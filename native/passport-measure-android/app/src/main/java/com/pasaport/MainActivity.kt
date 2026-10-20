@@ -3,6 +3,7 @@ package com.pasaport
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import android.content.Intent
 import android.os.Build
 import android.os.Bundle
 import android.view.WindowManager
@@ -25,11 +26,16 @@ import androidx.compose.foundation.layout.systemBarsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -73,6 +79,8 @@ private fun Screen(keepScreenOn: (Boolean) -> Unit) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var state by remember { mutableStateOf<State>(State.Idle) }
+    var menuOpen by remember { mutableStateOf(false) }
+    var aboutOpen by remember { mutableStateOf(false) }
 
     val measuring = state is State.Measuring
     DisposableEffect(measuring) {
@@ -86,21 +94,47 @@ private fun Screen(keepScreenOn: (Boolean) -> Unit) {
         scope.launch { state = State.Done(measureAll(context.applicationContext)) }
     }
 
+    val result = (state as? State.Done)?.passport
+
     Column(
         modifier = Modifier
             .fillMaxSize()
             .background(MaterialTheme.colorScheme.background)
             .systemBarsPadding()
-            .padding(20.dp),
+            .padding(horizontal = 20.dp, vertical = 12.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        Text(
-            "Kapasite Pasaportu",
-            fontSize = 26.sp,
-            fontWeight = FontWeight.Bold,
-            color = MaterialTheme.colorScheme.onBackground,
-        )
-        Spacer(Modifier.height(16.dp))
+        Box(Modifier.fillMaxWidth()) {
+            Text(
+                "Capability Passport",
+                fontSize = 26.sp,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onBackground,
+                modifier = Modifier.align(Alignment.Center).padding(vertical = 8.dp),
+            )
+            Box(Modifier.align(Alignment.TopEnd)) {
+                IconButton(onClick = { menuOpen = true }) {
+                    Text("⋮", fontSize = 24.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onBackground)
+                }
+                DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                    DropdownMenuItem(
+                        text = { Text("Copy JSON") },
+                        enabled = result != null,
+                        onClick = { menuOpen = false; result?.let { copyJson(context, it) } },
+                    )
+                    DropdownMenuItem(
+                        text = { Text("Share JSON") },
+                        enabled = result != null,
+                        onClick = { menuOpen = false; result?.let { shareJson(context, it) } },
+                    )
+                    DropdownMenuItem(
+                        text = { Text("About") },
+                        onClick = { menuOpen = false; aboutOpen = true },
+                    )
+                }
+            }
+        }
+        Spacer(Modifier.height(8.dp))
 
         Box(
             modifier = Modifier.weight(1f).fillMaxWidth(),
@@ -112,25 +146,40 @@ private fun Screen(keepScreenOn: (Boolean) -> Unit) {
                     shape = CircleShape,
                     modifier = Modifier.size(180.dp),
                 ) {
-                    Text("ÖLÇ", fontSize = 32.sp, fontWeight = FontWeight.Bold)
+                    Text("MEASURE", fontSize = 26.sp, fontWeight = FontWeight.Bold)
                 }
 
                 State.Measuring -> Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     CircularProgressIndicator(modifier = Modifier.size(72.dp))
                     Spacer(Modifier.height(16.dp))
-                    Text("Ölçülüyor…", color = MaterialTheme.colorScheme.onBackground)
+                    Text("Measuring…", color = MaterialTheme.colorScheme.onBackground)
                 }
 
                 is State.Done -> ResultCard(s.passport) { copyJson(context, s.passport) }
             }
         }
 
-        if (state is State.Done) {
+        if (result != null) {
             Spacer(Modifier.height(16.dp))
             Button(onClick = ::startMeasure, modifier = Modifier.fillMaxWidth()) {
-                Text("Yenile")
+                Text("Refresh")
             }
         }
+    }
+
+    if (aboutOpen) {
+        AlertDialog(
+            onDismissRequest = { aboutOpen = false },
+            confirmButton = { TextButton(onClick = { aboutOpen = false }) { Text("OK") } },
+            title = { Text("Capability Passport") },
+            text = {
+                Text(
+                    "Measures this device on-device, with no permissions and no network: " +
+                        "RAM, CPU, memory bandwidth, compute, storage and battery, then estimates " +
+                        "the largest Q4 model it can run alone. Schema passport/0.1."
+                )
+            },
+        )
     }
 }
 
@@ -142,22 +191,22 @@ private fun ResultCard(p: Passport, onCopy: () -> Unit) {
     ) {
         Card(modifier = Modifier.fillMaxWidth()) {
             Column(modifier = Modifier.padding(16.dp)) {
-                InfoRow("Cihaz", p.device)
+                InfoRow("Device", p.device)
                 InfoRow("SoC", p.soc)
                 InfoRow("Android", p.android)
-                InfoRow("RAM toplam / boş", "${p.ramTotalGb} / ${p.ramFreeGb} GB")
-                InfoRow("Uygulama bellek tavanı", "${p.appMemCapMb} MB")
-                InfoRow("CPU", "${p.cpuCores} çekirdek, ${p.cpuMaxGhz} GHz")
-                InfoRow("Bellek bant genişliği", "${p.memBwGbs} GB/s")
-                InfoRow("İşlem gücü", "${p.gflops} GFLOPS")
-                InfoRow("Boş depolama", "${p.storageFreeGb} GB")
-                InfoRow("Pil", "%${p.batteryPct}" + if (p.charging) " (şarjda)" else "")
-                InfoRow("En büyük model (Q4)", "${p.largestModelQ4}, ~${p.estTps} token/s")
+                InfoRow("RAM total / free", "${p.ramTotalGb} / ${p.ramFreeGb} GB")
+                InfoRow("App memory cap", "${p.appMemCapMb} MB")
+                InfoRow("CPU", "${p.cpuCores} cores, ${p.cpuMaxGhz} GHz")
+                InfoRow("Memory bandwidth", "${p.memBwGbs} GB/s")
+                InfoRow("Compute", "${p.gflops} GFLOPS")
+                InfoRow("Free storage", "${p.storageFreeGb} GB")
+                InfoRow("Battery", "${p.batteryPct}%" + if (p.charging) " (charging)" else "")
+                InfoRow("Largest model (Q4)", "${p.largestModelQ4}, ~${p.estTps} tok/s")
             }
         }
         Spacer(Modifier.height(10.dp))
         Text(
-            "JSON kopyala",
+            "Copy JSON",
             fontSize = 13.sp,
             color = MaterialTheme.colorScheme.primary,
             modifier = Modifier.clickable(onClick = onCopy).padding(6.dp),
@@ -187,6 +236,14 @@ private fun copyJson(context: Context, p: Passport) {
     val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
     cm.setPrimaryClip(ClipData.newPlainText("passport", p.toJson()))
     if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
-        Toast.makeText(context, "Kopyalandı", Toast.LENGTH_SHORT).show()
+        Toast.makeText(context, "Copied", Toast.LENGTH_SHORT).show()
     }
+}
+
+private fun shareJson(context: Context, p: Passport) {
+    val send = Intent(Intent.ACTION_SEND).apply {
+        type = "text/plain"
+        putExtra(Intent.EXTRA_TEXT, p.toJson())
+    }
+    context.startActivity(Intent.createChooser(send, "Share passport").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
 }
