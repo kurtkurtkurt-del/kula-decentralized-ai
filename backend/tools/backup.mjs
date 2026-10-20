@@ -1,12 +1,13 @@
-/* afterhours — a backup of the content.
-   What needs backing up is what cannot be made again: the event
-   texts, the venues and the comments. The daily backup Supabase takes
-   is a separate thing; this is your own copy, independent of the project.
+/* pasaport — a backup of the content.
+   What needs backing up is what cannot be made again: the projects, their abouts and
+   their samples (entered by hand in the panel). The daily backup Supabase takes is a
+   separate thing; this is your own copy, independent of the project. Taken with the
+   public key, so it never carries a person.
 
      node tools/backup.mjs                       (the address in config.js)
      node tools/backup.mjs http://localhost:4350 (against another address)
 
-   Output: backend/backup/afterhours-YYYY-MM-DD.json  */
+   Output: backend/backup/pasaport-YYYY-MM-DD.json  */
 
 import { readFile, writeFile, mkdir } from "node:fs/promises";
 
@@ -14,50 +15,45 @@ async function readConfig() {
   const text = await readFile(new URL("../../config.js", import.meta.url), "utf8");
   const box = {};
   new Function("window", text)(box);
-  return box.AH_CONFIG || {};
+  return box.PP_CONFIG || {};
 }
 
 const config = await readConfig();
 const address = (process.argv[2] || config.url || "").replace(/\/$/, "");
 const key = process.argv[3] || config.anonKey || "local";
-
 if (!address) {
   console.error("No address. Fill in config.js, or pass the address as an argument.");
   process.exit(1);
 }
 
-const pull = async (path) => {
-  const c = await fetch(address + "/rest/v1" + path, {
-    headers: { apikey: key, Authorization: "Bearer " + key },
+const call = async (fn, args = {}) => {
+  const c = await fetch(`${address}/rest/v1/rpc/${fn}`, {
+    method: "POST", headers: { apikey: key, Authorization: "Bearer " + key, "Content-Type": "application/json" }, body: JSON.stringify(args),
   });
-  if (!c.ok) throw new Error(path + " → " + c.status + " " + (await c.text()).slice(0, 120));
+  if (!c.ok) throw new Error(fn + " → " + c.status + " " + (await c.text()).slice(0, 120));
   return c.json();
 };
 
+const projects = await call("deck", { p_limit: 200 });
+const ids = projects.map((p) => p.id);
 const backup = {
   taken_at: new Date().toISOString(),
   source: address,
-  cities: await pull("/cities?order=sort_order"),
-  event_types: await pull("/event_types?order=sort_order"),
-  venues: await pull("/venues?order=name"),
-  events: await pull("/events_public?order=poster_no&limit=1000"),
-  comments: await pull("/comments_public?order=created_at&limit=5000"),
+  projects,
+  about: (await Promise.all(["en", "de", "tr"].map((l) => call("about_for", { p_projects: ids, p_lang: l })))).flat().filter((a, i, all) => all.findIndex((b) => b.project_id === a.project_id && b.lang === a.lang) === i),
+  samples: (await Promise.all(["en", "de", "tr"].map((l) => call("samples_for", { p_projects: ids, p_lang: l })))).flat().filter((a, i, all) => all.findIndex((b) => b.project_id === a.project_id && b.lang === a.lang) === i),
 };
 
 const day = new Date().toISOString().slice(0, 10);
 const folder = new URL("../backup/", import.meta.url);
 await mkdir(folder, { recursive: true });
-const file = new URL("afterhours-" + day + ".json", folder);
+const file = new URL("pasaport-" + day + ".json", folder);
 await writeFile(file, JSON.stringify(backup, null, 2));
-
 console.log("backup taken: " + file.pathname);
-for (const [name, list] of Object.entries(backup)) {
-  if (Array.isArray(list)) console.log(`  ${name.padEnd(14)} ${list.length}`);
-}
+for (const [name, list] of Object.entries(backup)) if (Array.isArray(list)) console.log(`  ${name.padEnd(10)} ${list.length}`);
 
-/* An empty backup is a warning: the published data may be gone, or the
-   key is wrong. Quietly writing an empty file is the worst outcome. */
-if (!backup.events.length) {
-  console.error("\nWARNING: no events came back. Is the address/key right?");
+/* An empty backup is a warning: the published data may be gone, or the key is wrong. */
+if (!backup.projects.length) {
+  console.error("\nWARNING: no projects came back. Is the address/key right?");
   process.exit(2);
 }

@@ -1,4 +1,4 @@
-/* afterhours — A LOCAL DEVELOPMENT SERVER. NOT Supabase.
+/* pasaport — A LOCAL DEVELOPMENT SERVER. NOT Supabase.
    It imitates the endpoints we use (a small subset of PostgREST and
    GoTrue) on top of PGlite. It exists for one reason: to run and test the
    live path for real before the project is opened.
@@ -17,15 +17,8 @@ const PORT = Number(process.env.PORT || 4350);
 const read = (y) => readFile(new URL(y, import.meta.url), "utf8");
 
 const db = new PGlite();
-for (const d of ["../test/supabase-shim.sql", "../sql/00_migrations.sql",
-                 "../sql/01_schema.sql", "../sql/02_rls.sql",
-                 "../sql/03_seed_catalog.sql", "../sql/04_seed_events.sql",
-                 "../sql/05_seed_comments.sql", "../sql/06_views.sql",
-                 "../sql/07_friends.sql", "../sql/08_storage.sql", "../sql/09_jobs.sql",
-                 "../sql/11_world.sql", "../sql/12_profiles.sql",
-                 "../sql/13_feedback.sql", "../sql/14_export.sql",
-                 "../sql/15_ticketmaster.sql", "../sql/16_coverage.sql",
-                 "../sql/17_real_people.sql", "../sql/18_geo.sql", "../sql/19_checkins.sql", "../sql/20_djs.sql", "../sql/21_sound.sql", "../sql/22_hardening.sql", "../sql/23_checkin_open.sql", "../sql/24_photos.sql", "../sql/25_people.sql", "../sql/26_push.sql", "../sql/27_sparks.sql", "../sql/28_spark_waves.sql", "../sql/29_profile_more.sql", "../sql/30_spark_map.sql", "../sql/31_past_feed.sql", "../sql/32_rsvp.sql", "../sql/33_waves.sql", "../sql/34_spark_push.sql", "../sql/35_spark_people.sql"]) {
+const { EXPECTED_SQL } = await import("./expected-sql.mjs");
+for (const d of ["../test/supabase-shim.sql", ...EXPECTED_SQL.map((f) => "../sql/" + f)]) {
   await db.exec(await read(d));
 }
 console.log("database ready (in memory)");

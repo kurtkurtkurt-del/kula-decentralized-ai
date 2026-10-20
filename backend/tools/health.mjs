@@ -1,4 +1,4 @@
-/* afterhours — the status check.
+/* pasaport — the status check.
    Is the database up, is the content in place, which of the SQL files have
    actually been run, and what wants attention.
    A non-zero exit code means something is wrong; a scheduled job can hook onto it.
@@ -11,7 +11,7 @@ import { EXPECTED_SQL } from "./expected-sql.mjs";
 const text = await readFile(new URL("../../config.js", import.meta.url), "utf8");
 const box = {};
 new Function("window", text)(box);
-const config = box.AH_CONFIG || {};
+const config = box.PP_CONFIG || box.AH_CONFIG || {};
 
 const address = (process.argv[2] || config.url || "").replace(/\/$/, "");
 const key = process.argv[3] || config.anonKey || "local";
@@ -40,47 +40,21 @@ try {
 const took = Date.now() - started;
 const count = (a) => Number(a || 0);
 
-console.log(`\nafterhours · ${address}`);
+console.log(`\npasaport · ${address}`);
 console.log(`response time       ${took} ms\n`);
-console.log(`events              ${count(reply.events)} (${count(reply.published)} published)`);
-console.log(`comments            ${count(reply.comments)} (${count(reply.hidden_comments)} hidden)`);
-console.log(`people              ${count(reply.people)}`);
-console.log(`swipes              ${count(reply.swipes)}`);
+console.log(`projects            ${count(reply.projects)} (${count(reply.open_projects)} open)`);
+console.log(`people              ${count(reply.people)} · ${count(reply.passports)} with a passport`);
+console.log(`keeps               ${count(reply.joins)}`);
 console.log(`friendships         ${count(reply.friendships)}`);
-
-/* Since 71: when the sync last brought a night, and whether pushes are leaving.
-   These go RED, not amber: a quiet failure here is exactly what went unseen for a week. */
-const synced = reply.newest_synced ? new Date(reply.newest_synced) : null;
-const syncedDays = synced ? (Date.now() - synced.getTime()) / 86400000 : null;
-console.log(`newest synced night ${synced ? synced.toISOString().slice(0, 16).replace("T", " ") + ` (${syncedDays.toFixed(1)} days ago)` : "none / before 71"}`);
-if (reply.outbox_stuck !== undefined) console.log(`pushes stuck        ${count(reply.outbox_stuck)}`);
-
-/* Since 87: pg_cron itself. Six jobs hang off it; a last good run older than two
-   hours means every one of them is dead. Before 87 the call fails and is skipped. */
-let clock = null;
-try { clock = (await call("cron_health"))[0]; } catch { clock = null; }
-const lastOk = clock?.last_ok ? new Date(clock.last_ok) : null;
-const okHours = lastOk ? (Date.now() - lastOk.getTime()) / 3600000 : null;
-if (clock) console.log(`cron                ${count(clock.jobs)} jobs · last good run ${lastOk ? okHours.toFixed(1) + " h ago" : "never"} · ${count(clock.failed_24h)} failed today`);
+console.log(`nights              ${count(reply.nights)} done · ${count(reply.nights_tonight)} running · ${count(reply.tokens)} tokens · ${count(reply.kwh)} kWh · ${count(reply.credits)} credits`);
+console.log(`coops · calls       ${count(reply.coops)} · ${count(reply.calls_open)} open`);
+console.log(`pushes stuck        ${count(reply.outbox_stuck)}`);
 
 const warnings = [];
 const failures = [];
-if (count(reply.events) === 0) failures.push("no events at all — the data may be gone");
-if (count(reply.past_still_up) > 50) failures.push(`${count(reply.past_still_up)} past events are still published — the sync or hide_past_events is not running`);
-else if (count(reply.past_still_up)) warnings.push(`${count(reply.past_still_up)} past events are still published`);
-if (syncedDays !== null && syncedDays > 3) failures.push(`the newest synced night is ${syncedDays.toFixed(1)} days old — sync-events.yml is not running or writes nothing`);
-if (clock && count(clock.jobs) === 0) failures.push("pg_cron has no active afterhours job — the schedules in 09/26/48/51/54 did not run or the extension is off");
-else if (clock && (okHours === null || okHours > 2)) failures.push(`pg_cron's last good run was ${okHours === null ? "never" : okHours.toFixed(1) + " hours ago"} — pushes, hiding, pruning are all stopped`);
-/* Since 93: the promise of a look within 24 hours. Red, so the morning workflow mails. */
-let backlog = null;
-try { backlog = (await call("staff_backlog"))[0]; } catch { backlog = null; }
-if (backlog) console.log(`staff backlog       ${count(backlog.reports_waiting)} reports past 20 h · ${count(backlog.appeals_waiting)} objections past 3 days · ${count(backlog.nights_waiting)} nights past 3 days`);
-if (backlog && count(backlog.reports_waiting)) failures.push(`${count(backlog.reports_waiting)} reported thing(s) have waited over 20 hours — open the panel`);
-if (backlog && (count(backlog.appeals_waiting) || count(backlog.nights_waiting))) warnings.push(`waiting over three days: ${count(backlog.appeals_waiting)} objection(s), ${count(backlog.nights_waiting)} night(s) sent in`);
-if (clock && count(clock.failed_24h)) warnings.push(`${count(clock.failed_24h)} cron runs failed in the last day`);
+if (count(reply.projects) === 0) failures.push("no projects at all — the seed (03) did not run or the data is gone");
+if (count(reply.nights_stuck)) warnings.push(`${count(reply.nights_stuck)} night(s) open for more than a day — the phone died; retention_prune closes them`);
 if (count(reply.outbox_stuck)) warnings.push(`${count(reply.outbox_stuck)} pushes older than six hours are still unsent — pg_net / pg_cron?`);
-if (count(reply.missing_venue)) warnings.push(`${count(reply.missing_venue)} events have no venue`);
-if (count(reply.unverified_date)) warnings.push(`${count(reply.unverified_date)} dates are unconfirmed`);
 
 /* --- which SQL files have been run -------------------------------------
    The setup is pasted in by hand, so a project can sit a file behind
@@ -104,7 +78,7 @@ try {
   if (missing.length) {
     console.log("\nnot run yet:");
     missing.forEach((f) => console.log("  · " + f));
-    console.log("  → paste backend/sql/setup-1-structure.sql in the SQL editor");
+    console.log("  → paste backend/sql/setup.sql in the SQL editor");
   }
 } catch (e) {
   /* The log itself is one of the files. Before it is run there is nothing
@@ -112,7 +86,7 @@ try {
   if (/PGRST202|does not exist|Searched for the function/i.test(e.message)) {
     behind = true;
     warnings.push("the migration log is missing — this project predates it; " +
-                  "run backend/sql/setup-1-structure.sql to find out what else is behind");
+                  "run backend/sql/setup.sql to find out what else is behind");
   } else {
     warnings.push("could not read the migration log: " + e.message);
   }

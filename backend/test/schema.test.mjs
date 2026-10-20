@@ -1,247 +1,98 @@
-/* afterhours — runs the schema on a real Postgres and checks it.
-   PGlite = Postgres compiled to WASM; no Docker, no psql needed.
-   Let it break here, before anything is sent to Supabase.  */
+/* 00–03: the log, the tables, the door, the seed. */
+import { build, check, mustBeRefused, asUser, asAnon, asService, rpc, one, people, befriend, ADA, BERK, CAN, DILA, finish } from "./lib.mjs";
 
-import { PGlite } from "@electric-sql/pglite";
-import { readFile } from "node:fs/promises";
+const db = await build("03_seed_projects.sql");
+await people(db);
 
-const read = (path) => readFile(new URL(path, import.meta.url), "utf8");
-
-let passed = 0, failed = 0;
-const check = (condition, name) => {
-  if (condition) { passed++; console.log("  ✓ " + name); }
-  else { failed++; console.log("  ✗ " + name); }
-};
-
-/* Expect a statement to be refused because of RLS */
-async function mustBeRefused(db, sql, name) {
-  try {
-    await db.exec(sql);
-    failed++; console.log("  ✗ " + name + " (it should not have gone through)");
-  } catch (e) {
-    passed++; console.log("  ✓ " + name);
-  }
-}
-
-async function asUser(db, userId) {
-  await db.exec(`set role authenticated;
-                 set request.jwt.claims = '{"sub":"${userId}"}';`);
-}
-async function asAnon(db) {
-  await db.exec(`set role anon; set request.jwt.claims = '';`);
-}
-async function asService(db) {
-  await db.exec(`reset role; set request.jwt.claims = '';`);
-}
-
-const db = new PGlite();
-
-/* PGlite errors print the whole bundle; show only the message. */
-process.on("uncaughtException", (e) => {
-  console.log("\nERROR: " + (e.message || e));
-  if (e.where) console.log("  " + e.where);
-  process.exit(1);
-});
-process.on("unhandledRejection", (e) => {
-  console.log("\nERROR: " + ((e && e.message) || e));
-  if (e && e.where) console.log("  " + e.where);
-  process.exit(1);
-});
-
-console.log("\n— building the schema —");
-for (const file of ["../test/supabase-shim.sql", "../sql/01_schema.sql", "../sql/02_rls.sql"]) {
-  await db.exec(await read(file));
-  console.log("  · " + file.split("/").pop());
-}
-
-/* ---------------------------------------------------------- fikstur */
-
-await db.exec(`
-  insert into public.cities (slug, name, status, sort_order)
-  values ('munchen', 'münchen', 'live', 1), ('istanbul', 'istanbul', 'live', 2);
-
-  insert into public.event_types (slug, name, sort_order) values
-    ('rave', 'Rave', 1), ('club-night', 'Club Night', 2), ('konzert', 'Konzert', 3);
-
-  insert into public.venues (city_id, slug, name, opens_hour, open_hours)
-  select id, 'olympiahalle', 'OLYMPIAHALLE', 18.5, 4 from public.cities where slug = 'munchen';
-
-  insert into public.events (slug, city_id, type_id, title, meta, body, poster_no)
-  select 'asap-rocky', c.id, t.id, 'A$AP Rocky',
-         'Olympiahalle · 11.09.26 · 18:30', 'An arena show.', 1
-  from public.cities c, public.event_types t
-  where c.slug = 'munchen' and t.slug = 'konzert';
-
-  insert into public.events (slug, city_id, type_id, title, meta, is_published, poster_no)
-  select 'hidden-night', c.id, t.id, 'Hidden', 'x', false, 2
-  from public.cities c, public.event_types t
-  where c.slug = 'munchen' and t.slug = 'rave';
-
-  insert into auth.users (id, email) values
-    ('11111111-1111-1111-1111-111111111111', 'ada@example.com'),
-    ('22222222-2222-2222-2222-222222222222', 'friend@example.com'),
-    ('33333333-3333-3333-3333-333333333333', 'yabanci@example.com');
-
-  update public.profiles set is_admin = true, handle = 'ada'
-  where id = '11111111-1111-1111-1111-111111111111';
-`);
-
-const ADMIN = "11111111-1111-1111-1111-111111111111";
-const FRIEND = "22222222-2222-2222-2222-222222222222";
-const STRANGER = "33333333-3333-3333-3333-333333333333";
-
-console.log("\n— does a new user get a profile —");
+console.log("\n— the log —");
 {
-  const r = await db.query(`select id, is_admin from public.profiles order by created_at`);
-  check(r.rows.length === 3, "all three users got a profile (trigger)");
-  check(r.rows.filter((s) => s.is_admin).length === 1, "there is exactly one admin");
+  const r = await db.query(`select name from public.migrations order by name`);
+  check(r.rows.map((x) => x.name).join() === "00_migrations.sql,01_schema.sql,02_doors.sql,03_seed_projects.sql", "four files stamped");
+  await asAnon(db);
+  check((await rpc(db, "migrations_applied")).length === 4, "anonymous may read the list");
+  await mustBeRefused(db, `select public.migration_done('x')`, "anonymous may not stamp");
 }
 
-console.log("\n— looking around signed out —");
+console.log("\n— the seed —");
+{
+  await asService(db);
+  check((await one(db, `select count(*)::int n from public.projects`)).n === 10, "ten projects");
+  check((await one(db, `select count(*)::int n from public.cities`)).n === 10, "ten cities");
+  const p = await one(db, `select est_kwh, est_eur, params_b from public.projects where slug = 'koy-okulu-ogretmen'`);
+  check(Number(p.est_kwh) === 163.2 && Number(p.est_eur) === 48.96, "energy estimate: 400 phones × 12 nights × 4 W × 8.5 h");
+  await db.exec(await (await import("./lib.mjs")).read("../sql/03_seed_projects.sql"));
+  check((await one(db, `select count(*)::int n from public.projects`)).n === 10, "pasting the seed again changes nothing");
+}
+
+console.log("\n— profiles appear by themselves —");
+{
+  const r = await db.query(`select handle, is_admin from public.profiles order by handle`);
+  check(r.rows.length === 4 && r.rows[0].handle === "ada" && r.rows[0].is_admin, "four profiles, one admin");
+  check((await one(db, `select count(*)::int n from public.profile_settings`)).n === 4, "four settings rows");
+  await db.exec(`insert into auth.users (id, email, raw_user_meta_data) values ('55555555-5555-5555-5555-555555555555', 'x@example.com', '{"handle":"ada"}')`);
+  check((await one(db, `select handle from public.profiles where id = '55555555-5555-5555-5555-555555555555'`)).handle === null, "a taken handle is left empty");
+}
+
+console.log("\n— every table is closed —");
+{
+  await asUser(db, BERK);
+  for (const t of ["cities", "projects", "profiles", "profile_settings", "joins", "friendships", "bans", "blocks", "contributions", "credits", "passports"]) {
+    await mustBeRefused(db, `select * from public.${t}`, `signed in, ${t} cannot be read directly`);
+  }
+  await asAnon(db);
+  await mustBeRefused(db, `select * from public.projects`, "anonymous, projects cannot be read directly");
+}
+
+console.log("\n— the door —");
 {
   await asAnon(db);
-  const r = await db.query(`select slug from public.events`);
-  check(r.rows.length === 1 && r.rows[0].slug === "asap-rocky",
-    "signed out, only the published event is visible");
+  await mustBeRefused(db, `select public.assert_member()`, "signed out, assert_member refuses", /sign in|permission/);
+  await asUser(db, BERK);
+  check((await one(db, `select public.assert_member() u`)).u === BERK, "signed in, assert_member answers the id");
+  check((await one(db, `select public.is_admin() a`)).a === false, "berk is not an admin");
+  await asUser(db, ADA);
+  check((await one(db, `select public.is_admin() a`)).a === true, "ada is");
+  await mustBeRefused(db, `update public.profiles set is_admin = true where id = '${BERK}'`, "nobody writes profiles directly");
 
-  const y = await db.query(`select count(*)::int as n from public.venues`);
-  check(y.rows[0].n === 1, "signed out, the venues can be read");
-
-  await mustBeRefused(db,
-    `insert into public.events (slug, city_id, type_id, title, meta)
-     select 'korsan', c.id, t.id, 'Korsan', 'x' from public.cities c, public.event_types t limit 1`,
-    "signed out, no event can be added");
+  await asUser(db, ADA);
+  await db.exec(`select public.staff_ban('${BERK}', 'spam')`);
+  await asUser(db, BERK);
+  await mustBeRefused(db, `select public.assert_member()`, "a banned account is refused at the door", /closed/);
+  const s = (await rpc(db, "account_status"))[0];
+  check(s.banned === true && s.reason === "spam", "account_status says why");
+  await asUser(db, CAN);
+  await mustBeRefused(db, `select public.staff_ban('${DILA}', 'x')`, "only the admin bans", /admins/);
+  await asUser(db, ADA);
+  await db.exec(`select public.staff_unban('${BERK}')`);
+  await asUser(db, BERK);
+  check((await one(db, `select public.assert_member() u`)).u === BERK, "unbanned, berk is back");
 }
 
-console.log("\n— a signed-in user —");
+console.log("\n— friends, blocks, waves —");
 {
-  await asUser(db, FRIEND);
-  await mustBeRefused(db,
-    `insert into public.events (slug, city_id, type_id, title, meta)
-     select 'korsan2', c.id, t.id, 'Korsan', 'x' from public.cities c, public.event_types t limit 1`,
-    "an ordinary user cannot add an event");
+  await befriend(db, ADA, BERK);
+  await befriend(db, BERK, CAN);
+  await befriend(db, CAN, DILA);
+  await asService(db);
+  const w = (await db.query(`select person, hops from public.waves('${ADA}') order by hops`)).rows;
+  check(w.length === 3 && w[0].person === BERK && w[0].hops === 1 && w[1].hops === 2 && w[2].hops === 3, "ada's waves: berk 1, can 2, dila 3");
+  check((await one(db, `select public.visible_to('${ADA}', '${DILA}') v`)).v === true, "a discoverable stranger is visible");
+  await db.exec(`update public.profile_settings set discoverable = false where user_id = '${DILA}'`);
+  check((await one(db, `select public.visible_to('${ADA}', '${DILA}') v`)).v === false, "…unless they turned it off");
+  check((await one(db, `select public.visible_to('${CAN}', '${DILA}') v`)).v === true, "a friend still sees them");
 
-  await mustBeRefused(db,
-    `update public.profiles set is_admin = true where id = '${FRIEND}'`,
-    "a user cannot make themselves an admin");
-
-  /* user_id is not sent: it defaults to auth.uid(). The browser never
-     has to say who it is writing as. */
-  await db.exec(`insert into public.swipes (event_id, direction)
-                 select id, 'right' from public.events where slug = 'asap-rocky'`);
-  const r = await db.query(`select user_id from public.swipes`);
-  check(r.rows.length === 1, "you can record your own swipe");
-  check(r.rows[0].user_id === FRIEND, "user_id was filled in from the session");
-
-  await mustBeRefused(db,
-    `insert into public.swipes (user_id, event_id, direction)
-     select '${STRANGER}', id, 'right' from public.events where slug = 'asap-rocky'`,
-    "you cannot swipe in someone else's name");
+  await asUser(db, ADA);
+  check((await one(db, `select public.block_user('${CAN}') b`)).b === true, "ada blocks can");
+  check((await rpc(db, "my_blocks")).length === 1, "my_blocks lists one");
+  await asService(db);
+  const w2 = (await db.query(`select person from public.waves('${ADA}')`)).rows.map((x) => x.person);
+  check(w2.length === 1 && w2[0] === BERK, "the wave stops at a block (can and dila are gone)");
+  await asUser(db, ADA);
+  await db.exec(`select public.unblock_user('${CAN}')`);
+  await asService(db);
+  check((await db.query(`select person from public.waves('${ADA}')`)).rows.length === 3, "unblocked, the wave runs again");
+  await asUser(db, ADA);
+  await mustBeRefused(db, `select * from public.waves('${ADA}')`, "waves() is not an API");
 }
 
-console.log("\n— are the swipes private —");
-{
-  await asUser(db, STRANGER);
-  const r = await db.query(`select count(*)::int as n from public.swipes`);
-  check(r.rows[0].n === 0, "a stranger cannot see anyone else's swipes");
-
-  await asService(db);
-  await db.exec(`insert into public.friendships (requester_id, addressee_id, status)
-                 values ('${FRIEND}', '${STRANGER}', 'accepted')`);
-
-  await asUser(db, STRANGER);
-  const s = await db.query(`select direction from public.swipes`);
-  check(s.rows.length === 1 && s.rows[0].direction === "right",
-    "you see what a confirmed friend swiped RIGHT");
-
-  await asService(db);
-  await db.exec(`insert into public.swipes (user_id, event_id, direction)
-                 select '${FRIEND}', id, 'left' from public.events where slug = 'hidden-night'`);
-  await asUser(db, STRANGER);
-  const l = await db.query(`select count(*)::int as n from public.swipes where direction = 'left'`);
-  check(l.rows[0].n === 0, "what a friend swiped LEFT stays hidden");
-}
-
-console.log("\n— the comments —");
-{
-  await asService(db);
-  const e = await db.query(`select id from public.events where slug = 'asap-rocky'`);
-  const eid = e.rows[0].id;
-  const k = await db.query(
-    `insert into public.comments (event_id, author_name, body) values ($1, 'lena_k', 'sample topic') returning id`,
-    [eid]);
-  const topicId = k.rows[0].id;
-  await db.exec(`insert into public.comments (event_id, parent_id, author_name, body)
-                 values ('${eid}', '${topicId}', 'tobi', 'sample reply')`);
-
-  await mustBeRefused(db,
-    `insert into public.comments (event_id, parent_id, author_name, body)
-     select '${eid}', id, 'x', 'reply to a reply'
-     from public.comments where parent_id = '${topicId}' limit 1`,
-    "a reply cannot be replied to (two levels)");
-
-  await mustBeRefused(db,
-    `insert into public.comments (event_id, parent_id, author_name, body)
-     select id, '${topicId}', 'x', 'reply on another event' from public.events where slug = 'hidden-night'`,
-    "a reply cannot hang off another event");
-
-  await asUser(db, STRANGER);
-  await mustBeRefused(db,
-    `insert into public.comments (event_id, author_id, body) values ('${eid}', '${FRIEND}', 'forged')`,
-    "you cannot comment in someone else's name");
-
-  await db.exec(`insert into public.comments (event_id, author_id, body)
-                 values ('${eid}', '${STRANGER}', 'my own comment')`);
-  const c = await db.query(`select count(*)::int as n from public.comments`);
-  check(c.rows[0].n === 3, "you can comment in your own name");
-
-  /* Under RLS a DELETE does not error, it simply removes no rows.
-     So the right measurement is: is the comment still there. */
-  await db.exec(`delete from public.comments where author_name = 'lena_k'`);
-  await asService(db);
-  const stillThere = await db.query(
-    `select count(*)::int as n from public.comments where author_name = 'lena_k'`);
-  check(stillThere.rows[0].n === 1, "someone else's comment was not deleted (RLS blocked it quietly)");
-}
-
-console.log("\n— the admin —");
-{
-  await asUser(db, ADMIN);
-  const r = await db.query(`select count(*)::int as n from public.events`);
-  check(r.rows[0].n === 2, "the admin sees the unpublished one too");
-
-  await db.exec(`insert into public.events (slug, city_id, type_id, title, meta)
-                 select 'new-night', c.id, t.id, 'New', 'Venue · 01.01' 
-                 from public.cities c, public.event_types t
-                 where c.slug = 'munchen' and t.slug = 'rave'`);
-  const s = await db.query(`select count(*)::int as n from public.events`);
-  check(s.rows[0].n === 3, "the admin can add an event");
-
-  const g = await db.query(`select count(*)::int as n from public.swipes`);
-  check(g.rows[0].n === 0, "not even the admin can see who swiped what");
-}
-
-console.log("\n— the constraints —");
-{
-  await asService(db);
-  await mustBeRefused(db,
-    `insert into public.swipes (user_id, event_id, direction)
-     select '${FRIEND}', id, 'up' from public.events limit 1`,
-    "an invalid direction is refused");
-
-  await mustBeRefused(db,
-    `insert into public.friendships (requester_id, addressee_id) values ('${ADMIN}', '${ADMIN}')`,
-    "you cannot befriend yourself");
-
-  await mustBeRefused(db,
-    `insert into public.swipes (user_id, event_id, direction)
-     select '${FRIEND}', id, 'left' from public.events where slug = 'asap-rocky'`,
-    "the same card cannot be swiped twice");
-
-  await mustBeRefused(db, `insert into public.comments (event_id, body)
-     select id, 'no author' from public.events limit 1`,
-    "a comment with no author is refused");
-}
-
-console.log(`\n${passed} passed, ${failed} failed\n`);
-process.exit(failed ? 1 : 0);
+finish();

@@ -1,222 +1,51 @@
--- afterhours — the tables
--- Run them in order in the Supabase SQL editor: 01 → 02 → 03 → ...
--- Authentication comes from the auth schema Supabase provides; what is
--- here is only the public schema that hangs off it.
-
--- gen_random_uuid() has been core since Postgres 13; no extension needed.
-
--- The two ordering columns were called `sira` before the code moved to
--- English. On a fresh database this does nothing; on one that already
--- exists it renames them, so the rest of this file lines up either way.
-do $$
-begin
-  if exists (select 1 from information_schema.columns
-             where table_schema = 'public' and table_name = 'cities'
-               and column_name = 'sira') then
-    alter table public.cities rename column sira to sort_order;
-  end if;
-  if exists (select 1 from information_schema.columns
-             where table_schema = 'public' and table_name = 'event_types'
-               and column_name = 'sira') then
-    alter table public.event_types rename column sira to sort_order;
-  end if;
-end
-$$;
+-- pasaport — the tables
+-- Run them in order: 01 → 02 → 03 → … Authentication comes from the auth schema
+-- Supabase provides; what is here is only the public schema that hangs off it.
+--
+-- A project is a social-benefit AI job a phone can carry at night: a small model, a
+-- number of nights wanted, a number of phones wanted. A person keeps a project (join,
+-- the swipe), and on a night the phone checks into it (contribution, 08). Everything
+-- hangs off the project and the night; there is nothing that hangs off a person alone.
 
 -- ---------------------------------------------------------------- city
-
+-- Where a project runs and where the phones are: the network tab draws clusters per city.
 create table if not exists public.cities (
-  id      uuid primary key default gen_random_uuid(),
-  slug    text unique not null,
-  name    text not null,
-  -- the honest city list on the landing page: live / soon / planned
-  status  text not null default 'live' check (status in ('live', 'soon', 'planned')),
-  sort_order    int  not null default 0,
-  -- The filter picks a country first, then the cities in that country;
-  -- and the countries themselves are grouped by continent
-  country         text,
-  country_slug    text,
-  continent       text,
-  continent_slug  text
+  id        uuid primary key default gen_random_uuid(),
+  slug      text unique not null,
+  name      text not null,
+  country   text not null,            -- ISO 3166 alpha-2, lower case: de · tr
+  lat       double precision not null,
+  lng       double precision not null,
+  sort_order int not null default 0
 );
 
-create index if not exists cities_country_idx on public.cities (country_slug, sort_order);
-
--- ----------------------------------------------------------------- kind
-
-create table if not exists public.event_types (
-  id    uuid primary key default gen_random_uuid(),
-  slug  text unique not null,
-  name  text not null,
-  -- the order from the spec itself: rave, club night, konzert, festival, meetup, hausparty
-  sort_order  int  not null
+-- ------------------------------------------------------------- project
+create table if not exists public.projects (
+  id             uuid primary key default gen_random_uuid(),
+  slug           text unique not null,
+  title          text not null check (length(btrim(title)) between 1 and 80),
+  -- two sentences: what it does and whom it serves. The source; do not break it.
+  summary        text not null check (length(btrim(summary)) between 1 and 400),
+  -- what the phones run: "3B Q4". params_b is the number the credit weight comes from.
+  model          text not null,
+  params_b       numeric(5,2) not null check (params_b > 0),
+  nights_wanted  int not null check (nights_wanted > 0),
+  phones_wanted  int not null check (phones_wanted > 0),
+  est_kwh        numeric(8,2) not null default 0,
+  est_eur        numeric(8,2) not null default 0,
+  -- who runs it (the project_about table carries the longer text, 12)
+  org            text not null,
+  city_id        uuid references public.cities on delete set null,
+  -- the drawn poster on the site (posters/NN.svg) or a photo
+  poster_no      int check (poster_no > 0),
+  image_url      text,
+  status         text not null default 'open' check (status in ('open', 'full', 'done')),
+  is_published   boolean not null default true,
+  created_at     timestamptz not null default now(),
+  updated_at     timestamptz not null default now()
 );
-
--- ---------------------------------------------------------------- venue
-
-create table if not exists public.venues (
-  id          uuid primary key default gen_random_uuid(),
-  city_id     uuid not null references public.cities on delete restrict,
-  slug        text not null,
-  name        text not null,
-  -- for the globe and the map; the "rooms open" counter uses the hours
-  map_x       int,
-  map_y       int,
-  opens_hour  numeric(4,1),
-  open_hours  numeric(4,1),
-  unique (city_id, slug)
-);
-
--- ---------------------------------------------------------------- event
-
-create table if not exists public.events (
-  id            uuid primary key default gen_random_uuid(),
-  slug          text unique not null,
-  city_id       uuid not null references public.cities on delete restrict,
-  type_id       uuid not null references public.event_types on delete restrict,
-  venue_id      uuid references public.venues on delete set null,
-
-  title         text not null,
-  -- the line shown on screen word for word. This is the source; do not break it.
-  meta          text not null,
-  body          text not null default '',
-
-  poster_no     int check (poster_no > 0),
-  -- when set, the file in storage; when empty, posters/NN.svg is used
-  poster_path   text,
-
-  -- The data holds non-dates like "Sommer 2027", "Mittwochs" and "TBA",
-  -- so this can be empty. meta is always right.
-  starts_at     timestamptz,
-  date_text     text,
-  -- Most dates in the data carry no year ("05.09"). The year was filled in
-  -- by inference; this flag means "not verified". It shows as a warning in
-  -- the admin panel. Since meta is always right, the screen is unaffected.
-  starts_at_estimated boolean not null default false,
-
-  is_published  boolean not null default true,
-  created_at    timestamptz not null default now(),
-  updated_at    timestamptz not null default now()
-);
-
-create index if not exists events_city_idx    on public.events (city_id);
-create index if not exists events_type_idx    on public.events (type_id);
-create index if not exists events_starts_idx  on public.events (starts_at);
-create index if not exists events_published_idx on public.events (is_published);
-
--- ---------------------------------------------------------------- people
-
--- auth.users stays private (the email lives there); this is the public part.
-create table if not exists public.profiles (
-  id            uuid primary key references auth.users on delete cascade,
-  handle        text unique,
-  display_name  text,
-  -- the right to write events comes from here. True for owner only.
-  is_admin      boolean not null default false,
-  created_at    timestamptz not null default now()
-);
-
--- --------------------------------------------------------------- swipes
-
--- Kept cards are not a separate table: they are the swipes going right.
-create table if not exists public.swipes (
-  id          uuid primary key default gen_random_uuid(),
-  -- Defaults to the person in the session: the browser never sends
-  -- never sends it, so it cannot be faked.
-  user_id     uuid not null default auth.uid() references public.profiles on delete cascade,
-  event_id    uuid not null references public.events on delete cascade,
-  direction   text not null check (direction in ('left', 'right')),
-  created_at  timestamptz not null default now(),
-  unique (user_id, event_id)
-);
-
-create index if not exists swipes_event_idx on public.swipes (event_id);
-create index if not exists swipes_user_dir_idx on public.swipes (user_id, direction);
-
--- ----------------------------------------------------------- beforehours
-
--- One table, two levels: empty parent_id means a topic, a set one a reply.
-create table if not exists public.comments (
-  id          uuid primary key default gen_random_uuid(),
-  event_id    uuid not null references public.events on delete cascade,
-  parent_id   uuid references public.comments on delete cascade,
-  author_id   uuid default auth.uid() references public.profiles on delete set null,
-  -- for the sample comments that have no real user behind them
-  author_name text,
-  body        text not null check (length(btrim(body)) > 0),
-  is_hidden   boolean not null default false,
-  created_at  timestamptz not null default now(),
-  -- The time text shown for sample comments ("4 days ago", "Nov 2023").
-  -- Empty on real comments; then it is worked out from created_at.
-  time_text   text,
-  constraint comments_author_var check (author_id is not null or author_name is not null)
-);
-
--- The inline check above only says "not empty"; a ceiling matters just as
--- much, or one signed-in account can store megabytes per row. Named and
--- added separately so a database built before this line gets it too.
-alter table public.comments
-  drop constraint if exists comments_body_length;
-alter table public.comments
-  add constraint comments_body_length
-  check (length(btrim(body)) between 1 and 2000);
-
-create index if not exists comments_event_idx on public.comments (event_id, created_at);
-create index if not exists comments_parent_idx on public.comments (parent_id);
-
--- There is no third level (the screen shows two) and a reply has to
--- belong to the same event as its topic.
--- security definer, because the SELECT below otherwise runs under the
--- caller’s read rule: a HIDDEN parent came back as no row at all, both
--- checks passed on NULL, and a reply could land on a hidden reply (a
--- third level) or carry the wrong event. The check has to see every
--- parent to mean anything.
-create or replace function public.comments_check_depth()
-returns trigger
-language plpgsql
-security definer
-set search_path = public
-as $$
-declare
-  parent public.comments%rowtype;
-begin
-  if new.parent_id is null then
-    return new;
-  end if;
-
-  select * into parent from public.comments where id = new.parent_id;
-
-  if parent.parent_id is not null then
-    raise exception 'a reply cannot be replied to (two levels only)';
-  end if;
-
-  if parent.event_id <> new.event_id then
-    raise exception 'a reply must belong to the same event as its topic';
-  end if;
-
-  return new;
-end;
-$$;
-
-drop trigger if exists comments_depth on public.comments;
-create trigger comments_depth
-  before insert or update on public.comments
-  for each row execute function public.comments_check_depth();
-
--- ------------------------------------------------------------ friendship
-
-create table if not exists public.friendships (
-  requester_id  uuid not null default auth.uid() references public.profiles on delete cascade,
-  addressee_id  uuid not null references public.profiles on delete cascade,
-  status        text not null default 'pending' check (status in ('pending', 'accepted')),
-  created_at    timestamptz not null default now(),
-  primary key (requester_id, addressee_id),
-  constraint friendship_not_self check (requester_id <> addressee_id)
-);
-
-create index if not exists friendships_addressee_idx on public.friendships (addressee_id, status);
-
--- --------------------------------------------------------- updated_at
+create index if not exists projects_city_idx on public.projects (city_id);
+create index if not exists projects_published_idx on public.projects (is_published, status);
 
 create or replace function public.touch_updated_at()
 returns trigger
@@ -227,38 +56,171 @@ begin
   return new;
 end;
 $$;
-
-drop trigger if exists events_touch on public.events;
-create trigger events_touch
-  before update on public.events
+drop trigger if exists projects_touch on public.projects;
+create trigger projects_touch before update on public.projects
   for each row execute function public.touch_updated_at();
 
--- ------------------------------- an automatic profile for a new user
+-- -------------------------------------------------------------- people
+-- auth.users stays private (the email lives there); this is the public part.
+create table if not exists public.profiles (
+  id            uuid primary key references auth.users on delete cascade,
+  handle        text unique check (handle is null or handle ~ '^[a-z0-9_]{3,20}$'),
+  display_name  text check (display_name is null or length(btrim(display_name)) between 1 and 40),
+  bio           text check (bio is null or length(btrim(bio)) between 1 and 160),
+  city_id       uuid references public.cities on delete set null,
+  is_admin      boolean not null default false,
+  -- registration is not finished until a handle is chosen
+  onboarded_at  timestamptz,
+  last_seen_at  timestamptz,
+  terms_version int,
+  terms_at      timestamptz,
+  created_at    timestamptz not null default now()
+);
+create index if not exists profiles_city_idx on public.profiles (city_id);
 
+-- Yours alone: who may see what, when the phone works, which pushes you want.
+create table if not exists public.profile_settings (
+  user_id         uuid primary key references public.profiles on delete cascade,
+  kept_visibility text not null default 'friends' check (kept_visibility in ('friends', 'private')),
+  discoverable    boolean not null default true,
+  locale          text not null default 'en' check (locale in ('en', 'de', 'tr')),
+  -- the night window on this account (the phone keeps its own copy, data/settings.ts)
+  night_from      time not null default '23:00',
+  night_to        time not null default '07:30',
+  wifi_only       boolean not null default true,
+  notify_friends  boolean not null default true,
+  notify_calls    boolean not null default true,
+  notify_coops    boolean not null default true,
+  notify_dms      boolean not null default true,
+  notify_cards    boolean not null default true,
+  updated_at      timestamptz not null default now()
+);
+drop trigger if exists settings_touch on public.profile_settings;
+create trigger settings_touch before update on public.profile_settings
+  for each row execute function public.touch_updated_at();
+
+-- Signing up: the profile and the settings row appear by themselves. A handle or city
+-- sent by the sign-up form is tried; a taken handle is quietly left empty.
 create or replace function public.handle_new_user()
 returns trigger
 language plpgsql
 security definer
 set search_path = public
 as $$
+declare
+  wanted text := lower(btrim(coalesce(new.raw_user_meta_data ->> 'handle', '')));
+  city_in text := lower(btrim(coalesce(new.raw_user_meta_data ->> 'city', '')));
+  city_uuid uuid;
 begin
-  insert into public.profiles (id, display_name)
-  values (new.id, coalesce(new.raw_user_meta_data ->> 'name', split_part(new.email, '@', 1)))
+  if wanted !~ '^[a-z0-9_]{3,20}$' or exists (select 1 from public.profiles where handle = wanted) then
+    wanted := null;
+  end if;
+  if city_in <> '' then
+    select id into city_uuid from public.cities where slug = city_in;
+  end if;
+  insert into public.profiles (id, display_name, handle, city_id, onboarded_at)
+  values (new.id, coalesce(new.raw_user_meta_data ->> 'name', split_part(new.email, '@', 1)), wanted, city_uuid,
+          case when wanted is null then null else now() end)
   on conflict (id) do nothing;
+  insert into public.profile_settings (user_id) values (new.id) on conflict (user_id) do nothing;
   return new;
 end;
 $$;
-
 drop trigger if exists on_auth_user_created on auth.users;
-create trigger on_auth_user_created
-  after insert on auth.users
+create trigger on_auth_user_created after insert on auth.users
   for each row execute function public.handle_new_user();
 
--- Stamp the migration log, if it is there. Each numbered file still runs on
--- its own (the tests load them one at a time), so this cannot insist.
+-- --------------------------------------------------------------- joins
+-- Kept projects are not a separate table: they are the swipes going right.
+create table if not exists public.joins (
+  id          uuid primary key default gen_random_uuid(),
+  user_id     uuid not null references public.profiles on delete cascade,
+  project_id  uuid not null references public.projects on delete cascade,
+  direction   text not null check (direction in ('left', 'right')),
+  created_at  timestamptz not null default now(),
+  unique (user_id, project_id)
+);
+create index if not exists joins_project_idx on public.joins (project_id, direction);
+create index if not exists joins_user_idx on public.joins (user_id, direction);
+
+-- ---------------------------------------------------------- friendship
+create table if not exists public.friendships (
+  requester_id  uuid not null references public.profiles on delete cascade,
+  addressee_id  uuid not null references public.profiles on delete cascade,
+  status        text not null default 'pending' check (status in ('pending', 'accepted')),
+  created_at    timestamptz not null default now(),
+  primary key (requester_id, addressee_id),
+  check (requester_id <> addressee_id)
+);
+create index if not exists friendships_addressee_idx on public.friendships (addressee_id, status);
+
+-- -------------------------------------------------------- contributions
+-- A night: the phone checked into a project while on charge and worked. Written only
+-- through contribution_start/contribution_end (08). Every finished row takes a card
+-- number from one shared sequence, so NO. 0208 means the 208th card ever issued. A night
+-- abandoned (the phone died) is closed without a card and counts for nothing.
+create sequence if not exists public.card_no_seq;
+create table if not exists public.contributions (
+  id          uuid primary key default gen_random_uuid(),
+  user_id     uuid not null references public.profiles on delete cascade,
+  project_id  uuid not null references public.projects on delete cascade,
+  -- made on the phone: a retry of the same start finds the first (the outbox, lib/offline.ts)
+  client_id   uuid not null,
+  card_no     bigint,
+  started_at  timestamptz not null default now(),
+  ended_at    timestamptz,
+  tokens      bigint not null default 0,
+  seconds     int not null default 0,
+  kwh         numeric(8,4) not null default 0,
+  credits     numeric(10,2) not null default 0,
+  unique (user_id, client_id)
+);
+create index if not exists contributions_user_idx on public.contributions (user_id, started_at desc);
+create index if not exists contributions_project_idx on public.contributions (project_id, ended_at);
+
+-- The ledger: one line per finished contribution. amount = tokens / 1000 × params_b / 7,
+-- so a night on a 7B model earns 1 per thousand tokens and a 1B night a seventh of it.
+create table if not exists public.credits (
+  id               bigserial primary key,
+  user_id          uuid not null references public.profiles on delete cascade,
+  contribution_id  uuid not null unique references public.contributions on delete cascade,
+  project_id       uuid not null references public.projects on delete cascade,
+  weight           numeric(6,4) not null,
+  amount           numeric(10,2) not null,
+  created_at       timestamptz not null default now()
+);
+create index if not exists credits_user_idx on public.credits (user_id, created_at desc);
+
+-- ------------------------------------------------------------ passports
+-- What the phone measured about itself (passport/0.1, modules/passport-measure). The
+-- last N per person; the newest is "the passport" the night worker reads from.
+create table if not exists public.passports (
+  id           uuid primary key default gen_random_uuid(),
+  user_id      uuid not null references public.profiles on delete cascade,
+  client_id    uuid not null,
+  data         jsonb not null,
+  measured_at  timestamptz not null,
+  created_at   timestamptz not null default now(),
+  unique (user_id, client_id)
+);
+create index if not exists passports_user_idx on public.passports (user_id, measured_at desc);
+
+-- Every table is closed (02 opens nothing: the app talks to functions, never tables).
+alter table public.cities enable row level security;
+alter table public.projects enable row level security;
+alter table public.profiles enable row level security;
+alter table public.profile_settings enable row level security;
+alter table public.joins enable row level security;
+alter table public.friendships enable row level security;
+alter table public.contributions enable row level security;
+alter table public.credits enable row level security;
+alter table public.passports enable row level security;
+revoke all on public.cities, public.projects, public.profiles, public.profile_settings, public.joins,
+              public.friendships, public.contributions, public.credits, public.passports from public, anon, authenticated;
+
 do $$ begin
   if to_regprocedure('public.migration_done(text, text)') is not null then
-    perform public.migration_done('01_schema.sql', '6db5fb87381f3f6e526baafd27fe26de66e3c7cf07ab6f70b39c5c4df30c4aaf');
+    perform public.migration_done('01_schema.sql', '08092ce6eccb423a66a0bfa8b521987240bde97f31b0a7c8714039c1a82b86e5');
   elsif to_regprocedure('public.migration_done(text)') is not null then
     perform public.migration_done('01_schema.sql');
   end if;
