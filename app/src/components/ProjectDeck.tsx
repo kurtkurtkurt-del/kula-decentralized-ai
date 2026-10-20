@@ -65,14 +65,15 @@ const Card = forwardRef<CardHandle, { p: Project; active: boolean; bottom: numbe
   }));
   const keepEdge = useAnimatedStyle(() => ({ opacity: interpolate(x.value, [width * 0.15, width * 0.4], [0, 1], Extrapolation.CLAMP) }));
   const letGoEdge = useAnimatedStyle(() => ({ opacity: interpolate(x.value, [-width * 0.4, -width * 0.15], [1, 0], Extrapolation.CLAMP) }));
-  const poster = p.image_url ? null : posterUrl(p);
+  const [broken, setBroken] = useState(false);
+  const poster = p.image_url || broken ? null : posterUrl(p);
   return (
     <GestureDetector gesture={pan}>
       <Animated.View style={[styles.slot, style]}>
         {/* the poster, fitted between the pickers and the caption */}
         <View style={[styles.posterArea, { top, bottom: bottom + 150 }]}>
           <View style={styles.poster}>
-            {p.image_url ? <Image source={{ uri: p.image_url }} style={styles.fill} contentFit="cover" /> : poster ? <SvgUri uri={poster} width="100%" height="100%" /> : <Image source={fallback} style={styles.fill} contentFit="cover" />}
+            {p.image_url ? <Image source={{ uri: p.image_url }} style={styles.fill} contentFit="cover" /> : poster ? <SvgUri uri={poster} width="100%" height="100%" onError={() => setBroken(true)} /> : <Image source={fallback} style={styles.fill} contentFit="cover" />}
             <View style={styles.tag}><Text style={styles.tagText}>{p.model}</Text></View>
             <View style={styles.tagRight}><Text style={styles.tagText}>{up(p.country ?? '')}{p.city_name ? ` · ${up(p.city_name)}` : ''}</Text></View>
           </View>
