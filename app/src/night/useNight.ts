@@ -89,7 +89,11 @@ export function startNightWatch() {
   AppState.addEventListener('change', (st) => {
     if (st === 'active') check().catch(() => {});
   });
-  Battery.addBatteryStateListener(() => check().catch(() => {}));
+  try {
+    Battery.addBatteryStateListener(() => check().catch(() => {}));
+  } catch {
+    /* the web has no battery listener */
+  }
 }
 export function useNight(): NightStatus {
   const [s, setS] = useState(worker.status());

@@ -7,7 +7,6 @@ import { router, useLocalSearchParams } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Storage from 'expo-sqlite/kv-store';
 import BackButton, { EdgeBack } from '@/components/BackButton';
-import SoundCorner from '@/components/SoundCorner';
 import Button from '@/components/Button';
 import Input from '@/components/Input';
 import { authMessage, useAuth } from '@/auth/AuthContext';
@@ -46,10 +45,10 @@ export default function SignUpScreen() {
         ? await signInAsGuest()
         : mode === 'in'
           ? await signIn(email.trim(), password)
-          : await signUp(email.trim(), password, Storage.getItemSync('city') ?? undefined);
+          : await signUp(email.trim(), password, undefined);
       if (guest) {
         // Anonymous sign-in disabled in the dashboard: enter anyway, swipes are not recorded.
-        router.replace('/flow');
+        router.replace('/passport');
         return;
       }
       if (err) {
@@ -59,7 +58,7 @@ export default function SignUpScreen() {
       // No handle yet means registration is unfinished: do that step first.
       const { data } = await supabase.rpc('profile_me');
       const row = Array.isArray(data) ? data[0] : data;
-      router.replace(row?.handle ? '/flow' : '/welcome');
+      router.replace('/passport');
     } catch (e) {
       setNote(authMessage(String((e as Error).message ?? e)).toLowerCase());
     } finally {
@@ -85,7 +84,7 @@ export default function SignUpScreen() {
       if (!inside) return; // window closed
       const { data } = await supabase.rpc('profile_me');
       const row = Array.isArray(data) ? data[0] : data;
-      router.replace(row?.handle ? '/flow' : '/welcome');
+      router.replace('/passport');
     } catch (e) {
       setNote(authMessage(String((e as Error).message ?? e)).toLowerCase());
     } finally {
@@ -97,7 +96,6 @@ export default function SignUpScreen() {
     <View style={styles.root}>
       <StatusBar style="light" />
       <EdgeBack />
-      <SoundCorner />
       <KeyboardAvoidingView behavior="padding" style={styles.body}>
         {/* Bottom padding lives here: the keyboard wrapper overrides its own paddingBottom. */}
         <View style={{ paddingBottom: insets.bottom + 24 }}>

@@ -5,7 +5,7 @@ import { dict, type CountKey, type Key } from './dict';
 // AuthContext can import it without a cycle. Components use '@/i18n'.
 
 // Three languages: English · Deutsch · Türkçe. Same strings and precedence as the website:
-//   1. the language chosen on this device (kv-store 'afterhours.lang')
+//   1. the language chosen on this device (kv-store 'pasaport.lang')
 //   2. the account's language (profile_settings.locale) when the device has no choice
 //   3. the phone's language
 //   4. English
@@ -16,7 +16,7 @@ export type Lang = 'en' | 'de' | 'tr';
 export const langs: Lang[] = ['en', 'de', 'tr'];
 export const langNames: Record<Lang, string> = { en: 'english', de: 'deutsch', tr: 'türkçe' };
 
-const KEY = 'afterhours.lang';
+const KEY = 'pasaport.lang';
 type Vars = Record<string, string | number>;
 type Entry = { en: string; de: string; tr: string };
 
@@ -84,14 +84,6 @@ type T = Translator['t'];
 export const t: T = (key, vars) => translators[current].t(key, vars);
 export const tx = (key: string, fallback?: string, vars?: Vars) => translators[current].tx(key, fallback, vars);
 
-// A synced night without its own description carries one fixed English sentence
-// (written by sync-ticketmaster.mjs). That sentence is ours, not data, so it is translated.
-const SYNCED = /^A real night, straight off the listings for (.+?)\. What it turns into is decided at the door, same as always\.$/;
-export const isSyncedBody = (body: string) => SYNCED.test(body.trim());
-export function bodyText(body: string, say: T = t) {
-  const found = SYNCED.exec(body.trim());
-  return found ? say('synced.body', { city: found[1] }) : body;
-}
 
 // Uppercasing happens here, not in styles: React Native's textTransform uses the
 // phone's locale, not the app's. Turkish maps i→İ and ı→I; toUpperCase() is

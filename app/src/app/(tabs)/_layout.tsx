@@ -4,17 +4,9 @@ import { TabList, TabSlot, TabTrigger, Tabs, type TabsSlotRenderOptions } from '
 import { Screen } from 'react-native-screens';
 import Animated, { Easing, useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
 import { TabBarFrame, TabItem } from '@/components/TabBar';
-import { useCities } from '@/data/cities';
-import { useFollowLocation } from '@/data/here';
 
-// The main app: five tabs in an edge-to-edge bottom bar. flow · messages · connect (people) · map · account (connect in the middle, owner, 12.10.2026).
-// The staff panel is a page of its own since 11.10.2026, reached from the account page.
-// yours is hidden since 12.10.2026 (owner: a feed is the wrong shape; the file stays, no tab
-// leads to it); people became connect (groups, the gallery, the decks) and messages is a tab of its own.
+// The main app: five tabs in an edge-to-edge bottom bar. flow · messages · connect · network · passport.
 export default function TabsLayout() {
-  // Every tab follows the city you are in (data/here.ts).
-  const { cities } = useCities();
-  useFollowLocation(cities);
   return (
     <Tabs>
       <TabSlot renderFn={renderTab} />
@@ -29,11 +21,11 @@ export default function TabsLayout() {
           <TabTrigger name="people" href="/people" asChild>
             <TabItem icon="people" />
           </TabTrigger>
-          <TabTrigger name="map" href="/map" asChild>
-            <TabItem icon="map" />
+          <TabTrigger name="network" href="/network" asChild>
+            <TabItem icon="network" />
           </TabTrigger>
-          <TabTrigger name="account" href="/account" asChild>
-            <TabItem icon="account" />
+          <TabTrigger name="passport" href="/passport" asChild>
+            <TabItem icon="passport" />
           </TabTrigger>
         </TabBarFrame>
       </TabList>
@@ -41,10 +33,7 @@ export default function TabsLayout() {
   );
 }
 
-// Switching tabs fades the content in and lifts it 8 px instead of snapping.
-// Otherwise identical to expo-router's default renderer; only the focused tab animates.
 type Descriptor = Parameters<NonNullable<Parameters<typeof TabSlot>[0]['renderFn']>>[0];
-
 function renderTab(descriptor: Descriptor, { isFocused, loaded, detachInactiveScreens }: TabsSlotRenderOptions) {
   if (!loaded && !isFocused) return null;
   return (
@@ -53,9 +42,7 @@ function renderTab(descriptor: Descriptor, { isFocused, loaded, detachInactiveSc
     </Screen>
   );
 }
-
 const IN = { duration: 260, easing: Easing.out(Easing.cubic) };
-
 function TabFade({ focused, children }: { focused: boolean; children: ReactNode }) {
   const shown = useSharedValue(0);
   useEffect(() => {
@@ -64,13 +51,9 @@ function TabFade({ focused, children }: { focused: boolean; children: ReactNode 
       shown.set(withTiming(1, IN));
     }
   }, [focused, shown]);
-  const style = useAnimatedStyle(() => ({
-    opacity: shown.get(),
-    transform: [{ translateY: (1 - shown.get()) * 8 }],
-  }));
+  const style = useAnimatedStyle(() => ({ opacity: shown.get(), transform: [{ translateY: (1 - shown.get()) * 8 }] }));
   return <Animated.View style={[styles.fill, style]}>{children}</Animated.View>;
 }
-
 const styles = StyleSheet.create({
   fill: { flex: 1 },
   screen: { flex: 1, position: 'relative', height: '100%' },

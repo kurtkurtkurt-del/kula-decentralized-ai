@@ -7,7 +7,7 @@ import { colors } from '@/theme/tokens';
 export default function ShareButton({ onPress, style }: { onPress: () => void; style?: object }) {
   const { t } = useLang();
   return (
-    <Pressable onPress={onPress} hitSlop={8} accessibilityRole="button" accessibilityLabel={t('night.share')} style={({ pressed }) => [styles.btn, style, pressed && styles.pressed]}>
+    <Pressable onPress={onPress} hitSlop={8} accessibilityRole="button" accessibilityLabel={t('project.share')} style={({ pressed }) => [styles.btn, style, pressed && styles.pressed]}>
       <Svg width={18} height={18} viewBox="0 0 24 24">
         <Path d="M12 3v12M7.5 7.5 12 3l4.5 4.5M5 12v7a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-7" stroke={colors.paper} strokeWidth={1.9} strokeLinecap="round" strokeLinejoin="round" fill="none" />
       </Svg>

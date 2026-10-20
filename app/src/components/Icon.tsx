@@ -1,6 +1,6 @@
 import Svg, { Circle, Path, Rect } from 'react-native-svg';
 
-export type IconName = 'flow' | 'people' | 'yours' | 'map' | 'account' | 'settings' | 'photo' | 'chat' | 'panel';
+export type IconName = 'flow' | 'people' | 'yours' | 'map' | 'network' | 'passport' | 'account' | 'settings' | 'photo' | 'chat' | 'panel';
 type Props = { name: IconName; size?: number; color: string; strokeWidth?: number; filled?: boolean; hole?: string };
 
 // 1.5 px line icons on a 24 grid. filled: the solid version of the tab icons (the open tab,
@@ -67,6 +67,23 @@ export default function Icon({ name, size = 22, color, strokeWidth = 1.5, filled
           <Rect x={13} y={4} width={7} height={7} rx={1.5} {...p} />
           <Rect x={4} y={13} width={7} height={7} rx={1.5} {...p} />
           <Rect x={13} y={13} width={7} height={7} rx={1.5} {...f} />
+        </>
+      )}
+      {name === 'network' && (
+        <>
+          {/* three nodes and the lines between them */}
+          <Circle cx={6} cy={17} r={2.6} {...f} />
+          <Circle cx={18} cy={17} r={2.6} {...f} />
+          <Circle cx={12} cy={6} r={2.6} {...f} />
+          <Path d="M8 15.5l3-7M16 15.5l-3-7M8.6 17h6.8" {...p} />
+        </>
+      )}
+      {name === 'passport' && (
+        <>
+          {/* a passport: a booklet with a round stamp */}
+          <Rect x={5} y={3} width={14} height={18} rx={2.5} {...f} />
+          <Circle cx={12} cy={11} r={3.2} {...(filled ? cut : p)} />
+          <Path d="M8.5 17h7" {...(filled ? { ...p, stroke: hole } : p)} />
         </>
       )}
       {name === 'account' && (

@@ -1,9 +1,7 @@
 import type { ReactNode } from 'react';
 import { Platform, Pressable, StyleSheet, View, type PressableProps } from 'react-native';
-import { Image } from 'expo-image';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Icon, { type IconName } from '@/components/Icon';
-import { usePhoto } from '@/data/photo';
 import { useLang } from '@/i18n';
 import { tabPressedAgain } from '@/hooks/useTabReset';
 import { colors } from '@/theme/tokens';
@@ -42,18 +40,8 @@ export function TabItem({ icon, isFocused, onPress, ...props }: ItemProps) {
       accessibilityState={{ selected: !!isFocused }}
       style={({ pressed }) => [styles.item, pressed && styles.pressed]}
     >
-      {icon === 'account' ? <Avatar on={!!isFocused} /> : <Icon name={icon} size={26} color={colors.paper} filled={!!isFocused} strokeWidth={1.7} />}
+      <Icon name={icon} size={26} color={colors.paper} filled={!!isFocused} strokeWidth={1.7} />
     </Pressable>
-  );
-}
-
-// Your photo in the account slot; the outline person when there is none.
-function Avatar({ on }: { on: boolean }) {
-  const { photo } = usePhoto();
-  return (
-    <View style={[styles.ring, on && styles.ringOn]}>
-      {photo ? <Image source={{ uri: photo }} style={styles.face} /> : <Icon name="account" size={24} color={colors.paper} filled={on} strokeWidth={1.7} />}
-    </View>
   );
 }
 
@@ -71,7 +59,4 @@ const styles = StyleSheet.create({
   row: { height: BAR, flexDirection: 'row', alignItems: 'center' },
   item: { flex: 1, height: BAR, alignItems: 'center', justifyContent: 'center' },
   pressed: { opacity: 0.6 },
-  ring: { width: 30, height: 30, borderRadius: 15, alignItems: 'center', justifyContent: 'center', borderWidth: 1.5, borderColor: 'transparent' },
-  ringOn: { borderColor: colors.paper },
-  face: { width: 24, height: 24, borderRadius: 12 },
 });

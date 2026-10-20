@@ -16,19 +16,16 @@ import * as Sentry from '@sentry/react-native';
 // the boundary can sit outside the language provider: read the language directly
 import { t as tNow } from '@/i18n/core';
 import { colors } from '@/theme/tokens';
-import { AmbientProvider } from '@/audio/AmbientContext';
 import { AuthProvider, useAuth } from '@/auth/AuthContext';
 import { LanguageProvider, useLang } from '@/i18n';
 import { usePushRegistration, usePushRouting } from '@/lib/push';
-import GenrePicker from '@/components/GenrePicker';
 import OfflineBar from '@/components/OfflineBar';
-import TermsGate from '@/components/TermsGate';
 import UpdateGate from '@/components/UpdateGate';
-import NoticeSheet from '@/components/NoticeSheet';
 import { catchErrors, logError } from '@/data/safety';
 import { startOffline } from '@/lib/offline';
 import '@/data/jobs';
 import { startWarm } from '@/data/warm';
+import { startNightWatch } from '@/night/useNight';
 import PillAction from '@/components/PillAction';
 
 // The browser build swaps Alert.alert for window.confirm and friends (web/alert.ts).
@@ -38,6 +35,7 @@ if (Platform.OS === 'web') require('@/web/alert');
 // Watch connectivity and flush queued writes as soon as the app starts.
 startOffline();
 startWarm();
+startNightWatch();
 // Uncaught errors are written to client_errors (51_safety.sql) for the admin.
 catchErrors();
 
@@ -73,11 +71,10 @@ function RootLayout() {
     <GestureHandlerRootView style={{ flex: 1 }}>
     <AuthProvider>
     <LanguageProvider>
-    <AmbientProvider>
       <Stack
         screenOptions={{
           headerShown: false,
-          // Pushed pages (night, dj, room, settings…) slide in from the right and back out on return.
+          // Pushed pages slide in from the right and back out on return.
           // Back navigation is the edge swipe in BackButton; the native gesture is disabled.
           animation: 'ios_from_right',
           animationDuration: 320,
@@ -86,17 +83,13 @@ function RootLayout() {
         }}
       >
         {/* Flow changes (entry, sign-up, film, arriving at the tabs) cross-fade instead of sliding. */}
-        {['index', '(tabs)', 'signup', 'welcome', 'film', 'explore', 'auth-callback'].map((name) => (
+        {['index', '(tabs)', 'signup', 'auth-callback'].map((name) => (
           <Stack.Screen key={name} name={name} options={{ animation: 'fade', animationDuration: 400 }} />
         ))}
       </Stack>
       <PushBridge />
-      <GenrePicker />
       <OfflineBar />
-      <NoticeSheet />
-      <TermsGate />
       <UpdateGate />
-    </AmbientProvider>
     </LanguageProvider>
     </AuthProvider>
     </GestureHandlerRootView>

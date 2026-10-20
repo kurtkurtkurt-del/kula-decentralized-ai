@@ -1,11 +1,8 @@
 {
   "version": "0.0.1",
   "configurations": [
-    {
-      "name": "site",
-      "runtimeExecutable": "python3",
-      "runtimeArgs": ["-m", "http.server", "4340"],
-      "port": 4340
-    }
+    { "name": "site", "runtimeExecutable": "python3", "runtimeArgs": ["-m", "http.server", "4340"], "port": 4340 },
+    { "name": "backend", "runtimeExecutable": "node", "runtimeArgs": ["backend/tools/local-server.mjs"], "port": 4350 },
+    { "name": "app", "runtimeExecutable": "npx", "runtimeArgs": ["expo", "start", "--web", "--port", "8081"], "port": 8081 }
   ]
 }

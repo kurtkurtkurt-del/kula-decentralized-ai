@@ -1,9 +1,10 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { useAuth } from '@/auth/AuthContext';
-import { fetchSettings, saveSettings } from '@/data/settings';
+import { saveSettings } from '@/data/settings';
+import { loadProfile } from '@/data/profile';
 import { getLang, known, remembered, setCurrentLang, translator, upper, type Lang, type Translator } from './core';
 
-export { bodyText, isSyncedBody, langNames, langs, upperData, type Lang } from './core';
+export { langNames, langs, upperData, type Lang } from './core';
 export type { Key } from './dict';
 
 type Value = Translator & { lang: Lang; setLang: (lang: Lang) => void; up: (text: string) => string };
@@ -21,7 +22,7 @@ export function LanguageProvider({ children }: { children: ReactNode }) {
       setCurrentLang(next);
       setState(next);
       // Remember it on the account too: the website and new devices read it from there.
-      if (uid) saveSettings(uid, { locale: next }).catch(() => {});
+      if (uid) saveSettings({ locale: next }).catch(() => {});
     },
     [uid],
   );
@@ -31,7 +32,7 @@ export function LanguageProvider({ children }: { children: ReactNode }) {
     if (!uid || remembered()) return;
     let live = true;
     (async () => {
-      const settings = await fetchSettings(uid).catch(() => null);
+      const settings = await loadProfile().catch(() => null);
       const theirs = known(settings?.locale);
       if (!live || !theirs || remembered()) return;
       setCurrentLang(theirs);
