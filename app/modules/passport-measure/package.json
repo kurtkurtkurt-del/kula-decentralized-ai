@@ -1,0 +1,7 @@
+{
+  "name": "passport-measure",
+  "version": "0.1.0",
+  "description": "the device passport, measured natively (android)",
+  "main": "index.ts",
+  "private": true
+}
