@@ -16,6 +16,6 @@ export default function ShareButton({ onPress, style }: { onPress: () => void; s
 }
 
 const styles = StyleSheet.create({
-  btn: { position: 'absolute', right: 12, bottom: 12, width: 40, height: 40, borderRadius: 20, backgroundColor: 'rgba(14,13,12,0.72)', borderWidth: 1, borderColor: 'rgba(243,241,236,0.18)', alignItems: 'center', justifyContent: 'center' },
+  btn: { position: 'absolute', right: 12, bottom: 12, width: 40, height: 40, borderRadius: 20, backgroundColor: 'rgba(255,255,255,0.72)', borderWidth: 1, borderColor: 'rgba(17,17,17,0.18)', alignItems: 'center', justifyContent: 'center' },
   pressed: { opacity: 0.7 },
 });

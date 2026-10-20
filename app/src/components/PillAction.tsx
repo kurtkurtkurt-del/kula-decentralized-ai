@@ -53,11 +53,11 @@ export function PillRow({ children, center }: { children: ReactNode; center?: bo
 
 const LOOK = {
   ink: {
-    quiet: { border: colors.ink3, fill: 'rgba(243,241,236,0.05)', text: colors.paper },
+    quiet: { border: colors.ink3, fill: 'rgba(17,17,17,0.05)', text: colors.paper },
     danger: { border: tint(0.55), fill: tint(0.12), text: colors.spotText },
   },
   paper: {
-    quiet: { border: colors.rule, fill: 'rgba(14,13,12,0.03)', text: colors.ink },
+    quiet: { border: colors.rule, fill: 'rgba(255,255,255,0.03)', text: colors.ink },
     danger: { border: tint(0.45), fill: tint(0.07), text: colors.spot },
   },
 } as const;

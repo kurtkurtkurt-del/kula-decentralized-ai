@@ -110,7 +110,7 @@ export const tabs = {
   'passport.again': { en: 'refresh', de: 'neu messen', tr: 'yenile' },
   'passport.copy': { en: 'copy json', de: 'json kopieren', tr: 'json kopyala' },
   'passport.copied': { en: 'copied', de: 'kopiert', tr: 'kopyalandı' },
-  'passport.none': { en: 'no passport yet. measure once and the night can start.', de: 'noch kein pass. einmal messen, dann kann die nacht starten.', tr: 'henüz pasaport yok. bir kez ölç, gece başlayabilsin.' },
+  'passport.none': { en: 'no passport yet. measure once and the night can start.', de: 'noch kein pass. einmal messen, dann kann die nacht starten.', tr: 'henüz poorman’s ai yok. bir kez ölç, gece başlayabilsin.' },
   'passport.approx': { en: 'approx · measured in javascript', de: 'ungefähr · in javascript gemessen', tr: 'yaklaşık · javascript ile ölçüldü' },
   'passport.largest': { en: 'runs alone', de: 'schafft allein', tr: 'tek başına' },
   'passport.speed': { en: 'rough speed', de: 'grobe geschwindigkeit', tr: 'kaba hız' },

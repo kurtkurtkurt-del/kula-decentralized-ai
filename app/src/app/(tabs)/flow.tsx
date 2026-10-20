@@ -85,7 +85,7 @@ export default function FlowScreen() {
 
   return (
     <View style={styles.root}>
-      <StatusBar style="light" />
+      <StatusBar style="dark" />
       <View style={[styles.head, { top: headTop }]} onLayout={(e) => setHeadBottom(e.nativeEvent.layout.y + e.nativeEvent.layout.height)}>
         <Pressable onPress={() => setSheet(true)} hitSlop={8} accessibilityRole="button" accessibilityLabel={t('filter.where')} style={({ pressed }) => [styles.where, pressed && styles.pressed]}>
           <Text style={styles.whereText} numberOfLines={1}>{label}</Text>

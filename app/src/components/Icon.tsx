@@ -5,7 +5,7 @@ type Props = { name: IconName; size?: number; color: string; strokeWidth?: numbe
 
 // 1.5 px line icons on a 24 grid. filled: the solid version of the tab icons (the open tab,
 // as on Instagram); inner details are cut out in hole, the colour behind the icon.
-export default function Icon({ name, size = 22, color, strokeWidth = 1.5, filled = false, hole = '#0E0D0C' }: Props) {
+export default function Icon({ name, size = 22, color, strokeWidth = 1.5, filled = false, hole = '#FFFFFF' }: Props) {
   const p = { stroke: color, strokeWidth, fill: 'none', strokeLinecap: 'round' as const, strokeLinejoin: 'round' as const };
   const f = filled ? { ...p, fill: color } : p;
   const cut = { ...p, stroke: hole, fill: hole };

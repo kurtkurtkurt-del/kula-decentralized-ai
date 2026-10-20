@@ -109,7 +109,7 @@ function Motion({ kind }: { kind: 'swipe' | 'tap' }) {
 }
 
 const styles = StyleSheet.create({
-  screen: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, zIndex: 50, backgroundColor: 'rgba(14,13,12,0.9)', justifyContent: 'center', paddingHorizontal: 28 },
+  screen: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, zIndex: 50, backgroundColor: 'rgba(255,255,255,0.9)', justifyContent: 'center', paddingHorizontal: 28 },
   middle: { alignItems: 'center' },
   big: { fontFamily: fonts.logo, fontSize: 46, lineHeight: 44, letterSpacing: -0.5, color: colors.paper, textAlign: 'center', marginTop: 28 },
   bigRed: { color: colors.spotText },
@@ -122,7 +122,7 @@ const styles = StyleSheet.create({
   mini: { width: 120, height: 170, borderRadius: radius.md, overflow: 'hidden', backgroundColor: colors.ink3, shadowColor: '#000', shadowOpacity: 0.5, shadowRadius: 18, shadowOffset: { width: 0, height: 10 }, elevation: 10 },
   miniTint: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 },
   miniKeep: { backgroundColor: tint(0.55) },
-  miniDrop: { backgroundColor: 'rgba(243,241,236,0.3)' },
+  miniDrop: { backgroundColor: 'rgba(17,17,17,0.3)' },
   ring: { position: 'absolute', width: 96, height: 96, borderRadius: 48, borderWidth: 2.5, borderColor: colors.spot },
   finger: { width: 26, height: 26, borderRadius: 13, backgroundColor: colors.paper },
 });

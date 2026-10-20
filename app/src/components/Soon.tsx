@@ -7,7 +7,7 @@ import { brand } from '@/theme/layout';
 export default function Soon({ title, line }: { title: string; line: string }) {
   return (
     <View style={styles.root}>
-      <StatusBar style="light" />
+      <StatusBar style="dark" />
       <Text style={styles.title}>{title}</Text>
       <Text style={styles.line}>{line}</Text>
     </View>

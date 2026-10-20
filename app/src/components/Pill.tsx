@@ -21,7 +21,7 @@ export function Chevron({ color }: { color: string }) {
 }
 
 const styles = StyleSheet.create({
-  pill: { flexShrink: 1, flexDirection: 'row', alignItems: 'center', gap: 7, height: 32, paddingHorizontal: 13, borderRadius: radius.pill, backgroundColor: 'rgba(14,13,12,0.82)', borderWidth: 1, borderColor: colors.ink3 },
+  pill: { flexShrink: 1, flexDirection: 'row', alignItems: 'center', gap: 7, height: 32, paddingHorizontal: 13, borderRadius: radius.pill, backgroundColor: 'rgba(255,255,255,0.82)', borderWidth: 1, borderColor: colors.ink3 },
   pillOn: { backgroundColor: colors.paper, borderColor: colors.paper },
   pillText: { flexShrink: 1, fontFamily: fonts.medium, fontSize: 13, letterSpacing: -0.1, color: colors.paper },
   pillTextOn: { color: colors.ink },

@@ -44,7 +44,7 @@ export default function CodeSheet({ open, title, go, error, onSubmit, onClose, s
 
 const styles = StyleSheet.create({
   wrap: { flex: 1 },
-  dim: { flex: 1, backgroundColor: 'rgba(14,13,12,0.6)' },
+  dim: { flex: 1, backgroundColor: 'rgba(255,255,255,0.6)' },
   sheet: { backgroundColor: colors.ink, borderWidth: 1, borderBottomWidth: 0, borderColor: colors.ink3, borderTopLeftRadius: radius.lg, borderTopRightRadius: radius.lg, paddingHorizontal: brand.left, paddingTop: 12 },
   head: { fontFamily: fonts.regular, fontSize: 11, letterSpacing: 1.4, color: colors.mute, marginBottom: 6 },
   error: { fontFamily: fonts.regular, fontSize: 12, color: colors.spot, marginTop: 10 },

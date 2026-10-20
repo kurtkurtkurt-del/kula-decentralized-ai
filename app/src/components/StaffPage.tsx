@@ -17,7 +17,7 @@ export default function StaffPage({ title, children, back = true }: { title: str
   const insets = useSafeAreaInsets();
   return (
     <View style={styles.root}>
-      <StatusBar style="light" />
+      <StatusBar style="dark" />
       {back ? <EdgeBack /> : null}
       <KeyboardAvoidingView style={styles.root} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
         <PullDownScroll

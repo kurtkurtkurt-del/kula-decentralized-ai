@@ -55,13 +55,13 @@ export default function BigPicker({ open, title, options, selected, onSelect, on
 }
 
 const styles = StyleSheet.create({
-  dim: { flex: 1, backgroundColor: 'rgba(14,13,12,0.6)' },
+  dim: { flex: 1, backgroundColor: 'rgba(255,255,255,0.6)' },
   sheet: { backgroundColor: colors.ink, borderWidth: 1, borderBottomWidth: 0, borderColor: colors.ink3, borderTopLeftRadius: radius.lg, borderTopRightRadius: radius.lg, paddingHorizontal: brand.left, paddingTop: 10, maxHeight: '80%' },
   grip: { alignSelf: 'center', width: 40, height: 4, borderRadius: 2, backgroundColor: colors.ink3, marginBottom: 14 },
   step: { fontFamily: fonts.jet, fontSize: 10, letterSpacing: 1.4, color: colors.meta, marginBottom: 8 },
   list: { flexGrow: 0 },
   pressed: { opacity: 0.6 },
-  item: { fontFamily: fonts.semibold, fontSize: 38, lineHeight: 44, letterSpacing: -1.4, color: '#4a4640' },
+  item: { fontFamily: fonts.semibold, fontSize: 38, lineHeight: 44, letterSpacing: -1.4, color: colors.ink3 },
   on: { color: colors.paper },
   empty: { color: colors.ink3 },
   sup: { fontFamily: fonts.jet, fontSize: 12, letterSpacing: 0.4, color: colors.meta },

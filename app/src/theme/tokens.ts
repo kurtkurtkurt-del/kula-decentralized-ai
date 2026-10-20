@@ -25,18 +25,24 @@ const accent = ACCENTS[accentId];
 // A see-through version of the accent: tint(0.12) → 'rgba(…,0.12)'.
 export const tint = (alpha: number) => `rgba(${accent.rgb},${alpha})`;
 
-// Ink on paper. No pure white, no pure black.
+// White, with colours on top (20.10.2026: it was ink on paper, as afterhours). The names
+// stayed so the screens did not: `ink` is the page's ground and `paper` the words on it.
 export const colors = {
-  paper: '#F3F1EC',
-  paper2: '#FAF9F6',
-  ink: '#0E0D0C',
-  ink2: '#6C6961',
-  rule: '#D9D5CC',
+  paper: '#111111',          // the words
+  paper2: '#1F1F1F',
+  ink: '#FFFFFF',            // the ground
+  ink2: '#F1F0EC',           // blocks, cards (the old 'ink2' panels)
+  rule: '#E3E1DB',
   spot: accent.spot,         // the accent: live · kept · on; fills, borders, the dot in the logo
-  spotText: accent.spotText, // accent TEXT on ink (spot is unreadable at small sizes)
-  ink3: '#2A2724',     // hairline: divider on dark backgrounds
-  mute: '#A9A59C',     // muted text and icons on dark backgrounds
-  meta: '#7F7B73',     // small uppercase meta lines
+  spotText: accent.spot,     // accent TEXT on white reads as is
+  ink3: '#E6E4DF',           // hairline: dividers, borders
+  mute: '#6B6962',           // muted text and icons
+  meta: '#8E8B83',           // small uppercase meta lines
+  // the colours on top: one per kind of thing
+  gold: '#E0A526',           // calls
+  blue: '#2D6BE0',           // coops
+  green: '#1E9E57',          // the night running
+  violet: '#8A5CD6',
 } as const;
 
 // Corner radii: small squares (initials, marks) xs · inner buttons, chips sm ·

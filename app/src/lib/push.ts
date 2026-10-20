@@ -51,7 +51,7 @@ export async function registerPush(ask: boolean): Promise<PushStatus> {
   if (!N) return 'unsupported';
   if (Platform.OS === 'android') {
     await N.setNotificationChannelAsync('default', {
-      name: 'pasaport',
+      name: "poorman's ai",
       importance: N.AndroidImportance.HIGH,
       lightColor: colors.spot,
     });

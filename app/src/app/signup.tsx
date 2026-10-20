@@ -94,7 +94,7 @@ export default function SignUpScreen() {
 
   return (
     <View style={styles.root}>
-      <StatusBar style="light" />
+      <StatusBar style="dark" />
       <EdgeBack />
       <KeyboardAvoidingView behavior="padding" style={styles.body}>
         {/* Bottom padding lives here: the keyboard wrapper overrides its own paddingBottom. */}

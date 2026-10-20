@@ -1,6 +1,6 @@
 {
   "expo": {
-    "name": "pasaport",
+    "name": "poorman's ai",
     "slug": "pasaport",
     "version": "0.1.0",
     "orientation": "portrait",
@@ -18,7 +18,7 @@
     "android": {
       "package": "app.pasaport.android",
       "adaptiveIcon": {
-        "backgroundColor": "#0E0D0C",
+        "backgroundColor": "#FFFFFF",
         "foregroundImage": "./assets/android-icon-foreground.png",
         "backgroundImage": "./assets/android-icon-background.png",
         "monochromeImage": "./assets/android-icon-monochrome.png"
@@ -61,11 +61,11 @@
     "web": {
       "favicon": "./public/favicon.png",
       "output": "single",
-      "name": "pasaport",
-      "shortName": "pasaport",
-      "description": "find your night. one card at a time.",
-      "themeColor": "#0E0D0C",
-      "backgroundColor": "#0E0D0C"
+      "name": "poorman's ai",
+      "shortName": "poormans ai",
+      "description": "your phone's idle hours, lent to a project you choose.",
+      "themeColor": "#FFFFFF",
+      "backgroundColor": "#FFFFFF"
     },
     "plugins": [
       "expo-router",
@@ -73,7 +73,7 @@
       [
         "expo-splash-screen",
         {
-          "backgroundColor": "#0E0D0C",
+          "backgroundColor": "#FFFFFF",
           "image": "./assets/splash-icon.png",
           "imageWidth": 200,
           "resizeMode": "contain"
@@ -126,8 +126,8 @@
     "experiments": {
       "typedRoutes": true
     },
-    "backgroundColor": "#0E0D0C",
-    "description": "find your night. one card at a time.",
+    "backgroundColor": "#FFFFFF",
+    "description": "your phone's idle hours, lent to a project you choose.",
     "extra": {
       "router": {},
       "expo-navigation-bar": {

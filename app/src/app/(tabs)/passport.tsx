@@ -84,7 +84,7 @@ export default function PassportScreen() {
 
   return (
     <View style={styles.root}>
-      <StatusBar style="light" />
+      <StatusBar style="dark" />
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: TAB_BAR_SPACE + insets.bottom + 28 }}>
         <View style={styles.top}>
           <Text style={styles.title}>{t('passport.title')}</Text>
@@ -262,5 +262,5 @@ const styles = StyleSheet.create({
   small: { flexShrink: 1, fontFamily: fonts.regular, fontSize: 11, letterSpacing: 1.4, color: colors.mute },
   deckScroll: { flexGrow: 0, marginTop: 12 },
   deck: { paddingHorizontal: brand.left },
-  dim: { flex: 1, backgroundColor: 'rgba(14,13,12,0.92)', alignItems: 'center', justifyContent: 'center', gap: 18 },
+  dim: { flex: 1, backgroundColor: 'rgba(255,255,255,0.92)', alignItems: 'center', justifyContent: 'center', gap: 18 },
 });

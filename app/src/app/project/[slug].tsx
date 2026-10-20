@@ -87,7 +87,7 @@ export default function ProjectScreen() {
   );
   return (
     <View style={styles.root}>
-      <StatusBar style="light" />
+      <StatusBar style="dark" />
       {p ? (
         <PullDownScroll header={band} contentContainerStyle={{ paddingBottom: insets.bottom + 32 }} showsVerticalScrollIndicator={false}>
           <View style={styles.ticketWrap}>
@@ -199,7 +199,7 @@ const styles = StyleSheet.create({
   centre: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   fill: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, width: '100%', height: '100%' },
   ticketWrap: { paddingHorizontal: brand.left, paddingTop: brand.top + 44 },
-  ticket: { backgroundColor: '#171512', borderRadius: radius.lg, overflow: 'hidden' },
+  ticket: { backgroundColor: colors.ink2, borderRadius: radius.lg, overflow: 'hidden' },
   ticketPhoto: { backgroundColor: colors.ink2, overflow: 'hidden' },
   ticketShare: { right: 12, top: 12, bottom: 'auto' },
   ticketHead: { paddingHorizontal: 16, paddingTop: 14, paddingBottom: 12, gap: 6 },
