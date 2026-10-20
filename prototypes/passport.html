@@ -1,0 +1,230 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>passport · the device passport · 5 tasarım</title>
+<link rel="stylesheet" href="../fonts/fonts.css">
+<style>
+  :root {
+    --paper: #F3F1EC; --ink: #0E0D0C; --ink2: #6C6961; --ink3: #2A2724; --rule: #D9D5CC;
+    --spot: #D7261E; --spotText: #F0443A; --mute: #A9A59C; --meta: #7F7B73;
+    --sans: "Inter Tight", system-ui, sans-serif; --mono: "JetBrains Mono", ui-monospace, monospace; --logo: "ArchivoLogo", "Archivo", sans-serif;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: #1b1a18; font-family: var(--sans); color: var(--paper); padding: 32px 16px 140px; }
+  header.page { max-width: 1560px; margin: 0 auto 28px; }
+  header.page h1 { font-family: var(--logo); font-weight: 900; font-size: 40px; letter-spacing: -1px; }
+  header.page h1 b { color: var(--spot); }
+  header.page p { color: var(--mute); font-size: 14px; margin-top: 8px; max-width: 900px; line-height: 1.55; }
+  header.page p b { color: var(--paper); font-weight: 500; }
+  section.fam { max-width: 1560px; margin: 0 auto 56px; }
+  .row5 { display: grid; grid-template-columns: repeat(5, 280px); gap: 22px; overflow-x: auto; padding: 4px 4px 12px; scroll-snap-type: x mandatory; }
+  figure.opt { scroll-snap-align: start; cursor: pointer; }
+  figure.opt figcaption { margin-top: 12px; font-size: 13px; line-height: 1.45; color: var(--mute); }
+  figure.opt figcaption b { display: block; color: var(--paper); font-weight: 500; font-size: 14px; margin-bottom: 2px; }
+  figure.opt figcaption i { display: block; font-style: normal; color: var(--meta); margin-top: 4px; font-size: 12px; }
+  figure.opt.picked .ph { box-shadow: 0 0 0 3px var(--spot), 0 20px 40px rgba(0,0,0,.45); }
+  figure.opt.picked figcaption b::after { content: "  ✓ seçildi"; color: var(--spotText); font-family: var(--mono); font-size: 10px; letter-spacing: 1px; }
+  .ph { width: 280px; height: 600px; border-radius: 30px; overflow: hidden; position: relative; background: var(--ink); color: var(--paper); box-shadow: 0 0 0 6px #000, 0 20px 40px rgba(0,0,0,.45); font-size: 13px; transition: box-shadow .15s; }
+  .sb { height: 26px; display: flex; justify-content: space-between; align-items: center; padding: 0 18px; font-size: 10.5px; font-weight: 600; }
+  .pad { padding: 0 14px; }
+  .abs { position: absolute; }
+  .mono { font-family: var(--mono); font-size: 9px; letter-spacing: 1.4px; text-transform: uppercase; }
+  .meta { color: var(--mute); font-size: 11px; }
+  .red { color: var(--spotText); }
+  .ttl { font-family: var(--logo); font-weight: 900; letter-spacing: -0.6px; line-height: .95; }
+  .paper { background: var(--paper); color: var(--ink); padding: 14px; border-radius: 14px; }
+  .paper .meta { color: var(--ink2); }
+  .paper .mono { color: var(--ink2); }
+  .paper .rule { height: 1px; background: var(--rule); margin: 8px 0; }
+  .sec { font-family: var(--mono); font-size: 9px; letter-spacing: 1.6px; text-transform: uppercase; color: var(--mute); display: flex; justify-content: space-between; margin-bottom: 8px; }
+  .tabbar { position: absolute; left: 0; right: 0; bottom: 0; height: 52px; border-top: 1px solid var(--ink3); background: var(--ink); display: flex; justify-content: space-around; align-items: center; }
+  .tabbar i { width: 18px; height: 18px; border: 1.6px solid var(--paper); border-radius: 4px; opacity: .8; }
+  .tabbar i.on { background: var(--paper); }
+  .kv { display: grid; grid-template-columns: 1fr auto; gap: 4px 10px; font-size: 11.5px; }
+  .kv span:nth-child(odd) { color: var(--mute); }
+  .kv span:nth-child(even) { font-family: var(--mono); font-size: 10.5px; letter-spacing: 0; text-align: right; }
+  .paper .kv span:nth-child(odd) { color: var(--ink2); }
+  .btn { height: 36px; border-radius: 10px; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 500; }
+  .btn.ink { background: var(--paper); color: var(--ink); }
+  .btn.line { border: 1.5px solid var(--paper); }
+  .paper .btn.line { border-color: var(--ink); }
+  .pill { height: 30px; padding: 0 12px; border-radius: 999px; border: 1px solid var(--ink3); display: inline-flex; align-items: center; font-size: 11px; gap: 6px; }
+  .bar { height: 6px; border-radius: 3px; background: #2a2724; overflow: hidden; display: flex; }
+  .bar i { display: block; height: 100%; background: var(--spot); }
+  .paper .bar { background: var(--rule); }
+  .picks { position: fixed; left: 0; right: 0; bottom: 0; background: rgba(14,13,12,.96); border-top: 1px solid var(--ink3); padding: 12px 16px; display: flex; gap: 12px; align-items: center; z-index: 10; }
+  .picks .sum { flex: 1; font-family: var(--mono); font-size: 12px; color: var(--paper); overflow-x: auto; white-space: nowrap; }
+  .picks .sum em { color: var(--mute); font-style: normal; }
+  .picks button { height: 36px; padding: 0 16px; border-radius: 999px; border: 0; background: var(--paper); color: var(--ink); font: 500 13px var(--sans); cursor: pointer; }
+  .stamp { display: inline-block; border: 1.5px solid currentColor; border-radius: 5px; padding: 3px 6px; font-family: var(--mono); font-size: 8px; letter-spacing: 1.2px; text-transform: uppercase; }
+  .ring { width: 150px; height: 150px; border-radius: 50%; margin: 0 auto; display: flex; align-items: center; justify-content: center; flex-direction: column; }
+</style>
+</head>
+<body>
+<header class="page">
+  <h1>passport<b>.</b> the device passport</h1>
+  <p>Beşinci sekmenin ilk ekranı. Ortada bir "measure" düğmesi; 5–10 saniye ölçüm; sonra sonuç kartı: cihaz, SoC, RAM, bellek tavanı, çekirdek, bant genişliği, GFLOPS, depolama, pil. Altta "tek başına çalıştırabileceği en büyük model" ve kaba token/s; en altta refresh ve copy JSON. <b>A</b> büyük yuvarlak düğme, kâğıt kart, <b>B</b> pasaport defteri: damgalı sayfa, <b>C</b> mono spec sheet, mürekkep üstüne, <b>D</b> halka: en büyük model ortada, ölçümler çevrede, <b>E</b> katkı kartı gibi: pasaport da bir kart, altında gece sayacı. Beğendiğine dokun, alttan kopyala.</p>
+</header>
+
+<section class="fam" id="f1" data-n="1" data-short="passport">
+  <div class="row5">
+
+    <!-- A: big round button, paper card -->
+    <figure class="opt" data-f="1" data-o="A"><div class="ph">
+      <div class="sb"><span>23:04</span><span>●●●</span></div>
+      <div class="pad" style="margin-top:8px"><div class="sec"><span>passport</span><span>pixel 8 · android 15</span></div></div>
+      <div class="ring" style="border:2px solid var(--paper);margin-top:10px"><div class="ttl" style="font-size:30px">measure</div><div class="mono" style="color:var(--mute);margin-top:4px">8 s · phone idle</div></div>
+      <div class="pad" style="margin-top:12px"><div class="paper">
+        <div class="sec" style="color:var(--ink2)"><span>last passport</span><span>23:01 today</span></div>
+        <div class="kv">
+          <span>soc</span><span>tensor g3</span>
+          <span>ram total / free</span><span>8.0 / 3.6 gb</span>
+          <span>app cap</span><span>512 mb</span>
+          <span>cores · max</span><span>9 · 2.91 ghz</span>
+          <span>mem bandwidth</span><span>14.2 gb/s</span>
+          <span>compute</span><span>31.4 gflops</span>
+          <span>storage free</span><span>41.0 gb</span>
+          <span>battery</span><span>87% · charging</span>
+        </div>
+        <div class="rule"></div>
+        <div style="display:flex;justify-content:space-between;align-items:flex-end"><div><div class="mono">largest model alone</div><div class="ttl" style="font-size:34px;margin-top:2px">~3B <span style="font-size:14px;font-family:var(--mono);font-weight:400;letter-spacing:0">Q4</span></div></div><div style="text-align:right"><div class="mono">rough speed</div><div class="ttl" style="font-size:22px">3.9 <span style="font-size:11px;font-family:var(--mono);font-weight:400">tok/s</span></div></div></div>
+        <div style="display:flex;gap:8px;margin-top:12px"><div class="btn line" style="flex:1">refresh</div><div class="btn ink" style="flex:1;background:var(--ink);color:var(--paper)">copy json</div></div>
+      </div></div>
+      <div class="tabbar"><i></i><i></i><i></i><i></i><i class="on"></i></div>
+    </div><figcaption><b>A · Düğme ve kâğıt</b>Mürekkep üstünde içi boş büyük bir halka düğme, "measure". Altında kâğıt kart: iki sütun anahtar-değer, sonra en büyük model ve token/s büyük. Refresh ve copy json kartın içinde.<i>En dolaysız olan; afterhours'ın account kâğıdıyla aynı dil.</i></figcaption></figure>
+
+    <!-- B: passport booklet -->
+    <figure class="opt" data-f="1" data-o="B"><div class="ph">
+      <div class="sb"><span>23:04</span><span>●●●</span></div>
+      <div class="pad" style="margin-top:8px"><div class="sec"><span>passport</span><span>no. 000 214</span></div></div>
+      <div class="pad" style="margin-top:6px"><div class="paper" style="min-height:430px;background:#EFECE4;border-radius:6px 18px 18px 6px;border-left:6px solid var(--ink);position:relative">
+        <div class="mono" style="letter-spacing:2.2px">device passport · passport/0.1</div>
+        <div class="ttl" style="font-size:26px;margin-top:8px">pixel 8</div>
+        <div class="meta">google · tensor g3 · android 15</div>
+        <div class="rule"></div>
+        <div class="kv">
+          <span>ram</span><span>8.0 gb · 3.6 free</span>
+          <span>app cap</span><span>512 mb</span>
+          <span>cpu</span><span>9 × 2.91 ghz</span>
+          <span>bandwidth</span><span>14.2 gb/s</span>
+          <span>compute</span><span>31.4 gflops</span>
+          <span>storage</span><span>41.0 gb free</span>
+          <span>battery</span><span>87% ⚡</span>
+        </div>
+        <div class="rule"></div>
+        <div class="mono">fit for</div>
+        <div style="display:flex;gap:6px;margin-top:6px;flex-wrap:wrap"><span class="stamp" style="color:#2c4a8a;transform:rotate(-3deg)">1B ✓</span><span class="stamp" style="color:#2c4a8a;transform:rotate(2deg)">3B ✓ · 3.9 tok/s</span><span class="stamp" style="color:var(--rule);transform:rotate(-1deg)">7B</span><span class="stamp" style="color:var(--rule);transform:rotate(3deg)">12B</span></div>
+        <div class="abs mono" style="right:14px;bottom:50px;color:var(--spot);border:2px solid var(--spot);border-radius:50%;width:64px;height:64px;display:flex;align-items:center;justify-content:center;text-align:center;font-size:7.5px;transform:rotate(-12deg)">measured<br>20.10<br>23:01</div>
+        <div class="abs" style="left:14px;right:14px;bottom:12px;display:flex;gap:8px"><div class="btn line" style="flex:1;height:32px">stamp again</div><div class="btn" style="flex:1;height:32px;background:var(--ink);color:var(--paper)">copy json</div></div>
+      </div></div>
+      <div class="pad" style="margin-top:10px"><div class="meta" style="text-align:center">a stamp is 8 seconds · phone stays still</div></div>
+      <div class="tabbar"><i></i><i></i><i></i><i></i><i class="on"></i></div>
+    </div><figcaption><b>B · Pasaport defteri</b>Ekran bir pasaport sayfası: sol kenar mürekkep sırt, üstte seri numarası, cihaz adı büyük, ölçümler satır satır, "fit for" damgaları (1B 3B ✓, 7B 12B soluk), köşede kırmızı yuvarlak tarih damgası. "stamp again" = ölç.<i>İsmi ciddiye alan tasarım; kart koleksiyonu diline de bağlanır.</i></figcaption></figure>
+
+    <!-- C: mono spec sheet on ink -->
+    <figure class="opt" data-f="1" data-o="C"><div class="ph">
+      <div class="sb"><span>23:04</span><span>●●●</span></div>
+      <div class="pad" style="margin-top:10px">
+        <div class="ttl" style="font-size:34px">passport<span class="red">.</span></div>
+        <div class="meta" style="margin-top:4px">what this phone can carry at night.</div>
+        <div class="btn ink" style="margin-top:14px;height:44px;font-size:13px">measure · 8 s</div>
+        <div style="font-family:var(--mono);font-size:10px;line-height:1.75;margin-top:16px;color:var(--paper);letter-spacing:0">
+          <div style="color:var(--mute)">// pixel 8 · tensor g3 · android 15</div>
+          <div>ram_total_gb <span style="color:var(--mute)">........</span> 8.0</div>
+          <div>ram_free_gb <span style="color:var(--mute)">.........</span> 3.6</div>
+          <div>app_mem_cap_mb <span style="color:var(--mute)">......</span> 512</div>
+          <div>cpu_cores <span style="color:var(--mute)">...........</span> 9</div>
+          <div>cpu_max_ghz <span style="color:var(--mute)">.........</span> 2.91</div>
+          <div>mem_bw_gbs <span style="color:var(--mute)">..........</span> 14.2</div>
+          <div>gflops <span style="color:var(--mute)">..............</span> 31.4</div>
+          <div>storage_free_gb <span style="color:var(--mute)">.....</span> 41.0</div>
+          <div>battery <span style="color:var(--mute)">.............</span> 87% ⚡</div>
+          <div style="margin-top:8px;color:var(--mute)">// alone</div>
+          <div>largest_model_q4 <span style="color:var(--mute)">....</span> <span class="red" style="font-weight:600">~3B</span></div>
+          <div>est_tps <span style="color:var(--mute)">.............</span> <span class="red">3.9</span></div>
+          <div style="margin-top:8px;color:var(--mute)">// measured_at 2026-10-20T21:01:12Z</div>
+        </div>
+        <div style="display:flex;gap:8px;margin-top:14px"><div class="pill">↻ refresh</div><div class="pill">⎘ copy json</div></div>
+      </div>
+      <div class="tabbar"><i></i><i></i><i></i><i></i><i class="on"></i></div>
+    </div><figcaption><b>C · Spec sheet</b>Kâğıt yok. Mürekkep üstünde JetBrains Mono ile JSON alanlarının kendisi, nokta çizgili hizalama, sonuç satırları kırmızı. Düğme üstte, refresh ve copy alt pill'ler.<i>Teknik kullanıcıya en dürüst olan; kopyaladığın JSON'un ekrandakiyle aynı olduğunu gösterir.</i></figcaption></figure>
+
+    <!-- D: ring, largest model in the centre -->
+    <figure class="opt" data-f="1" data-o="D"><div class="ph">
+      <div class="sb"><span>23:04</span><span>●●●</span></div>
+      <div class="pad" style="margin-top:8px"><div class="sec"><span>passport</span><span>pixel 8</span></div></div>
+      <div style="position:relative;width:200px;height:200px;margin:14px auto 0">
+        <svg viewBox="0 0 200 200" width="200" height="200" style="position:absolute;inset:0"><circle cx="100" cy="100" r="88" fill="none" stroke="#2a2724" stroke-width="10"/><circle cx="100" cy="100" r="88" fill="none" stroke="#D7261E" stroke-width="10" stroke-dasharray="553" stroke-dashoffset="310" stroke-linecap="round" transform="rotate(-90 100 100)"/></svg>
+        <div class="abs" style="inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center"><div class="mono" style="color:var(--mute)">runs alone</div><div class="ttl" style="font-size:44px;margin-top:2px">3B</div><div class="mono red">q4 · 3.9 tok/s</div></div>
+      </div>
+      <div class="meta" style="text-align:center;margin-top:8px">ring = 3B of 7B · the next step needs 4.2 gb free</div>
+      <div class="pad" style="margin-top:14px"><div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;text-align:center">
+        <div style="border:1px solid var(--ink3);border-radius:10px;padding:8px 4px"><div class="ttl" style="font-size:18px">3.6</div><div class="mono" style="color:var(--mute);font-size:7.5px">gb free</div></div>
+        <div style="border:1px solid var(--ink3);border-radius:10px;padding:8px 4px"><div class="ttl" style="font-size:18px">14.2</div><div class="mono" style="color:var(--mute);font-size:7.5px">gb/s</div></div>
+        <div style="border:1px solid var(--ink3);border-radius:10px;padding:8px 4px"><div class="ttl" style="font-size:18px">31</div><div class="mono" style="color:var(--mute);font-size:7.5px">gflops</div></div>
+        <div style="border:1px solid var(--ink3);border-radius:10px;padding:8px 4px"><div class="ttl" style="font-size:18px">9</div><div class="mono" style="color:var(--mute);font-size:7.5px">cores</div></div>
+        <div style="border:1px solid var(--ink3);border-radius:10px;padding:8px 4px"><div class="ttl" style="font-size:18px">41</div><div class="mono" style="color:var(--mute);font-size:7.5px">gb disk</div></div>
+        <div style="border:1px solid var(--ink3);border-radius:10px;padding:8px 4px"><div class="ttl" style="font-size:18px">87<span style="font-size:10px">%</span></div><div class="mono" style="color:var(--mute);font-size:7.5px">⚡ charging</div></div>
+      </div>
+      <div class="btn ink" style="margin-top:12px">measure again</div>
+      <div style="display:flex;justify-content:space-between;margin-top:8px" class="meta"><span>tensor g3 · android 15</span><span style="text-decoration:underline">copy json</span></div></div>
+      <div class="tabbar"><i></i><i></i><i></i><i></i><i class="on"></i></div>
+    </div><figcaption><b>D · Halka</b>Tek cevap ortada: "3B" büyük, çevresinde bir sonraki basamağa (7B) ne kadar yaklaştığını gösteren kırmızı halka. Altı ölçüm küçük kutularda, "measure again" altında, copy json metin link.<i>İlk ölçümden önce halka boş ve ortada "measure" yazar; ölçüm sırasında halka dolarak ilerleme çubuğu olur.</i></figcaption></figure>
+
+    <!-- E: like a contribution card -->
+    <figure class="opt" data-f="1" data-o="E"><div class="ph">
+      <div class="sb"><span>23:04</span><span>●●●</span></div>
+      <div class="pad" style="margin-top:8px"><div class="sec"><span>passport</span><span>card 000 214</span></div></div>
+      <div class="pad" style="margin-top:6px"><div style="border-radius:14px;overflow:hidden;border:1px solid var(--ink3)">
+        <div style="background:var(--spot);color:var(--paper);padding:14px;height:150px;position:relative"><div class="mono" style="opacity:.8">device passport</div><div class="ttl" style="font-size:40px;margin-top:6px">~3B</div><div class="mono" style="margin-top:2px">q4 · alone · 3.9 tok/s</div><div class="abs mono" style="right:14px;top:14px;opacity:.8">pixel 8</div><div class="abs" style="right:14px;bottom:14px;width:44px;height:44px;border-radius:50%;border:2px solid var(--paper);display:flex;align-items:center;justify-content:center;font-size:9px;font-family:var(--mono)">8 s</div></div>
+        <div class="paper" style="border-radius:0">
+          <div class="kv">
+            <span>ram</span><span>8.0 · 3.6 free</span>
+            <span>app cap</span><span>512 mb</span>
+            <span>cpu</span><span>9 × 2.91</span>
+            <span>bandwidth</span><span>14.2 gb/s</span>
+            <span>compute</span><span>31.4 gflops</span>
+            <span>disk · battery</span><span>41 gb · 87% ⚡</span>
+          </div>
+          <div class="rule"></div>
+          <div style="display:flex;justify-content:space-between" class="mono"><span>tensor g3 · android 15</span><span>23:01</span></div>
+        </div>
+      </div></div>
+      <div class="pad" style="margin-top:10px"><div style="display:flex;gap:8px"><div class="btn line" style="flex:1">measure</div><div class="btn line" style="flex:1">copy json</div></div></div>
+      <div class="pad" style="margin-top:14px"><div class="sec"><span>tonight</span><span class="red">23:00 – 07:30 · on charge</span></div>
+        <div style="border:1px solid var(--ink3);border-radius:12px;padding:10px 12px"><div style="display:flex;justify-content:space-between;align-items:center"><div><div style="font-weight:600;font-size:12px">offline teacher · köy okulları</div><div class="meta">night 4 of 12 · 3B q4</div></div><div class="ttl" style="font-size:18px">0</div></div><div class="bar" style="margin-top:8px"><i style="width:0%"></i></div><div class="meta" style="margin-top:6px">starts when you plug in</div></div>
+      </div>
+      <div class="tabbar"><i></i><i></i><i></i><i></i><i class="on"></i></div>
+    </div><figcaption><b>E · Pasaport bir kart</b>Pasaport da katkı kartlarıyla aynı biçimde: kırmızı blok üstte (en büyük model büyük), kâğıt alt yarıda ölçümler. Altında "tonight": bu geceki proje ve token sayacı, sabah kazanılacak kartın yeri.<i>Pasaport sekmesinin geri kalanıyla (kartlar, gece) tek dil; ölçüm ve gece aynı ekranda.</i></figcaption></figure>
+
+  </div>
+</section>
+
+<div class="picks"><div class="sum" id="sum"></div><button id="copy">kopyala</button></div>
+<script>
+  const KEY = "pasaport.designPicks.passport";
+  let picks = {};
+  try { picks = JSON.parse(localStorage.getItem(KEY) || "{}"); } catch (e) { picks = {}; }
+  const fams = [...document.querySelectorAll("section.fam")];
+  function paint() {
+    document.querySelectorAll("figure.opt").forEach((f) => f.classList.toggle("picked", picks[f.dataset.f] === f.dataset.o));
+    const list = fams.filter((s) => picks[s.dataset.n]).map((s) => s.dataset.n + picks[s.dataset.n]);
+    document.getElementById("sum").innerHTML = list.length ? list.join(" · ") : "<em>henüz seçim yok — bir tasarıma dokun</em>";
+    try { localStorage.setItem(KEY, JSON.stringify(picks)); } catch (e) {}
+  }
+  document.querySelectorAll("figure.opt").forEach((f) => {
+    f.tabIndex = 0;
+    const pick = () => { picks[f.dataset.f] = picks[f.dataset.f] === f.dataset.o ? undefined : f.dataset.o; paint(); };
+    f.addEventListener("click", pick);
+    f.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); pick(); } });
+  });
+  document.getElementById("copy").addEventListener("click", () => {
+    const text = fams.filter((s) => picks[s.dataset.n]).map((s) => "passport: " + picks[s.dataset.n]).join(", ");
+    navigator.clipboard?.writeText(text).then(() => { document.getElementById("copy").textContent = "kopyalandı"; setTimeout(() => (document.getElementById("copy").textContent = "kopyala"), 1500); }, () => {});
+  });
+  paint();
+</script>
+</body>
+</html>
