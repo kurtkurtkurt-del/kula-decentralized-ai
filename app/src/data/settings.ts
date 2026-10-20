@@ -1,43 +1,33 @@
 import { Platform } from 'react-native';
 import { File, Paths } from 'expo-file-system';
 import * as Sharing from 'expo-sharing';
+import Storage from 'expo-sqlite/kv-store';
 import { supabase } from '@/lib/supabase';
-import { must, remember, send } from '@/lib/offline';
+import { invalidate, outbox, send } from '@/lib/offline';
+import type { Profile } from '@/data/profile';
 
-// profile_settings row: only the owner reads and writes it (12_profiles.sql).
-export type Settings = {
-  kept_visibility: 'friends' | 'private';
-  discoverable: boolean;
-  notify_email: boolean;
-  locale: 'en' | 'de' | 'tr';
-  // 26_push.sql; missing until that file is applied, which reads as on
-  notify_requests?: boolean;
-  notify_accepts?: boolean;
-  notify_matches?: boolean;
-  notify_live?: boolean;
-  notify_nights?: boolean;
-  notify_rooms?: boolean;
-  notify_replies?: boolean;
-  notify_digest?: boolean;
-  notify_djs?: boolean;
-  notify_waves?: boolean;
-  // 26 + 34_spark_push.sql
-  notify_sparks?: boolean;
-  // 48_group_push.sql
-  notify_groups?: boolean;
-  notify_posts?: boolean;
-  notify_dms?: boolean;
-};
+// The settings a person may change (settings_set, 04): one object with the keys sent.
+export type Settings = Pick<Profile, 'kept_visibility' | 'discoverable' | 'locale' | 'night_from' | 'night_to' | 'wifi_only' | 'notify_friends' | 'notify_calls' | 'notify_coops' | 'notify_dms' | 'notify_cards'>;
+export type SettingsPatch = Partial<Settings & { display_name: string; bio: string; city_slug: string | null }>;
 
-export async function fetchSettings(userId: string): Promise<Settings | null> {
-  const data = await remember('settings', '', () => must(supabase.from('profile_settings').select('*').eq('user_id', userId).maybeSingle())).catch(() => null);
-  return (data as Settings | null) ?? null;
+outbox(
+  'settings',
+  async (j) => {
+    const { error } = await supabase.rpc('settings_set', { p_patch: j.patch });
+    if (error) throw error;
+  },
+  ['profile'],
+);
+// Switch changes are queued while offline. The night window is also kept on the phone,
+// where the worker reads it without the network (night/NightWorker.ts).
+export async function saveSettings(patch: SettingsPatch) {
+  if (patch.night_from) Storage.setItemSync('night.from', patch.night_from);
+  if (patch.night_to) Storage.setItemSync('night.to', patch.night_to);
+  if (patch.wifi_only !== undefined) Storage.setItemSync('night.wifi', patch.wifi_only ? '1' : '0');
+  await send({ kind: 'settings', patch });
+  invalidate('profile');
 }
-
-export async function saveSettings(userId: string, patch: Partial<Settings>) {
-  // Switch changes are queued while offline.
-  await send({ kind: 'settings', userId, patch });
-}
+export const nightWindow = () => ({ from: Storage.getItemSync('night.from') ?? '23:00', to: Storage.getItemSync('night.to') ?? '07:30', wifiOnly: Storage.getItemSync('night.wifi') !== '0' });
 
 // ok · empty · format · taken · yours
 export async function handleStatus(handle: string): Promise<string> {
@@ -45,16 +35,11 @@ export async function handleStatus(handle: string): Promise<string> {
   if (error) throw error;
   return String(data);
 }
-
 // Finishes registration / updates the profile. Returns 'ok' or an error code.
 export async function saveProfile(p: { handle: string; name: string; city: string | null; bio: string }): Promise<string> {
-  const { data, error } = await supabase.rpc('profile_setup', {
-    p_handle: p.handle,
-    p_display_name: p.name,
-    p_city_slug: p.city,
-    p_bio: p.bio,
-  });
+  const { data, error } = await supabase.rpc('profile_setup', { p_handle: p.handle, p_display_name: p.name, p_city_slug: p.city, p_bio: p.bio });
   if (error) throw error;
+  invalidate('profile');
   return String(data);
 }
 
@@ -63,13 +48,11 @@ export async function exportMe(): Promise<string> {
   if (error) throw error;
   return JSON.stringify(data, null, 2);
 }
-
-// "download my data": the export as a file in your hands, not a number on a screen
-// (F2, 20.10.2026). On the phone it is written to the cache and handed to the share
-// sheet (Files, Drive, mail); in the browser it downloads. Returns the file name.
+// "download my data": the export as a file in your hands. On the phone it is written
+// to the cache and handed to the share sheet; in the browser it downloads.
 export async function exportToFile(): Promise<string> {
   const json = await exportMe();
-  const name = `afterhours-${new Date().toISOString().slice(0, 10)}.json`;
+  const name = `pasaport-${new Date().toISOString().slice(0, 10)}.json`;
   if (Platform.OS === 'web') {
     const url = URL.createObjectURL(new Blob([json], { type: 'application/json' }));
     const a = document.createElement('a');
@@ -83,21 +66,4 @@ export async function exportToFile(): Promise<string> {
   file.write(json);
   await Sharing.shareAsync(file.uri, { mimeType: 'application/json', dialogTitle: name, UTI: 'public.json' });
   return name;
-}
-
-// 41_account_types.sql + 42_staff.sql. The code (the name the list shows) switches
-// between normal user and dj; community manager and admin are given.
-export type AccountType = 'user' | 'dj' | 'community_manager' | 'admin';
-export const ACCOUNT_TYPES: { id: AccountType; label: string }[] = [
-  { id: 'user', label: 'normal user' },
-  { id: 'dj', label: 'dj' },
-  { id: 'community_manager', label: 'community manager' },
-  { id: 'admin', label: 'admin' },
-];
-
-// ok · code (wrong code) · type · locked (given by an admin, 42_staff.sql)
-export async function setAccountType(type: AccountType, code: string): Promise<string> {
-  const { data, error } = await supabase.rpc('set_account_type', { p_type: type, p_code: code });
-  if (error) throw error;
-  return String(data);
 }

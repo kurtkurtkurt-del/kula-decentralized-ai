@@ -1,31 +1,20 @@
-// First-visit tips (components/Tips.tsx): one per page, short (two were too many, owner, 12.10.2026).
+// First visit to a page: one short tip (components/Tips.tsx).
 export const tips = {
   'tips.done': { en: 'got it', de: 'verstanden', tr: 'anladım' },
-  'tips.reset': { en: 'show the tips again', de: 'tipps wieder zeigen', tr: 'ipuçlarını tekrar göster' },
-  'tips.reset.hint': { en: 'the short notes on each page, from the start', de: 'die kurzen hinweise auf jeder seite, von vorn', tr: 'her sayfadaki kısa notlar, baştan' },
-  'tips.reset.done': { en: 'they come back on each page.', de: 'sie kommen auf jeder seite wieder.', tr: 'her sayfada yeniden çıkacaklar.' },
-
-  'tips.flow.1.t': { en: 'swipe the nights', de: 'wisch durch die nächte', tr: 'geceleri kaydır' },
-  'tips.flow.1.b': { en: 'right keeps a night, left lets it go. up: the ticket, down: the details. + makes your own.', de: 'rechts behalten, links loslassen. hoch: das ticket, runter: die details. + macht deine eigene.', tr: 'sağa sakla, sola geç. yukarı: bilet, aşağı: ayrıntılar. + ile kendi geceni oluştur.' },
-
+  'tips.flow.1.t': { en: 'swipe the projects', de: 'wisch durch die projekte', tr: 'projeleri kaydır' },
+  'tips.flow.1.b': { en: 'right keeps a project, left lets it go. down: the details. a kept project is what your phone works on at night.', de: 'rechts behalten, links loslassen. runter: die details. an einem behaltenen projekt arbeitet dein handy nachts.', tr: 'sağa sakla, sola bırak. aşağı: ayrıntılar. sakladığın proje, telefonunun gece çalışacağı projedir.' },
   'tips.people.1.t': { en: 'your people', de: 'deine leute', tr: 'insanların' },
-  'tips.people.1.b': { en: 'a red ring means out right now. tap a face to see what they keep; a group finds a night together.', de: 'roter ring: gerade unterwegs. tipp auf ein gesicht und sieh, was sie behalten; eine gruppe findet gemeinsam eine nacht.', tr: 'kırmızı halka şu an dışarıda demek. ne sakladığını görmek için yüze dokun; grup birlikte gece bulur.' },
-
-  'tips.yours.1.t': { en: 'with your people', de: 'mit deinen leuten', tr: 'seninkilerle' },
-  'tips.yours.1.b': { en: 'the nights your friends kept, and the sparks waiting for your answer. search by name to add people.', de: 'die nächte, die deine freunde behalten haben, und sparks, die auf deine antwort warten. such nach namen, um leute hinzuzufügen.', tr: 'arkadaşlarının sakladığı geceler ve cevabını bekleyen sparklar. insan eklemek için isimle ara.' },
-
-  'tips.map.1.t': { en: 'what is near', de: 'was in der nähe ist', tr: 'yakında ne var' },
-  'tips.map.1.b': { en: 'squares are nights, red ones a friend kept, gold diamonds are sparks. tap one.', de: 'quadrate sind nächte, rote hat ein freund behalten, goldene rauten sind sparks. tippen.', tr: 'kareler gece, kırmızılar bir arkadaşın sakladığı, altın elmaslar spark. birine dokun.' },
-
-  'tips.account.1.t': { en: 'your sleeve', de: 'deine hülle', tr: 'senin kapağın' },
-  'tips.account.1.b': { en: 'tap the cover to set your photo; edit adds a bio and your links. check in at a night and its card lands here.', de: 'tipp aufs cover für dein foto; bearbeiten fügt bio und links hinzu. check bei einer nacht ein und ihre karte landet hier.', tr: 'fotoğrafın için kapağa dokun; düzenle ile biyografi ve linklerini ekle. bir gecede check-in yap, kartı buraya düşer.' },
-
+  'tips.people.1.b': { en: 'what your friends keep, and the coops that work the same night. a coop picks tonight’s project together.', de: 'was deine freunde behalten, und die koops, die dieselbe nacht arbeiten. eine koop wählt das projekt für heute nacht gemeinsam.', tr: 'arkadaşlarının sakladıkları ve aynı gece çalışan kooperatifler. kooperatif bu gecenin projesini birlikte seçer.' },
+  'tips.network.1.t': { en: 'the network', de: 'das netz', tr: 'ağ' },
+  'tips.network.1.b': { en: 'each dot is a city: how many phones measured in, how fast together, which projects run there. tap one.', de: 'jeder punkt ist eine stadt: wie viele handys gemessen haben, wie schnell zusammen, welche projekte dort laufen. tippen.', tr: 'her nokta bir şehir: kaç telefon ölçtü, birlikte ne kadar hızlı, hangi projeler orada çalışıyor. birine dokun.' },
+  'tips.passport.1.t': { en: 'measure once', de: 'einmal messen', tr: 'bir kez ölç' },
+  'tips.passport.1.b': { en: 'ten seconds tell you the largest model this phone runs alone. then plug in at night: the card comes in the morning.', de: 'zehn sekunden sagen dir das größte modell, das dieses handy allein schafft. dann nachts anstecken: die karte kommt am morgen.', tr: 'on saniye, bu telefonun tek başına çalıştırabileceği en büyük modeli söyler. sonra gece şarja tak: kart sabah gelir.' },
   'tips.panel.1.t': { en: 'your panel', de: 'dein panel', tr: 'panelin' },
-  'tips.panel.1.b': { en: 'the numbers on top; below them make nights, rooms and djs. nights people sent in wait here until you let them through.', de: 'oben die zahlen; darunter nächte, räume und djs anlegen. eingeschickte nächte warten hier, bis du sie freigibst.', tr: 'üstte sayılar; altında gece, mekan ve dj oluştur. gönderilen geceler sen onaylayana kadar burada bekler.' },
-
-  'tips.night.1.t': { en: 'keep it', de: 'behalt sie', tr: 'sakla' },
-  'tips.night.1.b': { en: 'keep tells your friends you might go. talk about the night below; on the night, check in to get its card.', de: 'behalten zeigt deinen freunden, dass du vielleicht hingehst. unten über die nacht reden; am abend einchecken für die karte.', tr: 'saklamak arkadaşlarına gidebileceğini söyler. aşağıda gece hakkında konuş; o gece check-in yap, kartını al.' },
-
-  'tips.spark.1.t': { en: 'one tap', de: 'ein tipp', tr: 'tek dokunuş' },
-  'tips.spark.1.b': { en: 'name, time and place are suggested; change any of them below. a wave says who gets it: your friends, theirs, or one step further.', de: 'name, zeit und ort sind vorgeschlagen; unten änderst du sie. eine welle sagt, wer ihn bekommt: deine freunde, ihre, oder einen schritt weiter.', tr: 'isim, saat ve yer önerili; aşağıdan istediğini değiştir. dalga kime gideceğini söyler: arkadaşların, onlarınkiler ya da bir adım ötesi.' },
+  'tips.panel.1.b': { en: 'the numbers on top; below them the projects, the people, the reports.', de: 'oben die zahlen; darunter die projekte, die leute, die meldungen.', tr: 'üstte sayılar; altında projeler, insanlar, şikayetler.' },
+  'tips.project.1.t': { en: 'keep it', de: 'behalt es', tr: 'sakla' },
+  'tips.project.1.b': { en: 'keep tells your friends and makes it tonight’s candidate. a call asks your waves to work the same night.', de: 'behalten sagt es deinen freunden und macht es zum kandidaten für heute nacht. ein aufruf bittet deine wellen, dieselbe nacht zu arbeiten.', tr: 'saklamak arkadaşlarına söyler ve bu gecenin adayı yapar. çağrı, dalgalarından aynı gece çalışmalarını ister.' },
+  'tips.call.1.t': { en: 'one tap', de: 'ein tipp', tr: 'tek dokunuş' },
+  'tips.call.1.b': { en: 'pick the night and how far it travels: your friends, theirs, or one step further.', de: 'wähl die nacht und wie weit es reist: deine freunde, ihre, oder einen schritt weiter.', tr: 'geceyi ve ne kadar yayılacağını seç: arkadaşların, onlarınkiler ya da bir adım ötesi.' },
+  'tips.coop.1.t': { en: 'work together', de: 'arbeitet zusammen', tr: 'birlikte çalış' },
+  'tips.coop.1.b': { en: 'choose tonight’s project for the coop; in the morning the night’s numbers are here, phone by phone.', de: 'wähl das projekt der koop für heute nacht; am morgen stehen hier die zahlen der nacht, handy für handy.', tr: 'kooperatif için bu gecenin projesini seç; sabah gecenin sayıları burada, telefon telefon.' },
 } as const;

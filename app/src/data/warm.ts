@@ -2,62 +2,32 @@ import { supabase } from '@/lib/supabase';
 import { isOnline, onBackOnline } from '@/lib/offline';
 import { prefetchImages } from '@/lib/images';
 import { loadProfile } from '@/data/profile';
-import { friendsLive, myCards } from '@/data/checkin';
+import { friendsLive, myCards } from '@/data/contribution';
 import { friendsKept, friendsList, kept } from '@/data/friends';
-import { friendPhotos } from '@/data/photo';
-import { sparkInbox, sparkMine } from '@/data/sparks';
-import { followedSlugs, loadDjs } from '@/data/djs';
+import { callInbox, callMine } from '@/data/calls';
 import { fetchDeck } from '@/data/deck';
-import { pastFeed } from '@/data/feed';
-import { POSTS_ON } from '@/content/flags';
-import { wavesKept } from '@/data/waves';
-import { currentCity } from '@/data/here';
-import { loadCities } from '@/data/cities';
-import { warmCityPhotos } from '@/data/cityPhotos';
+import { networkNodes } from '@/data/network';
+import { passportsMine } from '@/data/passport';
 
 // Warm-up: when the app starts with an account and when the connection returns, the
 // pages people open most are read in the background, so their shelves are full before
-// the page is opened (it then shows at once, and offline too). The pictures on them go
-// to the disk cache, the cities' photos to the documents folder. At most once every two minutes.
+// the page is opened (it then shows at once, and offline too). At most once every two minutes.
 let last = 0;
 async function warm() {
   if (!isOnline() || Date.now() - last < 120_000) return;
   last = Date.now();
-  // Every tab's first screen too, so none of them waits when it is opened: the flow's
-  // deck, yours (its gallery sample, the feed while posts are on, the waves) and the DJs.
-  const city = currentCity() ?? 'munchen';
-  const pages = Promise.allSettled([fetchDeck(city, null, 120), fetchDeck(city, null, 12), POSTS_ON ? pastFeed(city, null, 10) : Promise.resolve([]), wavesKept(), loadDjs()]);
-  const [, , mine, theirs, , photos] = await Promise.allSettled([
-    loadProfile(),
-    myCards(),
-    kept(),
-    friendsKept(),
-    friendsList(),
-    friendPhotos(),
-    friendsLive(),
-    sparkInbox(),
-    sparkMine(),
-    followedSlugs(),
-  ]);
+  const [deck, cards, theirs] = await Promise.allSettled([fetchDeck(null, 40), myCards(), friendsKept(), loadProfile(), kept(), friendsList(), friendsLive(), callInbox(), callMine(), networkNodes(), passportsMine()]);
   const urls: (string | null)[] = [];
-  if (mine.status === 'fulfilled') urls.push(...mine.value.map((n) => n.image_url));
-  if (theirs.status === 'fulfilled') urls.push(...theirs.value.slice(0, 20).map((k) => k.image_url));
-  if (photos.status === 'fulfilled') urls.push(...photos.value.values());
-  const [deck, , feed] = await pages;
   if (deck.status === 'fulfilled') urls.push(...deck.value.slice(0, 12).map((n) => n.image_url));
-  if (feed.status === 'fulfilled') urls.push(...feed.value.map((p) => p.image_url));
+  if (cards.status === 'fulfilled') urls.push(...cards.value.map((c) => c.image_url));
+  if (theirs.status === 'fulfilled') void theirs;
   prefetchImages(urls);
-  // the place picker's city photos, the country you are in first (nothing to do once they are on the phone)
-  const cities = await loadCities();
-  await warmCityPhotos(cities, cities.find((c) => c.id === city)?.countrySlug ?? null);
 }
-
 let started = false;
 export function startWarm() {
   if (started) return;
   started = true;
   supabase.auth.onAuthStateChange((event, session) => {
-    // Guests have few shelves worth filling; accounts get the warm-up.
     if (session && !session.user.is_anonymous && (event === 'INITIAL_SESSION' || event === 'SIGNED_IN')) setTimeout(() => warm().catch(() => {}), 1500);
   });
   onBackOnline(() => {

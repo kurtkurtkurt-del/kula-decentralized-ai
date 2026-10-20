@@ -15,7 +15,7 @@ import { supabase } from '@/lib/supabase';
 //   goes straight out; otherwise it waits in order on the phone and goes out when the
 //   connection returns, retried with growing pauses while the server is unreachable.
 //   Each job carries an id made on the phone, so the database can tell a retry from a
-//   second action (37_offline.sql). Screens show waiting jobs right away (pendingJobs).
+//   second action (the client_id columns of 01, 08, 11). Screens show waiting jobs right away (pendingJobs).
 //   A job the server refuses is dropped, counted in `refused` (the offline bar says so)
 //   and the shelves it touches are read again, which undoes what the screen showed.
 
@@ -359,30 +359,23 @@ export function pendingJobs(kind?: string): Job[] {
   return mine(queue()).filter((j) => !kind || j.kind === kind);
 }
 
-// Built in: swipes and settings (lib/offline.ts has always sent these).
+// Built in: keep / let go (lib/offline.ts has always sent these; the rest register
+// themselves in their data modules, loaded by data/jobs.ts).
 outbox(
   'swipe',
   async (j) => {
-    const { error } = await supabase.rpc('swipe_set', { p_slug: j.slug, p_direction: j.direction });
+    const { error } = await supabase.rpc('join_set', { p_slug: j.slug, p_direction: j.direction });
     if (error) throw error;
   },
-  ['kept', 'yours'],
+  ['kept', 'yours', 'projectPage'],
 );
 outbox(
   'unswipe',
   async (j) => {
-    const { error } = await supabase.from('swipes').delete().eq('event_id', j.eventId as string);
+    const { error } = await supabase.rpc('join_unset', { p_slug: j.slug });
     if (error) throw error;
   },
-  ['kept', 'yours'],
-);
-outbox(
-  'settings',
-  async (j) => {
-    const { error } = await supabase.from('profile_settings').update(j.patch as Record<string, unknown>).eq('user_id', j.userId as string);
-    if (error) throw error;
-  },
-  ['settings'],
+  ['kept', 'yours', 'projectPage'],
 );
 
 function touched(job: Job) {

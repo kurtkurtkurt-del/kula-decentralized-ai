@@ -3,27 +3,22 @@ import * as AppleAuthentication from 'expo-apple-authentication';
 import Constants from 'expo-constants';
 import Storage from 'expo-sqlite/kv-store';
 import { supabase } from '@/lib/supabase';
-import { isNetworkError, must } from '@/lib/offline';
+import { must } from '@/lib/offline';
+import { SITE } from '@/data/deck';
 
-// 51_safety.sql: what the stores require — the terms (18+), reports, client errors —
-// and an account deletion that takes the files and the Apple link with it.
-
-// ------------------------------------------------------------------ the terms
+// 14_safety.sql: what the stores require — the terms, reports, client errors — and an
+// account deletion that takes the Apple link with it.
 
 // Raise this when the terms change: everyone is asked again.
 export const TERMS_VERSION = 1;
-const SITE = 'https://kurtkurtkurt-del.github.io/afterhours';
-export const TERMS_URL = `${SITE}/agb/`;
-export const PRIVACY_URL = `${SITE}/datenschutz/`;
-// Where an app that is too old is sent (78_min_version.sql; the stores come later).
-export const UPDATE_URL = `${SITE}/phone/`;
+export const TERMS_URL = `${SITE}agb/`;
+export const PRIVACY_URL = `${SITE}datenschutz/`;
+export const UPDATE_URL = `${SITE}phone/`;
 
-// The oldest app version the server still answers; null when it cannot be read (offline).
 export async function minAppVersion(): Promise<string | null> {
   const { data, error } = await supabase.rpc('min_app_version');
   return error || typeof data !== 'string' ? null : data;
 }
-// 1.2.0 is below 1.10.0: by number, part by part.
 export function versionBelow(a: string, b: string): boolean {
   const pa = a.split('.').map(Number), pb = b.split('.').map(Number);
   for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
@@ -33,22 +28,11 @@ export function versionBelow(a: string, b: string): boolean {
   return false;
 }
 
-// A guest who met an existing email is sent to sign in; the guest id is kept on the
-// phone until the account signs in and guest_merge (80) carries the swipes over.
-const GUEST_KEY = 'guest.pending';
-export function rememberGuest(uid: string) {
-  try { Storage.setItemSync(GUEST_KEY, uid); } catch {}
-}
-export async function mergeGuest(uid: string): Promise<number> {
-  let guest: string | null = null;
-  try { guest = Storage.getItemSync(GUEST_KEY); } catch {}
-  if (!guest || guest === uid) return 0;
-  const { data, error } = await supabase.rpc('guest_merge', { p_guest: guest });
-  // A guest that is already gone (or never was one) is forgotten; a network failure is retried next time.
-  if (error && !isNetworkError(error)) { try { Storage.removeItemSync(GUEST_KEY); } catch {} return 0; }
-  if (error) return 0;
-  try { Storage.removeItemSync(GUEST_KEY); } catch {}
-  return typeof data === 'number' ? data : 0;
+// A guest who met an existing email is sent to sign in; nothing is merged here (a guest
+// keeps nothing worth carrying: the passport is measured again, keeps are a swipe away).
+export function rememberGuest(_uid: string) {}
+export async function mergeGuest(_uid: string): Promise<number> {
+  return 0;
 }
 
 // Remembered per account on the phone, so an offline start does not ask again.
@@ -60,22 +44,21 @@ export function termsKnown(uid: string): boolean {
     return false;
   }
 }
-// true: accepted the current terms · false: must be asked · null: could not tell (offline)
 export async function termsAccepted(uid: string): Promise<boolean | null> {
   if (termsKnown(uid)) return true;
   const { data, error } = await supabase.rpc('terms_status');
   if (error) return null;
-  const row = ((data ?? []) as { version: number | null; adult: boolean }[])[0];
-  const ok = !!row && row.adult && (row.version ?? 0) >= TERMS_VERSION;
+  const row = ((data ?? []) as { version: number | null }[])[0];
+  const ok = !!row && (row.version ?? 0) >= TERMS_VERSION;
   if (ok) Storage.setItemSync(accepted(uid), String(row.version));
   return ok;
 }
 export async function acceptTerms(uid: string) {
-  await must(supabase.rpc('accept_terms', { p_version: TERMS_VERSION, p_adult: true }));
+  await must(supabase.rpc('accept_terms', { p_version: TERMS_VERSION }));
   Storage.setItemSync(accepted(uid), String(TERMS_VERSION));
 }
 
-// 52_bans.sql: a closed account is told so, with the reason. null: could not tell.
+// A closed account is told so, with the reason. null: could not tell.
 export async function accountStatus(): Promise<{ banned: boolean; reason: string | null } | null> {
   const { data, error } = await supabase.rpc('account_status');
   if (error) return null;
@@ -83,20 +66,7 @@ export async function accountStatus(): Promise<{ banned: boolean; reason: string
   return row ? { banned: row.banned, reason: row.reason } : null;
 }
 
-// 53_trust.sql: what the staff did to your things, told once.
-export type Notice = { id: number; kind: 'comment_hidden' | 'post_hidden' | 'removed' | 'profile_cleared' | 'role' | 'dj_verified' | 'dj_hidden' | 'report_removed' | 'report_kept' | 'night_ok' | 'night_no' | 'appeal_ok' | 'appeal_no'; data: Record<string, string>; created_at: string };
-export async function myNotices(): Promise<Notice[]> {
-  const { data, error } = await supabase.rpc('my_notices');
-  if (error) return [];
-  return (data ?? []) as Notice[];
-}
-export async function noticesSeen() {
-  await must(supabase.rpc('notices_seen'));
-}
-
-// The sign-in itself: a new email is confirmed from both addresses' inboxes
-// (Supabase sends the links); a new password works at once.
-const CONFIRM_URL = `${SITE}/login/`;
+const CONFIRM_URL = `${SITE}login/`;
 export async function changeEmail(email: string) {
   const { error } = await supabase.auth.updateUser({ email: email.trim() }, { emailRedirectTo: CONFIRM_URL });
   if (error) throw error;
@@ -117,13 +87,11 @@ export async function missingSql(): Promise<string[] | null> {
 }
 
 // ------------------------------------------------------------------ reports
-
-// Posts keep their own (data/posts.ts postReport); everything else comes here.
-export type ReportKind = 'comment' | 'room_post' | 'group_message' | 'profile' | 'group' | 'spark' | 'post_comment' | 'dm_message';
+export type ReportKind = 'profile' | 'dm' | 'coop' | 'call';
 export async function report(kind: ReportKind, target: string, reason: string | null) {
   await must(supabase.rpc('report', { p_kind: kind, p_target: target, p_reason: reason }));
 }
-export type OpenReport = { kind: ReportKind; target: string; preview: string | null; author: string | null; reports: number; reasons: string[]; first_at: string };
+export type OpenReport = { kind: ReportKind; target: string; snapshot: string | null; reports: number; reasons: string[]; first_at: string };
 export async function staffReports(): Promise<OpenReport[]> {
   return ((await must(supabase.rpc('staff_reports'))) ?? []) as OpenReport[];
 }
@@ -132,29 +100,15 @@ export async function settleReport(kind: ReportKind, target: string, remove: boo
 }
 
 // ------------------------------------------------------------------ client errors
-
 let sent = 0;
-// Fire and forget; at most twenty a session, so a render loop cannot flood it.
 export function logError(e: unknown, where: string | null, fatal = false) {
   if (sent >= 20) return;
   sent += 1;
   const err = e instanceof Error ? e : new Error(String(e));
   supabase
-    .rpc('log_error', {
-      p_message: err.message,
-      p_stack: err.stack ?? null,
-      p_where: where,
-      p_platform: Platform.OS,
-      p_version: Constants.expoConfig?.version ?? null,
-      p_fatal: fatal,
-    })
-    .then(
-      () => {},
-      () => {},
-    );
+    .rpc('log_error', { p_message: err.message, p_stack: err.stack ?? null, p_where: where, p_platform: Platform.OS, p_version: Constants.expoConfig?.version ?? null, p_fatal: fatal })
+    .then(() => {}, () => {});
 }
-
-// Every uncaught error goes to the table first, then on to React Native's own handler.
 let installed = false;
 export function catchErrors() {
   if (installed) return;
@@ -168,7 +122,6 @@ export function catchErrors() {
     next(e, fatal);
   });
 }
-
 export type ClientError = { id: number; message: string; stack: string | null; where_: string | null; platform: string | null; version: string | null; fatal: boolean; at: string; who: string | null };
 export async function adminErrors(): Promise<ClientError[]> {
   return ((await must(supabase.rpc('admin_errors', { p_limit: 200 }))) ?? []) as ClientError[];
@@ -177,36 +130,12 @@ export async function clearErrors() {
   await must(supabase.rpc('admin_errors_clear'));
 }
 
-// ------------------------------------------------------------------ deleting the account
-
-// Everything under your folder of the photos bucket: profile photo, posts, group
-// covers and album photos. Storage cannot be emptied from SQL, so the app does it
-// with your own rights (24_photos.sql: you see and remove your own folder).
-async function removeFiles(uid: string) {
-  const bucket = supabase.storage.from('photos');
-  const walk = async (dir: string): Promise<string[]> => {
-    const out: string[] = [];
-    for (let offset = 0; ; offset += 100) {
-      const { data, error } = await bucket.list(dir, { limit: 100, offset });
-      if (error) throw error;
-      for (const f of data ?? []) {
-        // A folder has no id; a file does.
-        if (f.id) out.push(`${dir}/${f.name}`);
-        else out.push(...(await walk(`${dir}/${f.name}`)));
-      }
-      if (!data || data.length < 100) return out;
-    }
-  };
-  const files = await walk(uid);
-  for (let i = 0; i < files.length; i += 100) {
-    const { error } = await bucket.remove(files.slice(i, i + 100));
-    if (error) throw error;
-  }
+// ------------------------------------------------------------------ feedback
+export async function sendFeedback(subject: string, body: string, contact: string | null) {
+  await must(supabase.rpc('feedback_send', { p_subject: subject, p_body: body, p_contact: contact }));
 }
 
-// App Store 5.1.1(v): an account made with Apple has its Apple link revoked when it is
-// deleted. Apple asks once more (Face ID), the code goes to the apple-revoke function,
-// which holds the key. false: the person cancelled (nothing is deleted).
+// ------------------------------------------------------------------ deleting the account
 async function revokeApple(): Promise<boolean> {
   try {
     const credential = await AppleAuthentication.signInAsync({ requestedScopes: [] });
@@ -221,7 +150,6 @@ async function revokeApple(): Promise<boolean> {
     return true;
   }
 }
-
 // true: deleted · false: cancelled at Apple's sheet
 export async function deleteEverything(): Promise<boolean> {
   const { data } = await supabase.auth.getUser();
@@ -229,41 +157,15 @@ export async function deleteEverything(): Promise<boolean> {
   if (!user) throw new Error('sign in first');
   const apple = Platform.OS === 'ios' && (user.identities ?? []).some((i) => i.provider === 'apple');
   if (apple && !(await revokeApple())) return false;
-  await removeFiles(user.id);
   await must(supabase.rpc('delete_account'));
   return true;
 }
 
-// ------------------------------------------------------------------ appeals (85)
-
-// A closed account objects once; the closed screen shows where it stands.
-export type MyAppeal = { sent_at: string; outcome: 'unban' | 'keep' | null; settled_at: string | null };
-export async function myAppeal(): Promise<MyAppeal | null> {
-  const { data, error } = await supabase.rpc('my_appeal');
-  if (error) return null;
-  return ((data ?? []) as MyAppeal[])[0] ?? null;
-}
-export async function sendAppeal(body: string) {
-  await must(supabase.rpc('appeal', { p_body: body }));
-}
-export type OpenAppeal = { id: number; user_id: string; handle: string | null; reason: string | null; banned_at: string; body: string; created_at: string };
-export async function staffAppeals(): Promise<OpenAppeal[]> {
-  return ((await must(supabase.rpc('staff_appeals'))) ?? []) as OpenAppeal[];
-}
-export async function settleAppeal(id: number, unban: boolean) {
-  await must(supabase.rpc('staff_appeal_settle', { p_id: id, p_unban: unban }));
-}
-
-// ------------------------------------------------------------- account security (F19)
-
-// The confirmation mail again, for an address that never clicked the first one.
+// ------------------------------------------------------------- account security
 export async function resendConfirmation(email: string) {
   const { error } = await supabase.auth.resend({ type: 'signup', email: email.trim(), options: { emailRedirectTo: CONFIRM_URL } });
   if (error) throw error;
 }
-// Proves the person at the phone knows the password before a change that matters
-// (a new password, deleting the account). True when the account has no password
-// identity (Apple, Google): there is nothing to ask for.
 export async function hasPassword(): Promise<boolean> {
   const { data } = await supabase.auth.getUser();
   return (data.user?.identities ?? []).some((i) => i.provider === 'email');

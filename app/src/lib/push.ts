@@ -8,7 +8,7 @@ import { supabase } from '@/lib/supabase';
 import { getLang } from '@/i18n/core';
 import { colors } from '@/theme/tokens';
 
-// Push notifications (26_push.sql). The phone registers its Expo push token with
+// Push notifications (13_push.sql). The phone registers its Expo push token with
 // the account, plus the app language and the phone's time zone (for quiet hours);
 // the database decides what to send and when.
 //
@@ -51,7 +51,7 @@ export async function registerPush(ask: boolean): Promise<PushStatus> {
   if (!N) return 'unsupported';
   if (Platform.OS === 'android') {
     await N.setNotificationChannelAsync('default', {
-      name: 'afterhours',
+      name: 'pasaport',
       importance: N.AndroidImportance.HIGH,
       lightColor: colors.spot,
     });
