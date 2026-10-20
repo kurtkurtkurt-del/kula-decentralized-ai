@@ -131,7 +131,7 @@ const server = createServer(async (req, reply) => {
   const path = url.pathname;
 
   reply.setHeader("Access-Control-Allow-Origin", "*");
-  reply.setHeader("Access-Control-Allow-Headers", "authorization, apikey, content-type, prefer, x-upsert, range");
+  reply.setHeader("Access-Control-Allow-Headers", "authorization, apikey, content-type, content-profile, accept-profile, prefer, x-upsert, range, x-client-info, x-supabase-api-version");
   reply.setHeader("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS");
   if (req.method === "OPTIONS") { reply.writeHead(204); return reply.end(); }
 
