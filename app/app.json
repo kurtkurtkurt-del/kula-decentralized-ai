@@ -1,13 +1,13 @@
 {
   "expo": {
-    "name": "afterhours",
-    "slug": "afterhours",
+    "name": "pasaport",
+    "slug": "pasaport",
     "version": "0.1.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
     "ios": {
-      "bundleIdentifier": "app.afterhours.ios",
+      "bundleIdentifier": "app.pasaport.ios",
       "supportsTablet": false,
       "infoPlist": {
         "NSLocationWhenInUseUsageDescription": "afterhours uses your location to show the nights near you.",
@@ -16,7 +16,7 @@
       "usesAppleSignIn": true
     },
     "android": {
-      "package": "app.afterhours.android",
+      "package": "app.pasaport.android",
       "adaptiveIcon": {
         "backgroundColor": "#0E0D0C",
         "foregroundImage": "./assets/android-icon-foreground.png",
@@ -61,8 +61,8 @@
     "web": {
       "favicon": "./public/favicon.png",
       "output": "single",
-      "name": "afterhours",
-      "shortName": "afterhours",
+      "name": "pasaport",
+      "shortName": "pasaport",
       "description": "find your night. one card at a time.",
       "themeColor": "#0E0D0C",
       "backgroundColor": "#0E0D0C"
@@ -122,7 +122,7 @@
         }
       ]
     ],
-    "scheme": "afterhours",
+    "scheme": "pasaport",
     "experiments": {
       "typedRoutes": true
     },
