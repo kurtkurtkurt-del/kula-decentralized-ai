@@ -52,3 +52,15 @@ app/package/backend adları "pasaport", Android `app.pasaport.android`, iOS `app
 
 ### Kalan iskelet (dokunulmaz)
 offline shelf+outbox, `assert_member()`, numaralı migration + PGlite test, i18n en·de·tr, `npm run gate`, pre-push hook, prototip-önce, push kuralı (sabit cümle + isim).
+
+## 3. Cihaz ölçümü: hazır Kotlin kaynağı (20.10.2026 akşamı)
+
+Ölçüm kodu başka bir Code oturumunda ("Kapasite Pasaportu Android uygulaması") yazıldı ve
+`native/passport-measure-android/` altına **olduğu gibi** alındı (saf Android, Compose, Gradle, JDK 17
+`/opt/homebrew/opt/openjdk@17`). Yeniden yazılmaz:
+- `app/src/main/java/com/pasaport/Measure.kt` — `measureAll()`: RAM (MemoryInfo, largeMemoryClass), SoC,
+  cpufreq, 256 MB arraycopy bant genişliği (1 ısınma + 3), 512×512 çok çekirdek matris (3 tekrar), StatFs,
+  BatteryManager, `estimateModel()` (min(free, cap)×0.8, 0.6 GB/1B, basamaklar 1/3/4/7/8/12/14).
+- `Passport.kt` — veri sınıfı + `toJson()` (schema passport/0.1, brief'teki alanlar).
+- `MainActivity.kt` — tek ekran Compose arayüzü (ölç → sonuç kartı → kopyala); Expo modülünde kullanılmaz.
+Adım 4'te `modules/passport-measure/` (expo-modules-core) Measure.kt + Passport.kt'yi değiştirmeden sarar.
