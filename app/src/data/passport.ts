@@ -6,13 +6,17 @@ import { supabase } from '@/lib/supabase';
 import { invalidate, must, newId, outbox, pendingJobs, remember, send, useShelf } from '@/lib/offline';
 import { measureNative, nativeAvailable } from '@/passport/measure';
 
-// The device passport (passport/0.1): what this phone can carry at night. Measured by
+// The device passport (passport/0.2): what this device can carry at night. Measured by
 // modules/passport-measure on Android (Kotlin: RAM, SoC, cpufreq, a 256 MB arraycopy
 // bandwidth test, a 512×512 matrix multiply on every core, StatFs, BatteryManager); on
 // iOS and in Expo Go a JS fallback marked "approx" (expo-device + a Float32Array copy).
 // The result goes to the shelf first, then through the outbox to passport_save (07).
+// 0.2 (21.10.2026) adds who the device is: device_id (a uuid made once on this install),
+// kind (phone · tablet · computer) and os. Other devices' passports arrive as qr codes
+// (or pasted json) and are kept on this phone only: linkedPassports / fleet below.
+export type DeviceKind = 'phone' | 'tablet' | 'computer';
 export type Passport = {
-  schema: 'passport/0.1';
+  schema: 'passport/0.1' | 'passport/0.2';
   device: string;
   soc: string;
   android: string;
@@ -30,9 +34,31 @@ export type Passport = {
   est_tps: number;
   measured_at: string;
   approx?: boolean; // the JS fallback, not the native measurement
+  device_id?: string; // 0.2
+  kind?: DeviceKind; // 0.2
+  os?: string; // 0.2: "android 15", "ios 18.1", "macos 14 · chrome", …
 };
 
 const LAST = 'passport.last';
+const DEVICE = 'passport.device';
+const LINKED = 'passport.linked';
+export const MAX_LINKED = 8;
+export const NIGHT_HOURS = 8.5;
+
+// This install's id, made once; it tells one phone's passport from another's.
+export function deviceId(): string {
+  try {
+    const have = Storage.getItemSync(DEVICE);
+    if (have) return have;
+    const id = newId();
+    Storage.setItemSync(DEVICE, id);
+    return id;
+  } catch {
+    return 'unknown';
+  }
+}
+const kindHere = (): DeviceKind => (Device.deviceType === Device.DeviceType.TABLET ? 'tablet' : Device.deviceType === Device.DeviceType.DESKTOP ? 'computer' : 'phone');
+const osHere = () => `${Platform.OS} ${Device.osVersion ?? ''}`.trim();
 export const STEPS = [1, 3, 4, 7, 8, 12, 14];
 
 // Largest Q4 model that fits: usable = min(free RAM, app cap) × 0.8, ~0.6 GB per 1B;
@@ -80,7 +106,8 @@ async function measureJs(): Promise<Passport> {
 // Measure: native where it exists, the JS fallback elsewhere. The result is kept on the
 // phone and sent to the account (a retry with the same id changes nothing).
 export async function measure(): Promise<Passport> {
-  const p = nativeAvailable() ? await measureNative() : await measureJs();
+  const raw = nativeAvailable() ? await measureNative() : await measureJs();
+  const p: Passport = { ...raw, schema: 'passport/0.2', device_id: deviceId(), kind: kindHere(), os: osHere() };
   try {
     Storage.setItemSync(LAST, JSON.stringify(p));
   } catch {}
@@ -130,3 +157,79 @@ export async function passportsMine(): Promise<PassportRow[]> {
 export const usePassportsShelf = () => useShelf('passports');
 export const forgetPassports = () => invalidate('passports');
 export const passportJson = (p: Passport) => JSON.stringify({ ...p, approx: undefined }, null, 2);
+// What the qr code carries: the same passport, compact (~450 characters, a version-15 code).
+export const passportQr = (p: Passport) => JSON.stringify(p);
+
+// ---- other devices, connected by qr ------------------------------------------------
+// Kept on this phone (kv-store), never sent: a list of passports read from other devices'
+// qr codes or pasted as json. Same device again (device_id, or device + soc for 0.1
+// passports) replaces the old one. At most MAX_LINKED.
+export type Linked = { id: string; data: Passport; added_at: string };
+export function linkedPassports(): Linked[] {
+  try {
+    const raw = Storage.getItemSync(LINKED);
+    return raw ? (JSON.parse(raw) as Linked[]) : [];
+  } catch {
+    return [];
+  }
+}
+function saveLinked(list: Linked[]) {
+  try {
+    Storage.setItemSync(LINKED, JSON.stringify(list));
+  } catch {}
+  listeners.forEach((fn) => fn());
+}
+const sameDevice = (a: Passport, b: Passport) => (a.device_id && b.device_id ? a.device_id === b.device_id : a.device === b.device && a.soc === b.soc);
+
+// Reads a passport from scanned or pasted text. Throws a code (devices.err.* in i18n)
+// when it is not one, when it lacks the field the night relies on, or when it is this
+// phone's own.
+export function parsePassport(text: string): Passport {
+  let p: Partial<Passport>;
+  try {
+    p = JSON.parse(text.trim()) as Partial<Passport>;
+  } catch {
+    throw new Error('notPassport');
+  }
+  if (!p || typeof p !== 'object' || typeof p.schema !== 'string' || !/^passport\/0\./.test(p.schema)) throw new Error('notPassport');
+  if (typeof p.est_tps !== 'number' || !(p.est_tps >= 0) || typeof p.device !== 'string') throw new Error('incomplete');
+  return p as Passport;
+}
+export function linkPassport(text: string): Passport {
+  const p = parsePassport(text);
+  const mine = lastPassport();
+  if (p.device_id === deviceId() || (mine && sameDevice(p, mine))) throw new Error('self');
+  const list = linkedPassports().filter((l) => !sameDevice(l.data, p));
+  const next: Linked = { id: newId(), data: p, added_at: new Date().toISOString() };
+  saveLinked([next, ...list].slice(0, MAX_LINKED));
+  return p;
+}
+export function unlinkPassport(id: string) {
+  saveLinked(linkedPassports().filter((l) => l.id !== id));
+}
+export function useLinked() {
+  const [list, setList] = useState<Linked[]>(linkedPassports);
+  useEffect(() => {
+    const fn = () => setList(linkedPassports());
+    listeners.add(fn);
+    return () => {
+      listeners.delete(fn);
+    };
+  }, []);
+  return list;
+}
+
+// The fleet: this device and the connected ones, as one number each where it adds up.
+// Speed, compute, bandwidth and disk add; the largest model does not (memory is not
+// pooled across devices), so that one is the best device's. tokens_night is what the
+// fleet would make in one night window (NIGHT_HOURS) at the summed rough speed.
+export type Fleet = { count: number; tps: number; gflops: number; bw: number; storage: number; largest: string; tokens_night: number };
+const fitOf = (label: string) => (label.startsWith('<') ? 0 : Number(label.replace(/[^0-9.]/g, '')) || 0);
+const r1 = (n: number) => Math.round(n * 10) / 10;
+export function fleet(own: Passport | null, linked: Linked[]): Fleet {
+  const all = [...(own ? [own] : []), ...linked.map((l) => l.data)];
+  const sum = (f: (p: Passport) => number) => all.reduce((a, p) => a + (Number(f(p)) || 0), 0);
+  const best = all.reduce<Passport | null>((b, p) => (!b || fitOf(p.largest_model_q4) > fitOf(b.largest_model_q4) ? p : b), null);
+  const tps = r1(sum((p) => p.est_tps));
+  return { count: all.length, tps, gflops: r1(sum((p) => p.gflops)), bw: r1(sum((p) => p.mem_bw_gbs)), storage: r1(sum((p) => p.storage_free_gb)), largest: best?.largest_model_q4 ?? '—', tokens_night: Math.round(tps * NIGHT_HOURS * 3600) };
+}

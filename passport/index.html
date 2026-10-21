@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title data-i18n="passport.title">device passport | afterhours</title>
+  <meta name="description" content="What this computer can carry at night, measured in the browser, as a code the app reads." data-i18n-attr="content:passport.desc" />
+  <meta property="og:type" content="website" />
+  <meta property="og:site_name" content="afterhours" />
+  <meta property="og:title" content="device passport — afterhours" />
+  <meta property="og:description" content="What this computer can carry at night, measured in the browser, as a code the app reads." />
+  <meta property="og:url" content="https://kurtkurtkurt-del.github.io/afterhours/passport/index.html" />
+  <meta property="og:image" content="https://kurtkurtkurt-del.github.io/afterhours/og/afterhours.png" />
+  <meta property="og:image:width" content="1200" />
+  <meta property="og:image:height" content="630" />
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="theme-color" content="#000000" />
+  <link rel="icon" type="image/png" sizes="16x16" href="../favicon-16.png" />
+  <link rel="icon" type="image/png" sizes="32x32" href="../favicon-32.png" />
+  <link rel="icon" type="image/png" sizes="48x48" href="../favicon-48.png" />
+  <link rel="apple-touch-icon" sizes="180x180" href="../favicon-180.png" />
+  <link rel="manifest" href="../manifest.webmanifest" />
+  <link rel="stylesheet" href="../fonts/fonts.css?v=199" />
+  <link rel="stylesheet" href="../style.css?v=199" />
+  <script src="../i18n.js?v=199"></script>
+</head>
+<body>
+
+  <a class="skip" href="#content" data-i18n="skip">skip to the content</a>
+
+  <header class="header">
+    <a class="logo" href="../index.html">afterhours</a>
+    <nav class="header-links">
+      <a href="../explore/index.html" data-i18n="nav.explore">explore</a>
+      <a href="../djs/index.html" data-i18n="nav.djs">djs</a>
+      <a href="../friends/index.html" data-i18n="nav.yours">yours</a>
+      <a href="../maps/index.html" data-i18n="nav.map">map</a>
+      <a href="../cards/index.html" data-i18n="nav.collection">collection</a>
+      <a href="../help/index.html" data-i18n="nav.help">help</a>
+      <a href="../login/index.html" data-i18n="nav.account">account</a>
+    </nav>
+  </header>
+
+  <main id="content" tabindex="-1" class="fb pp">
+    <h1 class="page-title" data-i18n-html="passport.h1">device<br />passport.</h1>
+    <p class="fb-intro" data-i18n="passport.intro">The app measures phones. This page measures the computer it is open on —
+      in the browser, so roughly — and draws the result as a code. On your phone: passport, connect, point it here.
+      Then this computer counts in your devices.</p>
+
+    <!-- before: how much ram, and the button -->
+    <div id="pp-form">
+      <section class="account">
+        <p class="account-title" data-i18n="passport.ram.label">ram, in gb</p>
+        <p class="account-about" id="pp-ram-about" data-i18n="passport.ram.about">The browser only tells us this on some machines, and never more than 8.
+          Correct it if you know better.</p>
+        <input class="account-field" id="pp-ram" type="number" inputmode="decimal" min="1" max="2048" step="1" placeholder="16" />
+      </section>
+      <div class="set-save">
+        <button class="account-button" id="pp-run" type="button" data-i18n="passport.measure">measure</button>
+        <span class="account-status" id="pp-status"></span>
+      </div>
+    </div>
+
+    <!-- after: the passport -->
+    <div id="pp-result" hidden>
+      <div class="pp-grid">
+        <div class="pp-qr">
+          <canvas id="pp-canvas" width="320" height="320" aria-label="the passport as a qr code" data-i18n-attr="aria-label:passport.qr.alt"></canvas>
+          <p class="pp-hint" data-i18n="passport.qr.hint">on your phone: passport → connect → point it here</p>
+        </div>
+        <div class="pp-rows" id="pp-rows"></div>
+      </div>
+      <div class="set-save pp-actions">
+        <button class="account-button" id="pp-again" type="button" data-i18n="passport.again">measure again</button>
+        <button class="sc-link pp-copy" id="pp-copy" type="button" data-i18n="passport.copy">copy json</button>
+        <span class="account-status" id="pp-copied"></span>
+      </div>
+      <pre class="pp-json" id="pp-json"></pre>
+    </div>
+
+    <p class="fb-note" data-i18n="passport.note">Marked approx on purpose: a browser measures itself more than the machine
+      — one thread at a time where there is no worker, memory rounded down, the disk is what the browser may use.
+      Speed, compute and bandwidth add up across your devices; the model does not, since memory is not pooled.</p>
+  </main>
+
+  <footer class="foot">
+    <p class="foot-name" data-i18n="foot.name">&copy; 2026 afterhours</p>
+    <nav class="foot-links">
+      <a href="../impressum/index.html" data-i18n="foot.impressum">impressum</a>
+      <a href="../datenschutz/index.html" data-i18n="foot.datenschutz">datenschutz</a>
+      <a href="../agb/index.html" data-i18n="foot.agb">agb</a>
+    </nav>
+  </footer>
+
+  <script src="../config.js?v=199"></script>
+  <script src="../session.js?v=199"></script>
+  <script src="../menu.js?v=199"></script>
+  <script src="qr.js?v=199"></script>
+  <script src="passport.js?v=199"></script>
+
+  <script src="../webapp.js?v=199"></script>
+</body>
+</html>

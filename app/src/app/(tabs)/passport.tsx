@@ -4,6 +4,7 @@ import { StatusBar } from 'expo-status-bar';
 import { router } from 'expo-router';
 import * as Clipboard from 'expo-clipboard';
 import AfterhoursCard from '@/components/AfterhoursCard';
+import Devices from '@/components/Devices';
 import Icon from '@/components/Icon';
 import Tips from '@/components/Tips';
 import { TAB_BAR_SPACE, useTabBarSpace } from '@/components/TabBar';
@@ -22,7 +23,8 @@ import { brand } from '@/theme/layout';
 
 // The passport tab (design E, prototypes/passport.html, 20.10.2026): the device passport
 // as a card, a red block on top (the largest model, large) and paper under it with the
-// measurements; measure / copy json under the card; then tonight: the night worker's
+// measurements; measure / copy json under the card; your devices (components/Devices.tsx:
+// the ones connected by qr and the fleet's total); then tonight: the night worker's
 // state and counter; then the cards earned so far, as the collection.
 const CARD = 0.39;
 const STEP = 0.42;
@@ -88,7 +90,7 @@ export default function PassportScreen() {
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: TAB_BAR_SPACE + insets.bottom + 28 }}>
         <View style={styles.top}>
           <Text style={styles.title}>{t('passport.title')}</Text>
-          <Pressable onPress={() => router.push(signedIn ? '/signup' : '/signup')} hitSlop={12} accessibilityRole="button" accessibilityLabel={t('passport.settings')} style={({ pressed }) => [styles.gear, pressed && styles.pressed]}>
+          <Pressable onPress={() => router.push('/settings')} hitSlop={12} accessibilityRole="button" accessibilityLabel={t('passport.settings')} style={({ pressed }) => [styles.gear, pressed && styles.pressed]}>
             <Icon name="account" size={20} color={colors.paper} />
           </Pressable>
           <View style={styles.sec}>
@@ -137,6 +139,9 @@ export default function PassportScreen() {
           </View>
           {note ? <Text style={styles.note}>{note}</Text> : null}
           {!nativeAvailable() ? <Text style={styles.note}>{t('passport.approx')}</Text> : null}
+
+          {/* your devices: this one and the ones connected by qr, and what they make together */}
+          <Devices passport={passport} />
 
           {/* tonight: the worker */}
           <View style={styles.sec}>

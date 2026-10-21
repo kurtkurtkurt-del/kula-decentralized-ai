@@ -95,6 +95,14 @@
       "expo-secure-store",
       "expo-asset",
       [
+        "expo-camera",
+        {
+          "cameraPermission": "afterhours reads the passport of another device from its qr code.",
+          "microphonePermission": false,
+          "recordAudioAndroid": false
+        }
+      ],
+      [
         "expo-image-picker",
         {
           "photosPermission": "afterhours shows the photo you choose at the top of your account.",
