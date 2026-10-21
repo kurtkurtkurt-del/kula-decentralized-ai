@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="tr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>kula · bilgisayarını bağla</title>
+<!-- kula decentralized ai — a computer's passport to the phone in three steps (22.10.2026).
+     1. copy one Terminal command: it measures this Mac with passport/mac.sh (no connect id,
+        so nothing is sent anywhere) and copies the passport json to the clipboard;
+     2. paste it here;
+     3. this page draws it as a qr code; the app reads it with passport → connect and adds the
+        computer, with every field, to "together". Nothing leaves this page: no server. -->
+<style>
+  :root { --ground: #ffffff; --beige: #f0e6d2; --line: #e8dfcb; --words: #1f1a14; --mute: #7a6a58; --sage: #5b6b56; --red: #c86a51; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--ground); color: var(--words); font: 16px/1.5 -apple-system, "Inter", Helvetica, Arial, sans-serif; }
+  main { max-width: 680px; margin: 0 auto; padding: 40px 20px 80px; }
+  h1 { font-size: 34px; letter-spacing: -0.03em; margin: 0 0 6px; }
+  .lede { color: var(--mute); margin: 0 0 32px; }
+  .step { border: 1px solid var(--line); border-radius: 16px; padding: 20px; margin-bottom: 18px; }
+  .step h2 { font-size: 13px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--mute); margin: 0 0 12px; font-weight: 500; }
+  .step h2 b { color: var(--sage); }
+  pre { background: var(--beige); border-radius: 10px; padding: 14px; margin: 0; overflow-x: auto; font: 13px/1.5 ui-monospace, Menlo, monospace; white-space: pre-wrap; word-break: break-all; }
+  button { font: inherit; font-weight: 600; border: 0; border-radius: 999px; padding: 10px 20px; background: var(--sage); color: #fff; cursor: pointer; }
+  button.line { background: transparent; color: var(--words); border: 1.5px solid var(--words); }
+  .row { display: flex; gap: 10px; align-items: center; margin-top: 12px; flex-wrap: wrap; }
+  .hint { color: var(--mute); font-size: 14px; }
+  textarea { width: 100%; min-height: 140px; border: 1px solid var(--line); border-radius: 10px; padding: 12px; font: 12px/1.4 ui-monospace, Menlo, monospace; resize: vertical; }
+  .err { color: var(--red); font-size: 14px; margin-top: 8px; }
+  .result { display: grid; grid-template-columns: 1fr; gap: 18px; }
+  /* large enough to read off a screen: about 7 px per module at version 24 */
+  .qr { background: #fff; border: 1px solid var(--line); border-radius: 12px; padding: 12px; max-width: 460px; width: 100%; margin: 0 auto; }
+  .qr svg { display: block; width: 100%; height: auto; }
+  dl { margin: 0; display: grid; grid-template-columns: auto 1fr; gap: 6px 14px; font-size: 14px; }
+  dt { color: var(--mute); }
+  dd { margin: 0; font-family: ui-monospace, Menlo, monospace; }
+  .big { font-size: 28px; font-weight: 700; letter-spacing: -0.02em; margin: 0 0 8px; }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<main>
+  <h1>bilgisayarını bağla.</h1>
+  <p class="lede">bilgisayarının pasaportunu çıkar, telefonundaki kula'ya okut; birlikte ne yaptıklarını gör. hiçbir şey bir sunucuya gitmez.</p>
+
+  <section class="step">
+    <h2><b>1</b> · Terminal'e yapıştır (Mac)</h2>
+    <pre id="cmd"></pre>
+    <div class="row">
+      <button id="copy">komutu kopyala</button>
+      <span class="hint" id="copied"></span>
+    </div>
+    <p class="hint">Terminal: ⌘ + boşluk → "Terminal" → yapıştır → enter. yaklaşık 20 saniye sürer, bilgisayarı ölçer ve sonucu panoya kopyalar. ilk sefer komut satırı araçlarını isteyebilir; istemezsen daha kaba bir ölçüm yapar.</p>
+  </section>
+
+  <section class="step">
+    <h2><b>2</b> · sonucu buraya yapıştır</h2>
+    <textarea id="json" placeholder='⌘ + V — {"schema": "passport/0.3", …}' spellcheck="false"></textarea>
+    <div class="row"><button id="make">qr yap</button></div>
+    <div class="err" id="err" hidden></div>
+  </section>
+
+  <section class="step" id="out" hidden>
+    <h2><b>3</b> · telefonla okut</h2>
+    <div class="result">
+      <div class="qr" id="qr"></div>
+      <div>
+        <p class="big" id="name"></p>
+        <dl id="facts"></dl>
+        <p class="hint" style="margin-top:16px">kula → pasaport → <b>bağla</b> → kamerayı bu koda tut. bilgisayar "birlikte"ye eklenir; "birleşince ne olur"da tahmini görürsün.</p>
+      </div>
+    </div>
+  </section>
+</main>
+<script src="../passport/qr.js"></script>
+<script>
+(function () {
+  // 1 · the command: the Mac script from this same site, then the passport to the clipboard
+  var cmd = "curl -fsSL " + location.origin + "/passport/mac.sh | bash && pbcopy < ~/.kula/passport.json && echo 'kopyalandı: sayfaya yapıştır'";
+  document.getElementById("cmd").textContent = cmd;
+  document.getElementById("copy").onclick = function () {
+    navigator.clipboard.writeText(cmd).then(function () { document.getElementById("copied").textContent = "kopyalandı"; });
+  };
+
+  var err = document.getElementById("err");
+  function fail(m) { err.textContent = m; err.hidden = false; document.getElementById("out").hidden = true; }
+
+  // 2 → 3 · read the passport the way the app does (passport/contract.ts normalizePassport):
+  // a passport/0.x json with a device and a speed; then draw it whole as a qr code
+  function make() {
+    err.hidden = true;
+    var p;
+    try { p = JSON.parse(document.getElementById("json").value.trim()); } catch (e) { return fail("bu bir pasaport değil: json okunamadı. komutun sonundaki 'kopyalandı' satırından sonra ⌘ + V."); }
+    if (!p || typeof p.schema !== "string" || !/^passport\/0\./.test(p.schema)) return fail("bu bir pasaport değil (schema passport/0.x olmalı).");
+    if (typeof p.device !== "string" || !(Number(p.est_tps) >= 0)) return fail("pasaport eksik: cihaz ya da hız yok. komutu yeniden çalıştır.");
+    var text = JSON.stringify(p); // compact: every field, the app keeps them all
+    var q;
+    try { q = window.AH.qr(text); } catch (e) { return fail("qr çizilemedi: " + e.message); }
+    var n = q.size, pad = 4, s = n + pad * 2, path = "";
+    for (var y = 0; y < n; y++) for (var x = 0; x < n; x++) if (q.get(x, y)) path += "M" + (x + pad) + " " + (y + pad) + "h1v1h-1z";
+    document.getElementById("qr").innerHTML = '<svg viewBox="0 0 ' + s + " " + s + '" shape-rendering="crispEdges"><rect width="' + s + '" height="' + s + '" fill="#fff"/><path d="' + path + '" fill="#000"/></svg>';
+
+    var e = p.estimate || {}, b = p.budget || {};
+    document.getElementById("name").textContent = (p.device || "bilgisayar").toLowerCase();
+    var rows = [
+      ["çip", p.soc],
+      ["işletim sistemi", p.os],
+      ["bellek", p.ram_total_gb + " gb · " + p.ram_free_gb + " boş"],
+      ["okuma", p.mem_bw_read_gbs ? p.mem_bw_read_gbs + " gb/s · " + (p.best_threads || "?") + " iş parçacığı" : p.mem_bw_gbs + " gb/s"],
+      ["hesap", p.gflops ? p.gflops + " gflops" : "ölçülmedi"],
+      ["model bütçesi", b.ram_gb !== undefined ? b.ram_gb + " gb · ~" + b.q4_k_m_b + "B q4" : "—"],
+      ["tek başına", e.tps_high ? "~" + e.fit_b + "B · " + e.tps_low + "–" + e.tps_high + " tok/s" : p.largest_model_q4 + " · " + p.est_tps + " tok/s"],
+      ["ölçüm", (p.approx ? "yaklaşık · " : "") + String(p.measured_at || "").slice(0, 16).replace("T", " ")],
+      ["qr", text.length + " bayt · sürüm " + ((n - 17) / 4)],
+    ];
+    document.getElementById("facts").innerHTML = rows.map(function (r) { return "<dt>" + r[0] + "</dt><dd>" + String(r[1] === undefined ? "—" : r[1]).replace(/</g, "&lt;") + "</dd>"; }).join("");
+    document.getElementById("out").hidden = false;
+    document.getElementById("out").scrollIntoView({ behavior: "smooth" });
+  }
+  document.getElementById("make").onclick = make;
+  document.getElementById("json").addEventListener("paste", function () { setTimeout(make, 0); });
+})();
+</script>
+</body>
+</html>

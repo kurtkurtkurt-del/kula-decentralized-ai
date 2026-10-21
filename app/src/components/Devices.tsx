@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { router } from 'expo-router';
 import { Modal, Platform, Pressable, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import * as Clipboard from 'expo-clipboard';
@@ -69,6 +70,9 @@ export default function Devices({ passport }: { passport: Passport | null }) {
         <Text style={[styles.total, f.tps_low !== f.tps_high && styles.totalRange]} numberOfLines={1} adjustsFontSizeToFit>{f.count ? rangeText(f.tps_low, f.tps_high) : '—'}</Text>
         <Text style={styles.unit}>tok/s</Text>
       </View>
+      <Pressable onPress={() => router.push('/together')} hitSlop={8} accessibilityRole="link" style={({ pressed }) => [styles.open, pressed && styles.pressed]}>
+        <Text style={styles.openText}>{t('combine.open')}</Text>
+      </Pressable>
       <Text style={styles.under}>{f.count ? `${tn('devices.count', f.count)}${f.tps_low !== f.tps_high ? ` · ${t('passport.range')}` : ''} · ${t('devices.best', { model: f.largest })}` : t('devices.none')}</Text>
       {all.length ? (
         <View style={styles.list}>
@@ -150,6 +154,8 @@ const styles = StyleSheet.create({
   mono: { flexShrink: 1, fontFamily: fonts.jet, fontSize: 10, letterSpacing: 1.4, color: colors.mute },
   totalRow: { flexDirection: 'row', alignItems: 'baseline', gap: 8 },
   total: { fontFamily: fonts.logo, fontSize: 64, lineHeight: 68, letterSpacing: -2, color: colors.paper, flexShrink: 1 },
+  open: { alignSelf: 'flex-start', marginBottom: 6 },
+  openText: { fontFamily: fonts.medium, fontSize: 13, color: colors.spotText },
   totalRange: { fontSize: 46, lineHeight: 52, letterSpacing: -1.5 },
   unit: { fontFamily: fonts.regular, fontSize: 18, color: colors.mute },
   under: { fontFamily: fonts.regular, fontSize: 13, color: colors.mute, marginTop: 2 },

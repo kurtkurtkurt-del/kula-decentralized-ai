@@ -6,7 +6,7 @@
 import { describe, expect, it } from '@jest/globals';
 import { existsSync, readdirSync, readFileSync } from 'fs';
 import { join } from 'path';
-import { estimateModel, fitLabelOf, normalizePassport, rangeOf, rangeText, SUPPORTED_API, SUPPORTED_MAJOR, unknownKeys } from '@/passport/contract';
+import { combine, estimateModel, fitLabelOf, normalizePassport, rangeOf, rangeText, SUPPORTED_API, SUPPORTED_MAJOR, unknownKeys } from '@/passport/contract';
 
 const app = join(__dirname, '../..');
 const sources = [
@@ -118,5 +118,34 @@ describe('the speed the screens show', () => {
     expect(rangeOf(old)).toEqual({ low: 3.9, high: 3.9 });
     expect(fitLabelOf(old)).toBe('~3B');
     expect(rangeText(3.9, 3.9)).toBe('3.9');
+  });
+});
+
+describe('what if they join (combine)', () => {
+  // the two devices of 21.10.2026: the S25+ and the MacBook Air M1, as measured
+  const phone = normalizePassport({ schema: 'passport/0.3', device: 'samsung SM-S936B', kind: 'phone', est_tps: 6.1, largest_model_q4: '~3B', mem_bw_read_gbs: 58.25,
+    budget: { ctx: 2048, reserve_gb: 0.5, ram_gb: 1.74, q4_k_m_b: 2.9, q3_k_s_b: 3.9, q8_0_b: 1.6 }, estimate: { fit_b: 1, tps_low: 28.6, tps_high: 57.3, source: 'estimate' } });
+  const mac = normalizePassport({ schema: 'passport/0.3', device: 'apple macbook air', kind: 'computer', est_tps: 46.7, largest_model_q4: '~1B', mem_bw_read_gbs: 61.2,
+    budget: { ctx: 2048, reserve_gb: 0.5, ram_gb: 1.18, q4_k_m_b: 1.9, q3_k_s_b: 2.6, q8_0_b: 1.1 }, estimate: { fit_b: 1, tps_low: 30.1, tps_high: 60.2, source: 'estimate' } });
+  const c = combine([phone, mac]);
+  it('apart: the speeds add up, the model stays the best single one', () => {
+    expect(c.apart).toMatchObject({ low: 58.7, high: 117.5, fitB: 1 });
+    expect(c.apart.tokensLow).toBe(Math.round((28.6 + 30.1) * 3600 * 8.5));
+  });
+  it('split: the budgets add up to a bigger model, the fastest device takes the first share', () => {
+    expect(c.split).not.toBeNull();
+    expect(c.split!.budgetGb).toBe(2.92);
+    expect(c.split!.fitB).toBe(4);
+    expect(c.split!.shares.map((s) => s.name)).toEqual(['apple macbook air', 'samsung SM-S936B']);
+    expect(c.split!.shares[0].gb).toBe(1.18);
+    expect(c.split!.hops).toBe(1);
+  });
+  it('split: one hop of 100 ms dominates; a lean protocol would be about twice as fast', () => {
+    expect(c.split!.high).toBe(5.9);
+    expect(c.split!.low).toBe(4.2);
+    expect(c.split!.leanHigh).toBe(13.7);
+  });
+  it('one device: nothing to split', () => {
+    expect(combine([phone]).split).toBeNull();
   });
 });

@@ -127,3 +127,72 @@ export function rangeOf(p: Passport): { low: number; high: number } {
 export const fitLabelOf = (p: Passport) => (p.estimate && p.estimate.tps_high > 0 ? (p.estimate.fit_b ? `~${p.estimate.fit_b}B` : '<1B') : p.largest_model_q4);
 /** "28.6–57.3", or one number when both ends agree. */
 export const rangeText = (low: number, high: number) => (low === high ? String(low) : `${low}–${high}`);
+
+// ---- "what if they join?" (the together page, 22.10.2026) ----------------------------
+// Two ways devices can work together, estimated from their passports:
+//  apart — every device runs its own copy of a model on its own jobs: the speeds add up,
+//          the model is the best device's (memory is not pooled);
+//  split — one model cut across the devices (llama.cpp rpc): the budgets add up, so a
+//          bigger model fits, but every token passes each device in turn and crosses the
+//          network between them. Shares go to the fastest device first. A hop costs what the
+//          wifi split test measured (11.10.2026, ~100 ms); a leaner protocol would need
+//          a few ms, shown for comparison. None of the factors is calibrated yet.
+export const COMBINE = { hopS: 0.1, leanHopS: 0.005, efficiency: 0.6, hot: 0.5, gbPerB: 0.61, steps: [1, 3, 4, 7, 8, 12, 14, 24, 32, 70], nightHours: 8.5 };
+export type CombineDevice = { name: string; kind: string; budgetGb: number; bwGbs: number; low: number; high: number; fitB: number };
+export type Share = { name: string; gb: number; msCool: number };
+export type Combined = {
+  devices: CombineDevice[];
+  apart: { low: number; high: number; fitB: number; tokensLow: number; tokensHigh: number };
+  split: { budgetGb: number; fitB: number; sizeGb: number; shares: Share[]; hops: number; low: number; high: number; leanHigh: number } | null;
+};
+const r1c = (x: number) => Math.round(x * 10) / 10;
+const fitNumber = (label: string) => (label.startsWith('<') ? 0 : Number(label.replace(/[^0-9.]/g, '')) || 0);
+
+export function deviceOf(p: Passport): CombineDevice {
+  const r = rangeOf(p);
+  return {
+    name: p.device,
+    kind: p.kind ?? 'phone',
+    budgetGb: p.budget ? Number(p.budget.ram_gb) || 0 : Math.max(0, (Number(p.ram_free_gb) || 0) * 0.8 - 0.5),
+    bwGbs: Number(p.mem_bw_read_gbs) || Number(p.mem_bw_gbs) || 0,
+    low: r.low,
+    high: r.high,
+    fitB: fitNumber(fitLabelOf(p)),
+  };
+}
+
+export function combine(passports: Passport[]): Combined {
+  const devices = passports.map(deviceOf);
+  const low = devices.reduce((a, d) => a + d.low, 0);
+  const high = devices.reduce((a, d) => a + d.high, 0);
+  const apart = {
+    low: r1c(low), high: r1c(high), fitB: Math.max(0, ...devices.map((d) => d.fitB)),
+    tokensLow: Math.round(low * 3600 * COMBINE.nightHours), tokensHigh: Math.round(high * 3600 * COMBINE.nightHours),
+  };
+  if (devices.length < 2) return { devices, apart, split: null };
+  const budgetGb = Math.round(devices.reduce((a, d) => a + d.budgetGb, 0) * 100) / 100;
+  const fitB = [...COMBINE.steps].reverse().find((b) => b * COMBINE.gbPerB <= budgetGb) ?? 0;
+  if (!fitB) return { devices, apart, split: null };
+  const sizeGb = fitB * COMBINE.gbPerB;
+  let left = sizeGb;
+  const shares: (Share & { bw: number })[] = [];
+  for (const d of [...devices].sort((a, b) => b.bwGbs - a.bwGbs)) {
+    const gb = Math.min(d.budgetGb, left);
+    if (gb <= 0) continue;
+    if (!(d.bwGbs > 0)) return { devices, apart, split: null }; // a device with no bandwidth: no estimate
+    shares.push({ name: d.name, gb: Math.round(gb * 100) / 100, msCool: Math.round((gb / (d.bwGbs * COMBINE.efficiency)) * 1000), bw: d.bwGbs });
+    left -= gb;
+    if (left <= 1e-9) break;
+  }
+  const hops = Math.max(0, shares.length - 1);
+  const cool = shares.reduce((a, s) => a + s.gb / (s.bw * COMBINE.efficiency), 0);
+  const hot = cool / COMBINE.hot;
+  return {
+    devices, apart,
+    split: {
+      budgetGb, fitB, sizeGb: Math.round(sizeGb * 100) / 100, hops,
+      shares: shares.map(({ name, gb, msCool }) => ({ name, gb, msCool })),
+      high: r1c(1 / (cool + hops * COMBINE.hopS)), low: r1c(1 / (hot + hops * COMBINE.hopS)), leanHigh: r1c(1 / (cool + hops * COMBINE.leanHopS)),
+    },
+  };
+}
