@@ -33,7 +33,7 @@ export const coops = {
   'coops.add': { en: 'add friends', de: 'freunde hinzufügen', tr: 'arkadaş ekle' },
   'coops.invite.hint': { en: 'anyone with the code can join, friends or not. it works for 14 days.', de: 'wer den code hat, kann beitreten, freund oder nicht. 14 tage gültig.', tr: 'kodu olan herkes katılabilir, arkadaşın olsun olmasın. 14 gün geçerli.' },
   'coops.invite.share': { en: 'send the link', de: 'link schicken', tr: 'linki gönder' },
-  'coops.invite.message': { en: 'work nights with us in “{name}” on pasaport. code: {code}', de: 'arbeite mit uns nächte in „{name}“ auf pasaport. code: {code}', tr: 'pasaport’ta “{name}” kooperatifinde bizimle gece çalış. kod: {code}' },
+  'coops.invite.message': { en: 'work nights with us in “{name}” on kula. code: {code}', de: 'arbeite mit uns nächte in „{name}“ auf kula. code: {code}', tr: 'pasaport’ta “{name}” kooperatifinde bizimle gece çalış. kod: {code}' },
   'coops.join.title': { en: 'join a coop', de: 'koop beitreten', tr: 'kooperatife katıl' },
   'coops.join.code': { en: 'the code (8 letters)', de: 'der code (8 zeichen)', tr: 'kod (8 karakter)' },
   'coops.join.look': { en: 'look', de: 'ansehen', tr: 'bak' },

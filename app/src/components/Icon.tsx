@@ -1,11 +1,12 @@
 import Svg, { Circle, Path, Rect } from 'react-native-svg';
+import { colors } from '@/theme/tokens';
 
 export type IconName = 'flow' | 'people' | 'yours' | 'map' | 'network' | 'passport' | 'account' | 'settings' | 'photo' | 'chat' | 'panel';
 type Props = { name: IconName; size?: number; color: string; strokeWidth?: number; filled?: boolean; hole?: string };
 
 // 1.5 px line icons on a 24 grid. filled: the solid version of the tab icons (the open tab,
 // as on Instagram); inner details are cut out in hole, the colour behind the icon.
-export default function Icon({ name, size = 22, color, strokeWidth = 1.5, filled = false, hole = '#FFFFFF' }: Props) {
+export default function Icon({ name, size = 22, color, strokeWidth = 1.5, filled = false, hole = colors.ink }: Props) {
   const p = { stroke: color, strokeWidth, fill: 'none', strokeLinecap: 'round' as const, strokeLinejoin: 'round' as const };
   const f = filled ? { ...p, fill: color } : p;
   const cut = { ...p, stroke: hole, fill: hole };

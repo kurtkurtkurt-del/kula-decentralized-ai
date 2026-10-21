@@ -4,12 +4,14 @@ import Storage from 'expo-sqlite/kv-store';
 // live rings), spotText is the same colour readable as small text on ink, rgb feeds
 // the see-through tints. Read once at start: every StyleSheet below is built from it,
 // so a new pick reloads the app (data/accent.ts).
+// kula (21.10.2026): the "Berlin Analog" palette of the kula web app — terracotta is
+// the default accent, sage the green, gold the warm one.
 export const ACCENTS = {
-  red: { spot: '#D7261E', spotText: '#F0443A', rgb: '215,38,30' },
-  green: { spot: '#1E9E57', spotText: '#3CC878', rgb: '30,158,87' },
-  yellow: { spot: '#E5B000', spotText: '#F5C838', rgb: '229,176,0' },
-  blue: { spot: '#2D6BE0', spotText: '#5C8FF0', rgb: '45,107,224' },
-  pink: { spot: '#DD3B8A', spotText: '#F065A8', rgb: '221,59,138' },
+  red: { spot: '#C86A51', spotText: '#B85A42', rgb: '200,106,81' },
+  green: { spot: '#5B6B56', spotText: '#4E5D4A', rgb: '91,107,86' },
+  yellow: { spot: '#D4A373', spotText: '#B08456', rgb: '212,163,115' },
+  blue: { spot: '#4A6B53', spotText: '#3E5A46', rgb: '74,107,83' },
+  pink: { spot: '#C87A53', spotText: '#A86340', rgb: '200,122,83' },
 } as const;
 export type AccentId = keyof typeof ACCENTS;
 const readAccent = (): AccentId => {
@@ -28,21 +30,21 @@ export const tint = (alpha: number) => `rgba(${accent.rgb},${alpha})`;
 // White, with colours on top (20.10.2026: it was ink on paper, as afterhours). The names
 // stayed so the screens did not: `ink` is the page's ground and `paper` the words on it.
 export const colors = {
-  paper: '#111111',          // the words
-  paper2: '#1F1F1F',
-  ink: '#FFFFFF',            // the ground
-  ink2: '#F1F0EC',           // blocks, cards (the old 'ink2' panels)
-  rule: '#E3E1DB',
+  paper: '#4E3629',          // the words: kula's deep brown
+  paper2: '#6B4F3F',
+  ink: '#F5F5F0',            // the ground: kula's warm off-white
+  ink2: '#FAF7F0',           // blocks, cards: cream
+  rule: '#D9D0C0',
   spot: accent.spot,         // the accent: live · kept · on; fills, borders, the dot in the logo
-  spotText: accent.spot,     // accent TEXT on white reads as is
-  ink3: '#E6E4DF',           // hairline: dividers, borders
-  mute: '#6B6962',           // muted text and icons
-  meta: '#8E8B83',           // small uppercase meta lines
+  spotText: accent.spotText, // accent TEXT on the warm ground
+  ink3: '#EADFC9',           // hairline: dividers, borders
+  mute: '#8C6F55',           // muted text and icons
+  meta: '#B08F65',           // small uppercase meta lines
   // the colours on top: one per kind of thing
-  gold: '#E0A526',           // calls
-  blue: '#2D6BE0',           // coops
-  green: '#1E9E57',          // the night running
-  violet: '#8A5CD6',
+  gold: '#D4A373',           // calls
+  blue: '#4A6B53',           // coops (kula has no blue: the deeper sage)
+  green: '#5B6B56',          // the night running: sage
+  violet: '#C86A51',         // terracotta where violet was
 } as const;
 
 // Corner radii: small squares (initials, marks) xs · inner buttons, chips sm ·

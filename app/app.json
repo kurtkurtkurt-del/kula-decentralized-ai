@@ -1,6 +1,6 @@
 {
   "expo": {
-    "name": "poorman's ai",
+    "name": "kula decentralized ai",
     "slug": "pasaport",
     "version": "0.1.0",
     "orientation": "portrait",
@@ -18,7 +18,7 @@
     "android": {
       "package": "app.pasaport.android",
       "adaptiveIcon": {
-        "backgroundColor": "#FFFFFF",
+        "backgroundColor": "#F5F5F0",
         "foregroundImage": "./assets/android-icon-foreground.png",
         "backgroundImage": "./assets/android-icon-background.png",
         "monochromeImage": "./assets/android-icon-monochrome.png"
@@ -61,11 +61,11 @@
     "web": {
       "favicon": "./public/favicon.png",
       "output": "single",
-      "name": "poorman's ai",
-      "shortName": "poormans ai",
+      "name": "kula decentralized ai",
+      "shortName": "kula",
       "description": "your phone's idle hours, lent to a project you choose.",
-      "themeColor": "#FFFFFF",
-      "backgroundColor": "#FFFFFF"
+      "themeColor": "#F5F5F0",
+      "backgroundColor": "#F5F5F0"
     },
     "plugins": [
       "expo-router",
@@ -73,7 +73,7 @@
       [
         "expo-splash-screen",
         {
-          "backgroundColor": "#FFFFFF",
+          "backgroundColor": "#F5F5F0",
           "image": "./assets/splash-icon.png",
           "imageWidth": 200,
           "resizeMode": "contain"
@@ -106,7 +106,7 @@
         "expo-image-picker",
         {
           "photosPermission": "afterhours shows the photo you choose at the top of your account.",
-          "cameraPermission": false,
+          "cameraPermission": "afterhours reads the passport of another device from its qr code.",
           "microphonePermission": false
         }
       ],
@@ -115,7 +115,7 @@
         "expo-notifications",
         {
           "icon": "./assets/android-icon-monochrome.png",
-          "color": "#D7261E",
+          "color": "#C86A51",
           "defaultChannel": "default"
         }
       ],
@@ -134,7 +134,7 @@
     "experiments": {
       "typedRoutes": true
     },
-    "backgroundColor": "#FFFFFF",
+    "backgroundColor": "#F5F5F0",
     "description": "your phone's idle hours, lent to a project you choose.",
     "extra": {
       "router": {},
