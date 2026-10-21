@@ -2,6 +2,10 @@
 // languages. The SQL stays English; lib/serverText.ts maps the text it sent to one
 // of these keys at the moment it is shown. A message not listed here is shown as it came.
 export const server = {
+  'noserver.title': { en: 'this build has no live server', de: 'dieser build hat keinen live-server', tr: 'bu sürümün canlı sunucusu yok' },
+  'noserver.missing': { en: 'it was made without a server address. a new build with kula’s server is needed.', de: 'er wurde ohne serveradresse gebaut. es braucht einen neuen build mit kulas server.', tr: 'sunucu adresi olmadan derlenmiş. kula’nın sunucusuyla yeni bir sürüm gerekiyor.' },
+  'noserver.devServer': { en: 'it points at a development computer ({host}), which only works on that network. a new build with kula’s server is needed.', de: 'er zeigt auf einen entwicklungsrechner ({host}), der nur in dessen netz erreichbar ist. es braucht einen neuen build mit kulas server.', tr: 'bir geliştirme bilgisayarını ({host}) gösteriyor; yalnızca o ağda çalışır. kula’nın sunucusuyla yeni bir sürüm gerekiyor.' },
+  'noserver.insecure': { en: 'its server address is not https. a new build is needed.', de: 'die serveradresse ist nicht https. es braucht einen neuen build.', tr: 'sunucu adresi https değil. yeni bir sürüm gerekiyor.' },
   'err.signin': { en: 'sign in first', de: 'melde dich zuerst an', tr: 'önce giriş yap' },
   'err.closed': { en: 'this account is closed', de: 'dieses konto ist gesperrt', tr: 'bu hesap kapalı' },
   'err.noproject': { en: 'this project is gone', de: 'dieses projekt ist weg', tr: 'bu proje artık yok' },

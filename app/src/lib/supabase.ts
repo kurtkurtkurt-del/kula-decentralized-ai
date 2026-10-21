@@ -2,13 +2,20 @@ import 'expo-sqlite/localStorage/install';
 import { AppState, Platform } from 'react-native';
 import { createClient } from '@supabase/supabase-js';
 import { LargeSecureStore } from '@/lib/secureStorage';
+import { backendProblem } from '@/lib/backend';
 
-// Same Supabase project as the website. Schema and rules live in
-// afterhours/backend/sql.
-const url = process.env.EXPO_PUBLIC_SUPABASE_URL!;
-const key = process.env.EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY!;
+// kula's own server: the local server (backend/tools/local-server.mjs) in development,
+// kula's live Supabase project in a release build (app/.env, .env.production). Schema and
+// rules live in backend/sql. Never afterhours' project.
+const url = process.env.EXPO_PUBLIC_SUPABASE_URL;
+const key = process.env.EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY;
 
-export const supabase = createClient(url, key, {
+/** null when this build can reach a live server; else why not (shown by NoServer). */
+export const BACKEND_PROBLEM = backendProblem(url, key, __DEV__);
+
+// A placeholder keeps the client constructible when the build has no server; every call
+// then fails like an offline one, and the root layout shows why instead of the app.
+export const supabase = createClient(url || 'https://missing.invalid', key || 'missing', {
   auth: {
     // On the web supabase-js keeps the session in localStorage by itself.
     storage: Platform.OS === 'web' ? undefined : new LargeSecureStore(),

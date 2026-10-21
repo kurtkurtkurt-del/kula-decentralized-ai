@@ -9,3 +9,7 @@
   `npx jest passport-contract`, and commit `modules/passport-measure/vendor` with what it
   needed. `npm run passport:check` (in the gate) fails while the snapshot is behind.
 - `modules/passport-measure/vendor/` is generated: never edit it by hand.
+- Servers: development = the Mac's local server (`app/.env.development.local`), a release apk =
+  kula's own Supabase project (`app/.env.production`). Never afterhours' project, never an
+  `app/.env.local` (Expo loads it into release builds too). Release apks only via `npm run apk`,
+  which runs `npm run release:check` first. README: "A live server".

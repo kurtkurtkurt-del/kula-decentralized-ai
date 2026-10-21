@@ -4,6 +4,31 @@
 
 Forked from afterhours on 20.10.2026; the app lends the phone's idle, charging hours to a social-benefit AI project. The Kotlin measurement app lives in `../device-passport/`; the app carries a copy of its `Measure.kt`/`Passport.kt` in `app/modules/passport-measure/`.
 
+## A live server
+
+Two servers, chosen by the env files in `app/` (`app/.env` explains the order):
+
+- **Development** (`expo start`, Expo Go): the Mac's local server, `backend/tools/local-server.mjs`
+  (PGlite in memory, imitation auth), from `app/.env.development.local` (not in git).
+- **A release apk** (`npm run apk`): kula's **own** Supabase project, from `app/.env.production`.
+  Never afterhours' project; `npm run release:check` refuses it, an empty address, the Mac's
+  address and plain http, and `npm run apk` runs that check first. A build that slipped
+  through anyway shows "this build has no live server" instead of looking offline forever
+  (`src/lib/backend.ts`).
+
+To make the apk live (once):
+
+1. Create a new Supabase project for kula (supabase.com; region EU).
+2. Run the schema: paste `backend/sql/setup.sql` into the SQL editor and run it, or
+   `SUPABASE_DB_URL=<session connection string> node backend/tools/migrate.mjs --write`.
+3. Authentication → URL Configuration → Redirect URLs: `pasaport://auth-callback` (and
+   `exp://**` for Expo Go). The confirmation and password emails come back to that address.
+4. Settings → API: put the Project URL and the publishable key into `app/.env.production`.
+5. `cd app && npm run release:check` (✓), then `npm run apk` → `dist/kula-decentralized-ai-<version>.apk`.
+
+Known gap: a password-reset link signs the user in, but the app has no "choose a new password"
+screen yet.
+
 ---
 
 _The notes below are the afterhours README the repo was forked from; parts of it no longer apply._

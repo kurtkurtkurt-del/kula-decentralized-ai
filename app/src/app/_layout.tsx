@@ -26,6 +26,7 @@ import '@/data/jobs';
 import { startWarm } from '@/data/warm';
 import { startNightWatch } from '@/night/useNight';
 import PillAction from '@/components/PillAction';
+import { BACKEND_PROBLEM } from '@/lib/supabase';
 
 // The browser build swaps Alert.alert for window.confirm and friends (web/alert.ts).
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- web only
@@ -61,6 +62,9 @@ function RootLayout() {
 
   // Same ink background as the splash while fonts load.
   if (!loaded) return <View style={{ flex: 1, backgroundColor: colors.ink }} />;
+
+  // A release build with no live server (none set, or the Mac's local one): say so.
+  if (BACKEND_PROBLEM) return <NoServer />;
 
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
@@ -115,6 +119,21 @@ function Crashed({ error, retry }: { error: Error; retry: () => Promise<void> })
       <Text style={{ fontFamily: 'InterTight_500Medium', fontSize: 22, color: colors.paper, textAlign: 'center' }}>{tNow('crash.title')}</Text>
       <Text style={{ fontFamily: 'JetBrainsMono_400Regular', fontSize: 11, color: colors.mute, textAlign: 'center' }} numberOfLines={3}>{error.message}</Text>
       <PillAction icon="retry" label={tNow('crash.retry')} onPress={() => retry()} />
+    </View>
+  );
+}
+
+// What a downloaded build shows when it cannot reach a live server (lib/backend.ts):
+// one plain screen, instead of an app that looks offline forever.
+function NoServer() {
+  let host = '';
+  try {
+    host = new URL(process.env.EXPO_PUBLIC_SUPABASE_URL ?? '').host;
+  } catch {}
+  return (
+    <View style={{ flex: 1, backgroundColor: colors.ink, alignItems: 'center', justifyContent: 'center', padding: 32, gap: 14 }}>
+      <Text style={{ fontFamily: 'InterTight_500Medium', fontSize: 22, color: colors.paper, textAlign: 'center' }}>{tNow('noserver.title')}</Text>
+      <Text style={{ fontFamily: 'InterTight_400Regular', fontSize: 15, lineHeight: 21, color: colors.mute, textAlign: 'center' }}>{tNow(`noserver.${BACKEND_PROBLEM ?? 'missing'}`, { host })}</Text>
     </View>
   );
 }

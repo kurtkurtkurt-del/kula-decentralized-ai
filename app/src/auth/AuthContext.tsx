@@ -1,5 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from 'react';
 import type { Session } from '@supabase/supabase-js';
+import * as Linking from 'expo-linking';
 import { supabase } from '@/lib/supabase';
 import { forgetCache, isNetworkError } from '@/lib/offline';
 import { LargeSecureStore } from '@/lib/secureStorage';
@@ -9,11 +10,13 @@ import { serverText } from '@/lib/serverText';
 import { t } from '@/i18n/core';
 import type { Key } from '@/i18n/dict';
 
-// Password reset links open the website, where the new password is entered.
-const RESET_URL = 'https://kurtkurtkurt-del.github.io/afterhours/reset/';
-// The confirmation link in the sign-up email opens the website's sign-in page, which
-// picks up the session from the link. Without it Supabase falls back to its Site URL.
-const CONFIRM_URL = 'https://kurtkurtkurt-del.github.io/afterhours/login/';
+// The links in kula's emails (confirm the sign-up, reset the password) come back into the
+// app, to auth-callback, which takes the session from the link (as Google sign-in does).
+// Until 21.10.2026 they opened afterhours' website. In kula's Supabase project the address
+// must be listed under Authentication → URL Configuration → Redirect URLs
+// (pasaport://auth-callback; exp://** for Expo Go).
+const RESET_URL = Linking.createURL('auth-callback');
+const CONFIRM_URL = Linking.createURL('auth-callback');
 
 type Auth = {
   session: Session | null;

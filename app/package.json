@@ -61,7 +61,9 @@
     "film": "node tools/build-film.mjs",
     "shots": "node tools/store-shots.mjs",
     "passport:sync": "node tools/passport-core.mjs sync",
-    "passport:check": "node tools/passport-core.mjs check"
+    "passport:check": "node tools/passport-core.mjs check",
+    "release:check": "node tools/release-env.mjs",
+    "apk": "node tools/apk.mjs"
   },
   "private": true,
   "devDependencies": {

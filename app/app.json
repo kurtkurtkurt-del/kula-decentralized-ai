@@ -33,29 +33,7 @@
         "android.permission.RECORD_AUDIO",
         "android.permission.READ_EXTERNAL_STORAGE",
         "android.permission.WRITE_EXTERNAL_STORAGE"
-      ],
-      "intentFilters": [
-        {
-          "action": "VIEW",
-          "autoVerify": true,
-          "data": [
-            {
-              "scheme": "https",
-              "host": "kurtkurtkurt-del.github.io",
-              "pathPrefix": "/afterhours/explore/event"
-            },
-            {
-              "scheme": "https",
-              "host": "kurtkurtkurt-del.github.io",
-              "pathPrefix": "/afterhours/g"
-            }
-          ],
-          "category": [
-            "BROWSABLE",
-            "DEFAULT"
-          ]
-        }
-      ],
+      ]
     },
     "web": {
       "favicon": "./public/favicon.png",
@@ -96,7 +74,7 @@
       [
         "expo-camera",
         {
-          "cameraPermission": "afterhours reads the passport of another device from its qr code.",
+          "cameraPermission": "kula reads the passport of another device from its qr code.",
           "microphonePermission": false,
           "recordAudioAndroid": false
         }
@@ -104,8 +82,8 @@
       [
         "expo-image-picker",
         {
-          "photosPermission": "afterhours shows the photo you choose at the top of your account.",
-          "cameraPermission": "afterhours reads the passport of another device from its qr code.",
+          "photosPermission": "kula shows the photo you choose at the top of your account.",
+          "cameraPermission": "kula reads the passport of another device from its qr code.",
           "microphonePermission": false
         }
       ],
@@ -131,9 +109,6 @@
       "router": {},
       "expo-navigation-bar": {
         "hidden": true
-      },
-      "eas": {
-        "projectId": "34222e72-1878-4555-9293-daeaf33dfd88"
       }
     }
   }
