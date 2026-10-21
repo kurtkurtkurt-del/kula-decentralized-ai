@@ -9,8 +9,9 @@
    "service_role" key is NEVER written here.  */
 
 window.AH_CONFIG = {
-  url: "https://elmnnyxgavwjxvwjgjcu.supabase.co",
-  anonKey: "sb_publishable_rrXU52Q7NnESxbEcp-6WfA_612THnnN",
+  /* kula's own project since 21.10.2026 (the site came with afterhours' — never again) */
+  url: "https://eshgfeasffxryrijwksp.supabase.co",
+  anonKey: "sb_publishable_eSYlpNsoLWyijpzcN1KEkg_hHia0yF0",
   city: "munchen",
   /* Where the app lives. The Android listing is the closed test for now;
      the iOS entry arrives with the App Store. The scheme opens a night in

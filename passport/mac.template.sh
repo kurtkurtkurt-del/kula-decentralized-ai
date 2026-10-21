@@ -166,7 +166,8 @@ function run(argv) {
     "  cores       " + p.cpu_cores + (num("pcores") ? " (" + num("pcores") + " performance)" : ""),
     "  bandwidth   " + (native ? p.mem_bw_read_gbs + " gb/s read · " + r1(bw) + " copy" : r1(bw) + " gb/s copy (approx)"),
     "  compute     " + (native ? r1(p.gflops) + " gflops" : "not measured (needs the command line tools)"),
-    "  runs alone  " + p.largest_model_q4 + " Q4 · " + (native ? r1(high * 0.5) + "–" + r1(high) + " tok/s (estimate)" : estTps + " tok/s"),
+    // one rule per line: with the native test, Probe.kt's budget (model and range); without it, the old rule
+    "  runs alone  " + (native ? (fitB ? "~" + fitB + "B" : "<1B") + " Q4_K_M · " + r1(high * 0.5) + "–" + r1(high) + " tok/s (estimate)" : p.largest_model_q4 + " Q4 · " + estTps + " tok/s"),
     "  saved       ~/.kula/passport.json",
   ];
   return lines.join("\n");
