@@ -5,9 +5,9 @@ import Storage from 'expo-sqlite/kv-store';
 import { supabase } from '@/lib/supabase';
 import { invalidate, must, newId, outbox, pendingJobs, remember, send, useShelf } from '@/lib/offline';
 import { measureNative, nativeAvailable } from '@/passport/measure';
-import { estimateModel, normalizePassport, SCHEMA, type DeviceKind, type Passport } from '@/passport/contract';
+import { estimateModel, fitLabelOf, normalizePassport, rangeOf, SCHEMA, type DeviceKind, type Passport } from '@/passport/contract';
 
-export { estimateModel, STEPS, type DeviceKind, type Passport } from '@/passport/contract';
+export { estimateModel, fitLabelOf, rangeOf, rangeText, STEPS, type DeviceKind, type Passport } from '@/passport/contract';
 
 // The device passport (passport/0.2): what this device can carry at night. Measured on
 // Android by device-passport's own code (../device-passport/passport-core, compiled into
@@ -201,13 +201,18 @@ export function useLinked() {
 // Speed, compute, bandwidth and disk add; the largest model does not (memory is not
 // pooled across devices), so that one is the best device's. tokens_night is what the
 // fleet would make in one night window (NIGHT_HOURS) at the summed rough speed.
-export type Fleet = { count: number; tps: number; gflops: number; bw: number; storage: number; largest: string; tokens_night: number };
+// Together adds the speed range of every device, hot end and cool end apart (passport/0.3,
+// estimate.tps_low / tps_high); a device without a range counts its est_tps for both. Until
+// 22.10.2026 it added est_tps, an older and rougher rule, and showed a number the card above
+// did not (6.1 under a card saying 28.6–57.3). Same rule as device-passport's Together.kt.
+export type Fleet = { count: number; tps_low: number; tps_high: number; gflops: number; bw: number; storage: number; largest: string; tokens_night: number };
 const fitOf = (label: string) => (label.startsWith('<') ? 0 : Number(label.replace(/[^0-9.]/g, '')) || 0);
 const r1 = (n: number) => Math.round(n * 10) / 10;
 export function fleet(own: Passport | null, linked: Linked[]): Fleet {
   const all = [...(own ? [own] : []), ...linked.map((l) => l.data)];
   const sum = (f: (p: Passport) => number) => all.reduce((a, p) => a + (Number(f(p)) || 0), 0);
-  const best = all.reduce<Passport | null>((b, p) => (!b || fitOf(p.largest_model_q4) > fitOf(b.largest_model_q4) ? p : b), null);
-  const tps = r1(sum((p) => p.est_tps));
-  return { count: all.length, tps, gflops: r1(sum((p) => p.gflops)), bw: r1(sum((p) => p.mem_bw_gbs)), storage: r1(sum((p) => p.storage_free_gb)), largest: best?.largest_model_q4 ?? '—', tokens_night: Math.round(tps * NIGHT_HOURS * 3600) };
+  const best = all.reduce<Passport | null>((b, p) => (!b || fitOf(fitLabelOf(p)) > fitOf(fitLabelOf(b)) ? p : b), null);
+  const low = r1(sum((p) => rangeOf(p).low));
+  // the night is spent warm: tokens a night are counted at the hot end
+  return { count: all.length, tps_low: low, tps_high: r1(sum((p) => rangeOf(p).high)), gflops: r1(sum((p) => p.gflops)), bw: r1(sum((p) => p.mem_bw_gbs)), storage: r1(sum((p) => p.storage_free_gb)), largest: best ? fitLabelOf(best) : '—', tokens_night: Math.round(low * NIGHT_HOURS * 3600) };
 }

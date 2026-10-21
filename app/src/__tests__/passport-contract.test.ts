@@ -6,7 +6,7 @@
 import { describe, expect, it } from '@jest/globals';
 import { existsSync, readdirSync, readFileSync } from 'fs';
 import { join } from 'path';
-import { estimateModel, normalizePassport, SUPPORTED_API, SUPPORTED_MAJOR, unknownKeys } from '@/passport/contract';
+import { estimateModel, fitLabelOf, normalizePassport, rangeOf, rangeText, SUPPORTED_API, SUPPORTED_MAJOR, unknownKeys } from '@/passport/contract';
 
 const app = join(__dirname, '../..');
 const sources = [
@@ -102,5 +102,21 @@ describe('normalizePassport', () => {
     const p = normalizePassport({ ...base, ram_free_gb: '4.9' });
     expect(p.ram_free_gb).toBe(4.9);
     expect(p.gflops).toBe(0);
+  });
+});
+
+describe('the speed the screens show', () => {
+  // a Galaxy S25+ on 21.10.2026: the card said 28.6–57.3, together said 6.1 (est_tps)
+  const s25 = normalizePassport({ schema: 'passport/0.3', device: 'samsung SM-S936B', est_tps: 6.1, largest_model_q4: '<1B', estimate: { fit_b: 1, tps_low: 28.6, tps_high: 57.3, source: 'estimate' } });
+  const old = normalizePassport({ schema: 'passport/0.2', device: 'Google Pixel 8', est_tps: 3.9, largest_model_q4: '~3B' });
+  it('a 0.3 passport speaks with its range, not est_tps', () => {
+    expect(rangeOf(s25)).toEqual({ low: 28.6, high: 57.3 });
+    expect(fitLabelOf(s25)).toBe('~1B');
+    expect(rangeText(28.6, 57.3)).toBe('28.6–57.3');
+  });
+  it('an older passport gives est_tps at both ends and its own label', () => {
+    expect(rangeOf(old)).toEqual({ low: 3.9, high: 3.9 });
+    expect(fitLabelOf(old)).toBe('~3B');
+    expect(rangeText(3.9, 3.9)).toBe('3.9');
   });
 });

@@ -116,3 +116,14 @@ export function estimateModel(ramFreeGb: number, memBwGbs: number): { label: str
   const tps = sizeGb > 0 && memBwGbs > 0 ? r1((memBwGbs / sizeGb) * 0.5) : 0;
   return { label: fit === null ? '<1B' : `~${fit}B`, tps, fit };
 }
+
+// What the screens show for a passport's speed (together, the device rows): the 0.3 range
+// when it was measured, else est_tps at both ends. Same rule as device-passport's Together.kt.
+export function rangeOf(p: Passport): { low: number; high: number } {
+  const e = p.estimate;
+  return e && e.tps_high > 0 ? { low: Number(e.tps_low), high: Number(e.tps_high) } : { low: Number(p.est_tps) || 0, high: Number(p.est_tps) || 0 };
+}
+/** The best model a passport runs: the 0.3 budget's step when measured, else the old label. */
+export const fitLabelOf = (p: Passport) => (p.estimate && p.estimate.tps_high > 0 ? (p.estimate.fit_b ? `~${p.estimate.fit_b}B` : '<1B') : p.largest_model_q4);
+/** "28.6–57.3", or one number when both ends agree. */
+export const rangeText = (low: number, high: number) => (low === high ? String(low) : `${low}–${high}`);

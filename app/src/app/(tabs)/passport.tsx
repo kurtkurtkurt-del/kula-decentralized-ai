@@ -103,7 +103,7 @@ export default function PassportScreen() {
             <View style={styles.red}>
               <Text style={styles.redMono}>{up(t('passport.largest'))}</Text>
               <Text style={styles.big}>{passport ? (passport.estimate ? (passport.estimate.fit_b ? `~${passport.estimate.fit_b}B` : '<1B') : passport.largest_model_q4) : '—'}</Text>
-              <Text style={styles.redMono}>
+              <Text style={[styles.redMono, styles.clearRing]}>
                 {!passport
                   ? up(t('passport.none'))
                   : passport.estimate
@@ -242,6 +242,9 @@ const styles = StyleSheet.create({
   redMono: { fontFamily: fonts.jet, fontSize: 10, letterSpacing: 1.4, color: colors.paper, opacity: 0.85 },
   big: { fontFamily: fonts.logo, fontSize: 48, lineHeight: 50, color: colors.paper, marginVertical: 6 },
   cornerTop: { position: 'absolute', right: 16, top: 16 },
+  // the line under the model keeps clear of the ring at the bottom right (46 + a gap); a long
+  // range wraps inside the block instead of running under it
+  clearRing: { paddingRight: 60 },
   ring: { position: 'absolute', right: 16, bottom: 16, width: 46, height: 46, borderRadius: 23, borderWidth: 2, borderColor: colors.paper, alignItems: 'center', justifyContent: 'center' },
   ringText: { fontFamily: fonts.jet, fontSize: 10, color: colors.paper },
   paper: { backgroundColor: colors.paper, padding: 14 },
