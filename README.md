@@ -1,3 +1,13 @@
+# kula decentralized ai
+
+**your phone works a night for a project you chose.**
+
+Forked from afterhours on 20.10.2026; the app lends the phone's idle, charging hours to a social-benefit AI project. The Kotlin measurement app lives in `../device-passport/`; the app carries a copy of its `Measure.kt`/`Passport.kt` in `app/modules/passport-measure/`.
+
+---
+
+_The notes below are the afterhours README the repo was forked from; parts of it no longer apply._
+
 # afterhours
 
 **find your night. one card at a time.**
