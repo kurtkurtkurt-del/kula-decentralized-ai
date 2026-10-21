@@ -9,7 +9,8 @@
 --   the floor       min_app_version() · set_min_app_version(v): the oldest app that still works
 --   feedback        feedback_send(subject, body, contact) from anyone; feedback_list() for the admin
 --   retention       retention_prune(): abandoned nights older than a day, errors older than
---                   30 days, passports older than 90 days (the last one stays)
+--                   30 days. Passports are not pruned (21.10.2026: every measurement is kept
+--                   for the device catalog, 16_devices.sql; they go with the account)
 
 create or replace function public.accept_terms(p_version int)
 returns void
@@ -243,8 +244,6 @@ declare
 begin
   delete from public.contributions where card_no is null and ended_at is not null and started_at < now() - interval '1 day'; get diagnostics m = row_count; n := n + m;
   delete from public.client_errors where created_at < now() - interval '30 days'; get diagnostics m = row_count; n := n + m;
-  delete from public.passports p where p.measured_at < now() - interval '90 days'
-    and p.id <> (select q.id from public.passports q where q.user_id = p.user_id order by q.measured_at desc limit 1); get diagnostics m = row_count; n := n + m;
   delete from public.push_outbox where sent_at < now() - interval '7 days'; get diagnostics m = row_count; n := n + m;
   return n;
 end;
@@ -279,7 +278,7 @@ grant execute on function public.log_error(text, text, text, text, text, boolean
 
 do $$ begin
   if to_regprocedure('public.migration_done(text, text)') is not null then
-    perform public.migration_done('14_safety.sql', '37de2d1e61fb5b30666accd67e058b2ce248db563229f6add9884b142ed4f22d');
+    perform public.migration_done('14_safety.sql', '0c72f26de1a1598042b3c869795a3676aac50b1e447f6254aaf5b7cdaf21f5db');
   elsif to_regprocedure('public.migration_done(text)') is not null then
     perform public.migration_done('14_safety.sql');
   end if;

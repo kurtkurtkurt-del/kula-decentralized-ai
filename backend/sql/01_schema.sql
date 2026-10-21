@@ -192,8 +192,8 @@ create table if not exists public.credits (
 create index if not exists credits_user_idx on public.credits (user_id, created_at desc);
 
 -- ------------------------------------------------------------ passports
--- What the phone measured about itself (passport/0.1, modules/passport-measure). The
--- last N per person; the newest is "the passport" the night worker reads from.
+-- What the phone measured about itself (passport/0.x, device-passport's passport-core).
+-- Every measurement is kept; the newest is "the passport" the night worker reads from.
 create table if not exists public.passports (
   id           uuid primary key default gen_random_uuid(),
   user_id      uuid not null references public.profiles on delete cascade,
@@ -220,7 +220,7 @@ revoke all on public.cities, public.projects, public.profiles, public.profile_se
 
 do $$ begin
   if to_regprocedure('public.migration_done(text, text)') is not null then
-    perform public.migration_done('01_schema.sql', '08092ce6eccb423a66a0bfa8b521987240bde97f31b0a7c8714039c1a82b86e5');
+    perform public.migration_done('01_schema.sql', 'dc2c5b5b43203c56804b917925a5064a6118e01b8efa56dcb12fe3ce469a66a9');
   elsif to_regprocedure('public.migration_done(text)') is not null then
     perform public.migration_done('01_schema.sql');
   end if;

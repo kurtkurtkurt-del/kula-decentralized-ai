@@ -21,6 +21,8 @@ export { estimateModel, STEPS, type DeviceKind, type Passport } from '@/passport
 // (or pasted json) and are kept on this phone only: linkedPassports / fleet below.
 
 const LAST = 'passport.last';
+const HISTORY = 'passport.history'; // every measurement on this phone, newest last
+export const MAX_HISTORY = 200;
 const DEVICE = 'passport.device';
 const LINKED = 'passport.linked';
 export const MAX_LINKED = 8;
@@ -83,6 +85,7 @@ export async function measure(): Promise<Passport> {
   const p: Passport = { ...raw, schema: raw.approx ? SCHEMA : raw.schema, device_id: deviceId(), kind: raw.kind ?? kindHere(), os: raw.os || osHere() };
   try {
     Storage.setItemSync(LAST, JSON.stringify(p));
+    Storage.setItemSync(HISTORY, JSON.stringify([...passportHistory(), p].slice(-MAX_HISTORY)));
   } catch {}
   listeners.forEach((fn) => fn());
   await send({ kind: 'passport', data: p, clientId: newId() }).catch(() => {});
@@ -96,6 +99,16 @@ outbox(
   },
   ['passports', 'network'],
 );
+
+// Every passport measured on this phone (the server keeps them too, passport_mine).
+export function passportHistory(): Passport[] {
+  try {
+    const v = JSON.parse(Storage.getItemSync(HISTORY) ?? '[]');
+    return Array.isArray(v) ? v : [];
+  } catch {
+    return [];
+  }
+}
 
 // The last passport on this phone, at once.
 export function lastPassport(): Passport | null {

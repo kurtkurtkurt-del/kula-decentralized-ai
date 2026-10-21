@@ -107,7 +107,7 @@ const put = (key: string, value: string | null) => {
 const OWNER = 'cache.owner';
 let owner: string | null = null;
 supabase.auth.onAuthStateChange((event, session) => {
-  if (session) {
+  if (session?.user?.id) {
     owner = session.user.id;
     put(OWNER, owner);
   } else if (event === 'SIGNED_OUT') {

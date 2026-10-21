@@ -19,7 +19,7 @@ object PassportCore {
     const val API = 1
 
     /** The json toJson() writes. Minor: fields added. Major: a field renamed or removed. */
-    const val SCHEMA = "passport/0.2"
+    const val SCHEMA = "passport/0.3"
 
     /** Measures this device: who it is (id, kind, os) is filled in here for every caller. */
     suspend fun measure(context: Context, deviceId: String = ""): Passport {

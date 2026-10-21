@@ -53,6 +53,19 @@ function checkPassword(password: string) {
 
 // Identity, same as the website: email + password. On sign-up a database trigger
 // (handle_new_user) creates the profile, for anonymous users too.
+// A stored session without a user (a local server that answered a refresh without one,
+// or a user the server no longer has) cannot be used: treat it as signed out and drop it
+// from this phone, instead of crashing on session.user.
+let dropping = false;
+function usable(s: Session | null): Session | null {
+  if (!s || s.user?.id) return s;
+  if (!dropping) {
+    dropping = true;
+    supabase.auth.signOut({ scope: 'local' }).catch(() => {}).finally(() => (dropping = false));
+  }
+  return null;
+}
+
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [session, setSession] = useState<Session | null>(null);
   const [ready, setReady] = useState(false);
@@ -64,18 +77,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       // session, which looked like a sign-out. The session is still in storage,
       // so use it; Supabase refreshes once the connection is back.
       if (!s && error && isNetworkError(error)) s = await storedSession();
-      setSession(s);
+      setSession(usable(s));
       setReady(true);
     });
     // Accept an empty session only on a real sign-out; an offline refresh
     // failure also reports "no session".
     const { data: sub } = supabase.auth.onAuthStateChange((event, s) => {
-      if (s || event === 'SIGNED_OUT') setSession(s);
+      if (s || event === 'SIGNED_OUT') setSession(usable(s));
     });
     return () => sub.subscription.unsubscribe();
   }, []);
 
-  const isAnonymous = !!session?.user.is_anonymous;
+  const isAnonymous = !!session?.user?.is_anonymous;
 
   const signIn = useCallback(async (email: string, password: string) => {
     const bad = checkEmail(email);

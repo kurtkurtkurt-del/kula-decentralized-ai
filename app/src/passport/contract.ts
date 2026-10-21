@@ -9,9 +9,13 @@
 export const SUPPORTED_API = [1];
 /** passport/<major>.<minor>: any minor of these majors (newer minors add fields only). */
 export const SUPPORTED_MAJOR = [0];
-export const SCHEMA = 'passport/0.2'; // what kula writes itself
+export const SCHEMA = 'passport/0.2'; // what kula's JS fallback writes (it cannot measure 0.3's fields)
 
 export type DeviceKind = 'phone' | 'tablet' | 'computer';
+/** What a model may use here: available × 0.8 minus the context's KV and buffers, and the params it holds per quant. */
+export type Budget = { ctx: number; reserve_gb: number; ram_gb: number; q4_k_m_b: number; q3_k_s_b: number; q8_0_b: number };
+/** Tokens/s for the largest Q4_K_M step that fits: hot (low) to cool (high); source says how it was found. */
+export type SpeedRange = { fit_b: number; tps_low: number; tps_high: number; source: string };
 export type Passport = {
   schema: string; // 'passport/0.1' · 'passport/0.2' · a newer minor
   device: string;
@@ -34,6 +38,18 @@ export type Passport = {
   device_id?: string; // 0.2
   kind?: DeviceKind; // 0.2
   os?: string; // 0.2: "android 15", "ios 18.1", "macos 14 · chrome", …
+  // 0.3 (phase 1, device-passport Probe.kt): only from the native measurement
+  mem_bw_read_gbs?: number; // the best read bandwidth over bw_threads
+  bw_threads?: Record<string, number>; // read bandwidth per thread count, GB/s
+  best_threads?: number;
+  clusters?: { count: number; max_ghz: number }[];
+  cpu_features?: string[];
+  thermal?: { status: number; headroom: number; battery_c: number }; // -1: unknown
+  gpu?: { opencl: boolean; vulkan: string; model: string };
+  wifi?: { band: string; link_mbps: number }; // band "" when not on Wi-Fi
+  budget?: Budget;
+  estimate?: SpeedRange;
+  measure_ms?: number;
   [newer: string]: unknown; // fields of a newer minor: kept and sent on, not shown yet
 };
 
@@ -41,7 +57,8 @@ const NUMBERS = ['ram_total_gb', 'ram_free_gb', 'app_mem_cap_mb', 'cpu_cores', '
 const STRINGS = ['device', 'soc', 'android', 'largest_model_q4', 'measured_at'] as const;
 const KINDS: DeviceKind[] = ['phone', 'tablet', 'computer'];
 /** Every key this app knows by name; anything else in a passport came from a newer minor. */
-export const KNOWN_KEYS = ['schema', ...NUMBERS, ...STRINGS, 'charging', 'approx', 'device_id', 'kind', 'os'];
+export const KNOWN_KEYS = ['schema', ...NUMBERS, ...STRINGS, 'charging', 'approx', 'device_id', 'kind', 'os',
+  'mem_bw_read_gbs', 'bw_threads', 'best_threads', 'clusters', 'cpu_features', 'thermal', 'gpu', 'wifi', 'budget', 'estimate', 'measure_ms'];
 
 export type PassportError = 'notPassport' | 'incomplete' | 'newer';
 const fail = (code: PassportError): never => {
@@ -70,6 +87,11 @@ export function normalizePassport(raw: unknown): Passport {
   for (const k of STRINGS) p[k] = typeof src[k] === 'string' ? (src[k] as string) : '';
   p.charging = src.charging === true || src.charging === 'true';
   if (src.kind !== undefined) p.kind = KINDS.includes(src.kind as DeviceKind) ? (src.kind as DeviceKind) : 'phone';
+  // 0.3's objects: a wrong shape is dropped rather than shown wrong
+  for (const k of ['bw_threads', 'thermal', 'gpu', 'wifi', 'budget', 'estimate'] as const) {
+    if (src[k] !== undefined && (typeof src[k] !== 'object' || src[k] === null || Array.isArray(src[k]))) delete p[k];
+  }
+  for (const k of ['clusters', 'cpu_features'] as const) if (src[k] !== undefined && !Array.isArray(src[k])) delete p[k];
   return p;
 }
 function safeParse(text: string): unknown {

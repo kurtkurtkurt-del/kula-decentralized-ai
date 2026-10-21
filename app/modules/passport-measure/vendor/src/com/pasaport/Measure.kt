@@ -28,6 +28,7 @@ internal fun Double.r2() = floor(this * 100 + 0.5) / 100
 
 /** Runs every measurement on Dispatchers.Default and returns the finished passport. */
 suspend fun measureAll(context: Context): Passport = withContext(Dispatchers.Default) {
+    val started = System.nanoTime()
     val am = context.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
     val mi = ActivityManager.MemoryInfo().also { am.getMemoryInfo(it) }
     val ramTotalGb = (mi.totalMem / GB).r1()
@@ -48,6 +49,14 @@ suspend fun measureAll(context: Context): Passport = withContext(Dispatchers.Def
 
     val (model, tps) = estimateModel(ramFreeGb, memBw)
 
+    // 0.3, phase 1 (Probe.kt): read bandwidth by threads, the cpu's shape, heat, gpu, wifi,
+    // and a budget and speed range from them. largest_model_q4 / est_tps above stay the old
+    // rule, so 0.2 readers see the same numbers.
+    val byThreads = readBandwidthByThreads(cores)
+    val best = byThreads.maxByOrNull { it.value }
+    val readBw = best?.value ?: 0.0
+    val b = budget(ramFreeGb)
+
     Passport(
         device = "${Build.MANUFACTURER} ${Build.MODEL}",
         soc = socName(),
@@ -65,6 +74,17 @@ suspend fun measureAll(context: Context): Passport = withContext(Dispatchers.Def
         largestModelQ4 = model,
         estTps = tps,
         measuredAt = isoNow(),
+        memBwReadGbs = readBw,
+        bwThreads = byThreads,
+        bestThreads = best?.key ?: 0,
+        clusters = clusters(),
+        cpuFeatures = cpuFeatures(),
+        thermal = thermal(context),
+        gpu = gpu(context),
+        wifi = wifi(context),
+        budget = b,
+        estimate = estimate(b, readBw),
+        measureMs = (System.nanoTime() - started) / 1_000_000,
     )
 }
 

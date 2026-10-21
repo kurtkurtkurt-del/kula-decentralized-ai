@@ -1,2 +1,5 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+  <!-- passport-core's Probe.kt reads the Wi-Fi band (passport/0.3). The same line is in
+       device-passport's passport-core manifest, which this module does not merge. -->
+  <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
 </manifest>

@@ -1,6 +1,6 @@
 -- ============================================================
 --  pasaport — SETUP : THE WHOLE DATABASE
---  VERSION: 2026-10-20 21:20   ← if the editor shows this line, it is the right copy
+--  VERSION: 2026-10-21 15:52   ← if the editor shows this line, it is the right copy
 --
 --  In the Supabase panel: SQL Editor → New query → paste this file
 --  IN FULL → Run.
@@ -273,8 +273,8 @@ create table if not exists public.credits (
 create index if not exists credits_user_idx on public.credits (user_id, created_at desc);
 
 -- ------------------------------------------------------------ passports
--- What the phone measured about itself (passport/0.1, modules/passport-measure). The
--- last N per person; the newest is "the passport" the night worker reads from.
+-- What the phone measured about itself (passport/0.x, device-passport's passport-core).
+-- Every measurement is kept; the newest is "the passport" the night worker reads from.
 create table if not exists public.passports (
   id           uuid primary key default gen_random_uuid(),
   user_id      uuid not null references public.profiles on delete cascade,
@@ -301,7 +301,7 @@ revoke all on public.cities, public.projects, public.profiles, public.profile_se
 
 do $$ begin
   if to_regprocedure('public.migration_done(text, text)') is not null then
-    perform public.migration_done('01_schema.sql', '08092ce6eccb423a66a0bfa8b521987240bde97f31b0a7c8714039c1a82b86e5');
+    perform public.migration_done('01_schema.sql', 'dc2c5b5b43203c56804b917925a5064a6118e01b8efa56dcb12fe3ce469a66a9');
   elsif to_regprocedure('public.migration_done(text)') is not null then
     perform public.migration_done('01_schema.sql');
   end if;
@@ -613,7 +613,8 @@ end $$;
 -- ============================================================
 
 -- pasaport — ten projects, hand-entered (no sync; the panel adds more)
--- Türkiye and Germany. Each one: a small model a phone can carry at night, a number
+-- Türkiye and Germany, each with a sample photo from Unsplash (free licence; swap for the
+-- project's own later). Each one: a small model a phone can carry at night, a number
 -- of nights, a number of phones, the energy it will take. The numbers are estimates:
 -- 4 W per phone per night-hour (the simulated worker uses the same figure), 8.5 h a
 -- night, 0.30 € per kWh. Idempotent: a second paste changes nothing (on conflict).
@@ -631,49 +632,49 @@ insert into public.cities (slug, name, country, lat, lng, sort_order) values
   ('leipzig',  'leipzig',  'de', 51.3397, 12.3731, 10)
 on conflict (slug) do nothing;
 
-insert into public.projects (slug, title, summary, model, params_b, nights_wanted, phones_wanted, est_kwh, est_eur, org, city_id, poster_no)
+insert into public.projects (slug, title, summary, model, params_b, nights_wanted, phones_wanted, est_kwh, est_eur, org, city_id, poster_no, image_url)
 select v.slug, v.title, v.summary, v.model, v.params_b, v.nights, v.phones,
        round(v.phones * v.nights * 4 * 8.5 / 1000.0, 2),
        round(v.phones * v.nights * 4 * 8.5 / 1000.0 * 0.30, 2),
-       v.org, c.id, v.poster
+       v.org, c.id, v.poster, 'https://images.unsplash.com/photo-' || v.photo || '?w=900&q=80'
 from (values
   ('koy-okulu-ogretmen', 'offline teacher for village schools',
    'A Turkish lesson assistant that runs with no internet, for primary schools in villages without a steady connection. Phones at night distil a 3B model into one small enough for a ten-year-old tablet.',
-   '3B Q4', 3.0, 12, 400, 'köy okulları derneği', 'van', 1),
+   '3B Q4', 3.0, 12, 400, 'köy okulları derneği', 'van', 1, '1503676260728-1c00da094a0b'),
   ('afet-mesaj-siniflandirma', 'disaster message sorting',
    'Reads the flood of messages after an earthquake and sorts them: trapped, injured, needs water, safe. Trained on the messages of February 2023, anonymised, so the next time the first hour is not lost.',
-   '1B Q4', 1.0, 8, 800, 'akut gönüllüleri', 'hatay', 2),
+   '1B Q4', 1.0, 8, 800, 'akut gönüllüleri', 'hatay', 2, '1555099962-4199c345e5dd'),
   ('deprem-sonrasi-ceviri', 'after the earthquake: translation',
    'Turkish ↔ Arabic ↔ Kurdish for rescue teams and families in the first days, when no server is up. A 4B model made to fit on the phones that are already in the ruins.',
-   '4B Q4', 4.0, 10, 600, 'sınır tanımayan çevirmenler', 'hatay', 3),
+   '4B Q4', 4.0, 10, 600, 'sınır tanımayan çevirmenler', 'hatay', 3, '1517245386807-bb43f82c33c4'),
   ('yerel-tarih-arsivi', 'local history archive summaries',
    'Summarises forty years of scanned town newspapers and council minutes into readable entries for the municipal archive. Istanbul first, then the towns that send their boxes.',
-   '7B Q4', 7.0, 20, 300, 'istanbul kent arşivi', 'istanbul', 4),
+   '7B Q4', 7.0, 20, 300, 'istanbul kent arşivi', 'istanbul', 4, '1529070538774-1843cb3265df'),
   ('turkce-ders-asistani', 'turkish lesson assistant',
    'Answers a pupil''s question about the lesson in plain Turkish and asks one back, for the evenings when nobody at home can help. Built on the open curriculum, checked by teachers.',
-   '3B Q4', 3.0, 14, 500, 'öğretmen ağı', 'ankara', 5),
+   '3B Q4', 3.0, 14, 500, 'öğretmen ağı', 'ankara', 5, '1509062522246-3755977927d7'),
   ('isaret-dili-altyazi', 'sign language captions',
    'Turns Turkish sign language on a phone camera into captions for the hearing side of a conversation. The night work is the hard part: aligning thousands of signed sentences.',
-   '3B Q4', 3.0, 16, 350, 'işitme engelliler federasyonu', 'izmir', 6),
+   '3B Q4', 3.0, 16, 350, 'işitme engelliler federasyonu', 'izmir', 6, '1573164713988-8665fc963095'),
   ('behoerdenbrief', 'behördenbriefe, einfach',
    'Rewrites a letter from a German office into plain language, in German, Turkish, Arabic or Ukrainian, on the phone, without the letter leaving it. The phones at night tune the model on anonymised letters.',
-   '3B Q4', 3.0, 10, 450, 'verein für einfache sprache e.v.', 'berlin', 7),
+   '3B Q4', 3.0, 10, 450, 'verein für einfache sprache e.v.', 'berlin', 7, '1484417894907-623942c8ee29'),
   ('pflege-nachtassistent', 'night assistant for carers',
    'For people who look after a parent at home: what to do at three in the morning, in their own language, with the guidelines of the Pflegekasse behind it. Trained on the open care handbooks.',
-   '4B Q4', 4.0, 12, 400, 'pflegebegleiter münchen', 'munchen', 8),
+   '4B Q4', 4.0, 12, 400, 'pflegebegleiter münchen', 'munchen', 8, '1544928147-79a2dbc1f389'),
   ('stadtarchiv-ocr', 'city archive, handwriting to text',
    'Reads the handwritten registers of the Hamburg city archive, 1850 to 1950, into searchable text. Volunteers correct, phones at night learn from the corrections.',
-   '1B Q4', 1.0, 24, 700, 'staatsarchiv freunde hamburg', 'hamburg', 9),
+   '1B Q4', 1.0, 24, 700, 'staatsarchiv freunde hamburg', 'hamburg', 9, '1524995997946-a1c2e315a42f'),
   ('jobcenter-dolmetscher', 'interpreter for the jobcenter',
    'A spoken interpreter for appointments at the Jobcenter, German ↔ Turkish ↔ Farsi, that runs on the phone of the person being interviewed. The night work aligns the vocabulary of forms and offices.',
-   '7B Q4', 7.0, 18, 300, 'migrantinnen netzwerk köln', 'koln', 10)
-) as v(slug, title, summary, model, params_b, nights, phones, org, city, poster)
+   '7B Q4', 7.0, 18, 300, 'migrantinnen netzwerk köln', 'koln', 10, '1522202176988-66273c2fd55f')
+) as v(slug, title, summary, model, params_b, nights, phones, org, city, poster, photo)
 left join public.cities c on c.slug = v.city
 on conflict (slug) do nothing;
 
 do $$ begin
   if to_regprocedure('public.migration_done(text, text)') is not null then
-    perform public.migration_done('03_seed_projects.sql', 'b179bc9d98a1867d59599ec96603c39078ad4f7d9e3c1a2901097c6a48c0406f');
+    perform public.migration_done('03_seed_projects.sql', '90d27c5d9d8c413d8c6484986391e6cb9510052b9e0c79d6f642a88cc4964997');
   elsif to_regprocedure('public.migration_done(text)') is not null then
     perform public.migration_done('03_seed_projects.sql');
   end if;
@@ -1277,10 +1278,11 @@ end $$;
 -- ============================================================
 
 -- pasaport — the device passport, on the server
---   passport_save(data, client_id)   the phone's measurement (passport/0.1); a retry with the
+--   passport_save(data, client_id)   the phone's measurement (passport/0.x); a retry with the
 --                                    same client_id finds the first and changes nothing.
---                                    Only the last 10 per person are kept.
---   passport_mine(limit)             your measurements, newest first
+--                                    Every one is kept (21.10.2026: every test is recorded;
+--                                    16_devices.sql reads them all for the device catalog).
+--   passport_mine(limit)             your measurements, newest first (at most 200 a call)
 --   passport_last()                  the newest one, what the night worker reads
 --   network_nodes()                  the network tab: per city, how many phones measured in
 --                                    the last 30 days and the sum of their rough tokens/s;
@@ -1306,8 +1308,6 @@ begin
   if (p_data ->> 'est_tps') is null or (p_data ->> 'est_tps')::numeric < 0 then raise exception 'est_tps missing' using errcode = '22023'; end if;
   at := least(coalesce((p_data ->> 'measured_at')::timestamptz, now()), now());
   insert into public.passports (user_id, client_id, data, measured_at) values (me, p_client_id, p_data, at) returning id into found_id;
-  delete from public.passports where user_id = me and id not in (
-    select id from public.passports where user_id = me order by measured_at desc limit 10);
   return found_id;
 end;
 $$;
@@ -1323,7 +1323,7 @@ declare
   me uuid := public.assert_member();
 begin
   return query select p.id, p.data, p.measured_at from public.passports p where p.user_id = me
-  order by p.measured_at desc limit least(greatest(coalesce(p_limit, 10), 1), 10);
+  order by p.measured_at desc limit least(greatest(coalesce(p_limit, 10), 1), 200);
 end;
 $$;
 
@@ -1392,7 +1392,7 @@ $$;
 
 do $$ begin
   if to_regprocedure('public.migration_done(text, text)') is not null then
-    perform public.migration_done('07_passports.sql', 'dc4bccc58fd21bceadadf01d6eea6fa351aa5fe2479e47514a7374d52dabffb7');
+    perform public.migration_done('07_passports.sql', 'ee32d493d83dd98215578882eee5b83f8b07d029c9d442192496991b20e454a0');
   elsif to_regprocedure('public.migration_done(text)') is not null then
     perform public.migration_done('07_passports.sql');
   end if;
@@ -2983,7 +2983,8 @@ end $$;
 --   the floor       min_app_version() · set_min_app_version(v): the oldest app that still works
 --   feedback        feedback_send(subject, body, contact) from anyone; feedback_list() for the admin
 --   retention       retention_prune(): abandoned nights older than a day, errors older than
---                   30 days, passports older than 90 days (the last one stays)
+--                   30 days. Passports are not pruned (21.10.2026: every measurement is kept
+--                   for the device catalog, 16_devices.sql; they go with the account)
 
 create or replace function public.accept_terms(p_version int)
 returns void
@@ -3217,8 +3218,6 @@ declare
 begin
   delete from public.contributions where card_no is null and ended_at is not null and started_at < now() - interval '1 day'; get diagnostics m = row_count; n := n + m;
   delete from public.client_errors where created_at < now() - interval '30 days'; get diagnostics m = row_count; n := n + m;
-  delete from public.passports p where p.measured_at < now() - interval '90 days'
-    and p.id <> (select q.id from public.passports q where q.user_id = p.user_id order by q.measured_at desc limit 1); get diagnostics m = row_count; n := n + m;
   delete from public.push_outbox where sent_at < now() - interval '7 days'; get diagnostics m = row_count; n := n + m;
   return n;
 end;
@@ -3253,7 +3252,7 @@ grant execute on function public.log_error(text, text, text, text, text, boolean
 
 do $$ begin
   if to_regprocedure('public.migration_done(text, text)') is not null then
-    perform public.migration_done('14_safety.sql', '37de2d1e61fb5b30666accd67e058b2ce248db563229f6add9884b142ed4f22d');
+    perform public.migration_done('14_safety.sql', '0c72f26de1a1598042b3c869795a3676aac50b1e447f6254aaf5b7cdaf21f5db');
   elsif to_regprocedure('public.migration_done(text)') is not null then
     perform public.migration_done('14_safety.sql');
   end if;
@@ -3303,5 +3302,109 @@ do $$ begin
     perform public.migration_done('15_health.sql', 'b8b7a43cc149385a7f4ddd9bfd28059ba00292919a3e7fcf5dfe9344d87e0a51');
   elsif to_regprocedure('public.migration_done(text)') is not null then
     perform public.migration_done('15_health.sql');
+  end if;
+end $$;
+
+
+-- ============================================================
+--  DEVICES — the catalog of every device model, the network's night estimated   (16_devices.sql)
+-- ============================================================
+
+-- kula — every device in detail, and the network's night estimated from them (21.10.2026)
+--   device_catalog()           one row per device model (device + soc) from every passport
+--                              ever saved: how many phones and measurements, the medians
+--                              of what they measured (bandwidth only from native
+--                              measurements, never the JS fallback), the speed range.
+--                              Counts and medians, never who.
+--   network_estimate(hours)    what the network could do tonight: per person their newest
+--                              passport of the last 30 days, or what their finished nights
+--                              really ran at when there are any (observed beats estimated),
+--                              summed. The sum assumes every phone runs its own copy of a
+--                              model on its own jobs; one model split across phones is far
+--                              slower (wifi split test, 11.10.2026) and is not counted here.
+-- The passports are device-passport's passport/0.x json; 0.3 brings estimate.tps_low /
+-- tps_high and budget.ram_gb, older ones only est_tps (then low = high = est_tps).
+
+drop function if exists public.device_catalog();
+create or replace function public.device_catalog()
+returns table (device text, soc text, phones int, passports int, native int,
+               ram_total_gb numeric, ram_free_gb numeric, ram_free_min numeric, ram_free_max numeric,
+               mem_bw_gbs numeric, mem_bw_read_gbs numeric, best_threads int,
+               budget_ram_gb numeric, tps_low numeric, tps_high numeric, last_measured timestamptz)
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  with p as (
+    select p.user_id, p.measured_at, p.data,
+           coalesce(p.data ->> 'approx', 'false') = 'true' as approx,
+           (p.data ->> 'ram_total_gb')::numeric as ram_total,
+           (p.data ->> 'ram_free_gb')::numeric as ram_free,
+           (p.data ->> 'mem_bw_gbs')::numeric as bw,
+           nullif((p.data ->> 'mem_bw_read_gbs')::numeric, 0) as bw_read,
+           nullif((p.data ->> 'best_threads')::int, 0) as threads,
+           (p.data -> 'budget' ->> 'ram_gb')::numeric as budget_ram,
+           coalesce((p.data -> 'estimate' ->> 'tps_low')::numeric, (p.data ->> 'est_tps')::numeric) as low,
+           coalesce((p.data -> 'estimate' ->> 'tps_high')::numeric, (p.data ->> 'est_tps')::numeric) as high
+    from public.passports p
+  )
+  select coalesce(nullif(data ->> 'device', ''), 'unknown'), coalesce(nullif(data ->> 'soc', ''), 'unknown'),
+         count(distinct user_id)::int, count(*)::int, count(*) filter (where not approx)::int,
+         round((percentile_cont(0.5) within group (order by ram_total))::numeric, 1),
+         round((percentile_cont(0.5) within group (order by ram_free))::numeric, 1),
+         round(min(ram_free), 1), round(max(ram_free), 1),
+         round((percentile_cont(0.5) within group (order by bw) filter (where not approx))::numeric, 2),
+         round((percentile_cont(0.5) within group (order by bw_read) filter (where not approx))::numeric, 2),
+         mode() within group (order by threads),
+         round((percentile_cont(0.5) within group (order by budget_ram))::numeric, 2),
+         round((percentile_cont(0.5) within group (order by low) filter (where not approx))::numeric, 1),
+         round((percentile_cont(0.5) within group (order by high) filter (where not approx))::numeric, 1),
+         max(measured_at)
+  from p
+  group by 1, 2
+  order by 3 desc, 4 desc, 1;
+$$;
+
+drop function if exists public.network_estimate(numeric);
+create or replace function public.network_estimate(p_hours numeric default 8.5)
+returns table (phones int, observed int, tps_low numeric, tps_high numeric,
+               tokens_night_low bigint, tokens_night_high bigint, hours numeric, by_device jsonb)
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  with h as (select least(greatest(coalesce(p_hours, 8.5), 0.5), 24) as hours),
+  last as (
+    select distinct on (p.user_id) p.user_id, p.data from public.passports p
+    where p.measured_at > now() - interval '30 days' order by p.user_id, p.measured_at desc),
+  seen as ( -- what finished nights really ran at, per person, last 30 days
+    select k.user_id, (percentile_cont(0.5) within group (order by k.tokens::numeric / k.seconds))::numeric as tps
+    from public.contributions k
+    where k.card_no is not null and k.seconds > 0 and k.ended_at > now() - interval '30 days'
+    group by k.user_id),
+  per as (
+    select l.user_id, coalesce(nullif(l.data ->> 'device', ''), 'unknown') as device, s.tps is not null as observed,
+           coalesce(s.tps, (l.data -> 'estimate' ->> 'tps_low')::numeric, (l.data ->> 'est_tps')::numeric, 0) as low,
+           coalesce(s.tps, (l.data -> 'estimate' ->> 'tps_high')::numeric, (l.data ->> 'est_tps')::numeric, 0) as high
+    from last l left join seen s on s.user_id = l.user_id)
+  select count(*)::int, (count(*) filter (where e.observed))::int,
+         round(coalesce(sum(e.low), 0), 1), round(coalesce(sum(e.high), 0), 1),
+         round(coalesce(sum(e.low), 0) * 3600 * (select hours from h))::bigint,
+         round(coalesce(sum(e.high), 0) * 3600 * (select hours from h))::bigint,
+         (select hours from h),
+         coalesce((select jsonb_agg(jsonb_build_object('device', d.device, 'phones', d.n, 'tps_low', d.low, 'tps_high', d.high) order by d.n desc, d.device)
+                   from (select device, count(*) n, round(sum(low), 1) low, round(sum(high), 1) high from per group by device) d), '[]')
+  from per e;
+$$;
+
+grant execute on function public.device_catalog(), public.network_estimate(numeric) to anon, authenticated;
+
+do $$ begin
+  if to_regprocedure('public.migration_done(text, text)') is not null then
+    perform public.migration_done('16_devices.sql', 'a51bcb721c6957399458fc0af33c4bb23daf54d3523e75024a85b3d2137a8796');
+  elsif to_regprocedure('public.migration_done(text)') is not null then
+    perform public.migration_done('16_devices.sql');
   end if;
 end $$;

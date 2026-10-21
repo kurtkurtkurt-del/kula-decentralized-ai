@@ -28,7 +28,7 @@ export function startWarm() {
   if (started) return;
   started = true;
   supabase.auth.onAuthStateChange((event, session) => {
-    if (session && !session.user.is_anonymous && (event === 'INITIAL_SESSION' || event === 'SIGNED_IN')) setTimeout(() => warm().catch(() => {}), 1500);
+    if (session?.user && !session.user.is_anonymous && (event === 'INITIAL_SESSION' || event === 'SIGNED_IN')) setTimeout(() => warm().catch(() => {}), 1500);
   });
   onBackOnline(() => {
     last = 0;

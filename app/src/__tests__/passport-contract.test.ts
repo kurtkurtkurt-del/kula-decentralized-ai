@@ -53,6 +53,19 @@ describe.each(sources)('contract from %s', (_name, dir) => {
     }
   });
 
+  it('knows every field of the newest schema (else: show it, then add it to KNOWN_KEYS in contract.ts)', () => {
+    const newest = [...samples].sort((a, b) => a.localeCompare(b, 'en', { numeric: true })).at(-1)!;
+    expect(unknownKeys(read(dir, newest))).toEqual([]);
+  });
+
+  it('reads the 0.3 objects as they come', () => {
+    if (!samples.includes('passport-0.3.json')) return;
+    const p = normalizePassport(readFileSync(join(dir, 'passport-0.3.json'), 'utf8'));
+    expect(p.estimate && p.estimate.tps_low <= p.estimate.tps_high).toBe(true);
+    expect(p.budget && p.budget.ram_gb >= 0).toBe(true);
+    expect(typeof p.best_threads).toBe('number');
+  });
+
   it('estimates like Measure.kt (estimate-cases.json)', () => {
     const { cases } = read(dir, 'estimate-cases.json') as { cases: { ram_free_gb: number; mem_bw_gbs: number; label: string; tps: number; why: string }[] };
     for (const c of cases) {
@@ -64,6 +77,11 @@ describe.each(sources)('contract from %s', (_name, dir) => {
 
 describe('normalizePassport', () => {
   const base = { schema: 'passport/0.2', device: 'd', est_tps: 3 };
+  it('drops a 0.3 object of the wrong shape instead of showing it wrong', () => {
+    const p = normalizePassport({ ...base, schema: 'passport/0.3', estimate: 'fast', clusters: 4 });
+    expect(p.estimate).toBeUndefined();
+    expect(p.clusters).toBeUndefined();
+  });
   it('keeps the fields of a newer minor', () => {
     const p = normalizePassport({ ...base, schema: 'passport/0.7', npu_tops: 45 });
     expect(p.npu_tops).toBe(45);

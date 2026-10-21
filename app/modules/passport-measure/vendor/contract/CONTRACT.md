@@ -40,7 +40,20 @@ kula calls exactly one thing: `PassportCore.measureJson(context, deviceId)` and 
   checks them against the code, kula's `passport-contract.test.ts` against its own.
 - `passport-0.1.json`, `passport-0.2.json`: one passport of each schema. The newest must have
   exactly the keys `toJson()` writes (the unit test checks).
-- `estimate-cases.json`: inputs and the label and speed the rule must give.
+- `estimate-cases.json`: inputs and the label and speed the old rule (`largest_model_q4`,
+  `est_tps`) must give. kula's JS fallback copies this rule.
+- `budget-cases.json` (0.3): inputs and the `budget` and `estimate` objects the phase-1 rule
+  (`Probe.kt`, `Rule`, `Quant`) must give. Kotlin only: kula reads these fields, it does not
+  recompute them. Its factors are guesses until a phone-alone calibration; change them here
+  and in the cases together.
+
+## History
+
+| Schema | Date | What came |
+|---|---|---|
+| passport/0.1 | 20.10.2026 | the first passport |
+| passport/0.2 | 21.10.2026 | `device_id`, `kind`, `os` (together, qr) |
+| passport/0.3 | 21.10.2026 | phase 1: `mem_bw_read_gbs`, `bw_threads`, `best_threads`, `clusters`, `cpu_features`, `thermal`, `gpu`, `wifi`, `budget`, `estimate`, `measure_ms` |
 
 ## Checks
 

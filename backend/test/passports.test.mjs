@@ -16,7 +16,8 @@ check((await one(db, `select public.passport_last() j`)).j.est_tps === 3.9, "pas
 await mustBeRefused(db, `select public.passport_save('{"schema":"x"}', '${C2}')`, "an unknown schema is refused", /schema/);
 await mustBeRefused(db, `select public.passport_save('{"schema":"passport/0.1"}', '${C2}')`, "est_tps must be there", /est_tps/);
 for (let i = 0; i < 12; i++) await db.exec(`select public.passport_save('${P(4 + i, `2026-10-${String(1 + i).padStart(2, "0")}T21:00:00Z`)}', 'bbbbbbbb-0000-0000-0000-${String(i).padStart(12, "0")}')`);
-check((await rpc(db, "passport_mine")).length === 10, "only the last ten are kept");
+check((await rpc(db, "passport_mine", { p_limit: 100 })).length === 13, "every measurement is kept (twelve plus the first)");
+check((await rpc(db, "passport_mine")).length === 10, "passport_mine gives ten unless asked for more");
 check((await one(db, `select public.passport_last() j`)).j.est_tps === 3.9, "…the newest by measured_at stays the last (today's)");
 check((await one(db, `select (public.passport_save('${P(1, "2099-01-01T00:00:00Z")}', 'cccccccc-0000-0000-0000-000000000000')) is not null ok`)).ok, "a measured_at in the future is accepted…");
 await asService(db);
@@ -35,6 +36,6 @@ check(n.length === 10, "ten cities");
 check(ist.phones === 2 && Number(ist.tps) === 3.5 && ist.projects.includes("yerel-tarih-arsivi"), "istanbul: two phones, their speed summed, the project they keep");
 check(n.find((x) => x.city_slug === "berlin").phones === 0, "berlin: nobody yet");
 await asUser(db, ADA);
-check((await one(db, `select jsonb_array_length(public.export_me() -> 'passports') n`)).n === 10, "the export carries the passports");
+check((await one(db, `select jsonb_array_length(public.export_me() -> 'passports') n`)).n === 14, "the export carries every passport");
 
 finish();

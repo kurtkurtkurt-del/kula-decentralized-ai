@@ -1,8 +1,9 @@
 -- pasaport — the device passport, on the server
---   passport_save(data, client_id)   the phone's measurement (passport/0.1); a retry with the
+--   passport_save(data, client_id)   the phone's measurement (passport/0.x); a retry with the
 --                                    same client_id finds the first and changes nothing.
---                                    Only the last 10 per person are kept.
---   passport_mine(limit)             your measurements, newest first
+--                                    Every one is kept (21.10.2026: every test is recorded;
+--                                    16_devices.sql reads them all for the device catalog).
+--   passport_mine(limit)             your measurements, newest first (at most 200 a call)
 --   passport_last()                  the newest one, what the night worker reads
 --   network_nodes()                  the network tab: per city, how many phones measured in
 --                                    the last 30 days and the sum of their rough tokens/s;
@@ -28,8 +29,6 @@ begin
   if (p_data ->> 'est_tps') is null or (p_data ->> 'est_tps')::numeric < 0 then raise exception 'est_tps missing' using errcode = '22023'; end if;
   at := least(coalesce((p_data ->> 'measured_at')::timestamptz, now()), now());
   insert into public.passports (user_id, client_id, data, measured_at) values (me, p_client_id, p_data, at) returning id into found_id;
-  delete from public.passports where user_id = me and id not in (
-    select id from public.passports where user_id = me order by measured_at desc limit 10);
   return found_id;
 end;
 $$;
@@ -45,7 +44,7 @@ declare
   me uuid := public.assert_member();
 begin
   return query select p.id, p.data, p.measured_at from public.passports p where p.user_id = me
-  order by p.measured_at desc limit least(greatest(coalesce(p_limit, 10), 1), 10);
+  order by p.measured_at desc limit least(greatest(coalesce(p_limit, 10), 1), 200);
 end;
 $$;
 
@@ -114,7 +113,7 @@ $$;
 
 do $$ begin
   if to_regprocedure('public.migration_done(text, text)') is not null then
-    perform public.migration_done('07_passports.sql', 'dc4bccc58fd21bceadadf01d6eea6fa351aa5fe2479e47514a7374d52dabffb7');
+    perform public.migration_done('07_passports.sql', 'ee32d493d83dd98215578882eee5b83f8b07d029c9d442192496991b20e454a0');
   elsif to_regprocedure('public.migration_done(text)') is not null then
     perform public.migration_done('07_passports.sql');
   end if;

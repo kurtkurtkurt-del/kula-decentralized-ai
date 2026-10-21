@@ -3,7 +3,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "node test/schema.test.mjs && node test/profiles.test.mjs && node test/friends.test.mjs && node test/deck.test.mjs && node test/passports.test.mjs && node test/contributions.test.mjs && node test/coops.test.mjs && node test/calls.test.mjs && node test/dms.test.mjs && node test/about.test.mjs && node test/push.test.mjs && node test/safety.test.mjs && node test/setup.test.mjs && node test/stamps.test.mjs",
+    "test": "node test/schema.test.mjs && node test/profiles.test.mjs && node test/friends.test.mjs && node test/deck.test.mjs && node test/passports.test.mjs && node test/contributions.test.mjs && node test/coops.test.mjs && node test/calls.test.mjs && node test/dms.test.mjs && node test/about.test.mjs && node test/push.test.mjs && node test/safety.test.mjs && node test/devices.test.mjs && node test/setup.test.mjs && node test/stamps.test.mjs",
     "setup": "node tools/build-setup.mjs",
     "server": "node tools/local-server.mjs",
     "backup": "node tools/backup.mjs",

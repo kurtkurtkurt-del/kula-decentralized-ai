@@ -1,0 +1,76 @@
+{
+  "schema": "passport/0.3",
+  "device": "samsung SM-S936B",
+  "soc": "SM8750",
+  "android": "16",
+  "ram_total_gb": 10.9,
+  "ram_free_gb": 4.9,
+  "app_mem_cap_mb": 512,
+  "cpu_cores": 8,
+  "cpu_max_ghz": 4.47,
+  "mem_bw_gbs": 44.74,
+  "gflops": 61.2,
+  "storage_free_gb": 180.4,
+  "battery_pct": 30,
+  "charging": true,
+  "largest_model_q4": "~4B",
+  "est_tps": 9.3,
+  "measured_at": "2026-10-21T14:52:00Z",
+  "device_id": "6f1d2c3a-8b7e-4f20-9a51-0c3d4e5f6a7b",
+  "kind": "phone",
+  "os": "android 16",
+  "mem_bw_read_gbs": 38.0,
+  "bw_threads": {
+    "1": 17.4,
+    "2": 29.8,
+    "4": 38.0,
+    "6": 36.9,
+    "8": 31.2
+  },
+  "best_threads": 4,
+  "clusters": [
+    {
+      "count": 2,
+      "max_ghz": 4.47
+    },
+    {
+      "count": 6,
+      "max_ghz": 3.53
+    }
+  ],
+  "cpu_features": [
+    "asimddp",
+    "i8mm",
+    "asimdhp",
+    "fphp"
+  ],
+  "thermal": {
+    "status": 0,
+    "headroom": 0.42,
+    "battery_c": 31.5
+  },
+  "gpu": {
+    "opencl": true,
+    "vulkan": "1.3",
+    "model": "Adreno830v2"
+  },
+  "wifi": {
+    "band": "5",
+    "link_mbps": 1201
+  },
+  "budget": {
+    "ctx": 2048,
+    "reserve_gb": 0.5,
+    "ram_gb": 3.42,
+    "q4_k_m_b": 5.6,
+    "q3_k_s_b": 7.6,
+    "q8_0_b": 3.2
+  },
+  "estimate": {
+    "fit_b": 4,
+    "tps_low": 4.7,
+    "tps_high": 9.3,
+    "source": "estimate"
+  },
+  "measure_ms": 14800
+}

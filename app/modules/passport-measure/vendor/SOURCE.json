@@ -1,16 +1,20 @@
 {
   "from": "device-passport/passport-core",
-  "commit": "fc8f8e2",
+  "commit": "0d09ad5",
   "dirty": false,
-  "synced_at": "2026-10-21T15:13:07.939Z",
+  "synced_at": "2026-10-21T15:49:51.037Z",
   "files": {
-    "src/com/pasaport/Measure.kt": "30a8d0ba5862e067",
-    "src/com/pasaport/Passport.kt": "c249e80380a1eb17",
-    "src/com/pasaport/PassportCore.kt": "54e12fad249f72e1",
-    "contract/CONTRACT.md": "2c5fdc833c1f0b3f",
-    "contract/contract.json": "141a891d4d364658",
+    "src/com/pasaport/Measure.kt": "4ed9364de641c316",
+    "src/com/pasaport/Passport.kt": "aed2e602e630869e",
+    "src/com/pasaport/PassportCore.kt": "8177cba93fe4b5b6",
+    "src/com/pasaport/PassportHistory.kt": "eab148bcffb920d8",
+    "src/com/pasaport/Probe.kt": "e64ba422c944de72",
+    "contract/CONTRACT.md": "19843d1c37d00511",
+    "contract/budget-cases.json": "b93cbf6f7f99b080",
+    "contract/contract.json": "b8563d04c6f1695c",
     "contract/estimate-cases.json": "17e8cb3792b56269",
     "contract/passport-0.1.json": "b5bd63eab893879a",
-    "contract/passport-0.2.json": "3b94fcae6fb8edb3"
+    "contract/passport-0.2.json": "3b94fcae6fb8edb3",
+    "contract/passport-0.3.json": "8058ff54c4f2d9a2"
   }
 }

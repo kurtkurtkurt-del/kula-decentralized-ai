@@ -223,15 +223,25 @@ const server = createServer(async (req, reply) => {
       }
 
       const id = (body && body.refresh_token || "").replace(/^local-/, "");
-      if (!id) return send(400, { msg: "refresh_token gerekli" });
-      return send(200, { access_token: "local-" + id, refresh_token: "local-" + id, expires_in: 3600 });
+      if (!id) return send(400, { msg: "refresh_token required" });
+      /* The database lives in memory: after a restart the phone's saved session points at a
+         user that is gone. Say so (the app signs out) instead of answering without a user,
+         which left session.user undefined and crashed the app on is_anonymous. */
+      await dropRole();
+      const u = await db.query(`select id, email from auth.users where id::text = $1`, [id]);
+      if (!u.rows.length) return send(400, { error: "invalid_grant", error_description: "Refresh Token Not Found" });
+      return send(200, { access_token: "local-" + id, refresh_token: "local-" + id, expires_in: 3600, token_type: "bearer",
+        user: { id: u.rows[0].id, email: u.rows[0].email, is_anonymous: false } });
     }
 
     if (path === "/auth/v1/user") {
       if (!user) return send(401, { msg: "no token" });
       await dropRole();
       const r = await db.query(`select id, email from auth.users where id = $1`, [user]);
-      return send(200, r.rows[0] || null);
+      /* A token for a user the in-memory database no longer has (the server restarted):
+         answer as Supabase does, so the app signs out instead of reading a null user. */
+      if (!r.rows.length) return send(403, { code: 403, error_code: "user_not_found", msg: "User from sub claim in JWT does not exist" });
+      return send(200, { ...r.rows[0], is_anonymous: false });
     }
 
     if (path === "/auth/v1/logout") return send(204);

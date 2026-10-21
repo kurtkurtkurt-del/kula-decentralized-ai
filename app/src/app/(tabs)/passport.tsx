@@ -102,8 +102,14 @@ export default function PassportScreen() {
           <View style={styles.card}>
             <View style={styles.red}>
               <Text style={styles.redMono}>{up(t('passport.largest'))}</Text>
-              <Text style={styles.big}>{passport ? passport.largest_model_q4 : '—'}</Text>
-              <Text style={styles.redMono}>{passport ? `Q4 · ${t('passport.speed')} ${passport.est_tps} tok/s` : up(t('passport.none'))}</Text>
+              <Text style={styles.big}>{passport ? (passport.estimate ? (passport.estimate.fit_b ? `~${passport.estimate.fit_b}B` : '<1B') : passport.largest_model_q4) : '—'}</Text>
+              <Text style={styles.redMono}>
+                {!passport
+                  ? up(t('passport.none'))
+                  : passport.estimate
+                    ? `Q4_K_M · ${passport.estimate.tps_low}–${passport.estimate.tps_high} tok/s · ${t('passport.range')}`
+                    : `Q4 · ${t('passport.speed')} ${passport.est_tps} tok/s`}
+              </Text>
               {passport ? <Text style={[styles.redMono, styles.cornerTop]}>{upperData(passport.soc)}</Text> : null}
               <View style={styles.ring}>
                 <Text style={styles.ringText}>{busy ? '…' : '8 s'}</Text>
@@ -115,7 +121,11 @@ export default function PassportScreen() {
                   <Row k={t('passport.ram')} v={`${passport.ram_total_gb} · ${passport.ram_free_gb} ${t('passport.free')}`} />
                   <Row k={t('passport.cap')} v={`${passport.app_mem_cap_mb} mb`} />
                   <Row k={t('passport.cpu')} v={passport.cpu_cores ? `${passport.cpu_cores} × ${passport.cpu_max_ghz} ghz` : '—'} />
-                  <Row k={t('passport.bw')} v={`${passport.mem_bw_gbs} gb/s`} />
+                  <Row k={t('passport.bw')} v={passport.mem_bw_read_gbs ? `${passport.mem_bw_read_gbs} gb/s · ${passport.best_threads} ${t('passport.threads')}` : `${passport.mem_bw_gbs} gb/s`} />
+                  {passport.budget ? <Row k={t('passport.budget')} v={`${passport.budget.ram_gb} gb · ~${passport.budget.q4_k_m_b}B q4 · ~${passport.budget.q3_k_s_b}B q3`} /> : null}
+                  {passport.gpu ? <Row k={t('passport.gpu')} v={[passport.gpu.model, passport.gpu.opencl ? 'opencl' : '', passport.gpu.vulkan ? `vulkan ${passport.gpu.vulkan}` : ''].filter(Boolean).join(' · ').toLowerCase() || '—'} /> : null}
+                  {passport.thermal ? <Row k={t('passport.heat')} v={`${passport.thermal.status >= 0 ? passport.thermal.status : '—'} · ${passport.thermal.battery_c >= 0 ? `${passport.thermal.battery_c} °c` : '—'}`} /> : null}
+                  {passport.wifi ? <Row k={t('passport.wifi')} v={passport.wifi.band ? `${passport.wifi.band} ghz · ${passport.wifi.link_mbps} mbps` : '—'} /> : null}
                   <Row k={t('passport.compute')} v={`${passport.gflops} gflops`} />
                   <Row k={`${t('passport.disk')} · ${t('passport.battery')}`} v={`${passport.storage_free_gb || '—'} gb · ${passport.battery_pct || '—'}%${passport.charging ? ' ⚡' : ''}`} />
                   <View style={styles.rule} />

@@ -24,6 +24,7 @@ const structure = [
   ["13_push.sql", "PUSH — a sentence and a name, never the words"],
   ["14_safety.sql", "WHAT THE STORES REQUIRE — terms, reports, errors, the floor, feedback, pruning"],
   ["15_health.sql", "HEALTH"],
+  ["16_devices.sql", "DEVICES — the catalog of every device model, the network's night estimated"],
 ];
 
 /* A visible version stamp goes at the top of the file, so one look at the
