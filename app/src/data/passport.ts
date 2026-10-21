@@ -61,10 +61,11 @@ const kindHere = (): DeviceKind => (Device.deviceType === Device.DeviceType.TABL
 const osHere = () => `${Platform.OS} ${Device.osVersion ?? ''}`.trim();
 export const STEPS = [1, 3, 4, 7, 8, 12, 14];
 
-// Largest Q4 model that fits: usable = min(free RAM, app cap) × 0.8, ~0.6 GB per 1B;
-// rough tokens/s = bandwidth / model size × 0.5. The same rule as Measure.kt.
-export function estimateModel(ramFreeGb: number, appMemCapMb: number, memBwGbs: number): { label: string; tps: number; fit: number | null } {
-  const usable = Math.min(ramFreeGb, appMemCapMb / 1024) * 0.8;
+// Largest Q4 model that fits: usable = free RAM × 0.8, ~0.6 GB per 1B; rough tokens/s =
+// bandwidth / model size × 0.5. The same rule as Measure.kt. Not the app memory cap: it
+// limits the Java heap only, and a model runner allocates native memory (21.10.2026).
+export function estimateModel(ramFreeGb: number, memBwGbs: number): { label: string; tps: number; fit: number | null } {
+  const usable = ramFreeGb * 0.8;
   const fit = [...STEPS].reverse().find((b) => b * 0.6 <= usable) ?? null;
   const sizeGb = (fit ?? 1) * 0.6;
   const tps = sizeGb > 0 && memBwGbs > 0 ? Math.round((memBwGbs / sizeGb) * 0.5 * 10) / 10 : 0;
@@ -93,7 +94,7 @@ async function measureJs(): Promise<Passport> {
   const t1 = Date.now();
   for (let r = 0; r < 3; r++) for (let i = 0; i < m; i++) for (let k = 0; k < m; k++) { const aik = x[i * m + k]; for (let j = 0; j < m; j++) z[i * m + j] += aik * y[k * m + j]; }
   const gf = Math.round(((3 * 2 * m * m * m) / Math.max(0.001, (Date.now() - t1) / 1000) / 1e9) * 100) / 100;
-  const est = estimateModel(ramFree, cap, bw);
+  const est = estimateModel(ramFree, bw);
   return {
     schema: 'passport/0.1', device: `${Device.manufacturer ?? ''} ${Device.modelName ?? ''}`.trim() || 'unknown', soc: Device.modelId ?? 'unknown',
     android: Platform.OS === 'android' ? String(Device.osVersion ?? '') : `${Platform.OS} ${Device.osVersion ?? ''}`,

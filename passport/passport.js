@@ -8,7 +8,8 @@
    localStorage. Under the list, this computer as a qr code for the phone's
    passport tab (connect). The passport is the app's shape, passport/0.2,
    kind "computer", approx true. The rule for the model and the speed is the
-   app's: usable = min(free ram, cap) × 0.8, ~0.6 gb per 1B; tok/s =
+   app's: usable = free ram × 0.8 (not the app memory cap: a model runner
+   uses native memory), ~0.6 gb per 1B; tok/s =
    bandwidth / size × 0.5. The speed adds up across devices; the model does
    not (memory is not pooled), so the line under the number names the best
    device's model. */
@@ -57,8 +58,8 @@
     return { device: device, os: (os + (browser ? " · " + browser : "")).trim() || "browser" };
   }
 
-  function estimateModel(ramFreeGb, appMemCapMb, memBwGbs) {
-    var usable = Math.min(ramFreeGb, appMemCapMb / 1024) * 0.8;
+  function estimateModel(ramFreeGb, memBwGbs) {
+    var usable = ramFreeGb * 0.8;
     var fit = null;
     for (var i = STEPS.length - 1; i >= 0; i--) if (STEPS[i] * 0.6 <= usable) { fit = STEPS[i]; break; }
     var sizeGb = (fit || 1) * 0.6;
@@ -143,7 +144,7 @@
       return gflops(cores).then(function (g) {
         return Promise.all([storage(), battery()]).then(function (rest) {
           var ramFree = r1(ramTotal * 0.45), cap = Math.round(ramTotal * 1024 * 0.5);
-          var est = estimateModel(ramFree, cap, bw);
+          var est = estimateModel(ramFree, bw);
           return {
             schema: "passport/0.2", device: who.device, soc: "unknown", android: who.os,
             ram_total_gb: r1(ramTotal), ram_free_gb: ramFree, app_mem_cap_mb: cap,

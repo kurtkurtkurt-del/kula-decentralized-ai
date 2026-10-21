@@ -41,7 +41,7 @@ suspend fun measureAll(context: Context): Passport = withContext(Dispatchers.Def
     val batteryPct = bm.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY)
     val charging = bm.isCharging
 
-    val (model, tps) = estimateModel(ramFreeGb, appMemCapMb, memBw)
+    val (model, tps) = estimateModel(ramFreeGb, memBw)
 
     Passport(
         device = "${Build.MANUFACTURER} ${Build.MODEL}",
@@ -164,12 +164,13 @@ suspend fun gflops(cores: Int): Double {
 }
 
 /**
- * Largest Q4 model that fits: usable = min(free RAM, largeMemoryClass) x 0.8,
- * ~0.6 GB per 1B parameters. Returns the label and a rough tokens/s estimate
- * (bandwidth / model size x 0.5).
+ * Largest Q4 model that fits: usable = free RAM x 0.8, ~0.6 GB per 1B parameters.
+ * Returns the label and a rough tokens/s estimate (bandwidth / model size x 0.5).
+ * Not the app memory cap (largeMemoryClass): that limits the Java heap only, and a
+ * model runner such as llama.cpp allocates native memory (21.10.2026).
  */
-fun estimateModel(ramFreeGb: Double, appMemCapMb: Int, memBwGbs: Double): Pair<String, Double> {
-    val usable = min(ramFreeGb, appMemCapMb / 1024.0) * 0.8
+fun estimateModel(ramFreeGb: Double, memBwGbs: Double): Pair<String, Double> {
+    val usable = ramFreeGb * 0.8
     val steps = intArrayOf(1, 3, 4, 7, 8, 12, 14)
     val fit = steps.lastOrNull { it * 0.6 <= usable }
     val label = if (fit == null) "<1B" else "~${fit}B"
