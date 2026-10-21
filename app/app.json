@@ -18,7 +18,7 @@
     "android": {
       "package": "app.pasaport.android",
       "adaptiveIcon": {
-        "backgroundColor": "#F5F5F0",
+        "backgroundColor": "#FFFFFF",
         "foregroundImage": "./assets/android-icon-foreground.png",
         "backgroundImage": "./assets/android-icon-background.png",
         "monochromeImage": "./assets/android-icon-monochrome.png"
@@ -64,8 +64,8 @@
       "name": "kula decentralized ai",
       "shortName": "kula",
       "description": "your phone's idle hours, lent to a project you choose.",
-      "themeColor": "#F5F5F0",
-      "backgroundColor": "#F5F5F0"
+      "themeColor": "#FFFFFF",
+      "backgroundColor": "#FFFFFF"
     },
     "plugins": [
       "expo-router",
@@ -73,7 +73,7 @@
       [
         "expo-splash-screen",
         {
-          "backgroundColor": "#F5F5F0",
+          "backgroundColor": "#FFFFFF",
           "image": "./assets/splash-icon.png",
           "imageWidth": 200,
           "resizeMode": "contain"
@@ -115,7 +115,7 @@
         "expo-notifications",
         {
           "icon": "./assets/android-icon-monochrome.png",
-          "color": "#C86A51",
+          "color": "#5B6B56",
           "defaultChannel": "default"
         }
       ],
@@ -126,7 +126,7 @@
     "experiments": {
       "typedRoutes": true
     },
-    "backgroundColor": "#F5F5F0",
+    "backgroundColor": "#FFFFFF",
     "description": "your phone's idle hours, lent to a project you choose.",
     "extra": {
       "router": {},

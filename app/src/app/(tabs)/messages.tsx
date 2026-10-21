@@ -226,7 +226,7 @@ const styles = StyleSheet.create({
   newMark: { width: 34, height: 34, borderRadius: 17, backgroundColor: colors.spot, alignItems: 'center', justifyContent: 'center' },
   newPlus: { fontFamily: fonts.medium, fontSize: 20, lineHeight: 22, color: colors.ink },
   newText: { fontFamily: fonts.medium, fontSize: 15, color: colors.paper },
-  scrim: { flex: 1, backgroundColor: 'rgba(78,54,41,0.4)' },
+  scrim: { flex: 1, backgroundColor: 'rgba(31,26,20,0.4)' },
   sheet: { backgroundColor: colors.ink, borderTopLeftRadius: radius.lg, borderTopRightRadius: radius.lg, borderTopWidth: 1, borderColor: colors.ink3, paddingHorizontal: brand.left, paddingTop: 18, gap: 12 },
   sheetTitle: { fontFamily: fonts.semibold, fontSize: 20, letterSpacing: -0.5, color: colors.paper },
   sheetList: { minHeight: 120 },
