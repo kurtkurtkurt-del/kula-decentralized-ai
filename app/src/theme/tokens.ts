@@ -16,7 +16,7 @@ export const ACCENTS = {
 export type AccentId = keyof typeof ACCENTS;
 const readAccent = (): AccentId => {
   try {
-    const v = Storage.getItemSync('accent');
+    const v = Storage.getItemSync('accent.kula'); // 'accent' was afterhours' key (red); ignored
     return v && v in ACCENTS ? (v as AccentId) : 'green';
   } catch {
     return 'green';
