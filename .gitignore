@@ -4,3 +4,4 @@ backend/backup/
 
 # the gate's proof (backend/tools/gate.mjs), per machine
 .qa/
+dist/
