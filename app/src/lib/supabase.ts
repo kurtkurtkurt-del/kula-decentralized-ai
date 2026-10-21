@@ -1,6 +1,7 @@
 import 'expo-sqlite/localStorage/install';
 import { AppState, Platform } from 'react-native';
-import { createClient } from '@supabase/supabase-js';
+import { createClient, type SupabaseClient } from '@supabase/supabase-js';
+import { createDemoClient } from '@/demo/client';
 import { LargeSecureStore } from '@/lib/secureStorage';
 import { backendProblem } from '@/lib/backend';
 
@@ -10,12 +11,17 @@ import { backendProblem } from '@/lib/backend';
 const url = process.env.EXPO_PUBLIC_SUPABASE_URL;
 const key = process.env.EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY;
 
-/** null when this build can reach a live server; else why not (shown by NoServer). */
-export const BACKEND_PROBLEM = backendProblem(url, key, __DEV__);
+/**
+ * No server set (an empty .env.production, 21.10.2026: "no Supabase for now, just random
+ * examples"), or EXPO_PUBLIC_DEMO=1: the app runs on the example world in src/demo, on the
+ * phone, with the demo user signed in. Everything works; nothing leaves the phone.
+ */
+export const DEMO = !url || process.env.EXPO_PUBLIC_DEMO === '1';
 
-// A placeholder keeps the client constructible when the build has no server; every call
-// then fails like an offline one, and the root layout shows why instead of the app.
-export const supabase = createClient(url || 'https://missing.invalid', key || 'missing', {
+/** null when this build can reach its server; else why not (shown by NoServer). */
+export const BACKEND_PROBLEM = DEMO ? null : backendProblem(url, key, __DEV__);
+
+const live = () => createClient(url!, key || 'missing', {
   auth: {
     // On the web supabase-js keeps the session in localStorage by itself.
     storage: Platform.OS === 'web' ? undefined : new LargeSecureStore(),
@@ -24,6 +30,7 @@ export const supabase = createClient(url || 'https://missing.invalid', key || 'm
     detectSessionInUrl: Platform.OS === 'web',
   },
 });
+export const supabase: SupabaseClient = DEMO ? createDemoClient() : live();
 
 // Refresh the session only while the app is in the foreground.
 AppState.addEventListener('change', (state) => {

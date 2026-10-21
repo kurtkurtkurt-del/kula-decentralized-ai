@@ -179,6 +179,8 @@ export const pages = {
   'settings.privacy.hint': { en: 'what we keep and why', de: 'was wir behalten und warum', tr: 'neyi, neden tutuyoruz' },
   'settings.feedback': { en: 'send us a note', de: 'schreib uns', tr: 'bize yaz' },
   'settings.feedback.hint': { en: 'something broken, an idea, a project we should carry', de: 'etwas kaputt, eine idee, ein projekt, das wir tragen sollten', tr: 'bozuk bir şey, bir fikir, taşımamız gereken bir proje' },
+  'settings.server': { en: 'server', de: 'server', tr: 'sunucu' },
+  'settings.server.demo': { en: 'example data on this phone: invented people and nights, nothing is sent anywhere', de: 'beispieldaten auf diesem handy: erfundene leute und nächte, nichts wird gesendet', tr: 'bu telefonda örnek veri: uydurma kişiler ve geceler, hiçbir yere bir şey gönderilmez' },
   'settings.version': { en: 'version', de: 'version', tr: 'sürüm' },
   'notify.title': { en: 'notifications', de: 'benachrichtigungen', tr: 'bildirimler' },
   'notify.allow': { en: 'allow notifications', de: 'benachrichtigungen erlauben', tr: 'bildirimlere izin ver' },

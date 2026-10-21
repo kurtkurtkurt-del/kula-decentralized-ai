@@ -20,6 +20,12 @@ const url = v.EXPO_PUBLIC_SUPABASE_URL ?? "";
 const key = v.EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY ?? "";
 const AFTERHOURS = ["elmnnyxgavwjxvwjgjcu"]; // afterhours' live project: kula must never use it
 
+console.log(`release env: ${loaded.map((f) => f.replace(app + "/", "")).join(", ") || "no env files"} → ${url || "(none)"}`);
+if (!url) {
+  // no server at all: the app runs on the example world in src/demo (lib/supabase.ts, DEMO)
+  console.log("✓ demo build: no server, the example world on the phone (src/demo); nothing leaves the phone");
+  process.exit(0);
+}
 const problems = [];
 let host = "";
 try {
@@ -33,7 +39,6 @@ if (host && /^(localhost|127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|0\.0\.0
 if (AFTERHOURS.some((id) => url.includes(id))) problems.push("the server is afterhours' project; kula has its own");
 if (!key || key === "local") problems.push("no publishable key (EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY)");
 
-console.log(`release env: ${loaded.map((f) => f.replace(app + "/", "")).join(", ") || "no env files"} → ${url || "(none)"}`);
 if (problems.length) {
   console.error(`✗ not releasable:\n  - ${problems.join("\n  - ")}\nFill app/.env.production with kula's own Supabase project (README: "a live server").`);
   process.exit(1);

@@ -4,6 +4,18 @@
 
 Forked from afterhours on 20.10.2026; the app lends the phone's idle, charging hours to a social-benefit AI project. The Kotlin measurement app lives in `../device-passport/`; the app carries a copy of its `Measure.kt`/`Passport.kt` in `app/modules/passport-measure/`.
 
+## Demo builds (no server)
+
+Today (21.10.2026: "no Supabase for now, just random examples") `app/.env.production` is empty,
+so a release apk is a **demo**: `src/lib/supabase.ts` swaps the Supabase client for
+`src/demo/client.ts`, and `src/demo/server.ts` answers every call from an invented example world
+(`src/demo/snapshot.json`: 14 people with their phones, friendships, kept projects, nights,
+messages, coops, calls, the network). The demo user (deniz) is signed in; what they do — keep,
+write, measure, finish a night, start a coop or call — stays on the phone. Settings → app →
+server says "demo". To remake the world (other names, more people): start a fresh local server
+and run `node tools/demo-snapshot.mjs [seed]` in `app/`. `EXPO_PUBLIC_DEMO=1` in
+`app/.env.development.local` runs the demo in Expo Go or the browser.
+
 ## A live server
 
 Two servers, chosen by the env files in `app/` (`app/.env` explains the order):

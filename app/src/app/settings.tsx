@@ -16,6 +16,7 @@ import { invalidate } from '@/lib/offline';
 import { serverText } from '@/lib/serverText';
 import { useRefreshOnFocus } from '@/hooks/useRefresh';
 import { useLang } from '@/i18n';
+import { DEMO } from '@/lib/supabase';
 import { colors, fonts } from '@/theme/tokens';
 
 const HOURS = Array.from({ length: 48 }, (_, i) => `${String(Math.floor(i / 2)).padStart(2, '0')}:${i % 2 ? '30' : '00'}`);
@@ -110,6 +111,7 @@ export default function SettingsScreen() {
       <LangRow />
       <Panel>
         <Row label={t('settings.web')} hint={t('settings.web.hint')} onPress={() => Linking.openURL(SITE)} right={<Value text="" more />} />
+        <Row label={t('settings.server')} hint={DEMO ? t('settings.server.demo') : undefined} right={<Value text={DEMO ? 'demo' : 'live'} />} />
         <Row label={t('settings.version')} right={<Value text={Constants.expoConfig?.version ?? '0'} />} />
       </Panel>
 
