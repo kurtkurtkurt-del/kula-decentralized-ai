@@ -1,0 +1,28 @@
+<!doctype html><html><head><meta charset="utf-8"><title>logo d render</title>
+<style>@font-face{font-family:ArchivoLogo;src:url(/app/assets/fonts/ArchivoLogo.ttf)} body{font-family:ArchivoLogo;background:#fff}</style></head>
+<body><span style="font-family:ArchivoLogo">K</span>
+<script>
+// Logo D: a heavy K with a green four-point spark and a small gold one at its top right.
+const SAGE='#5B6B56', GOLD='#D4A373', INK='#1F1A14';
+function spark(ctx,cx,cy,r,color){ctx.beginPath();ctx.moveTo(cx,cy-r);ctx.lineTo(cx+r*0.25,cy-r*0.25);ctx.lineTo(cx+r,cy);ctx.lineTo(cx+r*0.25,cy+r*0.25);ctx.lineTo(cx,cy+r);ctx.lineTo(cx-r*0.25,cy+r*0.25);ctx.lineTo(cx-r,cy);ctx.lineTo(cx-r*0.25,cy-r*0.25);ctx.closePath();ctx.fillStyle=color;ctx.fill();}
+// draw the mark into a box (x,y,size): K fills ~75% height, sparks top-right
+function mark(ctx,x,y,s,kColor,sparkColors){
+  const fs=s*0.78; ctx.font=`900 ${fs}px ArchivoLogo`; ctx.textBaseline='alphabetic'; ctx.fillStyle=kColor;
+  const m=ctx.measureText('K'); const kw=m.width; const kx=x+s*0.10; const ky=y+s*0.82;
+  ctx.fillText('K',kx,ky);
+  spark(ctx,kx+kw+s*0.12,y+s*0.30,s*0.13,sparkColors[0]);
+  spark(ctx,kx+kw+s*0.26,y+s*0.50,s*0.06,sparkColors[1]);
+}
+function render(w,h,bg,draw){const c=document.createElement('canvas');c.width=w;c.height=h;const ctx=c.getContext('2d');if(bg){ctx.fillStyle=bg;ctx.fillRect(0,0,w,h);}draw(ctx);return c.toDataURL('image/png');}
+window.renderAll=async function(){
+  await document.fonts.load('900 100px ArchivoLogo');
+  return {
+    icon: render(1024,1024,'#fff',ctx=>mark(ctx,0,0,1024,INK,[SAGE,GOLD])),
+    foreground: render(1024,1024,null,ctx=>mark(ctx,176,176,672,INK,[SAGE,GOLD])),
+    background: render(1024,1024,'#fff',()=>{}),
+    monochrome: render(1024,1024,null,ctx=>mark(ctx,176,176,672,'#000',['#000','#000'])),
+    splash: render(1200,600,'#fff',ctx=>mark(ctx,400,100,400,INK,[SAGE,GOLD])),
+    favicon: render(96,96,'#fff',ctx=>mark(ctx,0,0,96,INK,[SAGE,GOLD])),
+  };
+};
+</script></body></html>
