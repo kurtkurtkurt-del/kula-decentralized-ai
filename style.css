@@ -3922,3 +3922,34 @@ body[data-screen="5"] .header-links .lang { color: #f2f2f0; }
 .page-check { display: flex; align-items: flex-start; gap: 10px; margin: 6px 0 14px; font: 400 14px/1.45 "Inter Tight", system-ui, sans-serif; color: inherit; cursor: pointer; }
 .page-check input { margin: 3px 0 0; width: 16px; height: 16px; accent-color: #d7261e; flex: none; }
 .page-check a { color: inherit; text-decoration: underline; }
+
+/* ---- passport/ (21.10.2026): your devices together — one number, a
+   line per device, a field to paste another one, this computer's code ---- */
+.pp-total {
+  margin-top: 36px;
+  font-size: clamp(72px, 12vw, 160px);
+  font-weight: 500;
+  letter-spacing: -0.05em;
+  line-height: 0.95;
+}
+.pp-unit { font-size: 0.28em; font-weight: 400; letter-spacing: -0.01em; opacity: 0.55; }
+.pp-under { margin-top: 14px; font-size: 15px; opacity: 0.6; min-height: 22px; }
+.pp-list { margin-top: 40px; max-width: 520px; }
+.pp-row {
+  display: flex; align-items: baseline; gap: 14px;
+  padding: 11px 0;
+  border-top: 1px solid rgba(0, 0, 0, 0.09);
+  font-size: 15px;
+}
+.pp-row:last-child { border-bottom: 1px solid rgba(0, 0, 0, 0.09); }
+.pp-name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pp-v { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.pp-me, .pp-x { flex: 0 0 auto; width: 110px; text-align: right; font-size: 10px; letter-spacing: 0.14em; text-transform: uppercase; opacity: 0.45; }
+.pp-x { font-family: inherit; font-size: 15px; letter-spacing: 0; background: none; border: 0; padding: 0; cursor: pointer; opacity: 0.45; }
+.pp-x:hover { opacity: 1; }
+.pp-add { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 14px; margin-top: 28px; }
+.pp-add .account-field { font-family: inherit; }
+.pp-add .account-status { margin: 0 0 10px; flex-basis: 100%; }
+.pp-code { margin-top: 56px; }
+.pp-code canvas { display: block; width: 160px; height: 160px; image-rendering: pixelated; }
+.pp-hint { margin-top: 10px; font-size: 10px; letter-spacing: 0.16em; text-transform: uppercase; opacity: 0.5; }

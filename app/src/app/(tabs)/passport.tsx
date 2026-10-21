@@ -140,7 +140,7 @@ export default function PassportScreen() {
           {note ? <Text style={styles.note}>{note}</Text> : null}
           {!nativeAvailable() ? <Text style={styles.note}>{t('passport.approx')}</Text> : null}
 
-          {/* your devices: this one and the ones connected by qr, and what they make together */}
+          {/* together: this phone and the devices connected by qr, one number */}
           <Devices passport={passport} />
 
           {/* tonight: the worker */}

@@ -169,5 +169,23 @@
   "admin.handled": { "en": "handled", "de": "erledigt", "tr": "halledildi" },
   "admin.member": { "en": "member", "de": "mitglied", "tr": "üye" },
   "admin.show": { "en": "show", "de": "zeigen", "tr": "göster" },
-  "admin.hide": { "en": "hide", "de": "verbergen", "tr": "gizle" }
+  "admin.hide": { "en": "hide", "de": "verbergen", "tr": "gizle" },
+
+  "passport.title": {"en": "passport | afterhours", "de": "pass | afterhours", "tr": "pasaport | afterhours"},
+  "passport.desc": {"en": "Your devices together: how many tokens a second.", "de": "deine geräte zusammen: wie viele tokens pro sekunde.", "tr": "cihazların birlikte: saniyede kaç token."},
+  "passport.h1": {"en": "passport.", "de": "pass.", "tr": "pasaport."},
+  "passport.measuring": {"en": "measuring this computer…", "de": "dieser rechner wird gemessen…", "tr": "bu bilgisayar ölçülüyor…"},
+  "passport.failed": {"en": "this computer could not be measured", "de": "dieser rechner ließ sich nicht messen", "tr": "bu bilgisayar ölçülemedi"},
+  "passport.n.one": {"en": "{n} device", "de": "{n} gerät", "tr": "{n} cihaz"},
+  "passport.n.other": {"en": "{n} devices together", "de": "{n} geräte zusammen", "tr": "{n} cihaz birlikte"},
+  "passport.best": {"en": "runs {model} Q4", "de": "schafft {model} Q4", "tr": "{model} Q4 çalıştırır"},
+  "passport.this": {"en": "this computer", "de": "dieser rechner", "tr": "bu bilgisayar"},
+  "passport.remove": {"en": "remove", "de": "entfernen", "tr": "kaldır"},
+  "passport.paste": {"en": "paste a device's passport here", "de": "den pass eines geräts hier einfügen", "tr": "bir cihazın pasaportunu buraya yapıştır"},
+  "passport.add": {"en": "add", "de": "hinzufügen", "tr": "ekle"},
+  "passport.err.not": {"en": "that is not a passport", "de": "das ist kein pass", "tr": "bu bir pasaport değil"},
+  "passport.err.incomplete": {"en": "passport incomplete", "de": "pass unvollständig", "tr": "pasaport eksik"},
+  "passport.err.self": {"en": "that is this computer", "de": "das ist dieser rechner", "tr": "bu zaten bu bilgisayar"},
+  "passport.qr.alt": {"en": "this computer's passport as a qr code", "de": "der pass dieses rechners als qr-code", "tr": "bu bilgisayarın pasaportu qr kodu olarak"},
+  "passport.qr.hint": {"en": "the phone: passport → connect", "de": "das handy: pass → verbinden", "tr": "telefon: pasaport → bağla"}
 }
