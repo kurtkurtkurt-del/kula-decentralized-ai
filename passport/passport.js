@@ -6,7 +6,9 @@
    tokens a second of every device together. The other devices come in as
    their passport json, pasted (the app: copy json); they stay in
    localStorage. Under the list, this computer as a qr code for the phone's
-   passport tab (connect). The passport is the app's shape, passport/0.2,
+   passport tab (connect). A connect id from the phone hands it over without a
+   camera: the page builds the Terminal command for a Mac (mac.sh, a native
+   measurement) and sends its own measurement on request. The passport is the app's shape, passport/0.2,
    kind "computer", approx true. The rule for the model and the speed is the
    app's: usable = free ram × 0.8 (not the app memory cap: a model runner
    uses native memory), ~0.6 gb per 1B; tok/s =
@@ -235,8 +237,50 @@
     $("pp-code").hidden = false;
   }
 
+  // ---- to the phone by connect id ---------------------------------------------------
+  // The Passport app shows a connect id and waits; the passport is dropped under it on
+  // kula's server (backend/sql/17_passport_drops.sql) and the phone picks it up once.
+  var ID_RE = /^[ABCDEFGHJKMNPQRSTUVWXYZ23456789]{6}$/;
+  function connectId() {
+    var field = $("pp-id");
+    var v = field.value.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 6);
+    if (field.value !== v) field.value = v;
+    return v;
+  }
+  function macCommand() {
+    var here = location.href.split("#")[0].split("?")[0].replace(/[^/]*$/, "");
+    var id = connectId();
+    return "curl -fsSL " + here + "mac.sh | bash" + (ID_RE.test(id) ? " -s -- " + id : "");
+  }
+  function showCommand() { $("pp-cmd").textContent = macCommand(); }
+  function sendToPhone() {
+    var status = $("pp-sendstatus"), id = connectId(), cfg = window.AH_CONFIG || {};
+    var fail = function (msg) { status.className = "account-status error"; status.textContent = msg; };
+    if (!ID_RE.test(id)) return fail(AH.t("passport.send.badId"));
+    if (!mine) return fail(AH.t("passport.measuring"));
+    if (!cfg.url || !cfg.anonKey) return fail(AH.t("passport.send.offline"));
+    status.className = "account-status";
+    status.textContent = AH.t("passport.send.sending");
+    fetch(cfg.url.replace(/\/$/, "") + "/rest/v1/rpc/passport_drop", {
+      method: "POST",
+      headers: { apikey: cfg.anonKey, "Content-Type": "application/json" },
+      body: JSON.stringify({ p_code: id, p_data: mine })
+    }).then(function (r) {
+      if (!r.ok) return r.text().then(function (t) { throw new Error(t || String(r.status)); });
+      status.className = "account-status ok";
+      status.textContent = AH.t("passport.send.sent", { id: id });
+    }).catch(function (e) { fail(AH.t("passport.send.failed") + " · " + String(e && e.message || e).slice(0, 120)); });
+  }
+
   function init() {
     show();
+    showCommand();
+    $("pp-id").addEventListener("input", showCommand);
+    $("pp-sendbtn").addEventListener("click", sendToPhone);
+    $("pp-cmdcopy").addEventListener("click", function () {
+      var done = function () { $("pp-sendstatus").className = "account-status"; $("pp-sendstatus").textContent = AH.t("passport.send.copied"); };
+      if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(macCommand()).then(done, done);
+    });
     $("pp-addbtn").addEventListener("click", function () {
       var status = $("pp-status"), field = $("pp-paste");
       try {

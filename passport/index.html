@@ -58,6 +58,20 @@
       <span class="account-status" id="pp-status"></span>
     </div>
 
+    <!-- to the phone by connect id: a Mac measured natively in Terminal, or this browser's own measurement -->
+    <section class="pp-send">
+      <p class="account-title" data-i18n="passport.send.title">to your phone</p>
+      <p class="account-about" data-i18n="passport.send.about">In the Passport app: add a computer. It shows a connect id — type it here.</p>
+      <input class="account-field pp-id" id="pp-id" type="text" maxlength="6" placeholder="K7M2QX" autocomplete="off" autocapitalize="characters" spellcheck="false" aria-label="connect id" data-i18n-attr="aria-label:passport.send.id" />
+      <p class="pp-step" data-i18n="passport.send.mac">a mac: paste this into Terminal. it measures the machine natively and sends it.</p>
+      <div class="pp-cmd"><code id="pp-cmd"></code><button class="sc-link pp-copy" id="pp-cmdcopy" type="button" data-i18n="passport.send.copy">copy</button></div>
+      <p class="pp-step" data-i18n="passport.send.other">any other computer: send what this browser measured.</p>
+      <div class="set-save">
+        <button class="account-button" id="pp-sendbtn" type="button" data-i18n="passport.send.button">send to phone</button>
+        <span class="account-status" id="pp-sendstatus"></span>
+      </div>
+    </section>
+
     <!-- this computer as a code, for the phone -->
     <div class="pp-code" id="pp-code" hidden>
       <canvas id="pp-canvas" width="160" height="160" aria-label="this computer's passport as a qr code" data-i18n-attr="aria-label:passport.qr.alt"></canvas>

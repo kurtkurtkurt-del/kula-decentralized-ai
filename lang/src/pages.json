@@ -187,5 +187,18 @@
   "passport.err.incomplete": {"en": "passport incomplete", "de": "pass unvollständig", "tr": "pasaport eksik"},
   "passport.err.self": {"en": "that is this computer", "de": "das ist dieser rechner", "tr": "bu zaten bu bilgisayar"},
   "passport.qr.alt": {"en": "this computer's passport as a qr code", "de": "der pass dieses rechners als qr-code", "tr": "bu bilgisayarın pasaportu qr kodu olarak"},
-  "passport.qr.hint": {"en": "the phone: passport → connect", "de": "das handy: pass → verbinden", "tr": "telefon: pasaport → bağla"}
+  "passport.qr.hint": {"en": "the phone: passport → connect", "de": "das handy: pass → verbinden", "tr": "telefon: pasaport → bağla"},
+  "passport.send.title": {"en": "to your phone", "de": "aufs handy", "tr": "telefonuna"},
+  "passport.send.about": {"en": "In the Passport app: add a computer. It shows a connect id — type it here.", "de": "In der Passport-App: rechner hinzufügen. Sie zeigt eine verbindungs-id — hier eintippen.", "tr": "Passport uygulamasında: bilgisayar ekle. Bir bağlantı kimliği gösterir — buraya yaz."},
+  "passport.send.id": {"en": "connect id", "de": "verbindungs-id", "tr": "bağlantı kimliği"},
+  "passport.send.mac": {"en": "a mac: paste this into Terminal. it measures the machine natively and sends it.", "de": "ein mac: das ins terminal einfügen. es misst den rechner direkt und schickt es.", "tr": "mac: bunu Terminal'e yapıştır. makineyi doğrudan ölçer ve gönderir."},
+  "passport.send.copy": {"en": "copy", "de": "kopieren", "tr": "kopyala"},
+  "passport.send.copied": {"en": "copied — paste it into Terminal", "de": "kopiert — ins terminal einfügen", "tr": "kopyalandı — Terminal'e yapıştır"},
+  "passport.send.other": {"en": "any other computer: send what this browser measured.", "de": "jeder andere rechner: schicken, was dieser browser gemessen hat.", "tr": "başka bir bilgisayar: bu tarayıcının ölçtüğünü gönder."},
+  "passport.send.button": {"en": "send to phone", "de": "aufs handy schicken", "tr": "telefona gönder"},
+  "passport.send.badId": {"en": "the connect id is six letters and digits, as the phone shows it", "de": "die verbindungs-id hat sechs buchstaben und ziffern, wie das handy sie zeigt", "tr": "bağlantı kimliği, telefonun gösterdiği gibi altı harf ve rakamdır"},
+  "passport.send.offline": {"en": "this copy of the site has no server to send through", "de": "diese kopie der seite hat keinen server zum senden", "tr": "sitenin bu kopyasının gönderecek sunucusu yok"},
+  "passport.send.sending": {"en": "sending…", "de": "wird gesendet…", "tr": "gönderiliyor…"},
+  "passport.send.sent": {"en": "sent under {id} — it shows up on the phone in a few seconds", "de": "unter {id} gesendet — in ein paar sekunden auf dem handy", "tr": "{id} ile gönderildi — birkaç saniye içinde telefonda görünür"},
+  "passport.send.failed": {"en": "could not send", "de": "senden ging nicht", "tr": "gönderilemedi"}
 }

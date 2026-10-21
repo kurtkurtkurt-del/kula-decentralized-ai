@@ -19,4 +19,5 @@ export const EXPECTED_SQL = [
   '14_safety.sql',
   '15_health.sql',
   '16_devices.sql',
+  '17_passport_drops.sql',
 ] as const;

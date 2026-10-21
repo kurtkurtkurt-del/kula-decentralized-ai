@@ -3950,6 +3950,14 @@ body[data-screen="5"] .header-links .lang { color: #f2f2f0; }
 .pp-add { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 14px; margin-top: 28px; }
 .pp-add .account-field { font-family: inherit; }
 .pp-add .account-status { margin: 0 0 10px; flex-basis: 100%; }
+.pp-send { margin-top: 48px; max-width: 620px; }
+.pp-send .account-about { max-width: 48ch; }
+.pp-id { width: 150px; font-family: "JetBrains Mono", ui-monospace, Menlo, monospace; letter-spacing: 0.18em; text-transform: uppercase; }
+.pp-step { margin-top: 22px; font-size: 14px; opacity: 0.7; }
+.pp-cmd { display: flex; align-items: baseline; gap: 16px; margin-top: 8px; }
+.pp-cmd code { flex: 1 1 auto; min-width: 0; padding: 10px 12px; background: rgba(0, 0, 0, 0.05); font: 12.5px/1.5 "JetBrains Mono", ui-monospace, Menlo, monospace; overflow-x: auto; white-space: nowrap; }
+.pp-cmd .pp-copy { flex: 0 0 auto; margin-top: 0; font: inherit; font-size: 14px; background: none; border: 0; border-bottom: 1px solid rgba(0, 0, 0, 0.3); border-radius: 0; padding: 0 0 2px; cursor: pointer; }
+.pp-send .set-save { margin-top: 10px; }
 .pp-code { margin-top: 56px; }
 .pp-code canvas { display: block; width: 160px; height: 160px; image-rendering: pixelated; }
 .pp-hint { margin-top: 10px; font-size: 10px; letter-spacing: 0.16em; text-transform: uppercase; opacity: 0.5; }
