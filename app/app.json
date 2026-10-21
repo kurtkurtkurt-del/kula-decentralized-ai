@@ -10,7 +10,7 @@
       "bundleIdentifier": "app.pasaport.ios",
       "supportsTablet": false,
       "infoPlist": {
-        "NSLocationWhenInUseUsageDescription": "afterhours uses your location to show the nights near you.",
+        "NSLocationWhenInUseUsageDescription": "kula uses your location to place your phone in its city on the network.",
         "ITSAppUsesNonExemptEncryption": false
       },
       "usesAppleSignIn": true
@@ -89,7 +89,7 @@
       [
         "expo-location",
         {
-          "locationWhenInUsePermission": "afterhours uses your location to show the nights near you."
+          "locationWhenInUsePermission": "kula uses your location to place your phone in its city on the network."
         }
       ],
       "expo-secure-store",

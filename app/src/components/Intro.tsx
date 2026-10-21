@@ -35,7 +35,7 @@ export default function Intro({ onDone }: Props) {
         <Backdrop />
       </Animated.View>
       <Animated.Text style={[styles.word, wordStyle]}>
-        afterhours<Text style={styles.dot}>.</Text>
+        kula<Text style={styles.dot}>.</Text>
       </Animated.Text>
     </Pressable>
   );
