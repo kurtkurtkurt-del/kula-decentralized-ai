@@ -15,6 +15,7 @@ import { GestureHandlerRootView } from 'react-native-gesture-handler';
 // the boundary can sit outside the language provider: read the language directly
 import { t as tNow } from '@/i18n/core';
 import { colors } from '@/theme/tokens';
+import { MAX_WIDTH } from '@/theme/layout';
 import { AuthProvider, useAuth } from '@/auth/AuthContext';
 import { LanguageProvider, useLang } from '@/i18n';
 import { usePushRegistration, usePushRouting } from '@/lib/push';
@@ -68,6 +69,9 @@ function RootLayout() {
 
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
+    {/* a phone-shaped column, centred on a tablet (theme/layout.ts MAX_WIDTH) */}
+    <View style={{ flex: 1, backgroundColor: colors.ink, alignItems: 'center' }}>
+    <View style={{ flex: 1, width: '100%', maxWidth: MAX_WIDTH }}>
     <AuthProvider>
     <LanguageProvider>
       <Stack
@@ -91,6 +95,8 @@ function RootLayout() {
       <UpdateGate />
     </LanguageProvider>
     </AuthProvider>
+    </View>
+    </View>
     </GestureHandlerRootView>
   );
 }

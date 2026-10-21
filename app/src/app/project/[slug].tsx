@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
-import { Linking, Pressable, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
+import { Linking, Pressable, StyleSheet, Text, View } from 'react-native';
+import { useAppSize } from '@/hooks/useAppSize';
 import { Image } from 'expo-image';
 import { SvgUri } from 'react-native-svg';
 import { StatusBar } from 'expo-status-bar';
@@ -29,7 +30,7 @@ const fallback = require('../../../assets/intro/concert.jpg');
 export default function ProjectScreen() {
   const { slug } = useLocalSearchParams<{ slug: string }>();
   const insets = useSafeAreaInsets();
-  const { width } = useWindowDimensions();
+  const { width } = useAppSize();
   const { session } = useAuth();
   const { t, tn, up, lang } = useLang();
   const [page, setPage] = useState<ProjectPage | null>(null);

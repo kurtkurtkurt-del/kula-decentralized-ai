@@ -8,3 +8,6 @@ export const brand = {
   logoBig: 46,   // logo (Archivo condensed, black), centred in the intro
   logoSmall: 24, // logo, top left on the home screen
 } as const;
+
+// The widest the app gets: on a tablet it is a centred column of this width (22.10.2026).
+export const MAX_WIDTH = 600;

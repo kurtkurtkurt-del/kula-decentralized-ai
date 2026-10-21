@@ -1,5 +1,6 @@
 import { forwardRef, useCallback, useImperativeHandle, useRef, useState } from 'react';
-import { Pressable, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
+import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { useAppSize } from '@/hooks/useAppSize';
 import { Image } from 'expo-image';
 import { SvgUri } from 'react-native-svg';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
@@ -31,7 +32,7 @@ type CardHandle = { promote: () => void; fly: (d: Direction) => void };
 // down opens the project page. Each card owns its position, so the card behind is at
 // rest when the top one flies off.
 const Card = forwardRef<CardHandle, { p: Project; active: boolean; bottom: number; top: number; onDone: (d: Direction) => void }>(function Card({ p, active, bottom, top, onDone }, ref) {
-  const { width } = useWindowDimensions();
+  const { width } = useAppSize();
   const { t, tn, up } = useLang();
   const x = useSharedValue(0);
   const y = useSharedValue(0);

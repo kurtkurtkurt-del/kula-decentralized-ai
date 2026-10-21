@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
-import { Modal, Pressable, ScrollView, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
+import { Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { useAppSize } from '@/hooks/useAppSize';
 import { StatusBar } from 'expo-status-bar';
 import { router } from 'expo-router';
 import * as Clipboard from 'expo-clipboard';
@@ -40,7 +41,7 @@ export default function PassportScreen() {
   const { t, tn, up } = useLang();
   const insets = useSafeAreaInsets();
   const tabSpace = useTabBarSpace();
-  const { width, height } = useWindowDimensions();
+  const { width, height } = useAppSize();
   const passport = usePassport();
   const night = useNight();
   const tick = useRefreshOnFocus('cards', 'profile');

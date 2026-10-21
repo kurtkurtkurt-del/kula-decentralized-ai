@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { router } from 'expo-router';
-import { Modal, Platform, Pressable, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
+import { Modal, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
+import { useAppSize } from '@/hooks/useAppSize';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import * as Clipboard from 'expo-clipboard';
 import QRCode from 'react-native-qrcode-svg';
@@ -15,7 +16,7 @@ import { colors, fonts, radius } from '@/theme/tokens';
 // (data/passport.ts, linkedPassports). The speed adds up; the model is the best device's.
 export default function Devices({ passport }: { passport: Passport | null }) {
   const { t, tn, tx, up } = useLang();
-  const { width } = useWindowDimensions();
+  const { width } = useAppSize();
   const linked = useLinked();
   const [qr, setQr] = useState(false);
   const [scan, setScan] = useState(false);
