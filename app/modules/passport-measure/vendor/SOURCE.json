@@ -1,0 +1,16 @@
+{
+  "from": "device-passport/passport-core",
+  "commit": "fc8f8e2",
+  "dirty": false,
+  "synced_at": "2026-10-21T15:13:07.939Z",
+  "files": {
+    "src/com/pasaport/Measure.kt": "30a8d0ba5862e067",
+    "src/com/pasaport/Passport.kt": "c249e80380a1eb17",
+    "src/com/pasaport/PassportCore.kt": "54e12fad249f72e1",
+    "contract/CONTRACT.md": "2c5fdc833c1f0b3f",
+    "contract/contract.json": "141a891d4d364658",
+    "contract/estimate-cases.json": "17e8cb3792b56269",
+    "contract/passport-0.1.json": "b5bd63eab893879a",
+    "contract/passport-0.2.json": "3b94fcae6fb8edb3"
+  }
+}

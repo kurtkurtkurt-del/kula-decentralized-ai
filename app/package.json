@@ -59,7 +59,9 @@
     "lint": "expo lint",
     "test": "jest",
     "film": "node tools/build-film.mjs",
-    "shots": "node tools/store-shots.mjs"
+    "shots": "node tools/store-shots.mjs",
+    "passport:sync": "node tools/passport-core.mjs sync",
+    "passport:check": "node tools/passport-core.mjs check"
   },
   "private": true,
   "devDependencies": {

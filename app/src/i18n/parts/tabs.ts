@@ -156,6 +156,7 @@ export const tabs = {
   'devices.connected': { en: 'connected · {d}', de: 'verbunden · {d}', tr: 'bağlandı · {d}' },
   'devices.err.notPassport': { en: 'that is not a passport', de: 'das ist kein pass', tr: 'bu bir pasaport değil' },
   'devices.err.incomplete': { en: 'passport incomplete · measure again on that device', de: 'pass unvollständig · dort noch einmal messen', tr: 'pasaport eksik · o cihazda tekrar ölç' },
+  'devices.err.newer': { en: 'made by a newer passport · update kula', de: 'von einem neueren pass · kula aktualisieren', tr: 'daha yeni bir pasaporttan · kula’yı güncelle' },
   'devices.err.self': { en: 'that is this device', de: 'das ist dieses gerät', tr: 'bu zaten bu cihaz' },
 
   'night.title': { en: 'tonight', de: 'heute nacht', tr: 'bu gece' },

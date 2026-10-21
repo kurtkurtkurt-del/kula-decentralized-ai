@@ -19,9 +19,13 @@ data class Passport(
     val largestModelQ4: String,
     val estTps: Double,
     val measuredAt: String,
+    val deviceId: String = "", // 0.2: made once per install (Together.kt)
+    val kind: String = "phone", // 0.2: phone · tablet · computer
+    val os: String = "", // 0.2: "android 15"
 ) {
-    fun toJson(): String = JSONObject().apply {
-        put("schema", "passport/0.1")
+    /** The passport as json; compact is what the qr code carries. */
+    fun toJson(compact: Boolean = false): String = JSONObject().apply {
+        put("schema", PassportCore.SCHEMA)
         put("device", device)
         put("soc", soc)
         put("android", android)
@@ -38,5 +42,8 @@ data class Passport(
         put("largest_model_q4", largestModelQ4)
         put("est_tps", estTps)
         put("measured_at", measuredAt)
-    }.toString(2)
+        put("device_id", deviceId)
+        put("kind", kind)
+        put("os", os.ifBlank { "android $android" })
+    }.let { if (compact) it.toString() else it.toString(2) }
 }

@@ -27,6 +27,7 @@ const layers = [
   ["app types", "npx", ["tsc", "--noEmit"], "app"],
   ["app lint", "npx", ["expo", "lint"], "app"],
   ["app tests", "npm", ["test", "--", "--ci"], "app"],
+  ["passport core", "npm", ["run", "passport:check"], "app"],
   ["site", "python3", ["tools-site-check.py"], "."],
 ];
 const timings = {};

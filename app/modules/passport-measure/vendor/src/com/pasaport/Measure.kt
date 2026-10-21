@@ -11,15 +11,20 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
-import java.time.Instant
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+import java.util.TimeZone
 import kotlin.math.max
 import kotlin.math.min
-import kotlin.math.round
+import kotlin.math.floor
 
 private const val GB = 1024.0 * 1024.0 * 1024.0
 
-private fun Double.r1() = round(this * 10) / 10
-private fun Double.r2() = round(this * 100) / 100
+// Half up, one or two decimals: the same as Math.round in kula's JS (contract/CONTRACT.md).
+// kotlin.math.round is half-even and gave 0.2 where JS gave 0.3 for 0.25.
+internal fun Double.r1() = floor(this * 10 + 0.5) / 10
+internal fun Double.r2() = floor(this * 100 + 0.5) / 100
 
 /** Runs every measurement on Dispatchers.Default and returns the finished passport. */
 suspend fun measureAll(context: Context): Passport = withContext(Dispatchers.Default) {
@@ -59,7 +64,7 @@ suspend fun measureAll(context: Context): Passport = withContext(Dispatchers.Def
         charging = charging,
         largestModelQ4 = model,
         estTps = tps,
-        measuredAt = Instant.now().toString(),
+        measuredAt = isoNow(),
     )
 }
 
@@ -178,3 +183,8 @@ fun estimateModel(ramFreeGb: Double, memBwGbs: Double): Pair<String, Double> {
     val tps = if (sizeGb > 0 && memBwGbs > 0) memBwGbs / sizeGb * 0.5 else 0.0
     return label to tps.r1()
 }
+
+/** ISO 8601 in UTC. Not java.time.Instant: that needs API 26 and kula runs from API 24. */
+internal fun isoNow(): String = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", Locale.US)
+    .apply { timeZone = TimeZone.getTimeZone("UTC") }
+    .format(Date())

@@ -1,0 +1,22 @@
+{
+  "schema": "passport/0.2",
+  "device": "samsung SM-S936B",
+  "soc": "SM8750",
+  "android": "16",
+  "ram_total_gb": 10.9,
+  "ram_free_gb": 4.9,
+  "app_mem_cap_mb": 512,
+  "cpu_cores": 8,
+  "cpu_max_ghz": 4.47,
+  "mem_bw_gbs": 44.74,
+  "gflops": 61.2,
+  "storage_free_gb": 180.4,
+  "battery_pct": 30,
+  "charging": true,
+  "largest_model_q4": "~4B",
+  "est_tps": 9.3,
+  "measured_at": "2026-10-21T14:52:00Z",
+  "device_id": "6f1d2c3a-8b7e-4f20-9a51-0c3d4e5f6a7b",
+  "kind": "phone",
+  "os": "android 16"
+}

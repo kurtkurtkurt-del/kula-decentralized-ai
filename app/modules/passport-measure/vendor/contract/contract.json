@@ -1,0 +1,6 @@
+{
+  "api": 1,
+  "schema": "passport/0.2",
+  "min_sdk": 24,
+  "rounding": "half up"
+}

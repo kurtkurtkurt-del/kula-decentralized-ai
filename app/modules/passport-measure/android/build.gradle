@@ -6,11 +6,32 @@ plugins {
 group = 'expo.modules.passportmeasure'
 version = '0.1.0'
 
+// passport-core: device-passport's measurement (Measure.kt, Passport.kt, PassportCore.kt),
+// compiled into this module from its own folder, so improving it there improves kula on the
+// next build. Where it lives: PASSPORT_CORE_DIR, else ../device-passport/passport-core beside
+// this repo. Without it (another machine, ci) or with -PpassportCore=vendor, the snapshot in
+// ../vendor (npm run passport:sync) is used. The rules: device-passport's
+// passport-core/contract/CONTRACT.md.
+def coreDir = file(System.getenv('PASSPORT_CORE_DIR') ?: "${projectDir}/../../../../../device-passport/passport-core")
+def liveSrc = new File(coreDir, 'src/main/java')
+def vendorSrc = file("${projectDir}/../vendor/src")
+def useVendor = findProperty('passportCore') == 'vendor' || !liveSrc.isDirectory()
+def coreSrc = useVendor ? vendorSrc : liveSrc
+if (!coreSrc.isDirectory()) {
+  throw new GradleException("passport-measure: no passport-core at ${liveSrc} and no snapshot at ${vendorSrc} (npm run passport:sync)")
+}
+logger.lifecycle("passport-measure: passport-core from ${useVendor ? 'the snapshot in vendor/' : coreDir.canonicalPath}")
+
 android {
   namespace "expo.modules.passportmeasure"
   defaultConfig {
     versionCode 1
     versionName '0.1.0'
+  }
+  sourceSets {
+    main {
+      java.srcDir(coreSrc)
+    }
   }
 }
 
