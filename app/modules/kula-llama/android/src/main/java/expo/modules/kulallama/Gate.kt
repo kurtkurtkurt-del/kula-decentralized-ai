@@ -1,6 +1,7 @@
 package expo.modules.kulallama
 
 import android.util.Log
+import expo.modules.kulallama.audit.Auditor
 import java.io.BufferedReader
 import java.io.InputStream
 import java.io.InputStreamReader
@@ -22,11 +23,14 @@ import kotlin.concurrent.thread
  * The secret is made at pairing time and travels only in the QR code.
  *
  * Protocol v1 (text lines, then a plain pipe):
- *   C: "KULA1 <channel> <nonce_c>"          channel: rpc | api; nonces are 16 bytes hex
+ *   C: "KULA1 <channel> <nonce_c> [<unix_ms>]"   channel: rpc | api; nonces are 16 bytes hex;
+ *                                           the optional 4th field (v1.1) is the client's clock
  *   S: "<nonce_s>"
  *   C: "<hmac_c>"                           HMAC-SHA256(secret, nonce_c|nonce_s|channel)
  *   S: "OK <hmac_s>"                        HMAC-SHA256(secret, nonce_s|nonce_c|channel), or "NO <why>"
  *
+ * With an [Auditor] the server also checks the hello (a replayed nonce or a clock more than
+ * two minutes off is refused) and writes connect/reject/end to the signed ledger.
  * In Part 3 (beyin/check) this becomes TLS with per-device keys; the shape stays.
  * The Node side of this is node/src/gate.ts; both are checked against tools/gate-vectors.json.
  */
@@ -64,6 +68,7 @@ object Gate {
     private val secret: String,
     /** channel -> local port to pipe to (rpc: ggml's server, api: ApiServer). null = closed */
     private val targets: (String) -> Int?,
+    private val auditor: Auditor? = null,
     private val onEvent: (Event) -> Unit = {},
   ) {
     @Volatile private var running = false
@@ -99,11 +104,13 @@ object Gate {
         val out = s.getOutputStream()
         val hello = reader.readLine() ?: return refuse(s, out, peer, null, "no hello")
         val p = hello.trim().split(' ')
-        if (p.size != 3 || p[0] != VERSION) return refuse(s, out, peer, null, "bad hello")
+        if ((p.size != 3 && p.size != 4) || p[0] != VERSION) return refuse(s, out, peer, null, "bad hello")
         val channel = p[1]
         val nonceC = p[2]
         if (channel != "rpc" && channel != "api") return refuse(s, out, peer, channel, "bad channel")
         if (!nonceC.matches(Regex("[0-9a-f]{32}"))) return refuse(s, out, peer, channel, "bad nonce")
+        val clientMs = if (p.size == 4) (p[3].toLongOrNull() ?: return refuse(s, out, peer, channel, "bad hello")) else null
+        auditor?.onHello(peer, nonceC, clientMs)?.takeIf { !it.ok }?.let { return refuse(s, out, peer, channel, it.reason ?: "audit") }
         val nonceS = randomHex(16)
         out.write("$nonceS\n".toByteArray()); out.flush()
         val proof = reader.readLine()?.trim() ?: return refuse(s, out, peer, channel, "no proof")
@@ -115,11 +122,14 @@ object Gate {
         out.write("OK ${hmac(secret, nonceS, nonceC, channel)}\n".toByteArray()); out.flush()
         s.soTimeout = 0
         onEvent(Event("connect", peer, channel))
+        auditor?.onConnect(peer, channel)
+        val started = System.currentTimeMillis()
         if (channel == "rpc") { currentPeer = peer; connected.incrementAndGet() }
         // the reader may have buffered bytes after the proof line: hand them on first
-        pipe(s, local, readerLeftover(reader))
+        val bytes = pipe(s, local, readerLeftover(reader))
         if (channel == "rpc" && connected.decrementAndGet() == 0) currentPeer = null
         onEvent(Event("end", peer, channel))
+        auditor?.onEnd(peer, channel, bytes, (System.currentTimeMillis() - started) / 1000)
       } catch (e: Exception) {
         Log.w(TAG, "gate connection from $peer: ${e.message}")
         runCatching { s.close() }
@@ -129,6 +139,7 @@ object Gate {
     private fun refuse(s: Socket, out: OutputStream, peer: String, channel: String?, why: String) {
       Log.w(TAG, "refused $peer ($channel): $why")
       onEvent(Event("reject", peer, channel, why))
+      auditor?.onReject(peer, channel, why)
       runCatching { out.write("NO $why\n".toByteArray()); out.flush() }
       runCatching { s.close() }
     }
@@ -219,29 +230,33 @@ object Gate {
     }
   }
 
-  /** Bidirectional copy until either side closes. [aLeftover] is written to b first. */
-  private fun pipe(a: Socket, b: Socket, aLeftover: ByteArray) {
+  /** Bidirectional copy until either side closes. [aLeftover] is written to b first. Returns bytes moved both ways. */
+  private fun pipe(a: Socket, b: Socket, aLeftover: ByteArray): Long {
     a.tcpNoDelay = true; b.tcpNoDelay = true
+    val up = java.util.concurrent.atomic.AtomicLong(aLeftover.size.toLong())
     val t1 = thread(isDaemon = true) {
       try {
         val o = b.getOutputStream()
         if (aLeftover.isNotEmpty()) { o.write(aLeftover); o.flush() }
-        copy(a.getInputStream(), o)
+        copy(a.getInputStream(), o, up)
       } catch (_: Exception) {}
       runCatching { b.shutdownOutput() }
     }
-    try { copy(b.getInputStream(), a.getOutputStream()) } catch (_: Exception) {}
+    val down = java.util.concurrent.atomic.AtomicLong(0)
+    try { copy(b.getInputStream(), a.getOutputStream(), down) } catch (_: Exception) {}
     runCatching { a.shutdownOutput() }
     t1.join()
     runCatching { a.close() }; runCatching { b.close() }
+    return up.get() + down.get()
   }
 
-  private fun copy(i: InputStream, o: OutputStream) {
+  private fun copy(i: InputStream, o: OutputStream, count: java.util.concurrent.atomic.AtomicLong) {
     val buf = ByteArray(64 * 1024)
     while (true) {
       val n = i.read(buf)
       if (n < 0) break
       o.write(buf, 0, n); o.flush()
+      count.addAndGet(n.toLong())
     }
   }
 }
