@@ -94,6 +94,17 @@ export async function reconcileModels() {
   const names = new Set(files.filter((f) => !f.partial).map((f) => f.name));
   const kept = localModels().filter((m) => names.has(m.file));
   if (kept.length !== localModels().length) write(MODELS, kept);
+  // a download the app was killed in: its .part is still there; show it as interrupted so
+  // "retry" continues it (the native side resumes with a Range request)
+  for (const f of files.filter((x) => x.partial)) {
+    const file = f.name.replace(/\.part$/, '');
+    if (downloads.has(file)) continue;
+    const c = CATALOG.find((m) => m.file === file);
+    const model = c ? describe(c) : null;
+    if (!model || downloads.has(model.id)) continue;
+    downloads.set(model.id, { id: model.id, got: f.size, total: model.size, state: 'error', error: 'interrupted', model });
+  }
+  listeners.forEach((fn) => fn());
 }
 
 export function describe(m: CatalogModel): Omit<LocalModel, 'path' | 'added_at'> {
