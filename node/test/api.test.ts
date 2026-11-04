@@ -107,7 +107,7 @@ test('status, load (download + sha256 + backend start) and chat through the gate
 
     // a wrong sha256 is refused and the file removed
     const bad = await sse(`${base}/load`, { url: `http://127.0.0.1:${files.port}/x.gguf`, sha256: 'ff'.repeat(32), size: model.length, name: 'x.gguf' });
-    assert.match(bad.at(-1).error, /sha256 mismatch/);
+    assert.equal(bad.at(-1).error, 'checksum mismatch; file deleted, load again');
     assert.ok(!fs.existsSync(path.join(models, 'x.gguf')));
 
     // a second load of the same file reuses it (checking only, no download)

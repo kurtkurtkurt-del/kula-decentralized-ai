@@ -150,12 +150,18 @@ export function pipeBoth(a: net.Socket, b: net.Socket, fromA: Buffer, fromB: Buf
 
 export type Targets = (channel: Channel) => number | null | Promise<number | null>;
 
+// Called with every well formed hello before the server answers. The fourth
+// hello field, the client's clock in unix ms, is null when it was not sent.
+// A string refuses the connection with that reason (replay, clock).
+export type Admit = (peer: string, nonceC: string, unixMs: number | null) => string | null;
+
 export interface GateServerOptions {
   port: number;
   host?: string;
   secret: string;
   targets: Targets;
   onEvent?: (e: GateEvent) => void;
+  admit?: Admit;
 }
 
 export interface GateServer {
@@ -197,11 +203,20 @@ export async function startGateServer(opts: GateServerOptions): Promise<GateServ
       let hello: string;
       try { hello = await reader.line(HANDSHAKE_MS); } catch { return refuse('no hello'); }
       const parts = hello.split(' ');
-      if (parts.length !== 3 || parts[0] !== 'KULA1') return refuse('bad hello');
+      if ((parts.length !== 3 && parts.length !== 4) || parts[0] !== 'KULA1') return refuse('bad hello');
       if (!CHANNELS.includes(parts[1] as Channel)) return refuse('bad channel');
       channel = parts[1] as Channel;
       const nonceC = parts[2];
       if (!isNonce(nonceC)) return refuse('bad nonce');
+      let unixMs: number | null = null;
+      if (parts.length === 4) {
+        if (!/^\d{1,16}$/.test(parts[3])) return refuse('bad hello');
+        unixMs = Number(parts[3]);
+      }
+      if (opts.admit) {
+        const why = opts.admit(peer, nonceC, unixMs);
+        if (why) return refuse(why);
+      }
       const nonceS = nonce();
       writeLine(socket, nonceS);
       let proof: string;
@@ -248,11 +263,11 @@ export class GateRefused extends Error {
 
 // Client side. On success the socket is ready for raw traffic; `rest` is what
 // the server already sent after its OK line (normally nothing).
-export async function handshake(socket: net.Socket, secret: string, channel: Channel, timeoutMs = HANDSHAKE_MS): Promise<{ rest: Buffer }> {
+export async function handshake(socket: net.Socket, secret: string, channel: Channel, timeoutMs = HANDSHAKE_MS, clockMs?: number): Promise<{ rest: Buffer }> {
   const reader = new LineReader(socket);
   try {
     const nonceC = nonce();
-    writeLine(socket, `KULA1 ${channel} ${nonceC}`);
+    writeLine(socket, clockMs === undefined ? `KULA1 ${channel} ${nonceC}` : `KULA1 ${channel} ${nonceC} ${clockMs}`);
     const nonceS = await reader.line(timeoutMs);
     if (nonceS.startsWith('NO ')) throw new GateRefused(nonceS.slice(3));
     if (!isNonce(nonceS)) throw new Error(`bad server nonce: ${JSON.stringify(nonceS)}`);

@@ -13,6 +13,9 @@ import { home, expandHome } from './paths.js';
 import { lanIPv4, freeRamMB, measureBandwidth, detectGpu } from './sysinfo.js';
 import { freePort, startChild, type Child } from './children.js';
 import { startApiServer, type ApiServer } from './api.js';
+import { loadOrCreate } from './audit/key.js';
+import { Ledger } from './audit/ledger.js';
+import { Auditor } from './audit/auditor.js';
 
 export interface ShareOptions {
   port: number;
@@ -74,13 +77,23 @@ export async function share(opts: ShareOptions): Promise<() => Promise<void>> {
   const ram = opts.lieRam ?? freeRamMB();
   if (opts.lieRam) log(`advertising a false ram of ${opts.lieRam} MB (--lie-ram)`);
 
-  const ledger = fs.createWriteStream(path.join(home(), 'ledger.jsonl'), { flags: 'a' });
+  // every gate event goes through the auditor into the signed ledger
+  const key = loadOrCreate();
+  log(`device key ${key.alg} ${key.id}`);
+  const auditor = new Auditor({ ledger: new Ledger(path.join(home(), 'ledger.jsonl'), key), log });
   const onEvent = (e: GateEvent) => {
-    ledger.write(JSON.stringify(e) + '\n');
-    if (e.type === 'open') log(`${e.channel} open from ${e.peer}`);
-    else if (e.type === 'close') log(`${e.channel} closed from ${e.peer} after ${e.ms} ms, in ${e.bytesIn} out ${e.bytesOut} bytes`);
-    else log(`refused ${e.peer}${e.channel ? ' on ' + e.channel : ''}: ${e.reason}`);
+    if (e.type === 'open') { auditor.connect(e.peer, e.channel); log(`${e.channel} open from ${e.peer}`); }
+    else if (e.type === 'close') { auditor.end(e.peer, e.channel, e.ms, e.bytesIn, e.bytesOut); log(`${e.channel} closed from ${e.peer} after ${e.ms} ms, in ${e.bytesIn} out ${e.bytesOut} bytes`); }
+    else {
+      // replay and clock are written by the auditor itself when it refuses the hello
+      if (e.reason !== 'replay' && e.reason !== 'clock') auditor.reject(e.peer, e.reason, e.channel ? { channel: e.channel } : {});
+      log(`refused ${e.peer}${e.channel ? ' on ' + e.channel : ''}: ${e.reason}`);
+    }
   };
+  // what the qr claims against what this machine measured
+  auditor.claim('self', 'ram', ram, freeRamMB());
+  const healthTimer = setInterval(() => auditor.health('self', { freeRamMB: freeRamMB(), load1: Math.round(os.loadavg()[0] * 100) / 100 }), 60_000);
+  healthTimer.unref();
 
   // the two local programs, started when first asked for
   let rpc: Child | null = null;
@@ -106,7 +119,7 @@ export async function share(opts: ShareOptions): Promise<() => Promise<void>> {
       try { rpc = await rpcStarting; return rpc.port; } catch (e) { log(`ggml-rpc-server failed: ${(e as Error).message}`); return null; }
     }
     if (api) return api.port;
-    apiStarting ??= startApiServer({ models, llama, log }).finally(() => { apiStarting = null; });
+    apiStarting ??= startApiServer({ models, llama, log, onLoad: (name, want, got) => auditor.load('api', name, want, got) }).finally(() => { apiStarting = null; });
     try { api = await apiStarting; log(`api on 127.0.0.1:${api.port}`); return api.port; } catch (e) { log(`api failed: ${(e as Error).message}`); return null; }
   };
 
@@ -114,7 +127,7 @@ export async function share(opts: ShareOptions): Promise<() => Promise<void>> {
   process.on('uncaughtException', (e) => log(`error: ${e.message}`));
   process.on('unhandledRejection', (e) => log(`error: ${e instanceof Error ? e.message : String(e)}`));
 
-  const gate = await startGateServer({ port: opts.port, secret, targets, onEvent });
+  const gate = await startGateServer({ port: opts.port, secret, targets, onEvent, admit: (peer, nonceC, unixMs) => auditor.hello(peer, nonceC, unixMs) });
   log(`gate listening on 0.0.0.0:${gate.port}`);
 
   const payload: PeerPayload = { k: 'kula-peer', v: 2, id, name, host: host ?? '0.0.0.0', port: gate.port, secret, kind: 'pc', ram, bw, gpu: gpu.name, vram: gpu.vramMB };
@@ -145,7 +158,7 @@ export async function share(opts: ShareOptions): Promise<() => Promise<void>> {
     await gate.close();
     if (api) await api.close();
     if (rpc) await rpc.stop();
-    ledger.end();
+    clearInterval(healthTimer);
   };
   return stop;
 }

@@ -29,6 +29,8 @@ export interface ApiOptions {
   // how llama-server is started; tests swap in a fake
   startBackend?: (modelFile: string, ctx: number) => Promise<Backend>;
   defaultCtx?: number;
+  // told about every /load: the sha256 asked for and the one on disk (null when nothing usable arrived)
+  onLoad?: (name: string, wantSha256: string, gotSha256: string | null) => void;
 }
 
 export interface ApiServer {
@@ -123,6 +125,7 @@ export async function startApiServer(opts: ApiOptions): Promise<ApiServer> {
         sse.send({ state: 'checking', got: 0, total: size ?? 0 });
         const sum = await sha256Of(file, (got, total) => sse.send({ state: 'checking', got, total }));
         if (sum !== want) { log(`${name}: on disk but wrong sha256, fetching again`); fs.rmSync(file); have = false; }
+        else opts.onLoad?.(name, want, sum);
       }
       if (!have) {
         log(`downloading ${name} from ${url}`);
@@ -130,7 +133,8 @@ export async function startApiServer(opts: ApiOptions): Promise<ApiServer> {
         await download(url, file, (got, total) => sse.send({ state: 'running', got, total: total || size || 0 }), ac.signal);
         sse.send({ state: 'checking', got: 0, total: size ?? 0 });
         const sum = await sha256Of(file, (got, total) => sse.send({ state: 'checking', got, total }));
-        if (sum !== want) { fs.rmSync(file); throw new Error(`sha256 mismatch: got ${sum}`); }
+        opts.onLoad?.(name, want, sum);
+        if (sum !== want) { fs.rmSync(file); throw new Error('checksum mismatch; file deleted, load again'); }
       }
       if (ac.signal.aborted) throw new Error('stopped');
       sse.send({ state: 'loading', got: 0, total: 0 });

@@ -3,6 +3,7 @@ import { probe, type Channel } from './gate.js';
 import { setup, TAG } from './llama.js';
 import { share } from './share.js';
 import { home } from './paths.js';
+import { ledgerCommand } from './ledgercmd.js';
 
 const HELP = `kula-node: make this computer a worker in a kula cluster
 
@@ -16,6 +17,7 @@ usage:
       --lie-ram <MB>    advertise a false amount of free ram (for audit tests)
       --no-qr           print the json payload only
   kula-node probe <host> <port> <secret>   handshake on both channels, print OK/NO
+  kula-node ledger [--verify] [--tail N]   print the signed ledger; --verify checks the chain and signatures
 
 files live in ${home()} (KULA_NODE_HOME overrides)
 `;
@@ -51,6 +53,10 @@ export async function main(argv: string[]): Promise<number> {
   if (cmd === 'setup') {
     const got = await setup({ check: flags.check === true });
     return got ? 0 : 1;
+  }
+
+  if (cmd === 'ledger') {
+    return ledgerCommand({ verify: flags.verify === true, tail: flags.tail !== undefined ? num(flags.tail, 20) : undefined });
   }
 
   if (cmd === 'probe') {
