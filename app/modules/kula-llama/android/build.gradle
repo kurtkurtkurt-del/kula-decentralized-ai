@@ -40,6 +40,10 @@ android {
       version '3.22.1'
     }
   }
+  testOptions {
+    // GateTest runs on the JVM: android.util.Log returns defaults, org.json comes from the real jar below
+    unitTests.returnDefaultValues = true
+  }
   packagingOptions {
     jniLibs {
       pickFirsts += ['**/libc++_shared.so']
@@ -51,4 +55,6 @@ android {
 
 dependencies {
   implementation "org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0"
+  testImplementation "junit:junit:4.13.2"
+  testImplementation "org.json:json:20240303"
 }
