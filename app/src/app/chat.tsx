@@ -15,6 +15,9 @@ import { brand } from '@/theme/layout';
 // token, which device). "batch test" sends eight short prompts to every device at once:
 // the small rehearsal of what a kula night does (apart mode). Nothing is kept.
 type Turn = { role: 'user' | 'assistant'; text: string; stats?: Reply };
+// qwen3 reasons inside <think>…</think>; shown as a dot until the answer starts, then dropped
+const shown = (t: string) => (t.includes('<think>') ? (t.includes('</think>') ? t.slice(t.indexOf('</think>') + 8).trim() : '…') : t);
+const r1 = (x: number) => Math.round(x * 10) / 10;
 const BATCH = ['name three fruits.', 'what is 17 × 6?', 'one sentence about the sea.', 'translate "good night" to german.', 'a haiku about phones.', 'what colour is the sky at noon?', 'count from one to five.', 'why do cats purr? one line.'];
 
 export default function ChatScreen() {
@@ -72,9 +75,9 @@ export default function ChatScreen() {
       for (const q of qs) {
         let acc = '';
         try {
-          const r = await chat([{ role: 'user', content: q }], (p) => (acc += p), { maxTokens: 48, temperature: 0.7, reset: true, device: devices[i].id });
+          const r = await chat([{ role: 'user', content: engine.model?.id.startsWith('qwen3') ? `${q} /no_think` : q }], (p) => (acc += p), { maxTokens: 64, temperature: 0.7, reset: true, device: devices[i].id });
           tokens += r.tokens;
-          lines.push(`${devices[i].name.toLowerCase()} · ${r.tps} tok/s · ${q} → ${acc.trim().slice(0, 60)}`);
+          lines.push(`${devices[i].name.toLowerCase()} · ${r1(r.tps)} tok/s · ${q} → ${shown(acc).trim().slice(0, 60)}`);
         } catch (e) {
           lines.push(`${devices[i].name.toLowerCase()} · ${(e as Error).message}`);
         }
@@ -102,7 +105,7 @@ export default function ChatScreen() {
           ) : null}
           {turns.map((x, i) => (
             <View key={i} style={[styles.turn, x.role === 'user' ? styles.me : styles.them]}>
-              <Text style={[styles.text, x.role === 'user' && styles.textMe]}>{x.text || t('chat.thinking')}</Text>
+              <Text style={[styles.text, x.role === 'user' && styles.textMe]}>{shown(x.text) || t('chat.thinking')}</Text>
               {x.stats ? <Text style={styles.stats}>{t('chat.stats', { tps: x.stats.tps.toFixed(1), first: x.stats.firstMs, n: x.stats.tokens, device: x.stats.device.toLowerCase() })}</Text> : null}
             </View>
           ))}
