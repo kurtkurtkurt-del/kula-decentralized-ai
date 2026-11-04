@@ -16,11 +16,11 @@ ne yapıldı, ne doğrulandı, ne kaldı. Döndüğünde önce burayı oku.
 | ekranlar | yapıldı | `(tabs)/models`, `model/[id]` (mod sorusu), `chat`, `share`, `peers`; together'da "dene" |
 | testler / lint / tsc | geçti | 69 test; lint'te 2 **eski** hata var (index.tsx:14, bir dosya :74 — setState-in-effect, benden önce de vardı) |
 | README / CREDITS / CLAUDE.md | yapıldı | commit `0560748` |
-| release apk | **sürüyor** | `npm run apk` arka planda; log `/tmp/claude-501/apk.log` |
-| emülatörde uçtan uca | bekliyor | |
+| release apk | yapıldı (13 dk) | `dist/kula-decentralized-ai-0.1.0.apk`, 83 MB; içinde libllama, 4 cpu varyantı, libggml-rpc, libkula_llama (arm64) |
+| emülatörde uçtan uca | **sürüyor** | kuruldu; modeller sekmesi açıldı, native modül yüklendi (CPU backend armv8.2_2); passport ölçüldü; Qwen3 0.6B indirme + öldür-yeniden aç ile devam etti (Range) ✓; sohbet testi sırada |
 | küme testi (Mac dev-gate + rpc-server) | dev-gate yazıldı, el sıkışma Mac'te kendi kendine test edildi | `modules/kula-llama/tools/dev-gate.mjs` |
-| Bölüm 2 kula-node | **ayrı oturumda sürüyor** | worktree dalı `kula-node`; session "kula-node" |
-| Bölüm 3 beyin/check | bekliyor | |
+| Bölüm 2 kula-node | yapıldı (ayrı oturum) | dal `claude/kula-node-bcceb3`, 4 commit, push yok; 9 test; Mac'te gerçek model api kanalından aktı. **Bu dala henüz birleştirilmedi** |
+| Bölüm 3 beyin/check | taslak | `~/Desktop/claudecode/beyin/check/spec/PROTOCOL.md` (kendi git reposu); kod yok |
 
 ## nasıl test edilir (emülatör + Mac)
 
@@ -36,6 +36,14 @@ cd app/modules/kula-llama && node tools/dev-gate.mjs --secret <64 hex> --host 10
 ~/Library/Android/sdk/platform-tools/adb shell am broadcast -a clipper.set -e text '<json>'  # ya da ekranda yaz
 # 4. ayrı mod: dev-gate'e --model .llama/models/Qwen3-0.6B-Q8_0.gguf ver; llama-server api kanalında çalışır
 ```
+
+## bulgular (emülatör)
+
+- Emülatör 8 GB M1'de ağır: 4 GB AVD ile sistem ANR verdi; 2.5 GB ile çalışıyor. Gradle daemon'ları açıkken emülatör açma.
+- `run-as` çalışmıyor (release apk debuggable değil); dosyalar yalnızca uygulama üzerinden görülebiliyor.
+- Bir sekmede aşağı çekme hareketi sekmeyi kapatıp `/`'a gidiyor ve beyaz ekran kalıyor (PullDownScroll, eski davranış; `index` → `/models` yönlendirmesi sonrası boş kaldı). Başka sekmeye dokununca düzeliyor. Bakılacak.
+- Emülatörün passport'u: 2.4 GB RAM, bütçe 0.54 GB → her model "sığmaz" görünüyor; gerçek telefonda farklı.
+- Uygulama öldürülünce yarım indirme listede görünmüyordu; düzeltildi (`1935ede`), yeniden derlenecek apk'da.
 
 ## notlar
 
