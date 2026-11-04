@@ -131,3 +131,13 @@ Spark photos, the other twenty-eight kinds (assets/sparks/<kind>.jpg, 20.10.2026
 - tram.jpg — https://images.unsplash.com/photo-1606152535347-ddf675903712
 - jazz.jpg — https://images.unsplash.com/photo-1781447062707-4b1371d0e62f
 - walk.jpg — https://images.unsplash.com/photo-1608776934153-5857dde89c57
+
+## code
+
+- llama.cpp — MIT — https://github.com/ggml-org/llama.cpp — release b11157, fetched at build time by
+  `modules/kula-llama/tools/llama-src.mjs`; two small log-line patches in `tools/patches/`.
+- llama_flutter_android (dragneel2074) and PrivateLM (orailnoor, techjarves) — MIT —
+  https://github.com/orailnoor/cross-platform-llm-client — the JNI, the runtime CPU-variant loading, the
+  cluster planning and the worker service in `modules/kula-llama` were ported from them on 4.11.2026.
+- The models themselves carry their own licenses (apache-2.0, gemma, llama3.2, mit); each one links to
+  its license from the models tab.

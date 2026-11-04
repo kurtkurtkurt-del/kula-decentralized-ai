@@ -41,6 +41,35 @@ To make the apk live (once):
 Known gap: a password-reset link signs the user in, but the app has no "choose a new password"
 screen yet.
 
+## Models and the cluster (4.11.2026)
+
+The models tab (the first tab; it took the swipe deck's place) runs a real model on the phone
+with llama.cpp and lets several devices work together.
+
+- **Native module:** `app/modules/kula-llama` (Android, arm64 only). llama.cpp is **not** in git:
+  `node modules/kula-llama/tools/llama-src.mjs` fetches the pinned release (**b11157**, what
+  PrivateLM ships, so the cluster protocol matches), checks its sha256 and applies the two patches
+  in `tools/patches/`. Gradle runs it before every build. `--host` also builds the Mac binaries
+  (`.llama/host/ggml-rpc-server`, `llama-server`) the cluster tests and `node/` use.
+- **Modes**, asked every time a model starts: *only this phone* · *apart* (a copy on every device,
+  the work handed out, the speeds add up: beyin's rule, how a kula night works) · *split* (one model,
+  its layers spread over the devices with ggml's RPC backend: a bigger model, every token over Wi-Fi).
+- **The gate:** a device opens one port (50551). ggml's RPC server (which has no authentication and
+  lets a client write memory) listens only on 127.0.0.1; the gate does a shared-secret handshake
+  (`Gate.kt`, protocol in its header) and pipes the connection on. The secret travels only in the
+  qr code (`src/llm/peers.ts`, v2). A master reaches a worker through a local tunnel, so llama.cpp
+  never sees the network. Rejections are logged (`kula_gate_ledger.jsonl`): the first page of
+  beyin's ledger.
+- **Downloads** continue after a kill (`Range`) and are kept only when the sha256 matches
+  (`ModelDownloader.kt`). The chosen list (`src/llm/catalog.ts`) carries sizes and checksums read
+  from the Hugging Face API; a search there verifies against the LFS object id.
+- **Share this phone** runs `WorkerService` in its own process (`:worker`): the gate, the RPC
+  server and the apart-mode HTTP API behind it, NSD `_kula._tcp`, wake and Wi-Fi locks, the
+  screen kept on (Android gives a background worker only the slow cores).
+- **Credits:** PrivateLM / llama_flutter_android (MIT) for the port, llama.cpp (MIT). `app/CREDITS.md`.
+- **Testing without two phones:** an arm64 emulator (`avd kula35`) as the master and the Mac as a
+  worker through `node/` (kula-node). `docs/ILERLEME.md` has the log.
+
 ---
 
 _The notes below are the afterhours README the repo was forked from; parts of it no longer apply._
