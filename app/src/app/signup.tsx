@@ -48,7 +48,7 @@ export default function SignUpScreen() {
           : await signUp(email.trim(), password, undefined);
       if (guest) {
         // Anonymous sign-in disabled in the dashboard: enter anyway, swipes are not recorded.
-        router.replace('/passport');
+        router.replace('/models');
         return;
       }
       if (err) {
@@ -58,7 +58,7 @@ export default function SignUpScreen() {
       // No handle yet means registration is unfinished: do that step first.
       const { data } = await supabase.rpc('profile_me');
       const row = Array.isArray(data) ? data[0] : data;
-      router.replace('/passport');
+      router.replace('/models');
     } catch (e) {
       setNote(authMessage(String((e as Error).message ?? e)).toLowerCase());
     } finally {
@@ -84,7 +84,7 @@ export default function SignUpScreen() {
       if (!inside) return; // window closed
       const { data } = await supabase.rpc('profile_me');
       const row = Array.isArray(data) ? data[0] : data;
-      router.replace('/passport');
+      router.replace('/models');
     } catch (e) {
       setNote(authMessage(String((e as Error).message ?? e)).toLowerCase());
     } finally {

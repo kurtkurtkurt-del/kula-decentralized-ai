@@ -1,8 +1,6 @@
 // First visit to a page: one short tip (components/Tips.tsx).
 export const tips = {
   'tips.done': { en: 'got it', de: 'verstanden', tr: 'anladım' },
-  'tips.flow.1.t': { en: 'swipe the projects', de: 'wisch durch die projekte', tr: 'projeleri kaydır' },
-  'tips.flow.1.b': { en: 'right keeps a project, left lets it go. down: the details. a kept project is what your phone works on at night.', de: 'rechts behalten, links loslassen. runter: die details. an einem behaltenen projekt arbeitet dein handy nachts.', tr: 'sağa sakla, sola bırak. aşağı: ayrıntılar. sakladığın proje, telefonunun gece çalışacağı projedir.' },
   'tips.people.1.t': { en: 'your people', de: 'deine leute', tr: 'insanların' },
   'tips.people.1.b': { en: 'what your friends keep, and the coops that work the same night. a coop picks tonight’s project together.', de: 'was deine freunde behalten, und die koops, die dieselbe nacht arbeiten. eine koop wählt das projekt für heute nacht gemeinsam.', tr: 'arkadaşlarının sakladıkları ve aynı gece çalışan kooperatifler. kooperatif bu gecenin projesini birlikte seçer.' },
   'tips.network.1.t': { en: 'the network', de: 'das netz', tr: 'ağ' },

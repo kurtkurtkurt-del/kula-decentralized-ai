@@ -135,7 +135,7 @@ describe('send', () => {
   it('goes straight out when online', async () => {
     mockRpc.mockResolvedValue({ error: null });
     await send({ kind: 'swipe', slug: 'x', direction: 'right' });
-    expect(mockRpc).toHaveBeenCalledWith('swipe_set', { p_slug: 'x', p_direction: 'right' });
+    expect(mockRpc).toHaveBeenCalledWith('join_set', { p_slug: 'x', p_direction: 'right' });
     expect(mockStore.get('outbox')).toBeUndefined();
   });
 
@@ -187,7 +187,7 @@ describe('send', () => {
     mockNet?.({ isConnected: true, isInternetReachable: true });
     await flushAll();
     await flushAll();
-    expect(mockRpc).toHaveBeenCalledWith('swipe_set', { p_slug: 'old', p_direction: 'left' });
+    expect(mockRpc).toHaveBeenCalledWith('join_set', { p_slug: 'old', p_direction: 'left' });
   });
 
   it('makes distinct ids', () => {

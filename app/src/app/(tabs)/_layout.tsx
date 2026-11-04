@@ -5,15 +5,16 @@ import { Screen } from 'react-native-screens';
 import Animated, { Easing, useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
 import { TabBarFrame, TabItem } from '@/components/TabBar';
 
-// The main app: five tabs in an edge-to-edge bottom bar. flow · messages · connect · network · passport.
+// The main app: five tabs in an edge-to-edge bottom bar. models · messages · connect · network · passport.
+// (models took the swipe deck's place on 4.11.2026.)
 export default function TabsLayout() {
   return (
     <Tabs>
       <TabSlot renderFn={renderTab} />
       <TabList asChild>
         <TabBarFrame>
-          <TabTrigger name="flow" href="/flow" asChild>
-            <TabItem icon="flow" />
+          <TabTrigger name="models" href="/models" asChild>
+            <TabItem icon="models" />
           </TabTrigger>
           <TabTrigger name="messages" href="/messages" asChild>
             <TabItem icon="chat" />

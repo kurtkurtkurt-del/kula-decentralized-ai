@@ -12,7 +12,7 @@ import { callInbox, type CallInvite } from '@/data/calls';
 import { COOP_COLORS, myCoops, type CoopRow } from '@/data/coops';
 import { friendsLive, type LiveFriend } from '@/data/contribution';
 import { friendsKept, kept, type FriendKept } from '@/data/friends';
-import type { Project } from '@/data/deck';
+import type { Project } from '@/data/projects';
 import { useRefreshOnFocus } from '@/hooks/useRefresh';
 import { upperData, useLang } from '@/i18n';
 import { dayLabel } from '@/data/when';

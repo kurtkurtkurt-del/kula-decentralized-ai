@@ -9,14 +9,17 @@ const data = (name: string, args = {}, s = freshState()) => {
   return a.data as any;
 };
 
+// a project nobody kept yet (the deck rpc that listed them went with the swipe deck, 4.11.2026)
+const openSlug = (s: ReturnType<typeof freshState>) => (s.projects as { slug: string }[]).find((p) => !s.joins[p.slug])!.slug;
+
 describe('the example world', () => {
   it('answers what every tab asks', () => {
     const s = freshState();
-    for (const n of ['profile_me', 'deck', 'kept', 'friends_list', 'friends_kept', 'friends_live', 'my_cards', 'credits_mine', 'passport_mine', 'dm_list', 'my_coops', 'call_inbox', 'call_mine', 'network_nodes', 'device_catalog', 'network_estimate', 'people_suggested', 'terms_status', 'account_status', 'contribution_open', 'my_blocks']) {
+    for (const n of ['profile_me', 'kept', 'friends_list', 'friends_kept', 'friends_live', 'my_cards', 'credits_mine', 'passport_mine', 'dm_list', 'my_coops', 'call_inbox', 'call_mine', 'network_nodes', 'device_catalog', 'network_estimate', 'people_suggested', 'terms_status', 'account_status', 'contribution_open', 'my_blocks']) {
       expect(demoRpc(s, n, { p_limit: 40 }).error).toBeNull();
     }
     expect(data('profile_me', {}, s)[0].handle).toBe('deniz');
-    expect(data('deck', { p_limit: 40 }, s).length).toBeGreaterThan(0);
+    expect(data('project_page', { p_slug: openSlug(s) }, s).length).toBeGreaterThan(0);
     expect(data('network_estimate', {}, s)[0].phones).toBeGreaterThan(5);
   });
   it('says plainly what it does not know', () => {
@@ -25,11 +28,10 @@ describe('the example world', () => {
 });
 
 describe('what the user does stays', () => {
-  it('keeping takes a project out of the deck and into kept', () => {
+  it('keeping puts a project into kept', () => {
     const s = freshState();
-    const slug = data('deck', { p_limit: 40 }, s)[0].slug;
+    const slug = openSlug(s);
     data('join_set', { p_slug: slug, p_direction: 'right' }, s);
-    expect(data('deck', { p_limit: 40 }, s).some((p: { slug: string }) => p.slug === slug)).toBe(false);
     expect(data('kept', {}, s).some((p: { slug: string }) => p.slug === slug)).toBe(true);
     expect(data('project_page', { p_slug: slug }, s)[0].kept).toBe(true);
   });
@@ -56,7 +58,7 @@ describe('what the user does stays', () => {
   });
   it('a night on a project not kept is refused, as the server does', () => {
     const s = freshState();
-    const slug = data('deck', { p_limit: 40 }, s)[0].slug;
+    const slug = openSlug(s);
     expect(demoRpc(s, 'contribution_start', { p_slug: slug }).error?.message).toBe('notkept');
   });
   it('a measured passport is the newest', () => {

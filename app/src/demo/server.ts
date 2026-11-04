@@ -34,9 +34,7 @@ const keptProjects = (s: DemoState) => (s.projects as Row[]).filter((p) => s.joi
 /** Answers one rpc as the server would. Writes change `s` in place. */
 export function demoRpc(s: DemoState, name: string, a: Row = {}): Answer {
   switch (name) {
-    // ---- the deck and the projects
-    case 'deck':
-      return ok((s.projects as Row[]).filter((p) => !s.joins[p.slug] && (!a.p_country || p.country === a.p_country)).slice(0, a.p_limit ?? 40));
+    // ---- the projects
     case 'kept':
       return ok(keptProjects(s));
     case 'join_set':
@@ -44,9 +42,6 @@ export function demoRpc(s: DemoState, name: string, a: Row = {}): Answer {
       return ok(null);
     case 'join_unset':
       delete s.joins[a.p_slug];
-      return ok(null);
-    case 'joins_reset':
-      for (const k of Object.keys(s.joins)) if (s.joins[k] === 'left') delete s.joins[k];
       return ok(null);
     case 'project_page': {
       const page = copy(s.project_pages[a.p_slug] ?? []);

@@ -7,7 +7,7 @@ import PickerSheet from '@/components/PickerSheet';
 import { useAuth } from '@/auth/AuthContext';
 import { COOP_COLORS, coopDelete, coopGet, coopInvite, coopLeave, coopNightSet, coopNights, coopRemove, inviteUrl, tonight, why, type Coop, type CoopNight } from '@/data/coops';
 import { kept } from '@/data/friends';
-import type { Project } from '@/data/deck';
+import type { Project } from '@/data/projects';
 import { chooseTonight } from '@/night/useNight';
 import { invalidate } from '@/lib/offline';
 import { openPerson } from '@/components/People';

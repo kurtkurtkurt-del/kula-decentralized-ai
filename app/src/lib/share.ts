@@ -1,5 +1,5 @@
 import { Share } from 'react-native';
-import { SITE } from '@/data/deck';
+import { SITE } from '@/data/projects';
 import { t } from '@/i18n/core';
 
 // The project's web page; this is the shared link (it carries a preview card).

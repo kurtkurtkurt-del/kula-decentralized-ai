@@ -17,7 +17,6 @@ export const common = {
   'day.sun': { en: 'sun', de: 'so', tr: 'paz' },
 
   'word.keep': { en: 'keep', de: 'behalten', tr: 'sakla' },
-  'word.letgo': { en: 'let go', de: 'ziehen lassen', tr: 'bırak' },
   'word.details': { en: 'details', de: 'details', tr: 'ayrıntı' },
   'word.someone': { en: 'someone', de: 'jemand', tr: 'biri' },
   'word.signin': { en: 'sign in', de: 'anmelden', tr: 'giriş yap' },

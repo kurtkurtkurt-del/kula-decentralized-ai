@@ -1,6 +1,6 @@
 import { serverText } from '@/lib/serverText';
 import { supabase } from '@/lib/supabase';
-import { SITE } from '@/data/deck';
+import { SITE } from '@/data/projects';
 
 // 09_coops.sql. Every call goes through a function that first checks you are in the coop.
 export type CoopColor = 'red' | 'gold' | 'blue' | 'green' | 'violet' | 'paper';

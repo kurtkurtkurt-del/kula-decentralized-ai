@@ -3,11 +3,6 @@ import { supabase } from '@/lib/supabase';
 import { must, remember } from '@/lib/offline';
 
 export type City = { id: string; name: string; country: string; phones: number };
-export type Country = { id: string; label: string };
-export const COUNTRIES: Country[] = [
-  { id: 'tr', label: 'türkiye' },
-  { id: 'de', label: 'germany' },
-];
 
 // Cities from the network (network_nodes): the place picker in sign-up and the profile.
 const fallback: City[] = [

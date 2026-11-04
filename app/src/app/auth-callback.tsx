@@ -25,7 +25,7 @@ export default function AuthCallback() {
       }
       const { data: me } = await supabase.rpc('profile_me');
       const row = Array.isArray(me) ? me[0] : me;
-      if (live) router.replace('/passport');
+      if (live) router.replace('/models');
     })();
     return () => {
       live = false;

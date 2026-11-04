@@ -1,5 +1,7 @@
 import { useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { router } from 'expo-router';
+import Button from '@/components/Button';
 import StaffPage from '@/components/StaffPage';
 import { combine, rangeOf, rangeText, type Passport } from '@/passport/contract';
 import { usePassport, useLinked } from '@/data/passport';
@@ -93,6 +95,10 @@ export default function TogetherScreen() {
             <Text style={styles.empty}>{t('combine.split.none')}</Text>
           )}
           <Text style={styles.foot}>{up(t('combine.foot'))}</Text>
+          {/* 4.11.2026: the estimate above can be tried for real: a model, then the mode question */}
+          <View style={{ marginTop: 20 }}>
+            <Button label={t('combine.try')} onPress={() => router.push('/models')} kind="line" />
+          </View>
         </>
       )}
     </StaffPage>

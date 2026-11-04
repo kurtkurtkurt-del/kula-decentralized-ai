@@ -8,7 +8,7 @@ import { useAuth } from '@/auth/AuthContext';
 import { callAudience, callCreate, type Audience, type Reach } from '@/data/calls';
 import { tonight } from '@/data/coops';
 import { kept } from '@/data/friends';
-import type { Project } from '@/data/deck';
+import type { Project } from '@/data/projects';
 import { dayLabel } from '@/data/when';
 import { invalidate } from '@/lib/offline';
 import { serverText } from '@/lib/serverText';

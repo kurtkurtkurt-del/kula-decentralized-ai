@@ -5,7 +5,6 @@ import { loadProfile } from '@/data/profile';
 import { friendsLive, myCards } from '@/data/contribution';
 import { friendsKept, friendsList, kept } from '@/data/friends';
 import { callInbox, callMine } from '@/data/calls';
-import { fetchDeck } from '@/data/deck';
 import { networkNodes } from '@/data/network';
 import { passportsMine } from '@/data/passport';
 
@@ -16,9 +15,8 @@ let last = 0;
 async function warm() {
   if (!isOnline() || Date.now() - last < 120_000) return;
   last = Date.now();
-  const [deck, cards, theirs] = await Promise.allSettled([fetchDeck(null, 40), myCards(), friendsKept(), loadProfile(), kept(), friendsList(), friendsLive(), callInbox(), callMine(), networkNodes(), passportsMine()]);
+  const [cards, theirs] = await Promise.allSettled([myCards(), friendsKept(), loadProfile(), kept(), friendsList(), friendsLive(), callInbox(), callMine(), networkNodes(), passportsMine()]);
   const urls: (string | null)[] = [];
-  if (deck.status === 'fulfilled') urls.push(...deck.value.slice(0, 12).map((n) => n.image_url));
   if (cards.status === 'fulfilled') urls.push(...cards.value.map((c) => c.image_url));
   if (theirs.status === 'fulfilled') void theirs;
   prefetchImages(urls);
