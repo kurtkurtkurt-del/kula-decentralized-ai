@@ -8,6 +8,7 @@ import { createHash } from 'node:crypto';
 import { spawn, spawnSync } from 'node:child_process';
 import { home, repoRoots } from './paths.js';
 import { download } from './download.js';
+import { pickAsset, buildInstructions as instructionsFor, parseSidecar, type Asset } from './assets.js';
 
 export const TAG = 'b11157';
 export const SOURCE_URL = `https://github.com/ggml-org/llama.cpp/archive/refs/tags/${TAG}.tar.gz`;
@@ -97,15 +98,8 @@ function have(cmd: string): boolean {
   return !r.error;
 }
 
-export function buildInstructions(): string {
-  return [
-    `build llama.cpp ${TAG} yourself (needs git, cmake and a C++ compiler):`,
-    `  git clone --depth 1 --branch ${TAG} https://github.com/ggml-org/llama.cpp`,
-    `  cd llama.cpp`,
-    `  cmake -B build -DGGML_RPC=ON -DLLAMA_BUILD_TOOLS=ON -DLLAMA_BUILD_SERVER=ON -DLLAMA_CURL=OFF`,
-    `  cmake --build build --config Release --target ggml-rpc-server llama-server`,
-    `then point kula-node at the result: KULA_LLAMA_DIR=<llama.cpp>/build/bin kula-node share`,
-  ].join('\n');
+export function buildInstructions(platform: string = process.platform): string {
+  return instructionsFor(TAG, platform);
 }
 
 // macOS: build from the pinned source tarball.
@@ -139,63 +133,81 @@ async function buildFromSource(log: (s: string) => void): Promise<LlamaBinaries>
   return found;
 }
 
-function assetFor(names: string[]): string | null {
-  const arch = os.arch() === 'arm64' ? 'arm64' : os.arch() === 'x64' ? 'x64' : os.arch();
-  const prefer = process.platform === 'win32'
-    ? [`bin-win-cpu-${arch}.zip`, `bin-win-${arch}.zip`]
-    : process.platform === 'linux'
-      ? [`bin-ubuntu-${arch}.tar.gz`, `bin-linux-${arch}.tar.gz`]
-      : [`bin-macos-${arch}.tar.gz`];
-  for (const suffix of prefer) {
-    const hit = names.find((n) => n.endsWith(suffix) && !/snapdragon/.test(n));
-    if (hit) return hit;
-  }
-  return null;
+export function hasNvidia(): boolean {
+  if (process.env.KULA_NVIDIA === '0') return false;
+  if (process.env.KULA_NVIDIA === '1') return true;
+  const r = spawnSync('nvidia-smi', ['-L'], { stdio: 'ignore', timeout: 5000 });
+  return !r.error && r.status === 0;
 }
 
-// Linux and Windows: a release archive of the same tag.
-async function downloadRelease(log: (s: string) => void): Promise<LlamaBinaries> {
-  log(`looking up release ${TAG}`);
+// KULA_RELEASE_JSON names a saved copy of the release api answer, for an
+// offline dry run (the test fixture is one).
+export async function fetchRelease(): Promise<Asset[]> {
+  if (process.env.KULA_RELEASE_JSON) return (JSON.parse(fs.readFileSync(process.env.KULA_RELEASE_JSON, 'utf8')) as { assets: Asset[] }).assets;
   const res = await fetch(RELEASE_API, { headers: { 'user-agent': 'kula-node', accept: 'application/vnd.github+json' } });
   if (!res.ok) throw new Error(`github api: ${res.status}\n` + buildInstructions());
-  const rel = (await res.json()) as { assets: { name: string; browser_download_url: string }[] };
-  const names = rel.assets.map((a) => a.name);
-  const name = assetFor(names);
-  if (!name) throw new Error(`no release asset for ${process.platform}/${os.arch()} in ${TAG}; assets: ${names.join(', ')}\n` + buildInstructions());
-  const asset = rel.assets.find((a) => a.name === name)!;
-  const dir = cacheDir();
-  fs.mkdirSync(dir, { recursive: true });
-  const archive = path.join(dir, name);
+  const rel = (await res.json()) as { assets: Asset[] };
+  return rel.assets;
+}
+
+async function fetchArchive(asset: Asset, sidecar: Asset | null, dir: string, log: (s: string) => void): Promise<string> {
+  const archive = path.join(dir, asset.name);
   if (!fs.existsSync(archive)) {
     log(`downloading ${asset.browser_download_url}`);
     await download(asset.browser_download_url, archive, (got, total) => process.stdout.write(`\r  ${(got / 1e6).toFixed(1)} / ${(total / 1e6).toFixed(1)} MB`));
     process.stdout.write('\n');
   }
-  // the sidecar is optional in these releases; when it exists it is checked
-  const side = rel.assets.find((a) => a.name === `${name}.sha256`);
-  if (side) {
-    const want = (await (await fetch(side.browser_download_url)).text()).trim().split(/\s+/)[0].toLowerCase();
-    const got = await sha256File(archive);
-    if (got !== want) { fs.rmSync(archive); throw new Error(`${name}: sha256 mismatch (got ${got}, want ${want})`); }
-    log('sha256 ok');
-  } else {
-    log('no .sha256 sidecar for this asset; skipping the check');
+  await verifySidecar(archive, sidecar ? await (await fetch(sidecar.browser_download_url)).text() : null, log);
+  return archive;
+}
+
+// The sidecar is optional in these releases; when it exists the archive must match it.
+export async function verifySidecar(archive: string, sidecarText: string | null, log: (s: string) => void): Promise<void> {
+  if (sidecarText === null) { log(`no .sha256 sidecar for ${path.basename(archive)}; skipping the check`); return; }
+  const want = parseSidecar(sidecarText);
+  if (!want) throw new Error(`${path.basename(archive)}.sha256 holds no sha256`);
+  const got = await sha256File(archive);
+  if (got !== want) { fs.rmSync(archive); throw new Error(`${path.basename(archive)}: sha256 mismatch (got ${got}, want ${want}); the file was deleted, run setup again`); }
+  log('sha256 ok');
+}
+
+// Linux and Windows: a release archive of the same tag.
+async function downloadRelease(log: (s: string) => void, dryRun: boolean): Promise<LlamaBinaries | null> {
+  log(`looking up release ${TAG}`);
+  const assets = await fetchRelease();
+  const nvidia = hasNvidia();
+  const pick = pickAsset(process.platform, os.arch(), nvidia, assets);
+  if (!pick) throw new Error(`no release asset for ${process.platform}/${os.arch()} in ${TAG}; assets: ${assets.map((a) => a.name).join(', ')}\n` + buildInstructions());
+  const mb = (a: Asset) => (a.size ? ` (${(a.size / 1e6).toFixed(0)} MB)` : '');
+  log(`${pick.asset.name}${mb(pick.asset)}: ${pick.why}`);
+  if (pick.companion) log(`${pick.companion.name}${mb(pick.companion)}: the cuda runtime it needs`);
+  log(pick.sidecar ? 'sha256: checked against the .sha256 sidecar' : 'sha256: this asset has no .sha256 sidecar');
+  if (dryRun) {
+    log(`would download to ${cacheDir()} and unpack into ${path.join(cacheDir(), 'bin')}`);
+    log(`  ${pick.asset.browser_download_url}`);
+    if (pick.companion) log(`  ${pick.companion.browser_download_url}`);
+    return null;
   }
+  const dir = cacheDir();
+  fs.mkdirSync(dir, { recursive: true });
+  const archive = await fetchArchive(pick.asset, pick.sidecar, dir, log);
+  const companion = pick.companion ? await fetchArchive(pick.companion, assets.find((a) => a.name === `${pick.companion!.name}.sha256`) ?? null, dir, log) : null;
   const out = path.join(dir, 'bin');
   fs.rmSync(out, { recursive: true, force: true });
   fs.mkdirSync(out, { recursive: true });
   // tar reads zip too (bsdtar on windows 10+ and macOS; gnu tar on linux only
   // handles .tar.gz, and those are what linux gets)
   await run('tar', ['-xf', archive, '-C', out], dir, log);
+  if (companion) await run('tar', ['-xf', companion, '-C', out], dir, log);
   const found = binariesUnder(out, 3);
   if (!found) {
     const rpc = RPC_NAMES.join(' or ');
-    throw new Error(`the archive ${name} has no ${rpc} inside (or no llama-server).\n` + buildInstructions());
+    throw new Error(`the archive ${pick.asset.name} has no ${rpc} inside (or no llama-server).\n` + buildInstructions());
   }
   return found;
 }
 
-export async function setup(opts: { check?: boolean; log?: (s: string) => void } = {}): Promise<LlamaBinaries | null> {
+export async function setup(opts: { check?: boolean; dryRun?: boolean; log?: (s: string) => void } = {}): Promise<LlamaBinaries | null> {
   const log = opts.log ?? ((s) => console.log(s));
   const found = findLlama();
   if (found) {
@@ -209,7 +221,13 @@ export async function setup(opts: { check?: boolean; log?: (s: string) => void }
     log('run: kula-node setup');
     return null;
   }
-  const got = process.platform === 'darwin' ? await buildFromSource(log) : await downloadRelease(log);
-  log(`ready: ${got.where}`);
+  if (process.platform === 'darwin') {
+    if (opts.dryRun) { log(`would download ${SOURCE_URL} (sha256 ${SOURCE_SHA256}) and build it under ${cacheDir()}`); return null; }
+    const got = await buildFromSource(log);
+    log(`ready: ${got.where}`);
+    return got;
+  }
+  const got = await downloadRelease(log, opts.dryRun === true);
+  if (got) log(`ready: ${got.where}`);
   return got;
 }

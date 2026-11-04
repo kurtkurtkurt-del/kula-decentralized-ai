@@ -8,7 +8,8 @@ import { ledgerCommand } from './ledgercmd.js';
 const HELP = `kula-node: make this computer a worker in a kula cluster
 
 usage:
-  kula-node setup [--check]          get llama.cpp ${TAG} (build on macOS, download on linux/windows)
+  kula-node setup [--check] [--dry-run]   get llama.cpp ${TAG} (build on macOS, download on linux/windows)
+      --dry-run         only say which archive would be fetched
   kula-node share [options]          open the gate and wait for the phone
       --port <n>        gate port (default 50551)
       --name <s>        name shown to the phone (default: this computer's hostname)
@@ -51,8 +52,9 @@ export async function main(argv: string[]): Promise<number> {
   if (cmd === '--version' || cmd === 'version') { console.log(`kula-node 0.1.0 (llama.cpp ${TAG})`); return 0; }
 
   if (cmd === 'setup') {
-    const got = await setup({ check: flags.check === true });
-    return got ? 0 : 1;
+    const dryRun = flags['dry-run'] === true;
+    const got = await setup({ check: flags.check === true, dryRun });
+    return got || dryRun ? 0 : 1;
   }
 
   if (cmd === 'ledger') {
