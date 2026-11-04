@@ -110,6 +110,10 @@ export async function share(opts: ShareOptions): Promise<() => Promise<void>> {
     try { api = await apiStarting; log(`api on 127.0.0.1:${api.port}`); return api.port; } catch (e) { log(`api failed: ${(e as Error).message}`); return null; }
   };
 
+  // one bad connection or download must not take the worker down
+  process.on('uncaughtException', (e) => log(`error: ${e.message}`));
+  process.on('unhandledRejection', (e) => log(`error: ${e instanceof Error ? e.message : String(e)}`));
+
   const gate = await startGateServer({ port: opts.port, secret, targets, onEvent });
   log(`gate listening on 0.0.0.0:${gate.port}`);
 
