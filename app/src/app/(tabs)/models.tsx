@@ -63,7 +63,8 @@ export default function ModelsScreen() {
       const tog = pool.length > 1 && f.verdict === 'no' ? fitTogether(pool, { size: m.size, kv_mb_per_1k: m.kv_mb_per_1k, ctx: 2048 }) : null;
       return { m, f, tog, rank: f.verdict === 'fits' ? 0 : f.verdict === 'tight' ? 1 : tog && tog.verdict !== 'no' ? 2 : 3 };
     });
-    return list.sort((a, b) => a.rank - b.rank || b.m.params_b - a.m.params_b);
+    // without a passport nothing fits on paper: small first, so the first download is a sure one
+    return list.sort((a, b) => a.rank - b.rank || (passport ? b.m.params_b - a.m.params_b : a.m.params_b - b.m.params_b));
   }, [passport, pool]);
 
   const search = async () => {
