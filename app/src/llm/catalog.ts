@@ -19,6 +19,8 @@ export type CatalogModel = {
   ctx_max: number;
   kv_mb_per_1k: number;
   blurb: Record<Lang, string>;
+  good: Record<Lang, string>;   // what it does well
+  use: Record<Lang, string>;    // what to use it for
 };
 
 const hf = (repo: string, file: string) => `https://huggingface.co/${repo}/resolve/main/${file}`;
@@ -31,6 +33,8 @@ export const CATALOG: CatalogModel[] = [
     sha256: '9465e63a22add5354d9bb4b99e90117043c7124007664907259bd16d043bb031',
     license: 'apache-2.0', license_url: 'https://huggingface.co/Qwen/Qwen3-0.6B-GGUF', ctx_max: 32768, kv_mb_per_1k: 56,
     blurb: { en: 'the smallest that still talks; runs on any phone', de: 'das kleinste, das noch redet; läuft auf jedem telefon', tr: 'hâlâ konuşan en küçüğü; her telefonda çalışır' },
+    good: { en: 'short answers, lists, simple rewrites; surprisingly fluent for its size, in english and turkish. weak at maths and long reasoning.', de: 'kurze antworten, listen, einfache umformulierungen; für seine größe erstaunlich flüssig, auf englisch und türkisch. schwach bei mathe und langem denken.', tr: 'kısa cevaplar, listeler, basit yeniden yazımlar; boyutuna göre şaşırtıcı akıcı, ingilizce ve türkçe. matematikte ve uzun akıl yürütmede zayıf.' },
+    use: { en: 'trying the app, old or small phones, a first night job (classifying short texts, tagging). the fastest download.', de: 'die app ausprobieren, alte oder kleine telefone, ein erster nachtauftrag (kurze texte klassifizieren, taggen). der schnellste download.', tr: 'uygulamayı denemek, eski ya da küçük telefonlar, ilk gece işi (kısa metin sınıflama, etiketleme). en hızlı indirme.' },
   },
   {
     id: 'gemma3-1b-q4', name: 'Gemma 3 1B', family: 'gemma3', params_b: 1, quant: 'Q4_K_M',
@@ -38,6 +42,8 @@ export const CATALOG: CatalogModel[] = [
     sha256: '8ccc5cd1f1b3602548715ae25a66ed73fd5dc68a210412eea643eb20eb75a135',
     license: 'gemma', license_url: 'https://ai.google.dev/gemma/terms', ctx_max: 32768, kv_mb_per_1k: 26,
     blurb: { en: 'google’s small one; good at short answers', de: 'googles kleines; gut bei kurzen antworten', tr: 'google’ın küçüğü; kısa cevaplarda iyi' },
+    good: { en: 'clean short prose, summaries of a paragraph, question answering over a short text. 140 languages.', de: 'saubere kurze prosa, zusammenfassungen eines absatzes, fragen zu einem kurzen text. 140 sprachen.', tr: 'temiz kısa düzyazı, bir paragrafın özeti, kısa bir metin üzerinden soru-cevap. 140 dil.' },
+    use: { en: 'summarising and translating short texts on a 4 gb phone; a night job that reads a lot and writes little.', de: 'kurze texte zusammenfassen und übersetzen auf einem 4-gb-telefon; ein nachtauftrag, der viel liest und wenig schreibt.', tr: '4 gb telefonda kısa metin özetleme ve çeviri; çok okuyup az yazan bir gece işi.' },
   },
   {
     id: 'llama3.2-1b-q4', name: 'Llama 3.2 1B', family: 'llama3', params_b: 1, quant: 'Q4_K_M',
@@ -45,6 +51,8 @@ export const CATALOG: CatalogModel[] = [
     sha256: '6f85a640a97cf2bf5b8e764087b1e83da0fdb51d7c9fab7d0fece9385611df83',
     license: 'llama3.2', license_url: 'https://huggingface.co/meta-llama/Llama-3.2-1B-Instruct/blob/main/LICENSE.txt', ctx_max: 131072, kv_mb_per_1k: 32,
     blurb: { en: 'meta’s small one; english first', de: 'metas kleines; englisch zuerst', tr: 'meta’nın küçüğü; önce ingilizce' },
+    good: { en: 'english instructions, simple extraction (names, dates, fields from a text), friendly chat.', de: 'englische anweisungen, einfache extraktion (namen, daten, felder aus einem text), freundlicher chat.', tr: 'ingilizce yönergeler, basit çıkarım (bir metinden adlar, tarihler, alanlar), rahat sohbet.' },
+    use: { en: 'structured extraction jobs in english on small phones; pairs well with a bigger model on a computer.', de: 'strukturierte extraktionsaufträge auf englisch auf kleinen telefonen; passt gut zu einem größeren modell am computer.', tr: 'küçük telefonlarda ingilizce yapılandırılmış çıkarım işleri; bilgisayardaki büyük bir modelle iyi eşleşir.' },
   },
   {
     id: 'qwen2.5-1.5b-q4', name: 'Qwen2.5 1.5B', family: 'qwen2', params_b: 1.5, quant: 'Q4_K_M',
@@ -52,6 +60,8 @@ export const CATALOG: CatalogModel[] = [
     sha256: '6a1a2eb6d15622bf3c96857206351ba97e1af16c30d7a74ee38970e434e9407e',
     license: 'apache-2.0', license_url: 'https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct-GGUF', ctx_max: 32768, kv_mb_per_1k: 28,
     blurb: { en: 'a steady all-rounder for 4 gb phones', de: 'ein solider allrounder für 4-gb-telefone', tr: '4 gb telefonlar için dengeli bir model' },
+    good: { en: 'balanced: writing, summaries, light code, 29 languages incl. turkish and german. follows formats (json, lists) well.', de: 'ausgewogen: schreiben, zusammenfassungen, leichter code, 29 sprachen inkl. türkisch und deutsch. hält formate (json, listen) gut ein.', tr: 'dengeli: yazı, özet, hafif kod, türkçe ve almanca dahil 29 dil. biçimlere (json, liste) iyi uyar.' },
+    use: { en: 'the everyday choice on a 4–6 gb phone; night jobs that need json output.', de: 'die alltagswahl auf einem 4–6-gb-telefon; nachtaufträge, die json ausgeben sollen.', tr: '4–6 gb telefonda günlük seçim; json çıktısı isteyen gece işleri.' },
   },
   {
     id: 'qwen3-1.7b-q8', name: 'Qwen3 1.7B', family: 'qwen3', params_b: 1.7, quant: 'Q8_0',
@@ -59,6 +69,8 @@ export const CATALOG: CatalogModel[] = [
     sha256: '061b54daade076b5d3362dac252678d17da8c68f07560be70818cace6590cb1a',
     license: 'apache-2.0', license_url: 'https://huggingface.co/Qwen/Qwen3-1.7B-GGUF', ctx_max: 32768, kv_mb_per_1k: 112,
     blurb: { en: 'thinks a little before it answers; 6 gb phones', de: 'denkt kurz nach, bevor es antwortet; 6-gb-telefone', tr: 'cevaplamadan önce biraz düşünür; 6 gb telefonlar' },
+    good: { en: 'reasons step by step before answering (can be switched off with /no_think); better maths and logic than the 1b class; good turkish.', de: 'denkt schrittweise, bevor es antwortet (mit /no_think abschaltbar); bessere mathe und logik als die 1b-klasse; gutes türkisch.', tr: 'cevaplamadan önce adım adım düşünür (/no_think ile kapatılır); 1b sınıfından daha iyi matematik ve mantık; iyi türkçe.' },
+    use: { en: 'questions that need a little thinking on a 6 gb phone; slower per answer, so not for bulk tagging.', de: 'fragen, die etwas nachdenken brauchen, auf einem 6-gb-telefon; langsamer pro antwort, also nicht fürs massen-taggen.', tr: '6 gb telefonda biraz düşünme isteyen sorular; cevap başına yavaş, toplu etiketleme için değil.' },
   },
   {
     id: 'llama3.2-3b-q4', name: 'Llama 3.2 3B', family: 'llama3', params_b: 3, quant: 'Q4_K_M',
@@ -66,6 +78,8 @@ export const CATALOG: CatalogModel[] = [
     sha256: '6c1a2b41161032677be168d354123594c0e6e67d2b9227c84f296ad037c728ff',
     license: 'llama3.2', license_url: 'https://huggingface.co/meta-llama/Llama-3.2-3B-Instruct/blob/main/LICENSE.txt', ctx_max: 131072, kv_mb_per_1k: 112,
     blurb: { en: 'the usual choice on 6–8 gb phones', de: 'die übliche wahl auf 6–8-gb-telefonen', tr: '6–8 gb telefonlarda olağan seçim' },
+    good: { en: 'solid general assistant in english: longer answers, rewriting, instructions, some code. the most tested model of this size.', de: 'solider allgemeiner assistent auf englisch: längere antworten, umschreiben, anweisungen, etwas code. das meistgetestete modell dieser größe.', tr: 'ingilizcede sağlam genel asistan: uzun cevaplar, yeniden yazma, yönergeler, biraz kod. bu boyutun en çok test edilmiş modeli.' },
+    use: { en: 'a 6–8 gb phone as the main device; english writing jobs at night.', de: 'ein 6–8-gb-telefon als hauptgerät; englische schreibaufträge in der nacht.', tr: 'ana cihaz olarak 6–8 gb telefon; gece ingilizce yazı işleri.' },
   },
   {
     id: 'qwen3-4b-q4', name: 'Qwen3 4B', family: 'qwen3', params_b: 4, quant: 'Q4_K_M',
@@ -73,6 +87,8 @@ export const CATALOG: CatalogModel[] = [
     sha256: '7485fe6f11af29433bc51cab58009521f205840f5b4ae3a32fa7f92e8534fdf5',
     license: 'apache-2.0', license_url: 'https://huggingface.co/Qwen/Qwen3-4B-GGUF', ctx_max: 32768, kv_mb_per_1k: 144,
     blurb: { en: 'strong for its size; 8 gb phones', de: 'stark für seine größe; 8-gb-telefone', tr: 'boyutuna göre güçlü; 8 gb telefonlar' },
+    good: { en: "close to last year's 7b models: reasoning, code, multilingual writing, long context. thinking mode on by default.", de: 'nahe an den 7b-modellen vom letzten jahr: logik, code, mehrsprachiges schreiben, langer kontext. denkmodus standardmäßig an.', tr: 'geçen yılın 7b modellerine yakın: akıl yürütme, kod, çok dilli yazı, uzun bağlam. düşünme modu varsayılan açık.' },
+    use: { en: 'the best a flagship phone runs alone; harder night jobs (evaluation, distillation). warm phone, slower.', de: 'das beste, was ein flaggschiff-telefon allein schafft; schwerere nachtaufträge (bewertung, destillation). warmes telefon, langsamer.', tr: 'amiral gemisi bir telefonun tek başına çalıştırabileceği en iyisi; zor gece işleri (değerlendirme, damıtma). telefon ısınır, yavaştır.' },
   },
   {
     id: 'phi4-mini-q4', name: 'Phi-4 mini', family: 'phi3', params_b: 3.8, quant: 'Q4_K_M',
@@ -80,6 +96,8 @@ export const CATALOG: CatalogModel[] = [
     sha256: '01999f17c39cc3074afae5e9c539bc82d45f2dd7faa3917c66cbef76fce8c0c2',
     license: 'mit', license_url: 'https://huggingface.co/microsoft/Phi-4-mini-instruct/blob/main/LICENSE', ctx_max: 131072, kv_mb_per_1k: 96,
     blurb: { en: 'microsoft’s small one; reasoning and code', de: 'microsofts kleines; logik und code', tr: 'microsoft’un küçüğü; akıl yürütme ve kod' },
+    good: { en: 'maths, logic puzzles, code; terse and precise. weaker at casual chat and at turkish.', de: 'mathe, logikrätsel, code; knapp und präzise. schwächer bei lockerem chat und bei türkisch.', tr: 'matematik, mantık bulmacaları, kod; kısa ve kesin. gündelik sohbette ve türkçede daha zayıf.' },
+    use: { en: 'code and maths jobs on an 8 gb phone; grading answers with a known solution.', de: 'code- und matheaufträge auf einem 8-gb-telefon; antworten mit bekannter lösung bewerten.', tr: '8 gb telefonda kod ve matematik işleri; çözümü bilinen cevapları puanlama.' },
   },
   {
     id: 'qwen2.5-7b-q4', name: 'Qwen2.5 7B', family: 'qwen2', params_b: 7, quant: 'Q4_K_M',
@@ -87,6 +105,8 @@ export const CATALOG: CatalogModel[] = [
     sha256: '65b8fcd92af6b4fefa935c625d1ac27ea29dcb6ee14589c55a8f115ceaaa1423',
     license: 'apache-2.0', license_url: 'https://huggingface.co/Qwen/Qwen2.5-7B-Instruct', ctx_max: 32768, kv_mb_per_1k: 56,
     blurb: { en: 'too big for one phone: this is what split mode is for', de: 'zu groß für ein telefon: dafür ist der geteilte modus da', tr: 'tek telefona büyük: bölünmüş mod bunun için var' },
+    good: { en: 'a real assistant: long documents, careful writing, code, 29 languages. the quality step above everything on this list.', de: 'ein echter assistent: lange dokumente, sorgfältiges schreiben, code, 29 sprachen. die qualitätsstufe über allem auf dieser liste.', tr: 'gerçek bir asistan: uzun belgeler, özenli yazı, kod, 29 dil. bu listedeki her şeyin bir üst kalite basamağı.' },
+    use: { en: 'split mode across two or three phones, or apart mode with a computer; the model to pick when the job needs quality over speed.', de: 'geteilter modus über zwei oder drei telefone oder getrennter modus mit einem computer; das modell, wenn qualität vor geschwindigkeit geht.', tr: 'iki üç telefonla bölünmüş mod ya da bilgisayarla ayrı mod; iş hızdan çok kalite istiyorsa seçilecek model.' },
   },
 ];
 

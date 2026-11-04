@@ -113,6 +113,7 @@ export default function ModelsScreen() {
     <View style={styles.root}>
       <StatusBar style="dark" />
       <PullDownScroll
+        closable={false}
         header={<View style={styles.band}><Text style={styles.title}>{t('models.title')}</Text></View>}
         contentContainerStyle={[styles.body, { paddingBottom: tabSpace + insets.bottom + 28 }]}
         keyboardShouldPersistTaps="handled"
@@ -151,9 +152,9 @@ export default function ModelsScreen() {
           const d = dl(m.id);
           if (got || d) return null;
           return (
-            <View key={m.id} style={styles.row}>
+            <Pressable key={m.id} onPress={() => router.push(`/model/${encodeURIComponent(m.id)}`)} style={({ pressed }) => [styles.row, pressed && styles.pressed]}>
               <View style={styles.rowText}>
-                <Text style={styles.name} numberOfLines={1}>{m.name.toLowerCase()}</Text>
+                <Text style={styles.name} numberOfLines={1}>{m.name.toLowerCase()} <Text style={styles.chosen}>›</Text></Text>
                 <Text style={styles.meta}>{[`${m.params_b}B`, m.quant, gb(m.size), m.license].join(' · ').toLowerCase()}</Text>
                 <Text style={styles.blurb}>{m.blurb[lang as 'en' | 'de' | 'tr'] ?? m.blurb.en}</Text>
                 <View style={styles.badges}>
@@ -167,7 +168,7 @@ export default function ModelsScreen() {
                   <Text style={styles.btnText}>{t('models.download')}</Text>
                 </Pressable>
               ) : null}
-            </View>
+            </Pressable>
           );
         })}
 

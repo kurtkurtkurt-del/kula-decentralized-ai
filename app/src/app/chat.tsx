@@ -91,7 +91,7 @@ export default function ChatScreen() {
     <View style={styles.root}>
       <StatusBar style="dark" />
       <EdgeBack />
-      <KeyboardAvoidingView style={styles.root} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+      <KeyboardAvoidingView style={styles.root} behavior="padding">
         <View style={styles.band}>
           <Text style={styles.title}>{t('chat.title')}</Text>
           <Text style={styles.sub} numberOfLines={1}>{engine.model ? `${engine.model.name.toLowerCase()} · ${engine.mode} · ${engine.split.map((s) => `${s.name.toLowerCase()} ${s.gb} gb`).join(' · ')}` : ''}</Text>

@@ -9,9 +9,10 @@ import { usePassport, useLinked } from '@/data/passport';
 import type { Passport } from '@/passport/contract';
 import { useLang } from '@/i18n';
 import { catalogById } from '@/llm/catalog';
+import { cancelDownload, describe, downloadOf, startDownload, useDownloads } from '@/llm/store';
 import { load, unload, useEngine } from '@/llm/engine';
 import { defaultCtx, fitOn, fitTogether } from '@/llm/fit';
-import { localById, saveSettings, useLocalModels, usePeers, useSettings, type Mode } from '@/llm/store';
+import { localById, saveSettings, useLocalModels, usePeers, useSettings, type LocalModel, type Mode } from '@/llm/store';
 import { colors, fonts, radius } from '@/theme/tokens';
 import { brand } from '@/theme/layout';
 
@@ -31,8 +32,16 @@ export default function ModelScreen() {
   const linked = useLinked();
   const peers = usePeers();
   const engine = useEngine();
-  const model = localById(decodeURIComponent(id ?? ''));
-  const cat = model ? catalogById(model.id) : null;
+  const { lang } = useLang();
+  useDownloads();
+  const wanted = decodeURIComponent(id ?? '');
+  const local = localById(wanted);
+  const cat = catalogById(local?.id ?? wanted);
+  // a catalog model not on the phone yet: the same page, with a download button in place of start
+  const model: LocalModel | null = local ?? (cat ? { ...describe(cat), path: '', added_at: '' } : null);
+  const onPhone = !!local;
+  const dl = downloadOf(wanted);
+  const L = (lang === 'tr' || lang === 'de' ? lang : 'en') as 'en' | 'de' | 'tr';
   const [ctxOpen, setCtxOpen] = useState(false);
   const [ask, setAsk] = useState(false);
   const [shareQ, setShareQ] = useState<Mode | null>(null);
@@ -54,6 +63,7 @@ export default function ModelScreen() {
 
   const start = async (mode: Mode, share = false) => {
     setAsk(false);
+    if (!onPhone) return;
     setShareQ(null);
     setErr(null);
     if (mode !== 'alone' && peers.length === 0) return setErr(t('model.err.nopeers'));
@@ -80,7 +90,15 @@ export default function ModelScreen() {
 
   return (
     <StaffPage title={model.name.toLowerCase()}>
-      {cat ? <Text style={styles.lede}>{cat.blurb.en}</Text> : null}
+      {cat ? <Text style={styles.lede}>{cat.blurb[L]}</Text> : null}
+      {cat ? (
+        <View style={styles.about}>
+          <Text style={styles.aboutK}>{up(t('model.good'))}</Text>
+          <Text style={styles.aboutV}>{cat.good[L]}</Text>
+          <Text style={styles.aboutK}>{up(t('model.use'))}</Text>
+          <Text style={styles.aboutV}>{cat.use[L]}</Text>
+        </View>
+      ) : null}
       <View style={styles.card}>
         {rows.map(([k, v]) => (
           <View key={k} style={styles.row}><Text style={styles.k}>{k}</Text><Text style={styles.v}>{v}</Text></View>
@@ -110,7 +128,16 @@ export default function ModelScreen() {
       ) : null}
 
       <View style={styles.actions}>
-        {running ? (
+        {!onPhone ? (
+          dl ? (
+            <>
+              <Text style={styles.loading}>{dl.state === 'error' ? `${t('models.state.error')}: ${dl.error ?? ''}` : `${t(`models.state.${dl.state === 'cancelled' || dl.state === 'done' ? 'running' : dl.state}`)} · ${gb(dl.got)} / ${gb(dl.total)}`}</Text>
+              <Button label={dl.state === 'error' ? t('models.retry') : t('models.cancel')} onPress={() => (dl.state === 'error' ? startDownload(dl.model) : cancelDownload(dl.id))} kind="line" />
+            </>
+          ) : (
+            <Button label={`${t('models.download')} · ${gb(model.size)}`} onPress={() => startDownload(describe(cat!))} kind="red" />
+          )
+        ) : running ? (
           <>
             <Button label={t('model.openChat')} onPress={() => router.push('/chat')} kind="red" />
             <Button label={t('model.stop')} onPress={() => unload()} kind="line" />
@@ -159,6 +186,9 @@ function Option({ title, why, meta, off, onPress }: { title: string; why: string
 
 const styles = StyleSheet.create({
   lede: { fontFamily: fonts.regular, fontSize: 14, lineHeight: 20, color: colors.mute, marginBottom: 8 },
+  about: { gap: 4, marginTop: 4 },
+  aboutK: { fontFamily: fonts.regular, fontSize: 10, letterSpacing: 1.4, color: colors.spotText, marginTop: 10 },
+  aboutV: { fontFamily: fonts.regular, fontSize: 14.5, lineHeight: 21, color: colors.paper },
   card: { marginTop: 12, padding: 14, borderRadius: radius.md, backgroundColor: colors.ink2, gap: 6 },
   row: { flexDirection: 'row', justifyContent: 'space-between', gap: 12 },
   k: { fontFamily: fonts.regular, fontSize: 12, color: colors.mute },

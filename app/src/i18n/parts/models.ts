@@ -37,6 +37,8 @@ export const models = {
   'models.empty': { en: 'nothing downloaded yet. pick one below.', de: 'noch nichts geladen. wähl unten eins.', tr: 'henüz bir şey indirilmedi. aşağıdan birini seç.' },
   'models.license': { en: 'license', de: 'lizenz', tr: 'lisans' },
 
+  'model.good': { en: 'what it does well', de: 'was es gut kann', tr: 'neyi iyi yapar' },
+  'model.use': { en: 'use it for', de: 'wofür', tr: 'ne için kullanılır' },
   'model.ctx': { en: 'context', de: 'kontext', tr: 'bağlam' },
   'model.ctxHint': { en: 'how much the model remembers of the conversation, in tokens; more costs memory.', de: 'wie viel das modell vom gespräch behält, in tokens; mehr kostet speicher.', tr: 'modelin sohbetten ne kadarını hatırladığı, token olarak; fazlası bellek ister.' },
   'model.speed': { en: 'expected speed', de: 'erwartete geschwindigkeit', tr: 'beklenen hız' },

@@ -69,6 +69,9 @@ function usable(s: Session | null): Session | null {
   return null;
 }
 
+const DEMO_EMAIL = 'demo@kula.app';
+const DEMO_PASSWORD = 'kula-demo-2026';
+
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [session, setSession] = useState<Session | null>(null);
   const [ready, setReady] = useState(false);
@@ -140,7 +143,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const { data: cur } = await supabase.auth.getSession();
     if (cur.session) return null; // already signed in
     const { error } = await supabase.auth.signInAnonymously();
-    return error ? plain(error.message) : null;
+    if (!error) return null;
+    // Anonymous sign-ins off on the server (5.11.2026): one shared demo account instead, so
+    // the app can be tried without a password. Made on first use; nothing personal in it.
+    const demo = { email: DEMO_EMAIL, password: DEMO_PASSWORD };
+    const tryIn = await supabase.auth.signInWithPassword(demo);
+    if (!tryIn.error) return null;
+    const made = await supabase.auth.signUp(demo);
+    if (made.error) return plain(made.error.message);
+    if (!made.data.session) return t('auth.confirm');
+    return null;
   }, []);
 
   const resetPassword = useCallback(async (email: string) => {

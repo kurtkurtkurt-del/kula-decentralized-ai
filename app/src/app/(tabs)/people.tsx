@@ -58,6 +58,7 @@ export default function ConnectScreen() {
     <View style={styles.root}>
       <StatusBar style="dark" />
       <PullDownScroll
+        closable={false}
         header={<View style={styles.band}><Text style={styles.title}>{t('connect.title')}</Text></View>}
         contentContainerStyle={[styles.body, { paddingBottom: tabSpace + insets.bottom + 28 }]}
         showsVerticalScrollIndicator={false}

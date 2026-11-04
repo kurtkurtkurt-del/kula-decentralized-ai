@@ -69,6 +69,7 @@ export default function MessagesScreen() {
     <View style={styles.root}>
       <StatusBar style="dark" />
       <PullDownScroll
+        closable={false}
         header={<View style={styles.band}><Text style={styles.title}>{t('messages.title')}</Text></View>}
         contentContainerStyle={[styles.body, { paddingBottom: tabSpace + insets.bottom + 28 }]}
         showsVerticalScrollIndicator={false}
