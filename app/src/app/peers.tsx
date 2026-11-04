@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Modal, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Modal, Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { router } from 'expo-router';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import * as Clipboard from 'expo-clipboard';
@@ -25,6 +25,7 @@ export default function PeersScreen() {
   const [ok, setOk] = useState<Record<string, boolean | null>>({});
   const [nearby, setNearby] = useState<PeerFound[]>([]);
   const [looking, setLooking] = useState(false);
+  const [typed, setTyped] = useState('');
   const [perm, ask] = useCameraPermissions();
   const locked = useRef(false);
 
@@ -71,7 +72,9 @@ export default function PeersScreen() {
     setOk({ ...Object.fromEntries(r.ok.map((p) => [p.id, true])), ...Object.fromEntries(r.bad.map((b) => [b.peer.id, false])) });
   }, [peers]);
   useEffect(() => {
-    if (peers.length) check();
+    if (!peers.length) return;
+    const id = setTimeout(check, 0); // after the render, not inside it
+    return () => clearTimeout(id);
   }, [peers.length, check]);
   const findNearby = async () => {
     if (!hasNative()) return;
@@ -107,6 +110,11 @@ export default function PeersScreen() {
         <Pressable onPress={paste} style={({ pressed }) => [styles.btn, pressed && styles.pressed]}><Text style={styles.btnText}>{t('peers.paste')}</Text></Pressable>
         {peers.length ? <Pressable onPress={check} style={({ pressed }) => [styles.btn, pressed && styles.pressed]}><Text style={styles.btnText}>{t('peers.check')}</Text></Pressable> : null}
         {hasNative() ? <Pressable onPress={findNearby} style={({ pressed }) => [styles.btn, pressed && styles.pressed]}><Text style={styles.btnText}>{looking ? t('peers.searching') : t('peers.nearby')}</Text></Pressable> : null}
+      </View>
+      {/* the code as text: a computer's terminal prints it, and some emulators have no camera */}
+      <View style={styles.typeRow}>
+        <TextInput value={typed} onChangeText={setTyped} placeholder={t('peers.typeHint')} placeholderTextColor={colors.meta} autoCapitalize="none" autoCorrect={false} style={styles.input} testID="peer-code" />
+        <Pressable onPress={() => { if (take(typed)) setTyped(''); }} style={({ pressed }) => [styles.btn, pressed && styles.pressed]}><Text style={styles.btnText}>{t('peers.add')}</Text></Pressable>
       </View>
       {note ? <Text style={styles.okText}>{note}</Text> : null}
       {err && !scan ? <Text style={styles.offText}>{err}</Text> : null}
@@ -169,6 +177,8 @@ const styles = StyleSheet.create({
   btnText: { fontFamily: fonts.medium, fontSize: 13, color: colors.paper },
   btnLight: { borderColor: '#fff' },
   btnTextLight: { color: '#fff' },
+  typeRow: { flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: 14 },
+  input: { flex: 1, height: 44, borderBottomWidth: 1, borderBottomColor: colors.ink3, fontFamily: fonts.regular, fontSize: 13, color: colors.paper },
   shareLink: { marginTop: 28 },
   shareText: { fontFamily: fonts.medium, fontSize: 14, color: colors.spotText },
   scanRoot: { flex: 1, backgroundColor: '#000' },

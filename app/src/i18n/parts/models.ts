@@ -66,6 +66,7 @@ export const models = {
   'mode.shareAnyway': { en: 'share with {n} devices', de: 'mit {n} geräten teilen', tr: '{n} cihazla paylaş' },
   'mode.needPeers': { en: 'needs a connected device', de: 'braucht ein verbundenes gerät', tr: 'bağlı bir cihaz gerekir' },
   'mode.addPeer': { en: 'connect a device', de: 'gerät verbinden', tr: 'cihaz bağla' },
+  'mode.tryAnyway': { en: 'the estimate says it is too big; the phone may still manage a small context.', de: 'die schätzung sagt zu groß; mit kleinem kontext schafft es das telefon vielleicht trotzdem.', tr: 'tahmin büyük diyor; küçük bağlamla telefon yine de kaldırabilir.' },
   'mode.beyin': { en: 'beyin’s rule: jobs are split, models are not.', de: 'beyins regel: aufgaben werden geteilt, modelle nicht.', tr: 'beyin’in kuralı: işler bölünür, modeller bölünmez.' },
 
   'chat.title': { en: 'chat', de: 'chat', tr: 'sohbet' },
@@ -118,5 +119,7 @@ export const models = {
   'peers.kind.phone': { en: 'phone', de: 'telefon', tr: 'telefon' },
   'peers.kind.tablet': { en: 'tablet', de: 'tablet', tr: 'tablet' },
   'peers.kind.pc': { en: 'computer', de: 'computer', tr: 'bilgisayar' },
+  'peers.typeHint': { en: 'or paste the code here', de: 'oder den code hier einfügen', tr: 'ya da kodu buraya yapıştır' },
+  'peers.add': { en: 'add', de: 'hinzufügen', tr: 'ekle' },
   'peers.share': { en: 'share this phone instead', de: 'stattdessen dieses telefon teilen', tr: 'bunun yerine bu telefonu paylaş' },
 } as const;

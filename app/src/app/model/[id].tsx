@@ -116,7 +116,7 @@ export default function ModelScreen() {
             <Button label={t('model.stop')} onPress={() => unload()} kind="line" />
           </>
         ) : (
-          <Button label={t('model.start')} onPress={() => (fit && fit.maxCtx > 0 && ctx > fit.maxCtx ? saveSettings({ ctx: defaultCtx(fit) }) : null, setAsk(true))} kind="red" />
+          <Button label={t('model.start')} onPress={() => (fit && ctx > Math.max(fit.maxCtx, 1024) ? saveSettings({ ctx: fit.maxCtx > 0 ? defaultCtx(fit) : 1024 }) : null, setAsk(true))} kind="red" />
         )}
       </View>
 
@@ -125,8 +125,8 @@ export default function ModelScreen() {
         <Pressable style={styles.dim} onPress={() => setAsk(false)} />
         <View style={[styles.sheet, { paddingBottom: insets.bottom + 24 }]}>
           <Text style={styles.head}>{up(t('mode.title'))}</Text>
-          <Option title={t('mode.alone')} why={t('mode.alone.why')} meta={fit?.tps ? `${fit.tps.low}–${fit.tps.high} tok/s` : ''} off={fit?.verdict === 'no'} onPress={() => pick('alone')} />
-          <Option title={t('mode.apart')} why={`${t('mode.apart.why')} ${t('mode.beyin')}`} meta={peers.length ? `${peers.length + 1} × ${fit?.tps ? `${fit.tps.low}–${fit.tps.high}` : '?'} tok/s` : t('mode.needPeers')} off={!peers.length || fit?.verdict === 'no'} onPress={() => pick('apart')} />
+          <Option title={t('mode.alone')} why={fit?.verdict === 'no' ? `${t('mode.alone.why')} ${t('mode.tryAnyway')}` : t('mode.alone.why')} meta={fit?.tps ? `${fit.tps.low}–${fit.tps.high} tok/s` : ''} onPress={() => pick('alone')} />
+          <Option title={t('mode.apart')} why={`${t('mode.apart.why')} ${t('mode.beyin')}`} meta={peers.length ? `${peers.length + 1} × ${fit?.tps ? `${fit.tps.low}–${fit.tps.high}` : '?'} tok/s` : t('mode.needPeers')} off={!peers.length} onPress={() => pick('apart')} />
           <Option title={t('mode.split')} why={t('mode.split.why')} meta={together?.tps ? `${together.tps.low}–${together.tps.high} tok/s · ${together.shares.map((s) => `${s.name.toLowerCase()} ${(s.mb / 1024).toFixed(1)} gb`).join(' · ')}` : peers.length ? '' : t('mode.needPeers')} off={!peers.length || (!!together && together.verdict === 'no')} onPress={() => pick('split')} />
           {!peers.length ? (
             <Pressable onPress={() => { setAsk(false); router.push('/peers'); }} style={({ pressed }) => [styles.addPeer, pressed && styles.pressed]}>
