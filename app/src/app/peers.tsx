@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Modal, Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { router } from 'expo-router';
 import { CameraView, useCameraPermissions } from 'expo-camera';
@@ -6,10 +6,12 @@ import * as Clipboard from 'expo-clipboard';
 import StaffPage from '@/components/StaffPage';
 import { linkPassport } from '@/data/passport';
 import { useLang } from '@/i18n';
+import { parseLedger, peerBadge, type AuditEntry } from '@/llm/audit';
 import { probeAll } from '@/llm/cluster';
 import { hasNative, llama, type PeerFound } from '@/llm/native';
 import { isPeerQr, takePeerQr } from '@/llm/peers';
 import { forgetPeer, usePeers, type Peer } from '@/llm/store';
+import { VERDICT_COLOR } from '@/theme/audit';
 import { colors, fonts, radius } from '@/theme/tokens';
 
 // "connected devices": the peers this phone may use (paired by scanning the code the other
@@ -27,7 +29,14 @@ export default function PeersScreen() {
   const [looking, setLooking] = useState(false);
   const [typed, setTyped] = useState('');
   const [perm, ask] = useCameraPermissions();
+  const [ledger, setLedger] = useState<string[]>([]);
   const locked = useRef(false);
+  // beyin's badge per peer: the newest ledger line about that address (settings → beyin audit)
+  const audit: AuditEntry[] = useMemo(() => parseLedger(ledger), [ledger]);
+  useEffect(() => {
+    if (!hasNative()) return;
+    llama!.auditLedger(500).then(setLedger, () => {});
+  }, [peers.length]);
 
   useEffect(() => {
     if (!note) return;
@@ -102,6 +111,7 @@ export default function PeersScreen() {
             <Text style={styles.meta}>{[`${p.host}:${p.port}`, p.ram ? `${Math.round(p.ram / 1024 * 10) / 10} gb` : '', p.bw ? `${p.bw} gb/s` : ''].filter(Boolean).join(' · ')}</Text>
             <Text style={[styles.meta, ok[p.id] === true && styles.okText, ok[p.id] === false && styles.offText]}>{ok[p.id] === null ? '…' : ok[p.id] ? t('peers.ok') : ok[p.id] === false ? t('peers.off') : ''}</Text>
           </View>
+          <Badge verdict={peerBadge(audit, p.host)} label={t(`audit.verdict.${peerBadge(audit, p.host)}`)} />
           <Pressable onPress={() => forgetPeer(p.id)} hitSlop={10} accessibilityLabel={t('peers.remove')}><Text style={styles.x}>×</Text></Pressable>
         </View>
       ))}
@@ -160,7 +170,20 @@ export default function PeersScreen() {
   );
 }
 
+// The audit badge beside a peer: a dot in the verdict's colour and the word, from the ledger.
+function Badge({ verdict, label }: { verdict: keyof typeof VERDICT_COLOR; label: string }) {
+  return (
+    <View style={styles.badge} accessibilityLabel={label}>
+      <View style={[styles.badgeDot, { backgroundColor: VERDICT_COLOR[verdict] }]} />
+      <Text style={[styles.badgeText, { color: VERDICT_COLOR[verdict] }]}>{label}</Text>
+    </View>
+  );
+}
+
 const styles = StyleSheet.create({
+  badge: { flexDirection: 'row', alignItems: 'center', gap: 5, maxWidth: 92 },
+  badgeDot: { width: 7, height: 7, borderRadius: 4 },
+  badgeText: { fontFamily: fonts.medium, fontSize: 11, flexShrink: 1 },
   lede: { fontFamily: fonts.regular, fontSize: 14, lineHeight: 20, color: colors.mute },
   note: { fontFamily: fonts.regular, fontSize: 14, color: colors.mute, marginTop: 16 },
   section: { fontFamily: fonts.regular, fontSize: 10, letterSpacing: 1.6, color: colors.spotText, marginTop: 24 },
