@@ -119,7 +119,8 @@ test('/stop cancels a chat in flight', async () => {
     const res = await fetch(`${base}/chat`, { method: 'POST', body: '{"messages":[{"role":"user","content":"go"}]}' });
     const reader = res.body!.getReader();
     const first = new TextDecoder().decode((await reader.read()).value);
-    assert.equal(first, 'data: {"t":"a"}\n\n');
+    // on a loaded machine the second token can arrive in the same read: the first one leads
+    assert.ok(first.startsWith('data: {"t":"a"}\n\n'), first);
     assert.equal((await (await fetch(`${base}/status`)).json()).busy, true);
     assert.equal(await (await fetch(`${base}/stop`, { method: 'POST' })).text(), '{"ok":true,"wasBusy":true}');
     let rest = '';
