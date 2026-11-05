@@ -12,9 +12,10 @@ import { useLang } from '@/i18n';
 import { CATALOG, type CatalogModel } from '@/llm/catalog';
 import { useEngine } from '@/llm/engine';
 import { fitOn, fitTogether, type Fit } from '@/llm/fit';
-import { ggufFiles, hfUrl, kvGuess, paramsOf, quantOf, searchGguf, type HfFile, type HfRepo } from '@/llm/hf';
+import { FILE_FILTERS, HfError, SUGGESTED_QUERIES, ggufFiles, hfUrl, isSplit, kvGuess, licenseUrl, paramsOf, quantOf, repoUrl, searchGguf, type HfFile, type HfRepo } from '@/llm/hf';
+import { KEEP_FREE, freeDiskBytes } from '@/llm/disk';
 import { hasNative, llama } from '@/llm/native';
-import { cancelDownload, describe, forgetModel, initStore, retryDownload, saveSettings, startDownload, useDownloads, useLocalModels, usePeers, useSettings, type Download, type LocalModel } from '@/llm/store';
+import { cancelDownload, describe, forgetModel, forgetUnused, initStore, rememberQuery, retryDownload, saveSettings, startDownload, unusedModels, useDownloads, useHfHistory, useLocalModels, usePeers, useSettings, type Download, type LocalModel } from '@/llm/store';
 import { colors, fonts, radius } from '@/theme/tokens';
 import { brand } from '@/theme/layout';
 
@@ -23,6 +24,7 @@ import { brand } from '@/theme/layout';
 // download is verified by sha256 and continues after a kill. "run" opens the model page,
 // where the mode (alone · apart · split) is asked every time.
 const gb = (b: number) => `${(b / 1024 ** 3).toFixed(b < 1024 ** 3 ? 2 : 1)} gb`;
+const gb1 = (b: number) => (b / 1024 ** 3).toFixed(1);
 
 export default function ModelsScreen() {
   const insets = useSafeAreaInsets();
@@ -41,11 +43,17 @@ export default function ModelsScreen() {
   const [busy, setBusy] = useState(false);
   const [repos, setRepos] = useState<HfRepo[] | null>(null);
   const [pick, setPick] = useState<{ repo: HfRepo; files: HfFile[] } | null>(null);
+  const [hfErr, setHfErr] = useState<string | null>(null);
+  const [filter, setFilter] = useState<string | null>(null);
+  const history = useHfHistory();
+  const used = local.reduce((a, m) => a + m.size, 0);
+  const unused = unusedModels().length;
 
   useEffect(() => {
     initStore().then((info) => {
       if (!info) return;
-      setDisk(info.freeDiskMb);
+      const free = freeDiskBytes();
+      setDisk(free !== null ? Math.round(free / 1048576) : info.freeDiskMb);
       setArm(info.available);
     }).catch(() => {});
   }, [downloads.length, local.length]);
@@ -67,38 +75,62 @@ export default function ModelsScreen() {
     return list.sort((a, b) => a.rank - b.rank || (passport ? b.m.params_b - a.m.params_b : a.m.params_b - b.m.params_b));
   }, [passport, pool]);
 
-  const search = async () => {
-    const text = q.trim();
+  const hfFail = (e: unknown) => setHfErr(e instanceof HfError ? t(`models.err.${e.code}`) : t('models.err.http'));
+  const search = async (text = q) => {
+    text = text.trim();
     if (!text) return;
+    setQ(text);
     setBusy(true);
+    setHfErr(null);
     try {
       setRepos(await searchGguf(text));
-    } catch {
+      rememberQuery(text);
+    } catch (e) {
       setRepos([]);
+      hfFail(e);
     } finally {
       setBusy(false);
     }
   };
+  const readLicense = (repo: HfRepo) => Linking.openURL(licenseUrl(repo.id, repo.license));
   const openRepo = async (repo: HfRepo) => {
+    // a gated repo cannot be fetched without a token: explain, offer the browser, no file list
+    if (repo.gated) return Alert.alert(t('models.gated'), t('models.gatedWhy'), [{ text: t('models.cancel'), style: 'cancel' }, { text: t('models.licenseRead'), onPress: () => readLicense(repo) }, { text: t('models.open'), onPress: () => Linking.openURL(repoUrl(repo.id)) }]);
     setBusy(true);
+    setHfErr(null);
     try {
       setPick({ repo, files: await ggufFiles(repo.id) });
-    } catch {
-      setPick({ repo, files: [] });
+    } catch (e) {
+      hfFail(e);
     } finally {
       setBusy(false);
     }
   };
+  /** False when the file would leave less than 200 mb; says how much is missing. */
+  const roomFor = (size: number) => {
+    const free = freeDiskBytes() ?? (disk !== null ? disk * 1048576 : null);
+    if (free === null || free - size >= KEEP_FREE) return true;
+    Alert.alert(t('models.noDisk'), t('models.noDiskFor', { need: gb1(size + KEEP_FREE), free: gb1(free) }));
+    return false;
+  };
   const downloadHf = (repo: HfRepo, f: HfFile) => {
+    if (repo.gated) return;
     const params = paramsOf(f.file) || paramsOf(repo.id);
     const id = `hf:${repo.id}/${f.file}`;
-    if (disk !== null && f.size / 1048576 > disk - 200) return Alert.alert(t('models.noDisk'));
-    startDownload({ id, name: `${repo.id.split('/')[1] ?? repo.id} ${quantOf(f.file)}`.trim(), file: f.file, size: f.size, sha256: f.sha256, params_b: params, quant: quantOf(f.file), kv_mb_per_1k: kvGuess(params), ctx_max: 8192, license: repo.license, source: 'hf', url: hfUrl(repo.id, f.file) }).catch((e) => Alert.alert(String(e.message)));
+    if (!roomFor(f.size)) return;
+    startDownload({ id, name: `${repo.id.split('/')[1] ?? repo.id} ${quantOf(f.file)}`.trim(), file: f.file, size: f.size, sha256: f.sha256, parts: isSplit(f) ? f.parts : undefined, params_b: params, quant: quantOf(f.file), kv_mb_per_1k: kvGuess(params), ctx_max: 8192, license: repo.license, source: 'hf', url: hfUrl(repo.id, f.file) }).catch((e) => Alert.alert(String(e.message)));
   };
   const download = (m: CatalogModel) => {
-    if (disk !== null && m.size / 1048576 > disk - 200) return Alert.alert(t('models.noDisk'));
+    if (!roomFor(m.size)) return;
     startDownload(describe(m)).catch((e) => Alert.alert(String(e.message)));
   };
+  const prune = () => {
+    const list = unusedModels();
+    if (!list.length) return;
+    Alert.alert(t('models.pruneQ', { n: list.length, gb: gb1(list.reduce((a, m) => a + m.size, 0)) }), '', [{ text: t('models.cancel'), style: 'cancel' }, { text: t('models.delete'), style: 'destructive', onPress: () => forgetUnused() }]);
+  };
+  const pickFilter = FILE_FILTERS.find((f) => f.id === filter) ?? null;
+  const pickFiles = (pick?.files ?? []).filter((f) => !pickFilter || pickFilter.test(f));
   const remove = (m: LocalModel) => Alert.alert(t('models.deleteQ', { name: m.name }), '', [{ text: t('models.cancel'), style: 'cancel' }, { text: t('models.delete'), style: 'destructive', onPress: () => forgetModel(m.id) }]);
   const choose = (m: LocalModel) => {
     saveSettings({ modelId: m.id });
@@ -125,7 +157,12 @@ export default function ModelsScreen() {
             <Text style={styles.bannerText}>{banner}{!passport && hasNative() && arm ? ` · ${t('models.measure')} ›` : ''}</Text>
           </Pressable>
         ) : null}
-        {disk !== null ? <Text style={styles.small}>{up(t('models.disk', { gb: (disk / 1024).toFixed(1) }))}</Text> : null}
+        {disk !== null ? (
+          <View style={styles.storage}>
+            <Text style={styles.small}>{up(used > 0 ? t('models.storage', { used: gb1(used), free: (disk / 1024).toFixed(1) }) : t('models.disk', { gb: (disk / 1024).toFixed(1) }))}</Text>
+            {unused > 0 ? <Pressable onPress={prune} hitSlop={8}><Text style={styles.link}>{t('models.prune')} ({unused}) ›</Text></Pressable> : null}
+          </View>
+        ) : null}
 
         {/* on this phone */}
         <Text style={styles.section}>{up(t('models.onPhone'))}</Text>
@@ -138,7 +175,7 @@ export default function ModelsScreen() {
             <Pressable key={m.id} onPress={() => choose(m)} onLongPress={() => remove(m)} style={({ pressed }) => [styles.row, pressed && styles.pressed]}>
               <View style={styles.rowText}>
                 <Text style={styles.name} numberOfLines={1}>{m.name.toLowerCase()}{running ? <Text style={styles.live}>  ● {t('models.running')}</Text> : chosen ? <Text style={styles.chosen}>  · {t('models.chosen')}</Text> : null}</Text>
-                <Text style={styles.meta}>{[`${m.params_b}B`, m.quant, gb(m.size), m.license].filter(Boolean).join(' · ').toLowerCase()}</Text>
+                <Text style={styles.meta}>{[`${m.params_b}B`, m.quant, gb(m.size), m.parts && m.parts.length > 1 ? t('models.parts', { n: m.parts.length }) : '', m.license].filter(Boolean).join(' · ').toLowerCase()}</Text>
               </View>
               <Text style={styles.action}>{running ? t('model.openChat') : t('models.run')} ›</Text>
             </Pressable>
@@ -175,34 +212,53 @@ export default function ModelsScreen() {
         {/* hugging face */}
         <Text style={styles.section}>{up(t('models.search'))}</Text>
         <View style={styles.searchRow}>
-          <TextInput value={q} onChangeText={setQ} onSubmitEditing={search} placeholder={t('models.searchHint')} placeholderTextColor={colors.meta} returnKeyType="search" autoCapitalize="none" autoCorrect={false} style={styles.input} />
-          <Pressable onPress={search} style={({ pressed }) => [styles.btn, pressed && styles.pressed]}><Text style={styles.btnText}>{busy ? '…' : t('models.search').split(' ')[0]}</Text></Pressable>
+          <TextInput value={q} onChangeText={setQ} onSubmitEditing={() => search()} placeholder={t('models.searchHint')} placeholderTextColor={colors.meta} returnKeyType="search" autoCapitalize="none" autoCorrect={false} style={styles.input} />
+          <Pressable onPress={() => search()} style={({ pressed }) => [styles.btn, pressed && styles.pressed]}><Text style={styles.btnText}>{busy ? '…' : t('models.search').split(' ')[0]}</Text></Pressable>
+        </View>
+        {/* the last searches, then a few that are worth trying */}
+        <View style={styles.chips}>
+          {history.map((h) => <Chip key={`h:${h}`} label={h} onPress={() => search(h)} />)}
+          {SUGGESTED_QUERIES.filter((x) => !history.includes(x)).slice(0, Math.max(2, 5 - history.length)).map((x) => <Chip key={`s:${x}`} label={x} dim onPress={() => search(x)} />)}
+        </View>
+        <View style={styles.chips}>
+          <Text style={styles.chipLabel}>{t('models.filter')}</Text>
+          {FILE_FILTERS.map((f) => <Chip key={f.id} label={f.label.toLowerCase()} on={filter === f.id} onPress={() => setFilter(filter === f.id ? null : f.id)} />)}
         </View>
         {busy && repos === null ? <Text style={styles.note}>{t('models.searching')}</Text> : null}
-        {repos && repos.length === 0 ? <Text style={styles.note}>{t('models.noResults')}</Text> : null}
+        {hfErr ? <Text style={styles.err}>{hfErr}</Text> : null}
+        {repos && repos.length === 0 && !hfErr ? <Text style={styles.note}>{t('models.noResults')}</Text> : null}
         {(repos ?? []).map((r) => (
           <Pressable key={r.id} onPress={() => openRepo(r)} style={({ pressed }) => [styles.row, pressed && styles.pressed]}>
             <View style={styles.rowText}>
-              <Text style={styles.name} numberOfLines={1}>{r.id.toLowerCase()}</Text>
+              <Text style={styles.name} numberOfLines={1}>{r.gated ? '🔒 ' : ''}{r.id.toLowerCase()}</Text>
               <Text style={styles.meta}>{[`${(r.downloads / 1000).toFixed(r.downloads > 1e5 ? 0 : 1)}k ↓`, r.license ?? t('models.licenseUnknown'), r.gated ? t('models.gated') : ''].filter(Boolean).join(' · ').toLowerCase()}</Text>
+              <Pressable onPress={() => readLicense(r)} hitSlop={8}><Text style={styles.link}>{t('models.licenseRead')} ↗</Text></Pressable>
             </View>
-            <Text style={styles.action}>›</Text>
+            <Text style={styles.action}>{r.gated ? '' : '›'}</Text>
           </Pressable>
         ))}
         <PickerSheet
           open={!!pick}
-          title={pick ? `${t('models.files')} · ${pick.repo.id}` : ''}
-          options={(pick?.files ?? []).map((f) => ({ id: f.file, label: f.file.replace(/\.gguf$/i, '').toLowerCase(), extra: gb(f.size) }))}
+          title={pick ? `${t('models.files')} · ${pick.repo.id}${pickFilter ? ` · ${pickFilter.label.toLowerCase()}` : ''}` : ''}
+          options={pickFiles.map((f) => ({ id: f.file, label: f.file.replace(/-\d{5}-of-\d{5}\.gguf$/i, '').replace(/\.gguf$/i, '').toLowerCase(), extra: `${gb(f.size)}${isSplit(f) ? ` · ${t('models.parts', { n: f.parts.length })}` : ''}` }))}
           selected={null}
           onSelect={(id) => {
             const f = pick?.files.find((x) => x.file === id);
             if (pick && f) downloadHf(pick.repo, f);
           }}
           onClose={() => setPick(null)}
-          note={pick && pick.files.length === 0 ? t('models.noResults') : undefined}
+          note={pick && pickFiles.length === 0 ? t('models.noResults') : undefined}
         />
       </PullDownScroll>
     </View>
+  );
+}
+
+function Chip({ label, on, dim, onPress }: { label: string; on?: boolean; dim?: boolean; onPress: () => void }) {
+  return (
+    <Pressable onPress={onPress} style={({ pressed }) => [styles.chip, on && styles.chipOn, pressed && styles.pressed]}>
+      <Text style={[styles.chipText, on && styles.chipTextOn, dim && styles.chipDim]}>{label}</Text>
+    </Pressable>
   );
 }
 
@@ -225,7 +281,7 @@ function DownloadRow({ d }: { d: Download }) {
     <View style={styles.row}>
       <View style={styles.rowText}>
         <Text style={styles.name} numberOfLines={1}>{d.model.name.toLowerCase()}</Text>
-        <Text style={styles.meta}>{failed ? `${t('models.state.error')}: ${d.error ?? ''}` : `${t(`models.state.${d.state === 'cancelled' || d.state === 'done' ? 'running' : d.state}`)} · ${gb(d.got)} / ${gb(d.total)}`}</Text>
+        <Text style={styles.meta}>{failed ? `${t('models.state.error')}: ${d.error ?? ''}` : `${t(`models.state.${d.state === 'cancelled' || d.state === 'done' ? 'running' : d.state}`)} · ${gb(d.got)} / ${gb(d.total)}${d.parts > 1 ? ` · ${t('models.part', { i: d.part + 1, n: d.parts })}` : ''}`}</Text>
         <View style={styles.bar}><View style={[styles.barIn, { width: `${pct}%` }]} /></View>
       </View>
       <Pressable onPress={() => (failed ? retryDownload(d.id) : cancelDownload(d.id))} style={({ pressed }) => [styles.btn, pressed && styles.pressed]}>
@@ -244,6 +300,15 @@ const styles = StyleSheet.create({
   banner: { marginTop: 12, padding: 12, borderRadius: radius.md, backgroundColor: colors.ink2 },
   bannerText: { fontFamily: fonts.medium, fontSize: 13, color: colors.paper },
   small: { fontFamily: fonts.regular, fontSize: 10, letterSpacing: 1.4, color: colors.meta, marginTop: 10 },
+  storage: { flexDirection: 'row', alignItems: 'baseline', justifyContent: 'space-between', gap: 12 },
+  err: { fontFamily: fonts.regular, fontSize: 13, color: colors.gold, marginTop: 10 },
+  chips: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 6, marginTop: 10 },
+  chipLabel: { fontFamily: fonts.regular, fontSize: 10, letterSpacing: 1.2, color: colors.meta, marginRight: 4 },
+  chip: { paddingHorizontal: 10, height: 26, borderRadius: radius.pill, borderWidth: 1, borderColor: colors.ink3, justifyContent: 'center' },
+  chipOn: { backgroundColor: colors.paper, borderColor: colors.paper },
+  chipText: { fontFamily: fonts.regular, fontSize: 12, color: colors.paper2 },
+  chipTextOn: { color: colors.ink },
+  chipDim: { color: colors.meta },
   section: { fontFamily: fonts.regular, fontSize: 10, letterSpacing: 1.6, color: colors.spotText, marginTop: 28, marginBottom: 4 },
   note: { fontFamily: fonts.regular, fontSize: 14, color: colors.mute, marginTop: 10 },
   row: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: colors.ink3 },

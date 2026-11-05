@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Linking, Modal, Pressable, StyleSheet, Text, View } from 'react-native';
 import { router, useLocalSearchParams } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -9,9 +9,10 @@ import { usePassport, useLinked } from '@/data/passport';
 import type { Passport } from '@/passport/contract';
 import { useLang } from '@/i18n';
 import { catalogById } from '@/llm/catalog';
-import { cancelDownload, describe, downloadOf, startDownload, useDownloads } from '@/llm/store';
+import { cancelDownload, describe, downloadOf, readMeta, startDownload, useDownloads } from '@/llm/store';
+import { licenseUrl, repoOfId, repoUrl } from '@/llm/hf';
 import { load, unload, useEngine } from '@/llm/engine';
-import { defaultCtx, fitOn, fitTogether } from '@/llm/fit';
+import { defaultCtx, fitOn, fitTogether, suggestCtx } from '@/llm/fit';
 import { localById, saveSettings, useLocalModels, usePeers, useSettings, type LocalModel, type Mode } from '@/llm/store';
 import { colors, fonts, radius } from '@/theme/tokens';
 import { brand } from '@/theme/layout';
@@ -47,11 +48,19 @@ export default function ModelScreen() {
   const [shareQ, setShareQ] = useState<Mode | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const ctx = settings.ctx;
+  // the file's own header, read once it is on the phone: true layers / kv / ctx, kept on the record
+  useEffect(() => {
+    if (local && !local.meta_read) readMeta(local.id).catch(() => {});
+  }, [local?.id, local?.meta_read]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const pool: Passport[] = useMemo(() => [...(passport ? [passport] : []), ...linked.map((l) => l.data)], [passport, linked]);
   const fit = model ? fitOn(passport, { size: model.size, kv_mb_per_1k: model.kv_mb_per_1k, ctx }) : null;
   const together = model && pool.length > 1 ? fitTogether(pool, { size: model.size, kv_mb_per_1k: model.kv_mb_per_1k, ctx }) : null;
   const running = !!model && engine.model?.id === model.id && !!engine.load;
+  const suggested = fit && model ? suggestCtx(fit, model.ctx_max) : null;
+  const isHf = !!model && model.source === 'hf';
+  const repo = isHf && model ? repoOfId(model.id) : null;
+  const licenseLink = cat ? cat.license_url : repo ? licenseUrl(repo, model?.license ?? null) : null;
 
   if (!model) {
     return (
@@ -83,11 +92,17 @@ export default function ModelScreen() {
     start(mode, mode === 'split');
   };
 
+  const header = model.meta_read && model.layers ? ` · ${t('model.fromHeader')}` : '';
   const rows: [string, string][] = [
-    [t('model.size'), `${gb(model.size)} · ${model.params_b}B · ${model.quant}`],
-    [t('models.license'), model.license ?? '—'],
-    [t('model.ctx'), `${ctx} · ${t('models.fits').toLowerCase()} ≤ ${fit?.maxCtx || '—'}`],
+    [t('model.size'), `${gb(model.size)}${model.parts && model.parts.length > 1 ? ` · ${t('models.parts', { n: model.parts.length })}` : ''}`],
+    [t('model.params'), model.params_b ? `${model.params_b}B` : '—'],
+    [t('model.quant'), model.quant || '—'],
+    ...(model.layers ? [[t('model.layers'), `${model.layers}${model.arch ? ` · ${model.arch}` : ''}`] as [string, string]] : []),
+    [t('model.kv'), `${t('model.perK', { mb: model.kv_mb_per_1k })}${header}`],
+    [t('models.license'), model.license ?? t('models.licenseUnknown')],
+    [t('model.ctx'), `${ctx} · ${t('models.fits').toLowerCase()} ≤ ${fit?.maxCtx || '—'}${model.ctx_max ? ` · max ${model.ctx_max}` : ''}`],
     [t('model.speed'), fit?.tps ? `${fit.tps.low}–${fit.tps.high} tok/s` : '—'],
+    ...(repo ? [[t('model.source'), repo] as [string, string]] : []),
   ];
 
   return (
@@ -106,7 +121,10 @@ export default function ModelScreen() {
           <View key={k} style={styles.row}><Text style={styles.k}>{k}</Text><Text style={styles.v}>{v}</Text></View>
         ))}
         {fit ? <Text style={[styles.fit, fit.verdict === 'no' && styles.fitNo]}>{fit.verdict === 'fits' ? t('models.fits') : fit.verdict === 'tight' ? t('models.tight') : together && together.verdict !== 'no' ? t('models.together') : t('models.no')} · {t('models.needs', { need: fit.needMb, have: fit.haveMb })}</Text> : null}
-        {cat ? <Pressable onPress={() => Linking.openURL(cat.license_url)} hitSlop={8}><Text style={styles.link}>{t('models.license')} ↗</Text></Pressable> : null}
+        <View style={styles.links}>
+          {licenseLink ? <Pressable onPress={() => Linking.openURL(licenseLink)} hitSlop={8}><Text style={styles.link}>{t('models.licenseRead')} ↗</Text></Pressable> : null}
+          {repo ? <Pressable onPress={() => Linking.openURL(repoUrl(repo))} hitSlop={8}><Text style={styles.link}>hugging face ↗</Text></Pressable> : null}
+        </View>
       </View>
 
       <Pressable onPress={() => setCtxOpen(true)} style={({ pressed }) => [styles.ctxRow, pressed && styles.pressed]}>
@@ -116,6 +134,11 @@ export default function ModelScreen() {
         </View>
         <Text style={styles.ctxValue}>{ctx} ›</Text>
       </Pressable>
+      {suggested !== null && suggested !== ctx ? (
+        <Pressable onPress={() => saveSettings({ ctx: suggested })} hitSlop={8} style={styles.suggest}>
+          <Text style={styles.hint}>{t('model.ctxSuggest', { ctx: suggested })} · <Text style={styles.link}>{t('model.useSuggested')}</Text></Text>
+        </Pressable>
+      ) : null}
       <PickerSheet open={ctxOpen} title={t('model.ctx')} options={CTX.filter((c) => c <= Math.max(model.ctx_max, 4096)).map((c) => ({ id: String(c), label: String(c), extra: fit && c <= fit.maxCtx ? t('models.fits') : fit && c > fit.maxCtx ? t('models.no') : '' }))} selected={String(ctx)} onSelect={(v) => saveSettings({ ctx: Number(v) })} onClose={() => setCtxOpen(false)} />
 
       {engine.loading && engine.model?.id === model.id ? <Text style={styles.loading}>{tx(`model.loading.${engine.loading}`, engine.loading)}</Text> : null}
@@ -198,6 +221,8 @@ const styles = StyleSheet.create({
   fit: { fontFamily: fonts.medium, fontSize: 12.5, color: colors.spotText, marginTop: 6 },
   fitNo: { color: colors.violet },
   link: { fontFamily: fonts.regular, fontSize: 11, color: colors.meta, marginTop: 4 },
+  links: { flexDirection: 'row', gap: 14, flexWrap: 'wrap' },
+  suggest: { marginTop: 4 },
   ctxRow: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: colors.ink3, marginTop: 8 },
   hint: { fontFamily: fonts.regular, fontSize: 11.5, color: colors.meta, marginTop: 2 },
   ctxValue: { fontFamily: fonts.jet, fontSize: 14, color: colors.paper },
