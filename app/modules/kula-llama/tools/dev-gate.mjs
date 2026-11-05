@@ -181,7 +181,8 @@ function serve(sock, peer, first, v, fpC) {
     buf = Buffer.concat([buf, d]);
     while (step < 2) {
       const nl = buf.indexOf('\n');
-      if (nl < 0) return;
+      // a line that never ends must not grow the buffer without bound (gate.ts: 4 KiB)
+      if (nl < 0) { if (buf.length > 4096) refuse('no hello'); return; }
       const line = buf.subarray(0, nl).toString('ascii').trim();
       buf = buf.subarray(nl + 1);
       if (step === 0) {
