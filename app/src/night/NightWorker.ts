@@ -28,6 +28,9 @@ export type NightStatus = {
   checked?: number; // known-answer units among them
   wrong?: number;   // known-answer units that came out wrong
   devices?: NightDevice[];
+  // the person's own projects (5.11.2026): steps done and their tokens, kept off the card
+  ownUnits?: number;
+  ownTokens?: number;
 };
 export type NightWorker = {
   // key (night-2): the night's window key, so a pile kept on the phone can be continued

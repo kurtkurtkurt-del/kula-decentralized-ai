@@ -15,9 +15,10 @@ import { tips } from '@/i18n/parts/tips';
 import { ux } from '@/i18n/parts/ux';
 import { brain } from '@/i18n/parts/brain';
 import { voice } from '@/i18n/parts/voice';
+import { tasks } from '@/i18n/parts/tasks';
 import { dict } from '@/i18n/dict';
 
-const parts: Record<string, Record<string, Record<string, string>>> = { common, home, tabs, pages, staff, tips, coops, server, models, audit, ux, brain, bench, voice };
+const parts: Record<string, Record<string, Record<string, string>>> = { common, home, tabs, pages, staff, tips, coops, server, models, audit, ux, brain, bench, voice, tasks };
 
 describe('i18n dict', () => {
   it('has no key in two parts', () => {

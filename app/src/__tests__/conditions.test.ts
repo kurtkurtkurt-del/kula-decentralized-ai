@@ -43,7 +43,7 @@ beforeEach(() => {
 
 describe('evaluate', () => {
   it('says ok when everything is there', () => {
-    expect(evaluate(good, rules)).toEqual({ ok: true, reason: null, flags: { off: false, noproject: false, nopassport: false, window: false, charge: false, battery: false, hot: false, wifi: false } });
+    expect(evaluate(good, rules)).toEqual({ ok: true, reason: null, own: false, flags: { off: false, noproject: false, nopassport: false, window: false, charge: false, battery: false, hot: false, wifi: false } });
   });
   it.each([
     ['off', { wanted: false }],

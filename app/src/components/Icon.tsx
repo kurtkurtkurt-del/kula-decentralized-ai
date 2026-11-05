@@ -1,7 +1,7 @@
 import Svg, { Circle, Path, Rect } from 'react-native-svg';
 import { colors } from '@/theme/tokens';
 
-export type IconName = 'models' | 'chat' | 'brain' | 'people' | 'passport' | 'account';
+export type IconName = 'models' | 'chat' | 'brain' | 'people' | 'projects' | 'passport' | 'account';
 type Props = { name: IconName; size?: number; color: string; strokeWidth?: number; filled?: boolean; hole?: string };
 
 // 1.5 px line icons on a 24 grid. filled: the solid version of the tab icons (the open tab,
@@ -42,6 +42,16 @@ export default function Icon({ name, size = 22, color, strokeWidth = 1.5, filled
           <Path d="M12 5.6a3.1 3.1 0 0 1 5.4-1.4 3 3 0 0 1 2.7 3.6 3.1 3.1 0 0 1 .6 4.5 3.3 3.3 0 0 1-1.8 5.1A3.1 3.1 0 0 1 15 20a3 3 0 0 1-3-1.4z" {...f} />
           <Path d="M12 5.6v13" {...(filled ? { ...p, stroke: hole } : p)} />
           <Path d="M7.4 9.6c1.2 0 2 .8 2 1.9M16.6 9.6c-1.2 0-2 .8-2 1.9M7 14.6c1.3 0 2.2.6 2.5 1.6M17 14.6c-1.3 0-2.2.6-2.5 1.6" {...(filled ? { ...p, stroke: hole } : p)} />
+        </>
+      )}
+      {name === 'projects' && (
+        <>
+          {/* projects (5.11.2026): a sheet of work with a crescent moon on its corner, the
+              night it runs in */}
+          <Path d="M6 3.5h7.5L18 8v12.5H6z" {...f} />
+          <Path d="M13.5 3.5V8H18" {...(filled ? { ...p, stroke: hole } : p)} />
+          <Path d="M9 12.5h6M9 15.5h4" {...(filled ? { ...p, stroke: hole } : p)} />
+          <Path d="M15.9 17.6a2.2 2.2 0 1 1-2.4-2.9 1.8 1.8 0 0 0 2.4 2.9z" {...(filled ? cut : p)} />
         </>
       )}
       {name === 'passport' && (

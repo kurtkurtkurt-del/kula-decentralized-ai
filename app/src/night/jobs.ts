@@ -1,4 +1,5 @@
 import Storage from 'expo-sqlite/kv-store';
+import type { Message } from '@/llm/native';
 
 // Where the night's work comes from (5.11.2026). A night is cut into units: one prompt,
 // a cap on tokens, and now and then a known answer. The worker (LlamaWorker.ts) takes
@@ -9,7 +10,9 @@ import Storage from 'expo-sqlite/kv-store';
 // kv-store under night.results. ServerJobs is the shape of what comes next and throws
 // 'notyet'. The contribution itself (start, end, the card) still goes through the server
 // as before; only the work is local for now.
-export type UnitType = 'classify' | 'summarise' | 'translate';
+// 'project' (5.11.2026): a step of the person's own project (tasks/jobs.ts), with its own
+// messages, a longer budget and own: true, so it is not counted on the network's card.
+export type UnitType = 'classify' | 'summarise' | 'translate' | 'project';
 export type Unit = {
   id: string;
   type: UnitType;
@@ -18,6 +21,9 @@ export type Unit = {
   // the known answer, for a share of the classify units (about 1 in 8): the trust idea.
   // A device whose known answers come out wrong is not trusted with the rest of the night.
   expected?: string;
+  messages?: Message[]; // the whole conversation, instead of SYSTEM[type] + prompt
+  temperature?: number; // 0 unless given
+  own?: boolean; // the person's own work: not the network's units, tokens or card
 };
 export type UnitResult = { text: string; device: string; tokens: number; ms: number; ok?: boolean };
 export interface JobSource {
@@ -33,6 +39,7 @@ export const SYSTEM: Record<UnitType, string> = {
   classify: 'Answer with exactly one lowercase word and nothing else.',
   summarise: 'Summarise the text in one short sentence. No preamble.',
   translate: 'Translate the line. Answer with the translation only.',
+  project: 'You are a helpful assistant.',
 };
 
 // Was a known answer met? The first word of the reply, lowercased, without punctuation.
@@ -148,6 +155,33 @@ export class DemoJobs implements JobSource {
     try {
       Storage.setItemSync(RESULTS, JSON.stringify(all.slice(-KEEP)));
     } catch {}
+  }
+}
+
+/** Several sources, one pile: next() asks them in order, done and retry go back to the
+ * source a unit came from. The night puts the person's projects first (5.11.2026). */
+export class FirstOf implements JobSource {
+  private from = new Map<string, JobSource>();
+  constructor(private sources: JobSource[]) {}
+  async next() {
+    for (const s of this.sources) {
+      const u = await s.next().catch(() => null);
+      if (u) {
+        this.from.set(u.id, s);
+        return u;
+      }
+    }
+    return null;
+  }
+  async done(unit: Unit, result: UnitResult) {
+    const s = this.from.get(unit.id);
+    this.from.delete(unit.id);
+    await s?.done(unit, result);
+  }
+  async retry(unit: Unit) {
+    const s = this.from.get(unit.id);
+    this.from.delete(unit.id);
+    await s?.retry?.(unit);
   }
 }
 
