@@ -1,6 +1,6 @@
 # durum
 
-Proje nerede duruyor, 5.11.2026 akşamı (`kula-main` `9d5919f` + temizlik dalı `kula-cleanup`).
+Proje nerede duruyor, 5.11.2026 akşamı (`kula-main`: bütün cloud dalları, temizlik, the brain sekmesi, ölçüm, paketleme).
 Günü gününe kayıt [ILERLEME.md](ILERLEME.md)'de; bu sayfa onun özeti ve her büyük birleştirmeden
 sonra güncellenir. Mimari [ARCHITECTURE.md](ARCHITECTURE.md), geçmiş [HISTORY.md](HISTORY.md).
 
@@ -32,16 +32,31 @@ ve testleri geçiyor; **birleştirilmiş hâli henüz bir telefonda denenmedi**.
 | ci | `check.yml` (app, node 20/22, audit-jvm, kapı), `apk.yml` (elle / `v*`), `node-release.yml`, dependabot | `.github/workflows/` |
 | güvenlik incelemesi | tehdit modeli, 20 bulgu, yüksek ve ortaların hepsi düzeltildi | [SECURITY.md](SECURITY.md) |
 | belgeler | kılavuz (en / tr), mimari, kapı, denetim, gece, node, aktarıcı, planlayıcı, sunucular, bu sayfa | [README.md](README.md) |
-| temizlik | afterhours sitesi kökten gitti, `web/` ve `docs/HISTORY.md`, README yeniden | `kula-cleanup` |
+| temizlik | afterhours sitesi kökten gitti (son hâli `9d5919f`), `web/` ve `docs/HISTORY.md`, README yeniden | kök, `web/`, `docs/` |
+| the brain sekmesi | alt çubukta ortada; beyin'in bu telefonda ne yaptığı: şu an (model, mod, paylar), küme ve rozetler, kararlar defteri (planlayıcı ne seçti, kimi neden dışarıda bıraktı, ayrı modda hangi cihaz), denetim defteri ve zincir, gece | `(tabs)/brain.tsx`, `src/llm/brainlog.ts` |
+| demo / misafir | giriş yoksa misafir ya da demo hesapla kendiliğinden girer; mesajlar, bağlan, pasaport, coop, çağrı "kayıt ol" göstermez; hesap açmak yalnız ayarlarda | `src/auth/AuthContext.tsx` |
+| gece görseli | ilk açılıştaki konser fotoğrafının yerine kodla çizilmiş gece: şarjdaki telefonlar, aralarında ışık çizgileri | `src/components/NightNetwork.tsx` |
+| ölçüm | telefonda "hızı ölç" sayfası, `kula-node bench`; ölçülen tok/s planlayıcıya giriyor (Mac M1, Qwen3 0.6B: 59 tok/s) | `src/bench/`, `node/src/bench.ts`, [BENCH.md](BENCH.md) |
+| kula-node paketleri | tek dosya ikililer (Node SEA, 5 hedef), install.sh / install.ps1, .deb, brew / winget taslakları, ilk açılış menüsü, `info` | `node/tools/pack.mjs`, `packaging/`, [NODE.md](NODE.md) |
 
 Ayrı dallarda yazıldı, `kula-main`'e **henüz alınmadı**:
 
 | dal | ne |
 |---|---|
-| `claude/bench` | telefonda bench sayfası, `kula-node bench`, ölçülen tok/s planlayıcıya ve dağıtıcıya giriyor |
-| `claude/node-pack`, `claude/node-pack-mac` | kula-node tek dosya ikililer (node sea), install.sh / install.ps1, .deb, brew / winget taslakları, ilk açılış menüsü |
 | `claude/fuzz` | qr, hf adları, sse okuyucu, defter zinciri, gguf başlığı için fuzz / özellik testleri; Kotlin hello satırları; libFuzzer hedefi |
 | `claude/ios-module` | llama.cpp çekirdeği `cpp/core`'a taşındı; iOS için Swift modül, ObjC++ köprü, kapı, indirici, bonjour, işçi, api, defter: **yazıldı, hiç derlenmedi** (Mac + Xcode gerekir) |
+
+### birleştirirken bulunan hatalar (5.11 öğleden sonra)
+
+- `Gate.kt`, `Relay.kt` Android'de derlenmiyordu (cloud'da SDK yoktu): `SSLSocketFactory.createSocket(socket,
+  consumed, autoClose)` Android'de yok → okunan ilk bayt bir sarmalayıcı soketle geri konuyor; iki küçük
+  Kotlin hatası. JVM testleri 37/37.
+- Kapı bir bağlantıyı reddederken okunmamış girdi varken kapatıyordu: istemci "NO <neden>" yerine
+  "connection reset" görüyordu. Artık önce yazma yönü kapanıyor, kısa bir boşaltma, sonra kapanış.
+- Aktarıcı: işçi yerel kapıya bağlanmadan WebSocket akışını bağlamıyordu, ustanın ilk TLS kaydı
+  kayboluyordu ("no hello"); aynı kodla ikinci bağlantı "busy" alıyordu (oturum kapanış yarışı).
+- node testleri, başarısız testlerin açık bıraktığı sunucular yüzünden asılı kalıyordu.
+- Zamana bağlı iki test (gece döngüsü, `/stop`) yüklü makinede kalıyordu; koşul bekleyen hâle geldi.
 
 ## cihazda doğrulanmayanlar
 
@@ -68,16 +83,18 @@ için hiç apk derlenmedi**. Telefonda bakılacaklar:
 
 ## kalanlar
 
-- Dört dalın (bench, node-pack, fuzz, ios-module) `kula-main`'e alınması, sonra bir apk ve bir
-  küme turu.
+- fuzz ve ios-module dallarının alınması; iki telefonla bir küme turu.
+- kula-node yönetici olunca ayrı modda modeli kendi LAN adresinden sunuyor; güvenlik incelemesinin
+  URL kuralı işçilerin özel / LAN adreslerinden indirmesini reddediyor. Telefon ustası Hugging Face
+  adresi verdiği için etkilenmiyor; **bilgisayar ustası + ayrı mod şimdilik çalışmaz** (bkz. kararlar 8).
 - Defter: süreç satır ortasında ölürse yarım son satır; `DeviceKey` kısa dosyayı sessizce ezer;
   anahtar Android KeyStore'a taşınmalı.
 - `claim` kuralı RSS ile ölçüyor; cihazın gerçek boş belleğiyle ölçülmeli.
 - kula-node: `--secret` `ps`'te görünür; `share` varsayılanı hâlâ `--tls`siz.
 - Gece: ölçülen watt passport'a girmedi (3 W varsayılıyor); gece yalnız uygulama açıkken çalışır.
 - `sendLedgerHead` yazıldı, çağıran yok (beyin v1).
-- Uygulamada afterhours / pasaport kalıntıları (paket adı, şema, yasal sayfa bağlantıları, PWA
-  yayını): temizlik raporunda listelendi, uygulama tarafında yapılacak.
+- Uygulamada kalan pasaport adları (paket adı, şema, yasal sayfa bağlantıları): karar 7.
+  afterhours kalıntıları (kart destesi metinleri, AfterhoursCard, konser fotoğrafı, PWA adı) temizlendi.
 
 ## kullanıcının kararını bekleyenler
 
@@ -99,3 +116,6 @@ için hiç apk derlenmedi**. Telefonda bakılacaklar:
    sayfaları nerede olacak (`web/legacy/`'deki afterhours metinleri başlangıç olabilir);
    `app.pasaport.android` / `pasaport://` adları değişecek mi (değişirse kurulu uygulamalar ve
    giriş yönlendirmesi etkilenir).
+8. **İşçinin indirme kuralı.** Öneri: işçi, ustanın kendi adresinden (kapıya bağlanan IP) gelen
+   özel adresli bir URL'yi kabul etsin; başka özel adresleri reddetmeye devam etsin. Böylece
+   bilgisayar ustası modelini LAN'dan dağıtabilir, SSRF koruması kalır.
