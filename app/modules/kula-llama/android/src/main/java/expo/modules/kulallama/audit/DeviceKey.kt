@@ -99,14 +99,12 @@ class SoftwareKey private constructor(override val alg: String, private val pair
       if (file.exists()) {
         val lines = file.readLines()
         if (lines.size >= 3) {
-          val dec = java.util.Base64.getDecoder()
-          return from(lines[0].trim(), dec.decode(lines[1].trim()), dec.decode(lines[2].trim()))
+          return from(lines[0].trim(), B64.decode(lines[1]), B64.decode(lines[2]))
         }
       }
       val k = generate()
-      val enc = java.util.Base64.getEncoder()
       file.parentFile?.mkdirs()
-      file.writeText("${k.alg}\n${enc.encodeToString(k.pkcs8())}\n${enc.encodeToString(k.publicKey)}\n")
+      file.writeText("${k.alg}\n${B64.encode(k.pkcs8())}\n${B64.encode(k.publicKey)}\n")
       return k
     }
   }

@@ -2,9 +2,7 @@ package expo.modules.kulallama
 
 import android.util.Log
 import expo.modules.kulallama.audit.Auditor
-import java.io.BufferedReader
 import java.io.InputStream
-import java.io.InputStreamReader
 import java.io.OutputStream
 import java.net.InetAddress
 import java.net.InetSocketAddress
@@ -100,9 +98,13 @@ object Gate {
       try {
         s.soTimeout = 5000
         s.tcpNoDelay = true
-        val reader = BufferedReader(InputStreamReader(s.getInputStream(), Charsets.US_ASCII))
+        // the bounded byte-wise readLine, as on the client side: nothing before the proof is
+        // trusted, so no unbounded buffering of a line that never ends, and no over-read to
+        // hand on afterwards
+        val inp = s.getInputStream()
         val out = s.getOutputStream()
-        val hello = reader.readLine() ?: return refuse(s, out, peer, null, "no hello")
+        val hello = readLine(inp)
+        if (hello.isEmpty()) return refuse(s, out, peer, null, "no hello")
         val p = hello.trim().split(' ')
         if ((p.size != 3 && p.size != 4) || p[0] != VERSION) return refuse(s, out, peer, null, "bad hello")
         val channel = p[1]
@@ -110,10 +112,13 @@ object Gate {
         if (channel != "rpc" && channel != "api") return refuse(s, out, peer, channel, "bad channel")
         if (!nonceC.matches(Regex("[0-9a-f]{32}"))) return refuse(s, out, peer, channel, "bad nonce")
         val clientMs = if (p.size == 4) (p[3].toLongOrNull() ?: return refuse(s, out, peer, channel, "bad hello")) else null
-        auditor?.onHello(peer, nonceC, clientMs)?.takeIf { !it.ok }?.let { return refuse(s, out, peer, channel, it.reason ?: "audit") }
+        // an auditor that throws must not take the gate down; its verdicts do refuse
+        val verdict = runCatching { auditor?.onHello(peer, nonceC, clientMs) }.onFailure { Log.w(TAG, "auditor hello: ${it.message}") }.getOrNull()
+        if (verdict != null && !verdict.ok) return refuse(s, out, peer, channel, verdict.reason ?: "audit")
         val nonceS = randomHex(16)
         out.write("$nonceS\n".toByteArray()); out.flush()
-        val proof = reader.readLine()?.trim() ?: return refuse(s, out, peer, channel, "no proof")
+        val proof = readLine(inp).trim()
+        if (proof.isEmpty()) return refuse(s, out, peer, channel, "no proof")
         if (!constantEquals(proof, hmac(secret, nonceC, nonceS, channel))) return refuse(s, out, peer, channel, "wrong secret")
         val target = targets(channel) ?: return refuse(s, out, peer, channel, "channel closed")
         // one master at a time on the rpc channel
@@ -122,14 +127,14 @@ object Gate {
         out.write("OK ${hmac(secret, nonceS, nonceC, channel)}\n".toByteArray()); out.flush()
         s.soTimeout = 0
         onEvent(Event("connect", peer, channel))
-        auditor?.onConnect(peer, channel)
+        audit { it.onConnect(peer, channel) }
         val started = System.currentTimeMillis()
         if (channel == "rpc") { currentPeer = peer; connected.incrementAndGet() }
         // the reader may have buffered bytes after the proof line: hand them on first
-        val bytes = pipe(s, local, readerLeftover(reader))
+        val bytes = pipe(s, local, ByteArray(0))
         if (channel == "rpc" && connected.decrementAndGet() == 0) currentPeer = null
         onEvent(Event("end", peer, channel))
-        auditor?.onEnd(peer, channel, bytes, (System.currentTimeMillis() - started) / 1000)
+        audit { it.onEnd(peer, channel, bytes, (System.currentTimeMillis() - started) / 1000) }
       } catch (e: Exception) {
         Log.w(TAG, "gate connection from $peer: ${e.message}")
         runCatching { s.close() }
@@ -139,16 +144,17 @@ object Gate {
     private fun refuse(s: Socket, out: OutputStream, peer: String, channel: String?, why: String) {
       Log.w(TAG, "refused $peer ($channel): $why")
       onEvent(Event("reject", peer, channel, why))
-      auditor?.onReject(peer, channel, why)
+      // the answer first, then the record: a ledger that cannot be written must not leave
+      // the client hanging without its NO
       runCatching { out.write("NO $why\n".toByteArray()); out.flush() }
       runCatching { s.close() }
+      audit { it.onReject(peer, channel, why) }
     }
 
-    private fun readerLeftover(reader: BufferedReader): ByteArray {
-      // BufferedReader may have read past the proof line; drain what it holds (ready()).
-      val sb = StringBuilder()
-      while (reader.ready()) sb.append(reader.read().toChar())
-      return sb.toString().toByteArray(Charsets.ISO_8859_1)
+    /** Runs an auditor hook; a failure (disk full, directory gone) is logged and never breaks the connection. */
+    private fun audit(block: (Auditor) -> Unit) {
+      val a = auditor ?: return
+      runCatching { block(a) }.onFailure { Log.w(TAG, "auditor: ${it.message}") }
     }
   }
 

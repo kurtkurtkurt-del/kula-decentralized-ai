@@ -61,6 +61,7 @@ class WorkerService : Service() {
     const val PROCESS_SUFFIX = ":worker"
     private const val CHANNEL_ID = "kula-worker"
     private const val NOTIFICATION_ID = 41
+    private const val CLAIM_MIN_HELD_MB = 256L
 
     fun statusFile(context: Context) = File(context.filesDir, "kula_worker_status.json")
     /** The worker process's signing key (PKCS8 + public key, base64) and beyin's ledger. */
@@ -154,7 +155,9 @@ class WorkerService : Service() {
           val nowMs = System.currentTimeMillis()
           if (nowMs - lastAudit >= 60_000 || warn != lastWarn) {
             runCatching { a.onHealth(throttled, batteryC(), batteryPct()) }
-            if (peer != null) runCatching { a.onClaim(peer, ramMb, held, bandwidth, 0.0, 0.0) }
+            // the claim only once a master has put a model here: before that RSS is this
+            // process alone and the advertised RAM would look like a 4x lie every minute
+            if (peer != null && held >= CLAIM_MIN_HELD_MB) runCatching { a.onClaim(peer, ramMb, held, bandwidth, 0.0, 0.0) }
             lastAudit = nowMs; lastWarn = warn
           }
         }
