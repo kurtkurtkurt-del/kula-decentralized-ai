@@ -538,7 +538,7 @@ function renderBrain() {
     if (used.has(p.id)) continue;
     const card = el('div', 'dev');
     const top = el('div', 'dev-top');
-    top.append(el('span', `dot ${p.reach ? (p.reach.ok ? 'ok' : 'no') : ''}`), el('b', '', p.name), el('span', 'tag', p.kind));
+    top.append(el('span', `dot ${p.reach ? (p.reach.ok ? 'ok' : 'no') : ''}`), el('b', '', p.name), viaTag(p), el('span', 'tag', p.kind));
     card.appendChild(top);
     card.appendChild(el('p', '', p.reach ? (p.reach.ok ? `reachable${p.reach.ms ? `, ${p.reach.ms} ms` : ''}; holds nothing for this chat` : `not reachable: ${p.reach.reason}`) : 'not checked yet'));
     devs.appendChild(card);
@@ -622,6 +622,7 @@ function renderPeers() {
     if (pick.tagName === 'INPUT') { pick.checked = sel.has(p.id); pick.setAttribute('aria-label', p.name); }
     const who = el('div', 'who');
     const name = el('b', '', p.name);
+    name.appendChild(viaTag(p));
     const bits = [p.kind, p.where];
     if (p.ram) bits.push(`${(p.ram / 1024).toFixed(1)} GB free`);
     if (p.waitingPair) bits.push('pairs on first contact');
@@ -653,6 +654,30 @@ function renderPeers() {
     box.appendChild(row);
   }
 }
+
+// ---------- connect: a refresh (6.11.2026): asks again for the status, probes every device,
+// reads the cable list. Each device row says how it is reached (viaTag).
+
+function viaTag(p) {
+  if (p.cable) return el('small', `via cable${p.cable.plugged === false ? ' off' : ''}`, p.cable.plugged === false ? 'cable · unplugged' : 'cable');
+  if (p.far) return el('small', 'via', 'relay');
+  return el('small', 'via', 'wi-fi');
+}
+
+async function refreshAll() {
+  const b = $('connect-refresh');
+  if (b.classList.contains('spin')) return;
+  b.classList.add('spin');
+  b.querySelector('span').textContent = 'looking…';
+  try {
+    await Promise.all([refreshStatus(), refreshPeers(true), refreshCable()]);
+  } finally {
+    b.classList.remove('spin');
+    b.querySelector('span').textContent = 'refresh';
+    if (!$('wiz').hidden) renderWiz();
+  }
+}
+$('connect-refresh').addEventListener('click', refreshAll);
 
 $('probe').addEventListener('click', async () => { $('probe').textContent = 'checking…'; await refreshPeers(true); $('probe').textContent = 'check again'; });
 
