@@ -7,6 +7,8 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
+import android.os.BatteryManager
 import android.net.nsd.NsdManager
 import android.net.nsd.NsdServiceInfo
 import android.net.wifi.WifiManager
@@ -16,6 +18,10 @@ import android.os.PowerManager
 import android.os.Process
 import android.util.Log
 import androidx.core.app.NotificationCompat
+import expo.modules.kulallama.audit.Auditor
+import expo.modules.kulallama.audit.Ledger
+import expo.modules.kulallama.audit.SoftwareKey
+import expo.modules.kulallama.audit.Checks
 import org.json.JSONObject
 import java.io.File
 import java.net.ServerSocket
@@ -37,6 +43,7 @@ class WorkerService : Service() {
   private var wifiLock: WifiManager.WifiLock? = null
   private var gate: Gate.Server? = null
   private var api: ApiServer? = null
+  private var auditor: Auditor? = null
   @Volatile private var running = false
   @Volatile private var rpcPort = 0
   private var ramMb = 0L
@@ -54,8 +61,12 @@ class WorkerService : Service() {
     const val PROCESS_SUFFIX = ":worker"
     private const val CHANNEL_ID = "kula-worker"
     private const val NOTIFICATION_ID = 41
+    private const val CLAIM_MIN_HELD_MB = 256L
 
     fun statusFile(context: Context) = File(context.filesDir, "kula_worker_status.json")
+    /** The worker process's signing key (PKCS8 + public key, base64) and beyin's ledger. */
+    fun deviceKeyFile(context: Context) = File(context.filesDir, "kula_device_key")
+    fun ledgerFile(context: Context) = File(File(context.filesDir, "beyin"), "ledger.jsonl")
     fun modelsDir(context: Context) = File(context.filesDir, "models")
 
     /** Lasting worker id, in a file so both processes agree. */
@@ -105,9 +116,11 @@ class WorkerService : Service() {
         Native.initBackends(applicationInfo.nativeLibraryDir)
         rpcPort = ServerSocket(0).use { it.localPort }
         api = ApiServer(this, modelsDir(this).apply { mkdirs() }, threads).also { it.start() }
-        gate = Gate.Server(port, secret, { ch -> if (ch == "rpc") rpcPort else api?.port }) { ev ->
+        // beyin/check v0: every gate event goes to the signed ledger; replays and bad clocks are refused
+        val key = SoftwareKey.loadOrCreate(deviceKeyFile(this))
+        auditor = Auditor(Ledger(ledgerFile(this), key), key)
+        gate = Gate.Server(port, secret, { ch -> if (ch == "rpc") rpcPort else api?.port }, auditor) { ev ->
           when (ev.kind) { "connect" -> connects++; "reject" -> rejects++ }
-          appendLedger(ev)
         }.also { it.start() }
         Log.i(TAG, "worker: $threads threads, $ramMb MB free, %.1f GB/s, gate $port".format(bandwidth))
         advertise(port, intent?.getStringExtra(EXTRA_NAME) ?: Build.MODEL)
@@ -129,10 +142,25 @@ class WorkerService : Service() {
   private fun startStatusLoop() {
     thread(name = "kula-worker-status", isDaemon = true) {
       var last = ""
+      var lastAudit = 0L
+      var lastWarn = ""
       while (running) {
         val peer = gate?.currentPeer ?: Native.workerPeer()
         val held = residentMb()
         writeStatus("running", peer = peer, heldMb = held)
+        // health every minute or when its warnings change; the claim (advertised vs held) while a master is connected
+        auditor?.let { a ->
+          val throttled = isThrottled()
+          val warn = Checks.health(throttled, batteryC(), batteryPct()).warn.joinToString(",")
+          val nowMs = System.currentTimeMillis()
+          if (nowMs - lastAudit >= 60_000 || warn != lastWarn) {
+            runCatching { a.onHealth(throttled, batteryC(), batteryPct()) }
+            // the claim only once a master has put a model here: before that RSS is this
+            // process alone and the advertised RAM would look like a 4x lie every minute
+            if (peer != null && held >= CLAIM_MIN_HELD_MB) runCatching { a.onClaim(peer, ramMb, held, bandwidth, 0.0, 0.0) }
+            lastAudit = nowMs; lastWarn = warn
+          }
+        }
         val text = if (peer != null) "working for $peer · holding %.1f GB".format(held / 1024.0) else "ready · waiting for a device"
         if (text != last) { getSystemService(NotificationManager::class.java).notify(NOTIFICATION_ID, buildNotification(text)); last = text }
         Thread.sleep(2000)
@@ -153,11 +181,16 @@ class WorkerService : Service() {
     statusFile(this).writeText(json.toString())
   }
 
-  // the gate's events, one JSON line each: the first page of beyin's ledger (Part 3)
-  private fun appendLedger(ev: Gate.Event) = runCatching {
-    File(filesDir, "kula_gate_ledger.jsonl").appendText(
-      JSONObject().put("t", System.currentTimeMillis()).put("kind", ev.kind).put("peer", ev.peer).putOpt("channel", ev.channel).putOpt("why", ev.why).toString() + "\n")
-  }
+  // battery through Android, kept here so the audit core stays plain JVM
+  private fun batteryPct(): Int = runCatching {
+    (getSystemService(Context.BATTERY_SERVICE) as BatteryManager).getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY)
+  }.getOrDefault(-1)
+
+  private fun batteryC(): Double = runCatching {
+    val sticky = registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
+    val tenths = sticky?.getIntExtra(BatteryManager.EXTRA_TEMPERATURE, Int.MIN_VALUE) ?: Int.MIN_VALUE
+    if (tenths == Int.MIN_VALUE) 0.0 else tenths / 10.0
+  }.getOrDefault(0.0)
 
   private fun residentMb(): Long = File("/proc/self/status").readLines().firstOrNull { it.startsWith("VmRSS:") }
     ?.filter { it.isDigit() }?.toLongOrNull()?.div(1024) ?: 0L

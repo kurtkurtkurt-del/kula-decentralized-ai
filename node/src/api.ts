@@ -118,6 +118,9 @@ export async function startApiServer(opts: ApiOptions): Promise<ApiServer> {
     const sse = new Sse(res);
     const ac = new AbortController();
     current = ac;
+    // a phone that drops off wi-fi mid-load: stop the work, free busy; otherwise every later
+    // /load and /chat from it would be 409 until the download and start ran their course
+    res.on('close', () => { if (!res.writableFinished) ac.abort(); });
     try {
       await unload();
       let have = fs.existsSync(file);
@@ -153,13 +156,16 @@ export async function startApiServer(opts: ApiOptions): Promise<ApiServer> {
   }
 
   async function handleChat(body: any, res: http.ServerResponse) {
-    if (!state.loaded || !backend) return json(res, 400, { error: 'no model loaded' });
+    // 409 like ApiServer.kt (the phone's worker), not 400
+    if (!state.loaded || !backend) return json(res, 409, { error: 'no model loaded' });
     if (state.busy) return json(res, 409, { error: 'busy' });
     if (!Array.isArray(body?.messages)) return json(res, 400, { error: 'need messages' });
     state.busy = true;
     const sse = new Sse(res);
     const ac = new AbortController();
     current = ac;
+    // the client went away mid-stream: abort llama-server's request and free busy
+    res.on('close', () => { if (!res.writableFinished) ac.abort(); });
     const t0 = Date.now();
     let firstMs = 0;
     let tokens = 0;
@@ -230,7 +236,7 @@ export async function startApiServer(opts: ApiOptions): Promise<ApiServer> {
       if (req.method === 'POST' && url === '/load') return handleLoad(await readJson(req), res);
       if (req.method === 'POST' && url === '/chat') return handleChat(await readJson(req), res);
       if (req.method === 'POST' && url === '/stop') { current?.abort(); return json(res, 200, { ok: true, wasBusy: state.busy }); }
-      if (req.method === 'POST' && url === '/unload') { await unload(); return json(res, 200, { ok: true }); }
+      if (req.method === 'POST' && url === '/unload') { if (state.busy) return json(res, 409, { error: 'busy' }); await unload(); return json(res, 200, { ok: true }); }
       return json(res, 404, { error: 'not found' });
     } catch (e) {
       if (!res.headersSent) json(res, 400, { error: (e as Error).message });

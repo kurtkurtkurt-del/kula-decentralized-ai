@@ -58,7 +58,9 @@ export async function startNight(slug: string): Promise<{ id: string | null; job
   return { id: r.queued ? null : String(r.result), jobId: r.job.id, at: r.job.at };
 }
 // The morning: the card number, or null while it waits.
-export async function endNight(p: { contributionId: string | null; startId: string; startedAt: number; slug: string; tokens: number; seconds: number; kwh: number }): Promise<number | null> {
+// units, checked, wrong and model (5.11.2026) travel in the job and stay on the phone's
+// outbox record; contribution_end does not take them yet.
+export async function endNight(p: { contributionId: string | null; startId: string; startedAt: number; slug: string; tokens: number; seconds: number; kwh: number; units?: number; checked?: number; wrong?: number; model?: string | null }): Promise<number | null> {
   const r = await send({ kind: 'nightEnd', ...p });
   return r.queued ? null : Number(r.result);
 }
