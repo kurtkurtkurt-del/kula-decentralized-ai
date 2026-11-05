@@ -100,6 +100,9 @@ export const models = {
   'share.battery': { en: 'allow unrestricted battery', de: 'akku uneingeschränkt erlauben', tr: 'pili sınırsız yap' },
   'share.screen': { en: 'the screen stays on while sharing; the phone works at full speed only then.', de: 'der bildschirm bleibt beim teilen an; nur dann arbeitet das telefon mit voller kraft.', tr: 'paylaşırken ekran açık kalır; telefon yalnızca o zaman tam hızda çalışır.' },
   'share.gate': { en: '{ok} connections · {no} refused', de: '{ok} verbindungen · {no} abgewiesen', tr: '{ok} bağlantı · {no} reddedildi' },
+  'share.tls': { en: 'tls, {n} paired', de: 'tls, {n} gekoppelt', tr: 'tls, {n} eşleşmiş' },
+  'share.fp': { en: 'certificate', de: 'zertifikat', tr: 'sertifika' },
+  'share.pin': { en: 'code', de: 'code', tr: 'kod' },
   'share.noWifi': { en: 'not on wi-fi: another device cannot reach this phone.', de: 'kein wlan: ein anderes gerät erreicht dieses telefon nicht.', tr: 'wi-fi yok: başka bir cihaz bu telefona ulaşamaz.' },
 
   'peers.title': { en: 'connected devices', de: 'verbundene geräte', tr: 'bağlı cihazlar' },

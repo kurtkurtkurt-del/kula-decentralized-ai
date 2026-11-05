@@ -85,6 +85,7 @@ Options:
 | `--name <s>` | the name the phone shows (default: hostname) |
 | `--models <dir>` | where downloaded models are kept (default `~/.kula-node/models`) |
 | `--secret <hex>` | reuse a secret instead of a fresh one per run |
+| `--tls` | protocol v2: the gate also speaks TLS 1.3 between device certificates and the QR is v3 (`fp` + one-time `pin`); see below |
 | `--lie-ram <MB>` | advertise a false amount of free memory (for audit tests on the phone side) |
 | `--no-qr` | print the JSON only |
 
@@ -183,12 +184,40 @@ gives a client 5 s per line during the handshake and no timeout afterwards.
 HMACs are compared in constant time. Bytes a client sends right after its
 proof line are kept and forwarded.
 
+## Protocol v2: TLS between device certificates
+
+`share --tls` keeps v1 on the port and adds v2 (the server tells them apart by
+the first byte: a TLS ClientHello starts with `0x16`). The computer's identity
+is a P-256 key (`~/.kula-node/device_key.pem` when that key is P-256, else a
+separate `gate_key.pem`) and a self-signed certificate `gate_cert.der` written
+by `src/tls.ts` by hand in DER, the same bytes the Kotlin side writes. The QR
+is then v3: `fp` (SHA-256 of the certificate) and `pin` (a one-time pairing
+code) instead of `secret`. The phone pins `fp`; the first connection that
+proves `pin` pins the phone's certificate in `~/.kula-node/paired` (two-way
+TOFU) and spends the code, after which only the certificates speak:
+
+```
+tls 1.3, both sides with certificates, the client checks fp_s, no hostname check
+C → S   KULA2 <channel> <nonce_c> <unix_ms>
+S → C   <nonce_s> paired | <nonce_s> pin | NO <reason>
+C → S   <proof_c>        pin: HMAC-SHA256(pin, "nonce_c|nonce_s|channel|fp_s|fp_c"); paired: "-"
+S → C   OK <proof_s>     pin: HMAC-SHA256(pin, "nonce_s|nonce_c|channel|fp_s|fp_c"); paired: "OK -"
+```
+
+More reasons: `no tls` (a TLS client at a v1-only gate), `tls`, `no client
+cert`, `not paired`, `wrong pin`, `bad proof`; `replay` and `clock` are always
+checked in v2. `kula-node probe <host> <port> - --fp <hex> [--pin <code>]`
+probes over TLS. The whole thing is in `docs/GATE.md` at the repository root;
+`test/gate-vectors.json` carries the v2 proofs and the TBS certificate hash
+both sides must reproduce.
+
 ## Development
 
 ```
 npm test        # node --test, localhost only, never fetches llama.cpp
 
-Tests: `gate.test.ts` (protocol and vectors), `audit.test.ts` (vectors, chain,
+Tests: `gate.test.ts` (protocol and vectors), `gate-tls.test.ts` (v2: certificate,
+pairing, every refusal, v1 on the same port), `audit.test.ts` (vectors, chain,
 tampering, rotation, checks, the gate's clock field, `kula-node ledger`),
 `setup.test.ts` (`pickAsset` over the recorded release, sidecar, build
 instructions), `api.test.ts` and `conformance.test.ts` (the apart-mode api

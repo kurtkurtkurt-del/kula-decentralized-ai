@@ -21,7 +21,8 @@ jest.mock('@/lib/offline', () => ({ newId: () => Math.random().toString(36).slic
 import { CATALOG } from '@/llm/catalog';
 import { fitOn, fitTogether, needMb, haveMb } from '@/llm/fit';
 import { probeAll } from '@/llm/cluster';
-import { isPeerQr, takePeerQr } from '@/llm/peers';
+import { isPeerQr, makePeerQr, parsePeerQr, takePeerQr } from '@/llm/peers';
+import { peerTls } from '@/llm/cluster';
 import { peers } from '@/llm/store';
 import type { Passport } from '@/passport/contract';
 
@@ -101,6 +102,41 @@ describe('the peer qr', () => {
   it('refuses what it should', () => {
     expect(() => takePeerQr('{}')).toThrow('notPeer');
     expect(() => takePeerQr(JSON.stringify({ ...qr, v: 1 }))).toThrow('old');
+    expect(() => takePeerQr(JSON.stringify({ ...qr, v: 4 }))).toThrow('old');
     expect(() => takePeerQr(JSON.stringify({ ...qr, secret: 'short' }))).toThrow('notPeer');
+  });
+
+  // v3 (gate protocol v2): the certificate fingerprint and a one-time pairing code instead of the secret
+  const fp = 'AB'.repeat(32);
+  const qr3 = { k: 'kula-peer', v: 3, id: 'w-3', name: 'MacBook', host: '192.168.1.7', port: 50551, fp, pin: '0123456789abcdef', kind: 'pc', ram: 16000, bw: 60 };
+  it('reads a v3 code: fingerprint lowercased, pin kept until paired, no secret', () => {
+    expect(isPeerQr(JSON.stringify(qr3))).toBe(true);
+    const p = parsePeerQr(JSON.stringify(qr3));
+    expect(p.fp).toBe(fp.toLowerCase());
+    expect(p.pin).toBe('0123456789abcdef');
+    expect(p.secret).toBe('');
+    expect(p.kind).toBe('pc');
+    expect(peerTls(p)).toEqual({ fp: fp.toLowerCase(), pin: '0123456789abcdef' });
+    // a v3 code without a code (already paired, or shown after the code was spent) still reads
+    expect(parsePeerQr(JSON.stringify({ ...qr3, pin: undefined })).pin).toBeNull();
+    // a v2 peer has no tls side
+    expect(peerTls(parsePeerQr(JSON.stringify(qr)))).toBeNull();
+  });
+  it('refuses a v3 code with a bad fingerprint', () => {
+    expect(() => parsePeerQr(JSON.stringify({ ...qr3, fp: 'abc' }))).toThrow('notPeer');
+    expect(() => parsePeerQr(JSON.stringify({ ...qr3, fp: undefined }))).toThrow('notPeer');
+  });
+  it('makes v3 when there is a fingerprint and v2 otherwise, and either reads back', () => {
+    const base = { id: 'me', name: 'phone', host: '10.0.0.2', port: 50551, kind: 'phone' as const, ram: 3000, bw: 14, passport: null };
+    const v3 = JSON.parse(makePeerQr({ ...base, secret: 'cd'.repeat(32), fp: fp.toLowerCase(), pin: 'deadbeefdeadbeef' }));
+    expect(v3.v).toBe(3);
+    expect(v3.fp).toBe(fp.toLowerCase());
+    expect(v3.pin).toBe('deadbeefdeadbeef');
+    expect(v3.secret).toBeUndefined();
+    const v2 = JSON.parse(makePeerQr({ ...base, secret: 'cd'.repeat(32) }));
+    expect(v2.v).toBe(2);
+    expect(v2.secret).toBe('cd'.repeat(32));
+    expect('fp' in v2).toBe(false);
+    for (const q of [v2, v3]) expect(() => parsePeerQr(JSON.stringify(q))).not.toThrow();
   });
 });

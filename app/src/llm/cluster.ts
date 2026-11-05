@@ -1,4 +1,4 @@
-import { llama, native, type PeerArg, type PeerFound } from '@/llm/native';
+import { llama, native, type PeerArg, type PeerFound, type PeerTls } from '@/llm/native';
 import { peers as savedPeers, touchPeer, type LocalModel, type Mode, type Peer } from '@/llm/store';
 
 // The planner (after PrivateLM's cluster_service.dart, 31.10.2026): before a load, which
@@ -26,11 +26,11 @@ export async function probeAll(list: Peer[], channel: 'rpc' | 'api' = 'rpc'): Pr
   const ok: Peer[] = [];
   const bad: { peer: Peer; why: string }[] = [];
   await Promise.all(list.map(async (peer) => {
-    const why = await n.probePeer(peer.host, peer.port, peer.secret, channel).catch((e: Error) => e.message);
+    const why = await n.probePeer(peer.host, peer.port, peer.secret, channel, peerTls(peer)).catch((e: Error) => e.message);
     if (why) bad.push({ peer, why });
     else {
       ok.push(peer);
-      touchPeer(peer.id, { last_ok: new Date().toISOString() });
+      touchPeer(peer.id, { last_ok: new Date().toISOString(), ...(peer.pin ? { pin: null, paired_at: new Date().toISOString() } : {}) });
     }
   }));
   return { ok, bad };
@@ -117,7 +117,10 @@ export async function planSplit(model: LocalModel, localFreeMb: number, localBw:
   return { mode: 'split', used, skipped, localMb: Math.round(rows.find((r) => !r.peer)!.assignedMb), fitsAlone, totalMb: Math.round(totalMb), needMb };
 }
 
-export const peerArgs = (plan: Plan): PeerArg[] => plan.used.map((p) => ({ host: p.host, port: p.port, secret: p.secret, weight: p.assignedMb }));
+/** Protocol v2 for a v3 peer (its fingerprint, and the pairing code until the first connection spent it), v1 for a v2 peer. */
+export const peerTls = (p: Pick<Peer, 'fp' | 'pin'>): PeerTls => (p.fp ? { fp: p.fp, pin: p.pin ?? null } : null);
+
+export const peerArgs = (plan: Plan): PeerArg[] => plan.used.map((p) => ({ host: p.host, port: p.port, secret: p.secret, weight: p.assignedMb, fp: p.fp ?? null, pin: p.pin ?? null }));
 
 /** "this phone 1.2 gb · pixel 0.8 gb" from the native split report. */
 export function splitSummary(split: { buffer: string; mb: number | null }[], names: Map<string, string>, thisName: string): { name: string; gb: number }[] {

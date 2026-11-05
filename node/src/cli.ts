@@ -1,5 +1,7 @@
 // The command line: setup, share, probe.
-import { probe, type Channel } from './gate.js';
+import { probe, type Channel, type TlsClient } from './gate.js';
+import { loadOrCreateIdentity } from './tls.js';
+import { loadOrCreate as loadDeviceKey } from './audit/key.js';
 import { setup, TAG } from './llama.js';
 import { share } from './share.js';
 import { home } from './paths.js';
@@ -17,7 +19,9 @@ usage:
       --secret <hex>    cluster secret (default: a fresh one each run)
       --lie-ram <MB>    advertise a false amount of free ram (for audit tests)
       --no-qr           print the json payload only
+      --tls             protocol v2: tls between device certificates, qr v3 with a one-time code
   kula-node probe <host> <port> <secret>   handshake on both channels, print OK/NO
+      --fp <hex> [--pin <code>]   probe over tls (v2) against that certificate fingerprint; secret may be "-"
   kula-node ledger [--verify] [--tail N]   print the signed ledger; --verify checks the chain and signatures
 
 files live in ${home()} (KULA_NODE_HOME overrides)
@@ -65,9 +69,14 @@ export async function main(argv: string[]): Promise<number> {
     const [host, portS, secret] = rest;
     if (!host || !portS || !secret) { console.error('usage: kula-node probe <host> <port> <secret>'); return 2; }
     const port = Number(portS);
+    let tlsOpts: TlsClient | null = null;
+    if (typeof flags.fp === 'string') {
+      if (!/^[0-9a-f]{64}$/i.test(flags.fp)) { console.error('--fp must be 64 hex characters'); return 2; }
+      tlsOpts = { identity: loadOrCreateIdentity(home(), loadDeviceKey()), fp: flags.fp.toLowerCase(), pin: typeof flags.pin === 'string' ? flags.pin : null };
+    }
     let bad = 0;
     for (const channel of ['rpc', 'api'] as Channel[]) {
-      const r = await probe(host, port, secret, channel, num(flags.timeout, 2000));
+      const r = await probe(host, port, secret, channel, num(flags.timeout, 2000), tlsOpts);
       if (r.ok) console.log(`${channel}: OK (${r.ms} ms)`);
       else { console.log(`${channel}: NO ${r.reason}`); bad++; }
     }
@@ -84,6 +93,7 @@ export async function main(argv: string[]): Promise<number> {
       secret: secret?.toLowerCase(),
       lieRam: flags['lie-ram'] !== undefined ? num(flags['lie-ram'], 0) : undefined,
       noQr: flags['no-qr'] === true,
+      tls: flags.tls === true,
     });
     await new Promise<void>((resolve) => {
       const done = () => { stop().finally(resolve); };

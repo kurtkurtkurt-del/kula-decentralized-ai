@@ -7,7 +7,8 @@ import path from 'node:path';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { Bonjour } from 'bonjour-service';
 import qrcode from 'qrcode-terminal';
-import { startGateServer, type GateEvent, type Channel } from './gate.js';
+import { startGateServer, type GateEvent, type Channel, type TlsServer } from './gate.js';
+import { loadOrCreateIdentity, newPin, Paired } from './tls.js';
 import { findLlama, TAG } from './llama.js';
 import { home, expandHome } from './paths.js';
 import { lanIPv4, freeRamMB, measureBandwidth, detectGpu } from './sysinfo.js';
@@ -24,16 +25,23 @@ export interface ShareOptions {
   secret?: string;
   lieRam?: number;
   noQr?: boolean;
+  // protocol v2: the gate also speaks tls and the qr is v3 (fingerprint + one-time code)
+  tls?: boolean;
 }
 
+// The qr the phone scans. v2 carries the shared secret (protocol v1); v3 carries
+// this computer's certificate fingerprint and a one-time pairing code (protocol
+// v2, docs/GATE.md). A v3 worker still answers v1 clients with the secret.
 export interface PeerPayload {
   k: 'kula-peer';
-  v: 2;
+  v: 2 | 3;
   id: string;
   name: string;
   host: string;
   port: number;
-  secret: string;
+  secret?: string;
+  fp?: string;
+  pin?: string;
   kind: 'pc';
   ram: number;
   bw: number;
@@ -82,7 +90,8 @@ export async function share(opts: ShareOptions): Promise<() => Promise<void>> {
   log(`device key ${key.alg} ${key.id}`);
   const auditor = new Auditor({ ledger: new Ledger(path.join(home(), 'ledger.jsonl'), key), log });
   const onEvent = (e: GateEvent) => {
-    if (e.type === 'open') { auditor.connect(e.peer, e.channel); log(`${e.channel} open from ${e.peer}`); }
+    if (e.type === 'pair') { auditor.pair(e.peer, { fp: e.fp, channel: e.channel }); log(`paired ${e.peer} (certificate ${e.fp.slice(0, 16)}…)`); }
+    else if (e.type === 'open') { auditor.connect(e.peer, e.channel); log(`${e.channel} open from ${e.peer}${e.v === 2 ? ' (tls)' : ''}`); }
     else if (e.type === 'close') { auditor.end(e.peer, e.channel, e.ms, e.bytesIn, e.bytesOut); log(`${e.channel} closed from ${e.peer} after ${e.ms} ms, in ${e.bytesIn} out ${e.bytesOut} bytes`); }
     else {
       // replay and clock are written by the auditor itself when it refuses the hello
@@ -127,14 +136,28 @@ export async function share(opts: ShareOptions): Promise<() => Promise<void>> {
   process.on('uncaughtException', (e) => log(`error: ${e.message}`));
   process.on('unhandledRejection', (e) => log(`error: ${e instanceof Error ? e.message : String(e)}`));
 
-  const gate = await startGateServer({ port: opts.port, secret, targets, onEvent, admit: (peer, nonceC, unixMs) => auditor.hello(peer, nonceC, unixMs) });
-  log(`gate listening on 0.0.0.0:${gate.port}`);
+  // protocol v2: this computer's certificate, the phones it has paired with, a one-time code per qr
+  let tlsServer: TlsServer | undefined;
+  const printQr = (port: number) => {
+    const common = { k: 'kula-peer' as const, id, name, host: host ?? '0.0.0.0', port, kind: 'pc' as const, ram, bw, gpu: gpu.name, vram: gpu.vramMB };
+    const payload: PeerPayload = tlsServer ? { ...common, v: 3, fp: tlsServer.identity.fp, pin: tlsServer.pin ?? undefined } : { ...common, v: 2, secret };
+    const text = JSON.stringify(payload);
+    if (!opts.noQr) qrcode.generate(text, { small: true }, (q) => console.log(q));
+    console.log(text);
+    console.log();
+  };
+  if (opts.tls) {
+    const identity = loadOrCreateIdentity(home(), key);
+    const paired = new Paired(path.join(home(), 'paired'));
+    tlsServer = { identity, paired, pin: newPin() };
+    // the code is spent by the phone that used it; the next qr gets a fresh one
+    tlsServer.onPinUsed = () => { tlsServer!.pin = newPin(); log('pairing code used; a new qr follows'); printQr(opts.port); };
+    log(`tls certificate ${identity.fp.slice(0, 16)}… (${paired.size} paired)`);
+  }
 
-  const payload: PeerPayload = { k: 'kula-peer', v: 2, id, name, host: host ?? '0.0.0.0', port: gate.port, secret, kind: 'pc', ram, bw, gpu: gpu.name, vram: gpu.vramMB };
-  const text = JSON.stringify(payload);
-  if (!opts.noQr) qrcode.generate(text, { small: true }, (q) => console.log(q));
-  console.log(text);
-  console.log();
+  const gate = await startGateServer({ port: opts.port, secret, targets, onEvent, admit: (peer, nonceC, unixMs) => auditor.hello(peer, nonceC, unixMs), tls: tlsServer });
+  log(`gate listening on 0.0.0.0:${gate.port}${tlsServer ? ' (v1 and v2 tls)' : ''}`);
+  printQr(gate.port);
 
   const bonjour = new Bonjour();
   const service = bonjour.publish({
