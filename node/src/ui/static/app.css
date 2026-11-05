@@ -567,15 +567,15 @@ ul.wiz-steps li::before { content: "› "; color: var(--meta); }
 #dev-list .dev:hover .pen, #dev-list .pen:focus-visible { opacity: 1; }
 #dev-list input.rename { font: inherit; font-weight: 600; width: 100%; border: 1px solid var(--accent); border-radius: 8px; padding: 3px 8px; background: var(--card); color: var(--words); outline: none; }
 
-/* cortex and gauges (6.11.2026): the brain from above on top, the twelve gauges 3 × 4 under it,
-   the feed below scrolls; a branch's page opens in the gauges' place */
+/* instruments (6.11.2026): twelve tiles, two by six, each a small live gauge; the feed below scrolls;
+   a branch's page opens in the tiles' place */
 .btop { height: auto; min-height: 0; gap: 8px; }
-.cortex { width: 100%; height: clamp(150px, 25vh, 240px); display: block; flex: none; cursor: pointer; border-radius: 16px; border: 1px solid var(--line); background: radial-gradient(110% 90% at 50% 50%, color-mix(in srgb, var(--accent) 6%, var(--card)), var(--side)); }
-.bgrid { flex: none; grid-template-columns: repeat(3, minmax(0, 1fr)); grid-template-rows: repeat(4, 60px); gap: 6px; }
-.btile { padding: 6px 8px; grid-template-rows: auto 1fr; align-content: stretch; gap: 2px; }
-.btile b { font-size: 12.5px; }
-.btile .bt-mark { width: 15px; height: 15px; right: 6px; top: 7px; transform: none; opacity: 0.32; }
-.btile .bt-head { padding-right: 16px; }
+.bgrid { flex: none; grid-template-columns: repeat(2, minmax(0, 1fr)); grid-template-rows: repeat(6, 70px); gap: 7px; }
+.btile { padding: 7px 10px; grid-template-rows: auto auto 1fr; align-content: stretch; gap: 1px; }
+.btile b { font-size: 13.5px; }
+.btile .bt-mark { width: 20px; height: 20px; right: 8px; top: 8px; transform: none; opacity: 0.3; }
+.btile .bt-head { padding-right: 24px; }
+.btile .bt-stat { padding-right: 0; }
 .bt-viz { display: flex; flex-direction: column; justify-content: flex-end; gap: 3px; min-width: 0; overflow: hidden; }
 .bt-viz svg { width: 100%; height: 20px; overflow: visible; }
 .bt-viz .bt-stat { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -592,3 +592,8 @@ ul.wiz-steps li::before { content: "› "; color: var(--meta); }
 .bt-viz .shield-count .ok { color: var(--sage); }
 .bdetail { max-height: 50vh; }
 @media (prefers-reduced-motion: reduce) { .bt-viz .gauge span { transition: none; } }
+.btile b { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: block; }
+.bt-viz .marks { display: flex; gap: 4px; }
+.bt-viz .marks i { width: 14px; height: 14px; border-radius: 50%; border: 1.5px solid var(--line2); position: relative; }
+.bt-viz .marks i.ok { border-color: var(--sage); background: color-mix(in srgb, var(--sage) 16%, transparent); }
+.bt-viz .marks i.ok::after { content: ''; position: absolute; left: 4px; top: 1.5px; width: 3.5px; height: 6.5px; border: solid var(--sage); border-width: 0 1.5px 1.5px 0; transform: rotate(45deg); }
