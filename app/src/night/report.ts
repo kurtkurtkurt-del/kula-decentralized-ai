@@ -7,7 +7,7 @@ import type { NightDevice, NightStatus } from './NightWorker';
 // under the threshold, window closed); each stop leaves a Segment, the report adds them up.
 // Pure functions here, the kv-store under night.reports (newest last, REPORT_KEEP kept);
 // the screen is app/night/report.tsx, the server end is night_report (demo server) through
-// the outbox (nightReport job, data/contribution.ts).
+// the outbox (nightReport job, data/night.ts; 18_night.sql on the live server).
 export type Segment = {
   startedAt: number;
   endedAt: number;

@@ -58,7 +58,7 @@ describe('what the user does stays', () => {
   });
   it('a morning report is kept once per client id and listed newest first', () => {
     const s = freshState();
-    const report = { id: '2026-11-05', slug: 'beyin', units: 12, tokens: 300, seconds: 600, wh: 0.5 };
+    const report = { id: '2026-11-05', slug: data('kept', {}, s)[0].slug, device_id: 'dev-1', units: 12, tokens: 300, seconds: 600, wh: 0.5 };
     const id = data('night_report', { p_report: report, p_client_id: 'c1' }, s);
     expect(data('night_report', { p_report: report, p_client_id: 'c1' }, s)).toBe(id); // a retry
     const id2 = data('night_report', { p_report: { ...report, id: '2026-11-06' }, p_client_id: 'c2' }, s);
@@ -67,6 +67,32 @@ describe('what the user does stays', () => {
     expect(list).toHaveLength(2);
     expect(list[0]).toMatchObject({ id: id2, report: { id: '2026-11-06' } });
     expect(list[1].report).toEqual(report);
+  });
+  it('the same device, project and night again finds the first row; a bad report is refused', () => {
+    const s = freshState();
+    const slug = data('kept', {}, s)[0].slug;
+    const r = { id: '2026-11-05', slug, device_id: 'dev-1', units: 12, checked: 4, wrong: 1, tokens: 300, seconds: 600, wh: 0.5 };
+    const id = data('night_report', { p_report: r, p_client_id: 'd1' }, s);
+    expect(data('night_report', { p_report: { ...r, units: 99 }, p_client_id: 'd2' }, s)).toBe(id);
+    expect(data('night_reports', {}, s)).toHaveLength(1);
+    expect(demoRpc(s, 'night_report', { p_report: { ...r, slug: 'nope' }, p_client_id: 'd3' }).error?.message).toBe('noproject');
+    expect(demoRpc(s, 'night_report', { p_report: { ...r, id: '2026-11-06', checked: 50 }, p_client_id: 'd4' }).error?.message).toMatch(/add up/);
+  });
+  it('the summary on the cards: nights this month per project, the streak of this device, the board', () => {
+    const s = freshState();
+    const slug = data('kept', {}, s)[0].slug;
+    const day = (back: number) => new Date(Date.now() - back * 86400000).toISOString().slice(0, 10);
+    for (const [i, back] of [0, 1, 2].entries()) data('night_report', { p_report: { id: day(back), slug, device_id: 'dev-1', units: 10, tokens: 100, seconds: 60 }, p_client_id: `s${i}` }, s);
+    data('night_report', { p_report: { id: day(1), slug, device_id: 'dev-2', units: 5, tokens: 50, seconds: 60 }, p_client_id: 's9' }, s);
+    const sum = data('night_mine_summary', { p_device_id: 'dev-1' }, s);
+    expect(sum).toHaveLength(1);
+    expect(sum[0]).toMatchObject({ slug, nights_total: 3, streak: 3, last_night: day(0) });
+    expect(sum[0].nights_month).toBeGreaterThanOrEqual(1);
+    expect(data('night_mine_summary', { p_device_id: 'dev-2' }, s)[0].streak).toBe(1);
+    expect(demoRpc(s, 'project_summary', { p_slug: slug }).error?.message).toMatch(/owner/);
+    const board = data('night_leaderboard', {}, s);
+    expect(board.find((b: { me: boolean }) => b.me)).toMatchObject({ handle: 'deniz', nights: 3 });
+    expect(board[0].nights).toBeGreaterThanOrEqual(board[board.length - 1].nights);
   });
   it('a night on a project not kept is refused, as the server does', () => {
     const s = freshState();

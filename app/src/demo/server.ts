@@ -114,18 +114,56 @@ export function demoRpc(s: DemoState, name: string, a: Row = {}): Answer {
       s.open = null;
       return ok(cardNo);
     }
-    // the morning report (night-2): one json per night, kept under night_reports; a
-    // retry with the same client id does not make a second row
+    // the morning report (night-2, backend-night): numbers only, kept under night_reports;
+    // a retry with the same client id, or the same device + project + night, finds the first
     case 'night_report': {
       const list = ((s.night_reports ??= []) as Row[]);
-      const found = list.find((r) => r.client_id === a.p_client_id);
+      const r = a.p_report ?? {};
+      const found = list.find((x) => x.client_id === a.p_client_id) ?? list.find((x) => x.report?.device_id === r.device_id && x.report?.slug === r.slug && x.report?.id === r.id);
       if (found) return ok(found.id);
+      if (!project(s, r.slug)) return no('noproject');
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(String(r.id ?? ''))) return no('night out of range');
+      if ((r.checked ?? 0) > (r.units ?? 0) || (r.wrong ?? 0) > (r.checked ?? 0)) return no('counts do not add up');
       const id = uuid(s);
-      list.unshift({ id, client_id: a.p_client_id ?? null, report: a.p_report, created_at: new Date().toISOString() });
+      list.unshift({ id, client_id: a.p_client_id ?? null, report: r, created_at: new Date().toISOString() });
       return ok(id);
     }
     case 'night_reports':
       return ok(((s.night_reports ?? []) as Row[]).slice(0, a.p_limit ?? 30));
+    // "this project, this month: X nights" and the streak of this device (18_night.sql night_mine_summary)
+    case 'night_mine_summary': {
+      const list = ((s.night_reports ?? []) as Row[]).map((x) => x.report as Row).filter((r) => r && r.slug);
+      const month = new Date().toISOString().slice(0, 7);
+      const bySlug = new Map<string, Row[]>();
+      list.forEach((r) => bySlug.set(r.slug, [...(bySlug.get(r.slug) ?? []), r]));
+      const streakOf = (dev: string | null) => {
+        const nights = [...new Set(list.filter((r) => !dev || r.device_id === dev).map((r) => String(r.id)))].sort().reverse();
+        if (!nights.length) return 0;
+        const day = (d: string) => Math.round(Date.parse(d) / 86400000);
+        const today = day(new Date().toISOString().slice(0, 10));
+        if (today - day(nights[0]) > 1) return 0;
+        let n = 1;
+        while (n < nights.length && day(nights[n - 1]) - day(nights[n]) === 1) n++;
+        return n;
+      };
+      return ok([...bySlug.entries()].map(([slug, rs]) => {
+        const nights = [...new Set(rs.map((r) => String(r.id)))];
+        const inMonth = rs.filter((r) => String(r.id).startsWith(month));
+        return { slug, title: project(s, slug)?.title ?? slug, nights_month: new Set(inMonth.map((r) => r.id)).size, nights_total: nights.length,
+          units_month: inMonth.reduce((x, r) => x + (r.units ?? 0), 0), wh_month: Math.round(inMonth.reduce((x, r) => x + (r.wh ?? 0), 0) * 100) / 100,
+          last_night: nights.sort().at(-1) ?? null, streak: streakOf(a.p_device_id ?? null) };
+      }).sort((x, y) => String(y.last_night).localeCompare(String(x.last_night))));
+    }
+    case 'project_summary': {
+      // in the example world you own nothing: the server's answer for everyone but the owner
+      return no('not the owner');
+    }
+    case 'night_leaderboard': {
+      const mine = ((s.night_reports ?? []) as Row[]).map((x) => x.report as Row);
+      const me = { handle: s.profile_me[0]?.handle ?? 'you', nights: new Set(mine.map((r) => r.id)).size, units: mine.reduce((x, r) => x + (r.units ?? 0), 0), tokens: mine.reduce((x, r) => x + (r.tokens ?? 0), 0), me: true };
+      const others = [{ handle: 'ayse', nights: 9, units: 2410, tokens: 310000, me: false }, { handle: 'mert', nights: 6, units: 1200, tokens: 150000, me: false }];
+      return ok([...others, me].filter((r) => r.nights > 0).sort((x, y) => y.nights - x.nights || y.units - x.units).slice(0, a.p_limit ?? 20));
+    }
     case 'my_cards':
     case 'credits_mine':
       return ok(s[name]);

@@ -4,5 +4,6 @@ import '@/data/contribution';
 import '@/data/calls';
 import '@/data/dms';
 import '@/data/friends';
+import '@/data/night';
 import '@/data/passport';
 import '@/data/settings';

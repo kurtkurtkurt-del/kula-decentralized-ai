@@ -214,6 +214,8 @@ export const tabs = {
   'night.report.sent': { en: 'sent to the server', de: 'an den server geschickt', tr: 'sunucuya gönderildi' },
   'night.report.unsent': { en: 'kept on the phone only', de: 'nur auf dem handy', tr: 'yalnız telefonda' },
   'night.report.past': { en: 'earlier nights', de: 'frühere nächte', tr: 'önceki geceler' },
+  'night.month': { en: 'this month: {n} nights · streak {s}', de: 'diesen monat: {n} nächte · serie {s}', tr: 'bu ay: {n} gece · seri {s}' },
+  'night.month.none': { en: 'this month: no night on the server yet', de: 'diesen monat: noch keine nacht auf dem server', tr: 'bu ay: sunucuda henüz gece yok' },
   'night.report.last': { en: 'last night: {units} units · {tps} tok/s · {wh} wh', de: 'letzte nacht: {units} einheiten · {tps} tok/s · {wh} wh', tr: 'dün gece: {units} birim · {tps} tok/s · {wh} wh' },
   'night.done': { en: 'the night is over · the card is on its way', de: 'die nacht ist vorbei · die karte ist unterwegs', tr: 'gece bitti · kart yolda' },
   'night.tokens': { en: 'tokens', de: 'tokens', tr: 'token' },

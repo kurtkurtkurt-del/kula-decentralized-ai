@@ -341,6 +341,25 @@ beyin'in aktarma hizmetinin ilk hâli; tam anlatım `docs/RELAY.md`.
 - Sabah için: Mac'te `cd node && npm test`; `cd node/relay && npm run dev` (8787) → bir uçbirimde
   `kula-node share --relay ws://127.0.0.1:8787`, öbüründe `peers add "<kod> <pin>" --relay ws://127.0.0.1:8787`
   → `peers probe` → `chat --mode apart --model-url …`. Sonra Fly'a `fly deploy`, telefonda apk.
+## 5.11 cloud: `claude/backend-night` (gece raporu sunucuda, yalnız sayılar)
+
+`origin/claude/night-2` + `origin/claude/integrate-night` birleştirildi (çakışma yok), üstüne:
+
+- `backend/sql/18_night.sql`: `night_reports` (cihaz = passport id, proje, gece, birim/kontrol/yanlış, token, saniye,
+  tok/s, wh, sürüm, model, mod), `night_units` (isteğe bağlı ayrıntı, metin yok), `device_ledger_heads` (defterin son
+  hash'i + imza, içerik değil), `projects.owner_id`. RLS: kullanıcı yalnız kendi satırını okur/yazar; sahip ya da admin
+  yalnız toplamları (`project_summary`). Görünümler: proje×ay, cihaz başına seri, 30 günlük liderlik (takma adla, private
+  görünmez). `night_report` aynı client id'de ve aynı cihaz+proje+gece'de idempotent; şema + makul sınırlar (7 gün geri,
+  bir gün ileri, checked ≤ units, tok/s tokens/saniye ile tutarlı, 16 KB). `ledger_head_set`: seq geri gidemez.
+- Kenar fonksiyonları `night-report`, `project-summary`; ortak denetleyici `functions/_shared/night.ts` node'da test edilir.
+- `tools/supabase-reset.sh` (`npm run reset:check`): CLI+Docker varsa `supabase db reset`, yoksa PGlite'ta 19 dosya
+  sıfırdan iki kez. Bu konteynerde CLI yok; PGlite yolu geçti.
+- Uygulama: `data/night.ts` — `toPayload` yalnız sayılar (cihaz adları bile gitmez), outbox işi `nightReport` demo ve
+  canlıda; `night_mine_summary` passport kartında ("bu ay: n gece · seri s") ve proje sayfasında ("sen: bu projeye bu ay
+  n gece"); en/de/tr. Demo sunucu aynı uçlar. `sendLedgerHead` hazır, henüz çağıran yok (beyin v1).
+- Testler: backend 61 + 28 yeni kontrol, hepsi yeşil; jest 109 (night-data, demo); tsc ve lint 0 hata; gate aşağıda.
+- `docs/BACKEND.md`: şema, RLS kararları, gizlilik, kenar fonksiyonları, beyin v1 defter toplama planı.
+- Canlıya: `node tools/migrate.mjs --write` ile 18 girer; kenar fonksiyonları isteğe bağlı. Eski sunucuda rapor telefonda kalır.
 
 ## bütünleştirme (5.11 sabaha karşı, cloud oturumu, dal `claude/integrate-night`)
 
