@@ -29,7 +29,7 @@ export function versionBelow(a: string, b: string): boolean {
 }
 
 // A guest who met an existing email is sent to sign in; nothing is merged here (a guest
-// keeps nothing worth carrying: the passport is measured again, keeps are a swipe away).
+// keeps nothing worth carrying: the passport is measured again, keeps are a tap away).
 export function rememberGuest(_uid: string) {}
 export async function mergeGuest(_uid: string): Promise<number> {
   return 0;

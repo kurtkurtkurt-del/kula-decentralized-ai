@@ -1,13 +1,13 @@
 {
-  "name": "afterhours",
-  "short_name": "afterhours",
-  "description": "find your night. one card at a time.",
+  "name": "kula decentralized ai",
+  "short_name": "kula",
+  "description": "your phone's idle hours, lent to a project you choose.",
   "start_url": ".",
   "scope": ".",
   "display": "standalone",
   "orientation": "portrait",
-  "background_color": "#0E0D0C",
-  "theme_color": "#0E0D0C",
+  "background_color": "#FFFFFF",
+  "theme_color": "#FFFFFF",
   "icons": [
     { "src": "icon-192.png", "sizes": "192x192", "type": "image/png" },
     { "src": "icon-512.png", "sizes": "512x512", "type": "image/png" }

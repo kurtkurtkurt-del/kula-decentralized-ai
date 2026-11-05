@@ -1,12 +1,13 @@
-// Incoming links. afterhours://night/<slug> already maps to night/[slug], afterhours://groups/join?code=… to groups/join.
-// Web addresses (…/afterhours/explore/event/index.html?slug=…) are rewritten to routes; anything else passes through.
+// Incoming links. pasaport://project/<slug> and pasaport://coops/join?c=… already are routes.
+// The web addresses kula shares are rewritten to them: a project's page
+// (…/explore/project/index.html?slug=…, lib/share.ts) and a coop invitation (…/g/?c=CODE,
+// data/coops.ts inviteUrl). Anything else passes through.
 export function redirectSystemPath({ path }: { path: string; initial: boolean }): string {
   try {
-    const m = /explore\/event\/(?:index\.html)?\?(?:.*&)?slug=([^&#]+)/.exec(path);
-    if (m) return `/night/${decodeURIComponent(m[1])}`;
-    // A group invitation (…/afterhours/g/?c=CODE, the link groups/invite.tsx shares)
+    const m = /explore\/project\/(?:index\.html)?\?(?:.*&)?slug=([^&#]+)/.exec(path);
+    if (m) return `/project/${decodeURIComponent(m[1])}`;
     const g = /(?:^|\/)g\/(?:index\.html)?\?(?:.*&)?c=([A-Za-z0-9]+)/.exec(path);
-    if (g) return `/groups/join?code=${g[1].toUpperCase()}`;
+    if (g) return `/coops/join?c=${g[1].toUpperCase()}`;
   } catch {}
   return path;
 }

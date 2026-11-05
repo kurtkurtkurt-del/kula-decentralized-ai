@@ -35,7 +35,7 @@ export default function CallScreen() {
   const off = () =>
     Alert.alert(t('call.callOff'), t('call.callOff.sure'), [{ text: t('word.cancel'), style: 'cancel' }, { text: t('call.callOff'), style: 'destructive', onPress: () => callCancel(id).then(() => { invalidate('calls'); router.back(); }, (e) => setSaid(serverText(e))) }]);
   const c = invite ?? mine;
-  if (!loaded) return <StaffPage title={t('call.kicker')}><Said text={t('flow.loading')} /></StaffPage>;
+  if (!loaded) return <StaffPage title={t('call.kicker')}><Said text={t('word.loading')} /></StaffPage>;
   if (!c) return <StaffPage title={t('call.kicker')}><Said text={said ?? t('call.gone')} bad /></StaffPage>;
   const host = invite ? (invite.host_name ?? invite.host_handle ?? '?').toLowerCase() : t('word.you');
   return (

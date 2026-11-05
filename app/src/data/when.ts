@@ -7,9 +7,9 @@ const two = (n: number) => String(n).padStart(2, '0');
 const DAYS = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
 export const dayName = (d: Date) => tx('day.' + DAYS[d.getDay()], DAYS[d.getDay()]);
 export function dayLabel(iso: string | null): string {
-  if (!iso) return t('deck.tba');
+  if (!iso) return t('when.tba');
   const d = new Date(iso);
-  if (isNaN(d.getTime())) return t('deck.tba');
+  if (isNaN(d.getTime())) return t('when.tba');
   return `${dayName(d)} ${two(d.getDate())}.${two(d.getMonth() + 1)}`;
 }
 // "tonight", "tomorrow" or "fri 24.10" for a night (a date, yyyy-mm-dd).

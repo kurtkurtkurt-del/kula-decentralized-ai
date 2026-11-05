@@ -15,7 +15,7 @@ export const staff = {
   'staff.watch': { en: 'look after', de: 'pflegen', tr: 'bak' },
   'staff.admin': { en: 'admin', de: 'admin', tr: 'admin' },
   'staff.project.new': { en: 'new project', de: 'neues projekt', tr: 'yeni proje' },
-  'staff.project.new.hint': { en: 'shows in the flow and on the site', de: 'erscheint im flow und auf der seite', tr: 'akışta ve sitede görünür' },
+  'staff.project.new.hint': { en: 'shows in the app and on the site', de: 'erscheint in der app und auf der seite', tr: 'uygulamada ve sitede görünür' },
   'staff.project.edit': { en: 'edit project', de: 'projekt bearbeiten', tr: 'projeyi düzenle' },
   'staff.projects': { en: 'projects', de: 'projekte', tr: 'projeler' },
   'staff.projects.hint': { en: 'edit, close, delete', de: 'bearbeiten, schließen, löschen', tr: 'düzenle, kapat, sil' },

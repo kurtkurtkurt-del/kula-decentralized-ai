@@ -1,5 +1,5 @@
 import { serverText } from '@/lib/serverText';
-import { DEMO, supabase } from '@/lib/supabase';
+import { supabase } from '@/lib/supabase';
 import { OfflineError, invalidate, must, newId, outbox, peek, pendingJobs, remember, send, type Job } from '@/lib/offline';
 import type { Project } from '@/data/projects';
 import type { NightCardData } from '@/content/cardsgen';
@@ -119,7 +119,7 @@ export async function friendsLive(): Promise<LiveFriend[]> {
 export const forgetNight = () => invalidate(...NIGHT_SHELVES);
 export const nightJobId = newId;
 
-// For the card generator (content/cardsgen.js, the site's 400×600 drawing): metal and
+// For the card generator (content/cardsgen.js, the 400×600 night card): metal and
 // motif derive from the project, so a card always renders the same.
 const METALS = ['steel', 'gold', 'chrome', 'copper', 'gunmetal', 'brass', 'rose', 'titanium', 'nickel', 'anthracite'];
 const MOTIFS = ['rays', 'oval', 'diagonal', 'orbit', 'grid', 'moon', 'moire', 'bands', 'iso', 'descend'];
@@ -139,6 +139,7 @@ export function toCardData(r: CardRow): NightCardData {
     in: hhmm(r.started_at), out: hhmm(r.ended_at), dur: `${hours}H ${String(mins).padStart(2, '0')}M`,
     crew: r.crew.map((c) => c.toUpperCase()), more: r.crew_more, aud: `${fmtTokens(r.tokens)} TOK`, msg: Math.round(r.credits),
     who: `${Number(r.kwh).toFixed(3)} KWH`, froze: `NIGHT ${r.night_no}`, no: r.waiting ? '····' : String(r.card_no).padStart(4, '0'),
-    at1: '', at2: '', blank: true,
+    // a card whose night is still in the outbox is drawn empty; a counted one with its numbers
+    blank: !!r.waiting,
   };
 }
