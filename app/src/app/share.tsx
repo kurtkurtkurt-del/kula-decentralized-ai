@@ -5,6 +5,8 @@ import { useLocalSearchParams } from 'expo-router';
 import QRCode from 'react-native-qrcode-svg';
 import * as Clipboard from 'expo-clipboard';
 import Button from '@/components/Button';
+import InfoTip from '@/components/InfoTip';
+import { MainMark } from '@/components/models/Tags';
 import StaffPage from '@/components/StaffPage';
 import { useAppSize } from '@/hooks/useAppSize';
 import { useLang } from '@/i18n';
@@ -12,7 +14,7 @@ import { hasNative, llama, type WorkerStatus } from '@/llm/native';
 import { explain } from '@/llm/errors';
 import { myPeerQr, relayUrlOf } from '@/llm/peers';
 import { tapDone, tapSelect } from '@/lib/haptics';
-import { saveSettings, saveShare, settings, share, useShare } from '@/llm/store';
+import { peers, saveSettings, saveShare, settings, share, useShare } from '@/llm/store';
 import { colors, fonts, radius } from '@/theme/tokens';
 
 // "share this phone": starts the worker (its own process; the gate on the network, ggml's
@@ -114,6 +116,9 @@ export default function ShareScreen() {
   };
 
   const state = status?.state ?? 'stopped';
+  // the main device (6.11.2026): the one connected to this worker loads the model and uses
+  // this phone. the gate reports only its address; a device this phone also added is named.
+  const master = state === 'running' && status?.peer ? (peers().find((p) => p.host === status.peer)?.name ?? status.peer).toLowerCase() : null;
   const line = state === 'running' && status?.peer ? t('share.state.working', { peer: status.peer }) : state === 'error' ? t('share.state.error', { err: explain(status?.error, tx) }) : t(`share.state.${state === 'starting' ? 'starting' : state === 'running' ? 'running' : 'stopped'}`);
 
   return (
@@ -128,6 +133,12 @@ export default function ShareScreen() {
             <Text style={styles.meta}>{t('share.ram', { mb: status.ramMb, bw: status.bandwidth.toFixed(1) })}{status.heldMb > 50 ? ` · ${t('share.holding', { gb: (status.heldMb / 1024).toFixed(1) })}` : ''}</Text>
             <Text style={styles.meta}>{t('share.gate', { ok: status.connects, no: status.rejects })}{status.fp ? ` · ${t('share.tls', { n: status.paired ?? 0 })}` : ''}</Text>
           </>
+        ) : null}
+        {state === 'running' ? (
+          <View style={styles.mainRow}>
+            {master ? <MainMark label={t('modelsui.main.is', { name: master })} /> : <Text style={styles.meta}>{t('modelsui.main.waiting')}</Text>}
+            <InfoTip title={master ? t('modelsui.main.is', { name: master }) : t('modelsui.main.helper')} text={t('modelsui.main.why')} size={16} />
+          </View>
         ) : null}
         {status?.throttled ? <Text style={styles.warn}>{t('share.throttled')}</Text> : null}
         {status && !status.batteryUnrestricted && state === 'running' ? (
@@ -186,7 +197,8 @@ const styles = StyleSheet.create({
   card: { marginTop: 16, padding: 14, borderRadius: radius.md, backgroundColor: colors.ink2, gap: 6 },
   state: { fontFamily: fonts.semibold, fontSize: 16, color: colors.paper },
   stateOn: { color: colors.spotText },
-  meta: { fontFamily: fonts.regular, fontSize: 12, color: colors.mute },
+  meta: { fontFamily: fonts.regular, fontSize: 12, color: colors.mute, flexShrink: 1 },
+  mainRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 4 },
   warn: { fontFamily: fonts.medium, fontSize: 12.5, color: colors.violet, marginTop: 4 },
   link: { fontFamily: fonts.medium, fontSize: 13, color: colors.spotText },
   linkHit: { minHeight: 44, justifyContent: 'center' },

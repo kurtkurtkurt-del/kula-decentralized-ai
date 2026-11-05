@@ -10,6 +10,8 @@ import { kept } from '@/data/friends';
 import type { Project } from '@/data/projects';
 import { chooseTonight } from '@/night/useNight';
 import { invalidate } from '@/lib/offline';
+import { isTestHandle } from '@/data/local/testPeople';
+import { TestTag } from '@/components/connect/TestTag';
 import { openPerson } from '@/components/People';
 import { dayLabel } from '@/data/when';
 import { upperData, useLang } from '@/i18n';
@@ -35,7 +37,9 @@ export default function CoopScreen() {
   const owner = coop?.me === 'owner';
   const setNight = (slug: string) => {
     setPicking(false);
-    coopNightSet(id, tonight(), slug).then(() => { chooseTonight(slug); invalidate('coops'); load(); }, (e) => setSaid(why(e)));
+    const project = mine.find((p) => p.slug === slug);
+    if (!project) return;
+    coopNightSet(id, tonight(), project).then(() => { chooseTonight(slug); invalidate('coops'); load(); }, (e) => setSaid(why(e)));
   };
   const invite = () =>
     coopInvite(id).then((code) => Share.share({ message: `${t('coops.invite.message', { name: coop?.name ?? '', code })}\n${inviteUrl(code)}` }), (e) => setSaid(why(e)));
@@ -70,13 +74,16 @@ export default function CoopScreen() {
         <Pressable key={m.id} onPress={() => m.handle && openPerson(m.handle)} onLongPress={() => owner && m.role !== 'owner' && remove(m.id, (m.name ?? m.handle ?? '').toLowerCase())} style={styles.row}>
           <View style={[styles.face, m.live && styles.faceLive]}><Avatar name={m.handle ?? '?'} size={34} /></View>
           <View style={styles.rowText}>
-            <Text style={styles.name}>{(m.name ?? m.handle ?? '').toLowerCase()}{m.id === session?.user.id ? ` · ${t('word.you')}` : ''}</Text>
+            <View style={styles.nameRow}>
+              <Text style={[styles.name, styles.shrink]} numberOfLines={1}>{(m.name ?? m.handle ?? '').toLowerCase()}{m.id === (session?.user.id ?? 'guest') ? ` · ${t('word.you')}` : ''}</Text>
+              {isTestHandle(m.handle) ? <TestTag plain /> : null}
+            </View>
             <Text style={[styles.meta, m.live && styles.live]}>{m.live ? t('coops.live') : m.role === 'owner' ? t('coops.owner') : `@${m.handle}`}</Text>
           </View>
         </Pressable>
       ))}
       <Pressable onPress={invite} style={({ pressed }) => [styles.line, pressed && styles.pressed]}><Text style={styles.lineText}>{t('coops.invite')} · {t('coops.invite.share')}</Text></Pressable>
-      <Text style={styles.hint}>{t('coops.invite.hint')}</Text>
+      <Text style={styles.hint}>{t('social.coop.hint')}</Text>
 
       <Text style={styles.section}>{up(t('coops.nights'))}</Text>
       {!nights.length ? <Text style={styles.note}>{t('coops.nights.none')}</Text> : null}
@@ -104,6 +111,8 @@ const styles = StyleSheet.create({
   section: { fontFamily: fonts.regular, fontSize: 11, letterSpacing: 1.4, color: colors.mute, marginTop: 28, marginBottom: 6 },
   row: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: colors.ink3 },
   rowText: { flex: 1, gap: 2 },
+  nameRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  shrink: { flexShrink: 1 },
   face: { width: 34, height: 34, borderRadius: 17, overflow: 'hidden' },
   faceLive: { borderWidth: 2, borderColor: colors.spot },
   name: { fontFamily: fonts.medium, fontSize: 15, color: colors.paper },

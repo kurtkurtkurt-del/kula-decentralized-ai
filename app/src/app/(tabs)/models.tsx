@@ -5,6 +5,7 @@ import { router } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import DownloadCard from '@/components/DownloadCard';
 import EmptyState from '@/components/EmptyState';
+import { FitBadge, TagIcons, tagsOf } from '@/components/models/Tags';
 import PickerSheet from '@/components/PickerSheet';
 import PullDownScroll from '@/components/PullDownScroll';
 import StepBar from '@/components/StepBar';
@@ -15,7 +16,7 @@ import { useLang } from '@/i18n';
 import { CATALOG, type CatalogModel } from '@/llm/catalog';
 import { useEngine } from '@/llm/engine';
 import { explain } from '@/llm/errors';
-import { fitOn, fitTogether, type Fit } from '@/llm/fit';
+import { fitOn, fitTogether } from '@/llm/fit';
 import { FILE_FILTERS, HfError, SUGGESTED_QUERIES, ggufFiles, hfUrl, isSplit, kvGuess, licenseUrl, paramsOf, quantOf, repoUrl, searchGguf, type HfFile, type HfRepo } from '@/llm/hf';
 import { KEEP_FREE, freeDiskBytes } from '@/llm/disk';
 import { measuredFor } from '@/bench/store';
@@ -192,6 +193,7 @@ export default function ModelsScreen() {
               <View style={styles.rowText}>
                 <Text style={styles.name} numberOfLines={1}>{m.name.toLowerCase()}{running ? <Text style={styles.live}>  ● {t('models.running')}</Text> : chosen ? <Text style={styles.chosen}>  · {t('models.chosen')}</Text> : null}</Text>
                 <Text style={styles.meta}>{[`${m.params_b}B`, m.quant, gb(m.size), m.parts && m.parts.length > 1 ? t('models.parts', { n: m.parts.length }) : '', m.license].filter(Boolean).join(' · ').toLowerCase()}</Text>
+                <View style={styles.badges}><TagIcons tags={tagsOf(m)} size={13} /></View>
               </View>
               <Text style={styles.action}>{running ? t('model.openChat') : t('models.run')} ›</Text>
             </Pressable>
@@ -210,8 +212,12 @@ export default function ModelsScreen() {
                 <Text style={styles.name} numberOfLines={1}>{m.name.toLowerCase()} <Text style={styles.chosen}>›</Text></Text>
                 <Text style={styles.meta}>{[`${m.params_b}B`, m.quant, gb(m.size), m.license].join(' · ').toLowerCase()}</Text>
                 <Text style={styles.blurb}>{m.blurb[lang as 'en' | 'de' | 'tr'] ?? m.blurb.en}</Text>
+                {/* 6.11.2026: what it is good at as icons (a tap says the word), then the fit with its mark */}
                 <View style={styles.badges}>
-                  <Badge fit={f} together={tog} />
+                  <TagIcons tags={tagsOf(m)} size={13} />
+                </View>
+                <View style={styles.badges}>
+                  <FitBadge fit={f} together={tog} />
                   {f.tps ? <Text style={styles.tps}>{f.tps.low}–{f.tps.high} tok/s</Text> : null}
                   <Pressable onPress={() => Linking.openURL(m.license_url)} hitSlop={12} accessibilityRole="link" accessibilityLabel={t('a11y.license')} style={styles.linkHit}><Text style={styles.link}>{t('models.license')} ↗</Text></Pressable>
                 </View>
@@ -279,17 +285,6 @@ function Chip({ label, on, dim, onPress }: { label: string; on?: boolean; dim?: 
   );
 }
 
-function Badge({ fit, together }: { fit: Fit; together: (Fit & { shares: unknown[] }) | null }) {
-  const { t } = useLang();
-  const text = fit.verdict === 'fits' ? t('models.fits') : fit.verdict === 'tight' ? t('models.tight') : together && together.verdict !== 'no' ? t('models.together') : t('models.no');
-  const tone = fit.verdict === 'fits' ? styles.badgeOk : fit.verdict === 'tight' || (together && together.verdict !== 'no') ? styles.badgeMid : styles.badgeNo;
-  return (
-    <View style={[styles.badge, tone]}>
-      <Text style={styles.badgeText}>{text}</Text>
-    </View>
-  );
-}
-
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: colors.ink },
   band: { position: 'absolute', top: 0, left: 0, right: 0, height: brand.top + 44, backgroundColor: colors.ink, zIndex: 2 },
@@ -317,12 +312,7 @@ const styles = StyleSheet.create({
   chosen: { fontFamily: fonts.regular, fontSize: 12, color: colors.meta },
   meta: { fontFamily: fonts.regular, fontSize: 12, lineHeight: 16, color: colors.mute },
   blurb: { fontFamily: fonts.regular, fontSize: 12.5, color: colors.paper2, marginTop: 2 },
-  badges: { flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: 6, flexWrap: 'wrap' },
-  badge: { paddingHorizontal: 8, height: 20, borderRadius: radius.pill, justifyContent: 'center' },
-  badgeOk: { backgroundColor: colors.green },
-  badgeMid: { backgroundColor: colors.gold },
-  badgeNo: { backgroundColor: colors.ink3 },
-  badgeText: { fontFamily: fonts.medium, fontSize: 10.5, color: colors.ink, letterSpacing: 0.4 },
+  badges: { flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: 8, flexWrap: 'wrap' },
   tps: { fontFamily: fonts.jet, fontSize: 11, color: colors.spotText },
   link: { fontFamily: fonts.regular, fontSize: 11, color: colors.mute },
   action: { fontFamily: fonts.medium, fontSize: 13, color: colors.spotText },

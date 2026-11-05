@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Linking, Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { router, useLocalSearchParams } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -6,8 +6,9 @@ import Button from '@/components/Button';
 import DownloadCard from '@/components/DownloadCard';
 import PickerSheet from '@/components/PickerSheet';
 import StaffPage from '@/components/StaffPage';
-import { usePassport, useLinked } from '@/data/passport';
-import type { Passport } from '@/passport/contract';
+import InfoTip from '@/components/InfoTip';
+import { FitBadge, MainMark, TagIcons, tagsOf } from '@/components/models/Tags';
+import { ModeCard, useModes } from '@/components/models/modes';
 import { useLang } from '@/i18n';
 import { catalogById } from '@/llm/catalog';
 import { explain } from '@/llm/errors';
@@ -15,10 +16,7 @@ import { tapSelect } from '@/lib/haptics';
 import { describe, downloadOf, readMeta, startDownload, useDownloads } from '@/llm/store';
 import { licenseUrl, repoOfId, repoUrl } from '@/llm/hf';
 import { load, unload, useEngine } from '@/llm/engine';
-import { defaultCtx, fitOn, fitTogether, haveMb, suggestCtx } from '@/llm/fit';
-import { estimateAlone, modelProfile, NETWORKS, planShares, withMeasured, workerFromPeer, type Estimate, type SimDevice, type SplitPlan } from '@/llm/sim';
-import { modelKey } from '@/llm/cluster';
-import { measuredFor } from '@/bench/store';
+import { defaultCtx, suggestCtx } from '@/llm/fit';
 import { localById, saveSettings, useLocalModels, usePeers, useSettings, type LocalModel, type Mode } from '@/llm/store';
 import { colors, fonts, radius } from '@/theme/tokens';
 import { brand } from '@/theme/layout';
@@ -35,12 +33,7 @@ export default function ModelScreen() {
   const insets = useSafeAreaInsets();
   useLocalModels();
   const settings = useSettings();
-  const passport = usePassport();
-  const linked = useLinked();
   const peers = usePeers();
-  // peers far away (relay) take part in apart mode only
-  const nearPeers = peers.filter((p) => !p.relay);
-  const farPeers = peers.length - nearPeers.length;
   const engine = useEngine();
   useDownloads();
   const wanted = decodeURIComponent(id ?? '');
@@ -62,44 +55,12 @@ export default function ModelScreen() {
     if (local && !local.meta_read) readMeta(local.id).catch(() => {});
   }, [local?.id, local?.meta_read]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const pool: Passport[] = useMemo(() => [...(passport ? [passport] : []), ...linked.map((l) => l.data)], [passport, linked]);
-  const measuredHere = model ? measuredFor('self', modelKey(model)) : null;
-  const fit = model ? fitOn(passport, { size: model.size, kv_mb_per_1k: model.kv_mb_per_1k, ctx }, measuredHere) : null;
-  const together = model && pool.length > 1 ? fitTogether(pool, { size: model.size, kv_mb_per_1k: model.kv_mb_per_1k, ctx }) : null;
+  const { fit, together, est, cards, splitEst, estWord, fitWord } = useModes(model, peers, ctx);
   const running = !!model && engine.model?.id === model.id && !!engine.load;
   const suggested = fit && model ? suggestCtx(fit, model.ctx_max) : null;
   const isHf = !!model && model.source === 'hf';
   const repo = isHf && model ? repoOfId(model.id) : null;
   const licenseLink = cat ? cat.license_url : repo ? licenseUrl(repo, model?.license ?? null) : null;
-  // the same model the planner runs at load time (sim/model.ts), fed from the passport
-  // (this phone) and the peers' qr numbers, on 5 ghz wi-fi: what each option would do
-  const est = useMemo(() => {
-    if (!model) return null;
-    const sim = modelProfile(model);
-    const bw = passport ? Number(passport.mem_bw_read_gbs) || Number(passport.mem_bw_gbs) || 4 : 4;
-    const key = modelKey(model);
-    const local: SimDevice = withMeasured({ id: 'me', capMb: Math.max(haveMb(passport), 1), bw, eff: 0.6 }, sim, measuredFor('self', key));
-    const workers = peers.map((p) => withMeasured(workerFromPeer(p), sim, measuredFor(p.id, key)));
-    const alone: Estimate = estimateAlone(sim, local);
-    const apartTps = [local, ...workers].reduce((a, d) => a + estimateAlone(sim, d).tps, 0);
-    let split: SplitPlan | null = null;
-    let splitErr: string | null = null;
-    if (workers.length) {
-      try {
-        split = planShares({ model: sim, ctx, local, workers, net: NETWORKS.wifi5, share: true });
-      } catch (e) {
-        splitErr = (e as Error).message;
-      }
-    }
-    return { alone, apartTps: Math.round(apartTps * 10) / 10, split, splitErr };
-  }, [model, passport, peers, ctx]);
-  const nameOf = (id: string) => (id === 'me' ? (passport?.device ?? t('mode.alone')) : peers.find((p) => p.id === id)?.name ?? id).toLowerCase();
-  const splitMeta = est?.split
-    ? [t('mode.est.load', { s: Math.round(est.split.est.loadS) }), t('mode.est.tps', { tps: est.split.est.tps }), t('mode.est.token', { ms: Math.round(est.split.est.netMsPerToken) }),
-      [{ id: 'me', assignedMb: est.split.localMb }, ...est.split.used].map((u) => `${nameOf(u.id)} ${(u.assignedMb / 1024).toFixed(1)} gb`).join(' · '),
-      ...(est.split.aloneFaster && est.split.estAlone ? [t('mode.est.aloneFaster', { tps: est.split.estAlone.tps })] : [])].join('\n')
-    : est?.splitErr ? tx(`model.err.${est.splitErr}`, est.splitErr) : '';
-
   if (!model) {
     return (
       <StaffPage title={t('models.title')}>
@@ -133,21 +94,6 @@ export default function ModelScreen() {
     // alone" where the passport said no, and must not quietly keep every layer here
     start(mode, mode === 'split');
   };
-  // what each card says (5.11.2026): an estimate, a fit, one line of why, and, when it is
-  // off, the reason
-  const estWord = (f: { tps?: { low: number; high: number } | null } | null) => (f?.tps ? t('mode.est', { low: f.tps.low, high: f.tps.high }) : t('mode.estUnknown'));
-  const fitWord = (v: 'fits' | 'tight' | 'no' | undefined) => (v === 'fits' ? t('mode.fit.fits') : v === 'tight' ? t('mode.fit.tight') : v === 'no' ? t('mode.fit.no') : '');
-  const splitOff = !peers.length ? t('mode.off.noPeers') : together && together.verdict === 'no' ? t('mode.off.toobig') : null;
-  const apartOff = !peers.length ? t('mode.off.noPeers') : null;
-  // the numbers come from the planner's own model (sim/), the words from the passport's fit
-  const aloneEst = est ? `${t('mode.est.tps', { tps: est.alone.tps })} · ${t('mode.est.load', { s: Math.round(est.alone.loadS) })}` : estWord(fit);
-  const apartEst = peers.length && est ? t('mode.est.together', { n: peers.length + 1, tps: est.apartTps }) : estWord(fit);
-  const splitEst = splitMeta || estWord(together);
-  const cards: { mode: Mode; title: string; why: string; est: string; fit: string; off: string | null }[] = [
-    { mode: 'alone', title: t('mode.alone'), why: fit?.verdict === 'no' ? t('mode.tryAnyway') : t('mode.alone.why'), est: aloneEst, fit: fitWord(fit?.verdict), off: null },
-    { mode: 'apart', title: t('mode.apart'), why: `${t('mode.apart.why')} ${t('mode.beyin')}`, est: `${apartEst}${farPeers ? ` · ${t('mode.apart.remote', { n: farPeers })}` : ''}`, fit: fitWord(fit?.verdict), off: apartOff },
-    { mode: 'split', title: t('mode.split'), why: `${t('mode.split.why')}${farPeers ? ` ${t('mode.split.remote', { n: farPeers })}.` : ''}`, est: splitEst, fit: together ? (together.verdict === 'no' ? t('mode.fit.no') : t('mode.fit.together')) : '', off: splitOff ?? (peers.length && est && !est.split ? (est.splitErr ? tx(`model.err.${est.splitErr}`, est.splitErr) : t('mode.off.toobig')) : null) },
-  ];
   const pickedOff = cards.find((c) => c.mode === picked)?.off ?? null;
 
   const header = model.meta_read && model.layers ? ` · ${t('model.fromHeader')}` : '';
@@ -166,6 +112,13 @@ export default function ModelScreen() {
   return (
     <StaffPage title={model.name.toLowerCase()}>
       {cat ? <Text style={styles.lede}>{cat.blurb[L]}</Text> : null}
+      {/* what it is good at, as icons; a tap says the word (6.11.2026) */}
+      {tagsOf(model).length ? (
+        <View style={styles.tags}>
+          <Text style={styles.aboutK}>{up(t('modelsui.tags'))}</Text>
+          <TagIcons tags={tagsOf(model)} size={17} />
+        </View>
+      ) : null}
       {cat ? (
         <View style={styles.about}>
           <Text style={styles.aboutK}>{up(t('model.good'))}</Text>
@@ -178,7 +131,12 @@ export default function ModelScreen() {
         {rows.map(([k, v]) => (
           <View key={k} style={styles.row}><Text style={styles.k}>{k}</Text><Text style={styles.v}>{v}</Text></View>
         ))}
-        {fit ? <Text style={[styles.fit, fit.verdict === 'no' && styles.fitNo]}>{fit.verdict === 'fits' ? t('models.fits') : fit.verdict === 'tight' ? t('models.tight') : together && together.verdict !== 'no' ? t('models.together') : t('models.no')} · {t('models.needs', { need: fit.needMb, have: fit.haveMb })}</Text> : null}
+        {fit ? (
+          <View style={styles.fitRow}>
+            <FitBadge fit={fit} together={together} />
+            <Text style={[styles.fit, fit.verdict === 'no' && styles.fitNo]}>{t('models.needs', { need: fit.needMb, have: fit.haveMb })}</Text>
+          </View>
+        ) : null}
         <View style={styles.links}>
           {licenseLink ? <Pressable onPress={() => Linking.openURL(licenseLink)} hitSlop={12} accessibilityRole="link" accessibilityLabel={t('a11y.license')} style={styles.linkHit}><Text style={styles.link}>{t('models.licenseRead')} ↗</Text></Pressable> : null}
           {repo ? <Pressable onPress={() => Linking.openURL(repoUrl(repo))} hitSlop={12} accessibilityRole="link" accessibilityLabel="hugging face" style={styles.linkHit}><Text style={styles.link}>hugging face ↗</Text></Pressable> : null}
@@ -203,6 +161,13 @@ export default function ModelScreen() {
       {err ? <Text style={styles.err} accessibilityLiveRegion="assertive" accessibilityRole="alert">{err}</Text> : null}
       {running && engine.load ? (
         <View style={styles.card}>
+          {/* a cluster run from here: this phone loaded the model and uses the others */}
+          {engine.mode !== 'alone' ? (
+            <View style={styles.mainRow}>
+              <MainMark label={t('modelsui.main.this')} />
+              <InfoTip title={t('modelsui.main.this')} text={t('modelsui.main.why')} size={16} />
+            </View>
+          ) : null}
           <Text style={styles.k}>{up(t('model.split'))}</Text>
           <Text style={styles.v}>{t('model.loaded', { s: (engine.load.loadMs / 1000).toFixed(1), layers: engine.load.layers, ctx: engine.load.ctx })}</Text>
           {engine.split.map((s) => <Text key={s.name} style={styles.v}>{s.name.toLowerCase()} · {s.gb} gb</Text>)}
@@ -225,6 +190,13 @@ export default function ModelScreen() {
         ) : (
           <Button label={t('model.start')} onPress={() => (fit && ctx > Math.max(fit.maxCtx, 1024) ? saveSettings({ ctx: fit.maxCtx > 0 ? defaultCtx(fit) : 1024 }) : null, setAsk(true))} kind="red" />
         )}
+        {/* 6.11.2026: the guided way to use another phone; this phone stays the main device */}
+        {onPhone && !running ? (
+          <Pressable onPress={() => { tapSelect(); router.push(`/run-together?id=${encodeURIComponent(model.id)}`); }} accessibilityRole="button" accessibilityLabel={t('modelsui.rt.link')} style={({ pressed }) => [styles.together, pressed && styles.pressed]}>
+            <MainMark size={15} />
+            <Text style={styles.togetherText}>{t('modelsui.rt.link')} ›</Text>
+          </Pressable>
+        ) : null}
         {/* the other way round: this phone works for another device (a computer's chat page, a master phone) */}
         <Button label={t('share.title')} onPress={() => router.push('/share')} kind="line" />
       </View>
@@ -260,24 +232,6 @@ export default function ModelScreen() {
   );
 }
 
-function ModeCard({ title, why, est, fit, off, on, onPress }: { mode: Mode; title: string; why: string; est: string; fit: string; off: string | null; on: boolean; onPress: () => void }) {
-  const { t } = useLang();
-  const label = [title, fit, est, off ?? ''].filter(Boolean).join(', ');
-  return (
-    <Pressable onPress={onPress} disabled={!!off} accessibilityRole="radio" accessibilityState={{ selected: on, checked: on, disabled: !!off }} accessibilityLabel={label} style={({ pressed }) => [styles.card2, on && styles.card2On, off && styles.off, pressed && styles.pressed]}>
-      <View style={styles.cardTop}>
-        <View style={[styles.radio, on && styles.radioOn]}>{on ? <View style={styles.radioDot} /> : null}</View>
-        <Text style={[styles.optTitle, on && styles.optTitleOn]} numberOfLines={2}>{title}</Text>
-      </View>
-      <View style={styles.cardMeta}>
-        {fit ? <Text style={[styles.pill, fit === t('mode.fit.no') ? styles.pillNo : styles.pillOk]}>{fit}</Text> : null}
-        <Text style={styles.optMeta} numberOfLines={2}>{est}</Text>
-      </View>
-      <Text style={styles.optWhy}>{off ?? why}</Text>
-    </Pressable>
-  );
-}
-
 const styles = StyleSheet.create({
   lede: { fontFamily: fonts.regular, fontSize: 14, lineHeight: 20, color: colors.mute, marginBottom: 8 },
   about: { gap: 4, marginTop: 4 },
@@ -287,7 +241,12 @@ const styles = StyleSheet.create({
   row: { flexDirection: 'row', justifyContent: 'space-between', gap: 12 },
   k: { fontFamily: fonts.regular, fontSize: 12, color: colors.mute },
   v: { fontFamily: fonts.medium, fontSize: 13, color: colors.paper, flexShrink: 1, textAlign: 'right' },
-  fit: { fontFamily: fonts.medium, fontSize: 12.5, color: colors.spotText, marginTop: 6 },
+  fit: { fontFamily: fonts.medium, fontSize: 12.5, color: colors.spotText, flexShrink: 1 },
+  fitRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 6, flexWrap: 'wrap' },
+  tags: { marginTop: 2, gap: 6 },
+  mainRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 4 },
+  together: { flexDirection: 'row', alignItems: 'center', gap: 8, minHeight: 48, paddingHorizontal: 4 },
+  togetherText: { fontFamily: fonts.medium, fontSize: 14, color: colors.spotText, flexShrink: 1 },
   fitNo: { color: colors.violet },
   link: { fontFamily: fonts.regular, fontSize: 11, color: colors.mute, marginTop: 4 },
   links: { flexDirection: 'row', gap: 14, flexWrap: 'wrap' },
@@ -304,21 +263,6 @@ const styles = StyleSheet.create({
   head: { fontFamily: fonts.regular, fontSize: 11, letterSpacing: 1.4, color: colors.mute, marginBottom: 6 },
   cards: { maxHeight: 420 },
   cardsIn: { gap: 8, paddingTop: 4 },
-  card2: { padding: 14, borderRadius: radius.md, borderWidth: 1.5, borderColor: colors.ink3, backgroundColor: colors.ink2, gap: 8, minHeight: 44 },
-  card2On: { borderColor: colors.spot, backgroundColor: colors.ink },
-  cardTop: { flexDirection: 'row', alignItems: 'center', gap: 10 },
-  radio: { width: 20, height: 20, borderRadius: 10, borderWidth: 1.5, borderColor: colors.mute, alignItems: 'center', justifyContent: 'center' },
-  radioOn: { borderColor: colors.spot },
-  radioDot: { width: 10, height: 10, borderRadius: 5, backgroundColor: colors.spot },
-  cardMeta: { flexDirection: 'row', alignItems: 'center', gap: 8, flexWrap: 'wrap' },
-  pill: { fontFamily: fonts.medium, fontSize: 10.5, letterSpacing: 0.4, color: colors.ink, paddingHorizontal: 8, paddingVertical: 3, borderRadius: radius.pill, overflow: 'hidden' },
-  pillOk: { backgroundColor: colors.green },
-  pillNo: { backgroundColor: colors.mute },
-  off: { opacity: 0.45 },
-  optTitle: { fontFamily: fonts.semibold, fontSize: 16, color: colors.paper, flexShrink: 1 },
-  optTitleOn: { color: colors.paper },
-  optWhy: { fontFamily: fonts.regular, fontSize: 12.5, color: colors.paper2, lineHeight: 17 },
-  optMeta: { fontFamily: fonts.jet, fontSize: 11, lineHeight: 15, color: colors.spotText, flexShrink: 1 },
   sheetActions: { marginTop: 12 },
   linkHit: { minHeight: 32, justifyContent: 'center' },
   addPeer: { paddingVertical: 14, minHeight: 44, justifyContent: 'center' },

@@ -7,6 +7,8 @@ import Avatar from '@/components/Avatar';
 import { COOP_COLORS, COOP_EMOJI, coopCreate, why, type CoopColor } from '@/data/coops';
 import { friendsList, type FriendRow } from '@/data/friends';
 import { invalidate } from '@/lib/offline';
+import { isTestHandle } from '@/data/local/testPeople';
+import { TestTag } from '@/components/connect/TestTag';
 import { useLang } from '@/i18n';
 import { colors, fonts, radius } from '@/theme/tokens';
 
@@ -21,7 +23,7 @@ export default function NewCoopScreen() {
   const [said, setSaid] = useState<string | null>(null);
   useEffect(() => { friendsList().then((f) => setFriends(f.filter((x) => x.status === 'accepted')), () => {}); }, []);
   const make = () =>
-    coopCreate({ name: name.trim(), emoji, color }, picked).then((id) => { invalidate('coops'); router.replace({ pathname: '/coops/[id]', params: { id } }); }, (e) => setSaid(why(e)));
+    coopCreate({ name: name.trim(), emoji, color }, friends.filter((f) => picked.includes(f.other_id)).map((f) => ({ id: f.other_id, handle: f.handle, name: f.display_name }))).then((id) => { invalidate('coops'); router.replace({ pathname: '/coops/[id]', params: { id } }); }, (e) => setSaid(why(e)));
   return (
     <StaffPage title={t('coops.new')}>
       <Field label={t('coops.f.name')} value={name} onChangeText={setName} placeholder={t('coops.f.name.placeholder')} maxLength={40} />
@@ -46,6 +48,7 @@ export default function NewCoopScreen() {
             <Pressable key={f.other_id} onPress={() => setPicked((p) => (on ? p.filter((x) => x !== f.other_id) : [...p, f.other_id]))} style={[styles.friend, on && styles.friendOn]}>
               <View style={styles.face}><Avatar name={f.handle ?? '?'} size={26} /></View>
               <Text style={[styles.friendText, on && styles.friendTextOn]}>{(f.display_name ?? f.handle ?? '').toLowerCase()}</Text>
+              {isTestHandle(f.handle) ? <TestTag plain /> : null}
             </Pressable>
           );
         })}

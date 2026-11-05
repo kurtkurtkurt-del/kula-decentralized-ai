@@ -10,7 +10,9 @@ import type { FriendRow } from '@/data/friends';
 import { upperData, useLang } from '@/i18n';
 import { colors, fonts, radius } from '@/theme/tokens';
 import { brand } from '@/theme/layout';
+import { isTestHandle } from '@/data/local/testPeople';
 import { connectStyles as s } from './styles';
+import { TestTag } from './TestTag';
 
 // Connect's messages (5.11.2026; it was its own tab): your conversations, the friends
 // working a night right now first with a ring, a new message to one of your people.
@@ -55,7 +57,10 @@ export default function Messages({ dms, live, friends }: { dms: DmThread[] | nul
                 <Pressable key={d.id} onPress={() => router.push({ pathname: '/dm/[id]', params: { id: d.id, name: (d.name ?? d.handle ?? '').toLowerCase() } })} accessibilityRole="button" style={({ pressed }) => [s.row, pressed && s.pressed]}>
                   <View style={[s.face, out && s.faceLive]}><Avatar name={d.handle ?? d.name ?? '?'} size={36} /></View>
                   <View style={s.text}>
-                    <Text style={s.name} numberOfLines={1}>{(d.name ?? d.handle ?? '').toLowerCase()}</Text>
+                    <View style={styles.nameRow}>
+                      <Text style={[s.name, styles.shrink]} numberOfLines={1}>{(d.name ?? d.handle ?? '').toLowerCase()}</Text>
+                      {isTestHandle(d.handle) ? <TestTag plain /> : null}
+                    </View>
                     <Text style={[s.meta, out && s.metaLive]} numberOfLines={1}>
                       {out ? `${up(t('messages.outNow'))} · ${upperData(out.title)}` : d.last_body ? `${d.last_mine ? t('word.you') + ': ' : ''}${d.last_body}` : t('messages.quiet')}
                     </Text>
@@ -78,7 +83,10 @@ export default function Messages({ dms, live, friends }: { dms: DmThread[] | nul
               <Pressable key={f.other_id} onPress={() => pick(f)} accessibilityRole="button" style={({ pressed }) => [s.row, pressed && s.pressed]}>
                 <View style={s.face}><Avatar name={f.handle ?? f.display_name ?? '?'} size={36} /></View>
                 <View style={s.text}>
-                  <Text style={s.name} numberOfLines={1}>{(f.display_name ?? f.handle ?? '').toLowerCase()}</Text>
+                  <View style={styles.nameRow}>
+                    <Text style={[s.name, styles.shrink]} numberOfLines={1}>{(f.display_name ?? f.handle ?? '').toLowerCase()}</Text>
+                    {isTestHandle(f.handle) ? <TestTag plain /> : null}
+                  </View>
                   <Text style={s.meta} numberOfLines={1}>@{f.handle}</Text>
                 </View>
               </Pressable>
@@ -93,6 +101,8 @@ export default function Messages({ dms, live, friends }: { dms: DmThread[] | nul
 }
 
 const styles = StyleSheet.create({
+  nameRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  shrink: { flexShrink: 1 },
   newRow: { flexDirection: 'row', alignItems: 'center', gap: 12, marginTop: 14, paddingVertical: 10 },
   newMark: { width: 34, height: 34, borderRadius: 17, backgroundColor: colors.spot, alignItems: 'center', justifyContent: 'center' },
   newPlus: { fontFamily: fonts.medium, fontSize: 20, lineHeight: 22, color: colors.ink },

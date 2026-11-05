@@ -9,6 +9,9 @@ import { colors, fonts, radius } from '@/theme/tokens';
 // One download (5.11.2026): name, state in words, speed and time left (a smoothed rate over
 // the last few seconds), pause / resume / retry, and the note that it keeps going in the
 // background and survives a kill. Used on the models tab and on the model page.
+// × (or a long press on the card, as on a model row) removes it (6.11.2026): cancelled, the
+// half file deleted, gone from the list at once, also when it is paused or failed
+// (store.ts cancelDownload says why it used to come back).
 const gb = (b: number) => `${(b / 1024 ** 3).toFixed(b < 1024 ** 3 ? 2 : 1)} gb`;
 
 export default function DownloadCard({ d, compact }: { d: Download; compact?: boolean }) {
@@ -20,10 +23,11 @@ export default function DownloadCard({ d, compact }: { d: Download; compact?: bo
   const paused = d.state === 'paused';
   const stateLine = failed ? explain(d.error, tx) : paused ? t('dl.paused') : d.state === 'retrying' ? t('models.state.retrying') : d.state === 'checking' ? t('models.state.checking') : t('models.state.running');
   const tail = [gb(d.got) + ' / ' + gb(d.total), d.state === 'running' && bps ? t('dl.speed', { mbs: (bps / 1048576).toFixed(1) }) : '', d.state === 'running' ? leftText(t, d.total - d.got, bps) : ''].filter(Boolean).join(' · ');
+  const remove = () => { tapSelect(); cancelDownload(d.id).catch(() => {}); };
   const primary = failed || paused ? { label: failed ? t('models.retry') : t('dl.resume'), on: () => retryDownload(d.id) } : { label: t('dl.pause'), on: () => pauseDownload(d.id) };
 
   return (
-    <View style={styles.card} accessible={false} testID={`download-${d.id}`}>
+    <Pressable onLongPress={remove} style={styles.card} accessible={false} testID={`download-${d.id}`}>
       <View style={styles.head}>
         <View style={styles.text}>
           <Text style={styles.name} numberOfLines={1}>{d.model.name.toLowerCase()}</Text>
@@ -34,7 +38,7 @@ export default function DownloadCard({ d, compact }: { d: Download; compact?: bo
           <Pressable onPress={() => { tapSelect(); primary.on(); }} accessibilityRole="button" accessibilityLabel={primary.label} style={({ pressed }) => [styles.btn, pressed && styles.pressed]}>
             <Text style={styles.btnText}>{primary.label}</Text>
           </Pressable>
-          <Pressable onPress={() => cancelDownload(d.id)} accessibilityRole="button" accessibilityLabel={t('a11y.remove', { name: d.model.name })} hitSlop={8} style={({ pressed }) => [styles.x, pressed && styles.pressed]}>
+          <Pressable onPress={remove} accessibilityRole="button" accessibilityLabel={`${t('modelsui.dl.remove')} · ${d.model.name.toLowerCase()}`} hitSlop={8} testID={`download-remove-${d.id}`} style={({ pressed }) => [styles.x, pressed && styles.pressed]}>
             <Text style={styles.xText}>×</Text>
           </Pressable>
         </View>
@@ -43,7 +47,7 @@ export default function DownloadCard({ d, compact }: { d: Download; compact?: bo
         <View style={[styles.barIn, { width: `${pct}%` }, paused && styles.barPaused]} />
       </View>
       {!compact && !failed ? <Text style={styles.note}>{t('dl.background')}</Text> : null}
-    </View>
+    </Pressable>
   );
 }
 

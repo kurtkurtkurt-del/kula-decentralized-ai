@@ -139,10 +139,10 @@ export async function reconcileModels() {
   // "retry" continues it (the native side resumes with a Range request)
   for (const f of files.filter((x) => x.partial)) {
     const file = f.name.replace(/\.part$/, '');
-    if (downloads.has(file)) continue;
+    if (downloads.has(file) || dropping.has(file)) continue;
     const c = CATALOG.find((m) => m.file === file);
     const model = c ? describe(c) : null;
-    if (!model || downloads.has(model.id)) continue;
+    if (!model || downloads.has(model.id) || dropping.has(model.id)) continue;
     downloads.set(model.id, { id: model.id, got: f.size, total: model.size, state: 'error', error: 'interrupted', model, part: 0, parts: 1, bps: null, at: Date.now() });
   }
   listeners.forEach((fn) => fn());
@@ -251,10 +251,35 @@ export async function startDownload(model: ModelDraft, fromPart = 0) {
   listeners.forEach((fn) => fn());
   await startPart(d);
 }
+// Removing a download (6.11.2026, the bug a paused one showed: × did nothing on the phone).
+// The native cancel keeps the .part so a pause can resume, and the models tab re-runs
+// reconcileModels whenever the list of downloads changes; reconcile saw the .part and put the
+// row straight back as "interrupted". And with the row removed only after the native cancel
+// had answered, a rejected cancel (a paused download has no thread left) kept it on screen.
+// Now: the row goes first (the screen updates at once), the id sits in `dropping` so a
+// reconcile in between does not bring it back, then the native side is told, and every
+// part's file and .part is deleted. Nothing here may throw: the user asked for it gone.
+const dropping = new Set<string>();
 export async function cancelDownload(id: string) {
   const d = downloads.get(id);
-  await llama?.cancelDownload(d ? nativeId(id, d.part, d.parts) : id);
-  if (d) { d.state = 'cancelled'; downloads.delete(id); listeners.forEach((fn) => fn()); }
+  const files = d ? partsOf(d.model).map((p) => p.file) : [CATALOG.find((m) => m.id === id)?.file].filter((f): f is string => !!f);
+  dropping.add(id);
+  files.forEach((f) => dropping.add(f));
+  if (d) { d.state = 'cancelled'; d.paused = false; downloads.delete(id); }
+  listeners.forEach((fn) => fn());
+  try {
+    await llama?.cancelDownload(d ? nativeId(id, d.part, d.parts) : id).catch(() => {});
+    if (llama && modelsDir) {
+      // a finished earlier part is the file itself; the part in flight is "<file>.part"
+      for (const f of files) {
+        await llama.deleteFile(partPath(f)).catch(() => {});
+        await llama.deleteFile(`${partPath(f)}.part`).catch(() => {});
+      }
+    }
+  } finally {
+    dropping.delete(id);
+    files.forEach((f) => dropping.delete(f));
+  }
 }
 export async function pauseDownload(id: string) {
   const d = downloads.get(id);

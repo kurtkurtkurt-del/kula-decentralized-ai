@@ -1,19 +1,16 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Modal, Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { router } from 'expo-router';
-import { CameraView, useCameraPermissions } from 'expo-camera';
-import * as Clipboard from 'expo-clipboard';
 import EmptyState from '@/components/EmptyState';
 import StaffPage from '@/components/StaffPage';
-import { linkPassport } from '@/data/passport';
 import { useLang } from '@/i18n';
 import { parseLedger, peerBadge, type AuditEntry } from '@/llm/audit';
 import { probeAll } from '@/llm/cluster';
-import { classify, explain } from '@/llm/errors';
-import { tapDone, tapSelect } from '@/lib/haptics';
+import { tapSelect } from '@/lib/haptics';
 import { hasNative, llama, type PeerFound } from '@/llm/native';
-import { isPeerQr, isRelayCode, isRemote, parseRelayCode, takePeerQr } from '@/llm/peers';
-import { forgetPeer, rememberPeer, usePeers, type Peer } from '@/llm/store';
+import { isRemote } from '@/llm/peers';
+import { forgetPeer, usePeers, type Peer } from '@/llm/store';
+import { ScanModal, usePeerAdd } from '@/components/models/PeerScan';
 import { VERDICT_COLOR } from '@/theme/audit';
 import { colors, fonts, radius } from '@/theme/tokens';
 
@@ -27,15 +24,11 @@ export default function PeersScreen() {
   const { t, tx, up } = useLang();
   const peers = usePeers();
   const [scan, setScan] = useState(false);
-  const [note, setNote] = useState<string | null>(null);
-  const [err, setErr] = useState<string | null>(null);
   const [ok, setOk] = useState<Record<string, boolean | null>>({});
   const [nearby, setNearby] = useState<PeerFound[]>([]);
   const [looking, setLooking] = useState(false);
   const [typed, setTyped] = useState('');
-  const [perm, ask] = useCameraPermissions();
   const [ledger, setLedger] = useState<string[]>([]);
-  const locked = useRef(false);
   // beyin's badge per peer: the newest ledger line about that address (settings → beyin audit)
   const audit: AuditEntry[] = useMemo(() => parseLedger(ledger), [ledger]);
   useEffect(() => {
@@ -43,55 +36,11 @@ export default function PeersScreen() {
     llama!.auditLedger(500).then(setLedger, () => {});
   }, [peers.length]);
 
-  useEffect(() => {
-    if (!note) return;
-    const id = setTimeout(() => setNote(null), 3000);
-    return () => clearTimeout(id);
-  }, [note]);
-
-  const take = (text: string) => {
-    try {
-      if (isRelayCode(text)) {
-        const p = parseRelayCode(text);
-        rememberPeer(p);
-        setErr(null);
-        setNote(t('peers.added', { name: p.name }));
-        setScan(false);
-        return true;
-      }
-      if (!isPeerQr(text)) {
-        // an old passport-only code: still link the passport, say what it is
-        linkPassport(text);
-        setNote(t('devices.connected', { d: '' }));
-        setScan(false);
-        return true;
-      }
-      const p = takePeerQr(text);
-      setErr(null);
-      tapDone();
-      setNote(t('peers.added', { name: p.name.toLowerCase() }));
-      setScan(false);
-      return true;
-    } catch (e) {
-      // the qr codes' own words first (notPeer · self · old), the dictionary for the rest
-      const code = (e as Error).message;
-      const own = tx(`peers.err.${code}`, tx(`devices.err.${code}`, ''));
-      setErr(own || (classify(e).kind === 'unknown' ? t('peers.err.notPeer') : explain(e, tx)));
-      return false;
-    }
-  };
+  const { take, paste, err, setErr, note } = usePeerAdd(() => setScan(false));
   const openScan = () => {
     setErr(null);
-    locked.current = false;
     setScan(true);
-    if (!perm?.granted && perm?.canAskAgain !== false) ask().catch(() => {});
   };
-  const onScan = ({ data }: { data: string }) => {
-    if (locked.current) return;
-    locked.current = true;
-    if (!take(data)) setTimeout(() => (locked.current = false), 1200);
-  };
-  const paste = async () => take((await Clipboard.getStringAsync().catch(() => '')) ?? '');
   const check = useCallback(async () => {
     setOk(Object.fromEntries(peers.map((p) => [p.id, null])));
     // a peer far away has only the api channel (through the relay); the lan ones are asked on rpc
@@ -165,29 +114,7 @@ export default function PeersScreen() {
       ) : null}
       <Pressable onPress={() => router.push('/share')} accessibilityRole="button" accessibilityLabel={t('peers.share')} style={({ pressed }) => [styles.shareLink, pressed && styles.pressed]}><Text style={styles.shareText}>{t('peers.share')} ›</Text></Pressable>
 
-      <Modal visible={scan} animationType="slide" onRequestClose={() => setScan(false)}>
-        <View style={styles.scanRoot}>
-          {camera && perm?.granted ? (
-            <CameraView style={StyleSheet.absoluteFill} facing="back" barcodeScannerSettings={{ barcodeTypes: ['qr'] }} onBarcodeScanned={onScan} />
-          ) : (
-            <View style={styles.center}>
-              {camera && perm?.canAskAgain !== false ? (
-                <Pressable onPress={() => ask().catch(() => {})} accessibilityRole="button" accessibilityLabel={t('devices.camera')} style={({ pressed }) => [styles.btn, styles.btnLight, pressed && styles.pressed]}><Text style={[styles.btnText, styles.btnTextLight]}>{t('devices.camera')}</Text></Pressable>
-              ) : (
-                <Text style={styles.hintLight}>{t('devices.cameraOff')}</Text>
-              )}
-            </View>
-          )}
-          <View style={styles.frame} pointerEvents="none" />
-          <View style={styles.scanBottom}>
-            <Text style={styles.hintLight}>{err ?? t('devices.scanHint')}</Text>
-            <View style={styles.actions}>
-              <Pressable onPress={paste} accessibilityRole="button" accessibilityLabel={t('peers.paste')} style={({ pressed }) => [styles.btn, styles.btnLight, pressed && styles.pressed]}><Text style={[styles.btnText, styles.btnTextLight]}>{t('peers.paste')}</Text></Pressable>
-              <Pressable onPress={() => setScan(false)} accessibilityRole="button" accessibilityLabel={t('word.close')} style={({ pressed }) => [styles.btn, styles.btnLight, pressed && styles.pressed]}><Text style={[styles.btnText, styles.btnTextLight]}>{t('word.close')}</Text></Pressable>
-            </View>
-          </View>
-        </View>
-      </Modal>
+      <ScanModal open={scan} err={err} onClose={() => setScan(false)} onData={take} onPaste={paste} />
     </StaffPage>
   );
 }
@@ -221,17 +148,10 @@ const styles = StyleSheet.create({
   btn: { paddingHorizontal: 14, minHeight: 44, borderRadius: radius.pill, borderWidth: 1, borderColor: colors.paper, justifyContent: 'center' },
   xHit: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center' },
   btnText: { fontFamily: fonts.medium, fontSize: 13, color: colors.paper },
-  btnLight: { borderColor: '#fff' },
-  btnTextLight: { color: '#fff' },
   typeRow: { flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: 8 },
   hint: { fontFamily: fonts.regular, fontSize: 12, color: colors.mute, marginTop: 6 },
   input: { flex: 1, height: 44, borderBottomWidth: 1, borderBottomColor: colors.ink3, fontFamily: fonts.regular, fontSize: 13, color: colors.paper },
   shareLink: { marginTop: 28, minHeight: 44, justifyContent: 'center' },
   shareText: { fontFamily: fonts.medium, fontSize: 14, color: colors.spotText },
-  scanRoot: { flex: 1, backgroundColor: '#000' },
-  center: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 12 },
-  frame: { position: 'absolute', top: '28%', left: '15%', right: '15%', aspectRatio: 1, borderWidth: 2, borderColor: '#fff', borderRadius: radius.md, opacity: 0.8 },
-  scanBottom: { position: 'absolute', left: 24, right: 24, bottom: 48, gap: 10 },
-  hintLight: { fontFamily: fonts.regular, fontSize: 13, color: '#fff', textAlign: 'center' },
   pressed: { opacity: 0.7 },
 });

@@ -8,6 +8,8 @@ import { Said } from '@/components/StaffPage';
 import { useReport } from '@/components/ReportSheet';
 import { dmListen, dmSend, dmThread, dmUnsay, dmWaiting, why, type DmLine } from '@/data/dms';
 import { markDmSeen } from '@/data/messages';
+import { isTestThread } from '@/data/local/testPeople';
+import { TestTag } from '@/components/connect/TestTag';
 import { useLang } from '@/i18n';
 import { colors, fonts } from '@/theme/tokens';
 import { brand } from '@/theme/layout';
@@ -56,17 +58,22 @@ export default function DmScreen() {
   const drop = (l: DmLine) =>
     Alert.alert(t('staff.delete'), t('dm.delete'), [
       { text: t('staff.delete.keep'), style: 'cancel' },
-      { text: t('staff.delete'), style: 'destructive', onPress: () => dmUnsay(l.id).then(() => setLines((x) => x.filter((y) => y.id !== l.id)), () => {}) },
+      { text: t('staff.delete'), style: 'destructive', onPress: () => dmUnsay(l.id, id).then(() => setLines((x) => x.filter((y) => y.id !== l.id)), () => {}) },
     ]);
   const reporting = useReport();
+  // a test person (data/local/testPeople.ts): on this phone only, answers by itself, nothing to report
+  const testing = isTestThread(id);
   const time = (iso: string) => iso.slice(11, 16);
   return (
     <View style={styles.root}>
       <StatusBar style="dark" />
-      <View style={styles.band}><Text style={styles.title} numberOfLines={1}>{name || t('messages.title')}</Text></View>
+      <View style={styles.band}>
+        <Text style={styles.title} numberOfLines={1}>{name || t('messages.title')}</Text>
+        {testing ? <View style={styles.tag}><TestTag /></View> : null}
+      </View>
       <KeyboardAvoidingView style={styles.root} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
         <ScrollView ref={scroll} contentContainerStyle={styles.body} onContentSizeChange={() => scroll.current?.scrollToEnd({ animated: false })}>
-          {!lines.length ? <Text style={styles.quiet}>{t('messages.dm.none')}</Text> : null}
+          {!lines.length ? <Text style={styles.quiet}>{testing ? t('social.dm.test') : t('messages.dm.none')}</Text> : null}
           {lines.map((l) =>
             l.mine ? (
               <Pressable key={l.id} onLongPress={() => drop(l)} style={styles.mineWrap}>
@@ -74,7 +81,7 @@ export default function DmScreen() {
                 <Text style={styles.metaMine}>{time(l.created_at)}</Text>
               </Pressable>
             ) : (
-              <Pressable key={l.id} onLongPress={() => reporting.ask('dm', String(l.id))} style={styles.theirsWrap}>
+              <Pressable key={l.id} onLongPress={testing ? undefined : () => reporting.ask('dm', String(l.id))} style={styles.theirsWrap}>
                 <View style={styles.bubble}><Text style={styles.text}>{l.body}</Text></View>
                 <Text style={styles.metaSmall}>{time(l.created_at)}</Text>
               </Pressable>
@@ -107,6 +114,7 @@ const styles = StyleSheet.create({
   band: { position: 'absolute', top: 0, left: 0, right: 0, height: brand.top + 40, backgroundColor: colors.ink, zIndex: 2 },
   title: { position: 'absolute', top: brand.top, left: brand.left + 40, right: brand.left + 40, textAlign: 'center', fontFamily: fonts.medium, fontSize: brand.smallSize, letterSpacing: -0.3, color: colors.paper },
   body: { paddingTop: brand.top + 52, paddingHorizontal: brand.left, paddingBottom: 16, gap: 12 },
+  tag: { position: 'absolute', top: brand.top + 23, left: 0, right: 0, alignItems: 'center' },
   quiet: { fontFamily: fonts.regular, fontSize: 13, color: colors.mute, textAlign: 'center', marginTop: 40 },
   theirsWrap: { alignSelf: 'flex-start', gap: 3, maxWidth: '80%' },
   bubble: { alignSelf: 'flex-start', backgroundColor: colors.ink2, borderRadius: 18, borderBottomLeftRadius: 5, paddingHorizontal: 13, paddingVertical: 9 },

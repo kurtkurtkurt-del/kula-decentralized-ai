@@ -12,6 +12,8 @@ import { useAuth } from '@/auth/AuthContext';
 import { personCards, toCardData, type CardRow } from '@/data/contribution';
 import { dmStart } from '@/data/dms';
 import { friendRemove, person, type PersonCard, type Relation } from '@/data/friends';
+import { isTestHandle, testPerson } from '@/data/local/testPeople';
+import { TestTag } from '@/components/connect/TestTag';
 import { upperData, useLang } from '@/i18n';
 import { colors, fonts, radius } from '@/theme/tokens';
 import { brand } from '@/theme/layout';
@@ -37,6 +39,9 @@ export default function PersonScreen() {
   if (p === undefined) return <View style={styles.root}><Text style={styles.quiet}>{t('person.loading')}</Text><BackButton /></View>;
   if (!p || gone) return <View style={styles.root}><Text style={styles.quiet}>{t('person.hidden')}</Text><BackButton /></View>;
   const relation: Relation = after[p.id] ?? p.relation;
+  // a test person (data/local/testPeople.ts): marked, with their phone; nothing to report or block
+  const testing = isTestHandle(p.handle);
+  const device = testPerson({ handle: p.handle })?.device;
   const name = (p.display_name ?? p.handle).toLowerCase();
   const write = () => dmStart(p.handle).then((id) => router.push({ pathname: '/dm/[id]', params: { id, name } }), () => {});
   const remove = () =>
@@ -52,7 +57,8 @@ export default function PersonScreen() {
         <View style={styles.head}>
           <View style={styles.face}><Avatar name={p.handle} size={72} /></View>
           <Text style={styles.name}>{name}</Text>
-          <Text style={styles.meta}>{upperData([`@${p.handle}`, p.city_name].filter(Boolean).join(' · '))}</Text>
+          <Text style={styles.meta}>{upperData([`@${p.handle}`, p.city_name, testing ? device : null].filter(Boolean).join(' · '))}</Text>
+          {testing ? <TestTag /> : null}
           {p.bio ? <Text style={styles.bio}>{p.bio}</Text> : null}
           <Text style={styles.stats}>{up(`${t('person.kept', { n: p.kept_count ?? 0 })} · ${t('person.nights', { n: p.night_count ?? 0 })}`)}</Text>
         </View>
@@ -71,7 +77,7 @@ export default function PersonScreen() {
             {cards.map((c, i) => <NightCard key={`${c.card_no}-${i}`} data={toCardData(c)} index={i} width={width} />)}
           </ScrollView>
         ) : null}
-        {session ? (
+        {session && !testing ? (
           <View style={styles.foot}>
             <Pressable onPress={() => reporting.ask('profile', p.id)} hitSlop={8}><Text style={styles.footText}>{t('posts.report')}</Text></Pressable>
             <Pressable onPress={() => confirmBlock({ id: p.id, name }, t, () => setGone(true))} hitSlop={8}><Text style={styles.footText}>{t('block.do')}</Text></Pressable>

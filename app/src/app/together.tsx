@@ -1,8 +1,13 @@
-import { useState } from 'react';
+import { useCallback, useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { router } from 'expo-router';
 import Button from '@/components/Button';
 import StaffPage from '@/components/StaffPage';
+import Connect from '@/components/together/Connect';
+import { PartHead, TrialHeader } from '@/components/together/Heads';
+import Trial from '@/components/together/Trial';
+import { pingAll, type Ping } from '@/components/together/tests';
+import { usePeers } from '@/llm/store';
 import { combine, rangeOf, rangeText, type Passport } from '@/passport/contract';
 import { usePassport, useLinked } from '@/data/passport';
 import { useLang } from '@/i18n';
@@ -12,6 +17,9 @@ import { colors, fonts, radius } from '@/theme/tokens';
 // ways of working together, estimated by passport/contract.ts combine(): apart (each its
 // own model, the speeds add up) and split (one model across the devices: more memory, a
 // bigger model, but every token crosses the network). The factors are not calibrated.
+// "see the power" (6.11.2026): the page says it is a trial, in three parts kept apart by
+// rules: 1 the estimate above, 2 connect for real (scan another phone's share qr, the same
+// helpers as the peers page), 3 try it (a ping per phone, a short apart speed test).
 type Tab = 'apart' | 'split';
 const fmt = (n: number) => (n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${Math.round(n / 1e3)}K` : String(n));
 
@@ -22,10 +30,25 @@ export default function TogetherScreen() {
   const [tab, setTab] = useState<Tab>('apart');
   const all: { id: string; mine: boolean; p: Passport }[] = [...(own ? [{ id: 'me', mine: true, p: own }] : []), ...linked.map((l) => ({ id: l.id, mine: false, p: l.data }))];
   const c = combine(all.map((a) => a.p));
+  const peers = usePeers();
+  const [pings, setPings] = useState<Record<string, Ping | 'busy'>>({});
+  const [pinging, setPinging] = useState(false);
+  const ping = useCallback(async () => {
+    setPinging(true);
+    setPings(Object.fromEntries(peers.map((p) => [p.id, 'busy' as const])));
+    try {
+      const r = await pingAll(peers);
+      setPings(Object.fromEntries(r.map((x) => [x.id, x])));
+    } finally {
+      setPinging(false);
+    }
+  }, [peers]);
 
   return (
-    <StaffPage title={t('combine.title')}>
-      <Text style={styles.lede}>{t('combine.lede')}</Text>
+    <StaffPage title={t('power.title')}>
+      <TrialHeader kicker={t('combine.title')} tag={t('power.tag')} lede={t('power.lede')} />
+
+      <PartHead n={1} title={t('power.p1')} hint={t('power.p1.hint')} kind={t('power.p1.kind')} info={t('combine.lede')} />
 
       {all.map(({ id, mine, p }) => {
         const r = rangeOf(p);
@@ -57,7 +80,7 @@ export default function TogetherScreen() {
       })}
 
       {all.length < 2 ? (
-        <Text style={styles.empty}>{t('combine.one')}</Text>
+        <Text style={styles.empty}>{t('power.one')}</Text>
       ) : (
         <>
           <View style={styles.tabs} accessibilityRole="tablist">
@@ -95,18 +118,26 @@ export default function TogetherScreen() {
             <Text style={styles.empty}>{t('combine.split.none')}</Text>
           )}
           <Text style={styles.foot}>{up(t('combine.foot'))}</Text>
-          {/* 4.11.2026: the estimate above can be tried for real: a model, then the mode question */}
-          <View style={{ marginTop: 20 }}>
-            <Button label={t('combine.try')} onPress={() => router.push('/models')} kind="line" />
-          </View>
         </>
       )}
+
+      <PartHead n={2} title={t('power.p2')} hint={t('power.p2.hint')} kind={t('power.p2.kind', { n: peers.length })} />
+      <Connect peers={peers} pings={pings} />
+
+      <PartHead n={3} title={t('power.p3')} hint={t('power.p3.hint')} kind={t('power.p3.kind')} />
+      <Trial peers={peers} pinging={pinging} onPing={ping} />
+
+      {/* 4.11.2026: past the trial, the real thing: a model, then the mode question */}
+      <View style={styles.after}>
+        <Text style={styles.foot}>{up(t('power.foot'))}</Text>
+        <Button label={t('combine.try')} onPress={() => router.push('/models')} kind="line" />
+      </View>
     </StaffPage>
   );
 }
 
 const styles = StyleSheet.create({
-  lede: { fontFamily: fonts.regular, fontSize: 14, lineHeight: 20, color: colors.mute, marginBottom: 16 },
+  after: { marginTop: 30, paddingTop: 4, borderTopWidth: 1, borderTopColor: colors.rule, gap: 14 },
   card: { borderWidth: 1, borderColor: colors.ink3, borderRadius: radius.md, padding: 14, marginBottom: 12, gap: 6 },
   cardMine: { backgroundColor: colors.ink2, borderColor: colors.ink2 },
   cardHead: { flexDirection: 'row', alignItems: 'baseline', gap: 10, marginBottom: 4 },

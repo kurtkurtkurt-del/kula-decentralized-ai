@@ -7,6 +7,8 @@ import Avatar from '@/components/Avatar';
 import { useAuth } from '@/auth/AuthContext';
 import { blockUser, friendAccept, friendRequest, peopleSearch, peopleSuggested, type Found, type Relation, type Suggested } from '@/data/friends';
 import { invalidate } from '@/lib/offline';
+import { isTestHandle } from '@/data/local/testPeople';
+import { TestTag } from '@/components/connect/TestTag';
 import { upperData, useLang } from '@/i18n';
 import type { Key } from '@/i18n/dict';
 import { colors, fonts, radius } from '@/theme/tokens';
@@ -114,7 +116,10 @@ export function PeopleResults({ query }: { query: string }) {
             <Pressable onPress={() => openPerson(p.handle)} accessibilityRole="button" style={({ pressed }) => [styles.rowOpen, pressed && styles.pressed]}>
               <View style={styles.face}><Avatar name={p.handle} size={46} /></View>
               <View style={styles.rowText}>
-                <Text style={styles.rowName} numberOfLines={1}>{name}</Text>
+                <View style={styles.nameRow}>
+                  <Text style={[styles.rowName, styles.shrink]} numberOfLines={1}>{name}</Text>
+                  {isTestHandle(p.handle) ? <TestTag plain /> : null}
+                </View>
                 <Text style={styles.rowMeta} numberOfLines={1}>{upperData(meta)}</Text>
               </View>
             </Pressable>
@@ -160,6 +165,7 @@ export function SuggestedRow() {
                 <Text style={[styles.badgeText, asked && styles.badgeTextDone]}>{asked ? '✓' : '+'}</Text>
               </Pressable>
               <Text style={styles.miniName} numberOfLines={1}>{name}</Text>
+              {isTestHandle(p.handle) ? <TestTag plain /> : null}
             </View>
           );
         })}
@@ -177,6 +183,8 @@ const styles = StyleSheet.create({
   row: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 12, borderTopWidth: 1, borderTopColor: colors.ink3 },
   rowOpen: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 12 },
   rowText: { flex: 1, gap: 3 },
+  nameRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  shrink: { flexShrink: 1 },
   rowName: { fontFamily: fonts.semibold, fontSize: 17, letterSpacing: -0.4, color: colors.paper },
   rowMeta: { fontFamily: fonts.jet, fontSize: 10, letterSpacing: 0.8, color: colors.mute },
   face: { width: 46, height: 46, borderRadius: radius.sm, overflow: 'hidden' },

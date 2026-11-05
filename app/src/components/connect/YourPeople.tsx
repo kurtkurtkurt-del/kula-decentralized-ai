@@ -8,7 +8,11 @@ import { why } from '@/data/dms';
 import { friendAccept, type FriendRow } from '@/data/friends';
 import { useLang } from '@/i18n';
 import { colors, fonts, radius } from '@/theme/tokens';
+import InfoTip from '@/components/InfoTip';
+import { useTestPeople } from '@/data/local/gate';
+import { isTestHandle } from '@/data/local/testPeople';
 import { connectStyles as s } from './styles';
+import { TestTag } from './TestTag';
 
 // Connect's people: find someone, the requests waiting for you, your people as faces (the
 // ones working a night now ringed), who to add. Moved here from the messages tab.
@@ -19,6 +23,11 @@ export default function YourPeople({ friends, live, onChanged }: { friends: Frie
   const accepted = friends.filter((f) => f.status === 'accepted');
   const requests = friends.filter((f) => f.status === 'pending' && f.direction === 'incoming');
   const liveOf = (handle: string | null) => live.find((l) => l.handle === handle);
+  const [testOn, setTestOn] = useTestPeople();
+  const flip = () => {
+    setTestOn(!testOn);
+    onChanged();
+  };
 
   return (
     <>
@@ -37,7 +46,10 @@ export default function YourPeople({ friends, live, onChanged }: { friends: Frie
                       <Pressable onPress={() => f.handle && openPerson(f.handle)} style={styles.rowLeft} accessibilityRole="button">
                         <View style={s.face}><Avatar name={f.handle ?? f.display_name ?? '?'} size={36} /></View>
                         <View style={s.text}>
-                          <Text style={s.name} numberOfLines={1}>{(f.display_name ?? f.handle ?? '').toLowerCase()}</Text>
+                          <View style={styles.nameRow}>
+                            <Text style={[s.name, styles.shrink]} numberOfLines={1}>{(f.display_name ?? f.handle ?? '').toLowerCase()}</Text>
+                            {isTestHandle(f.handle) ? <TestTag plain /> : null}
+                          </View>
                           <Text style={s.meta} numberOfLines={1}>@{f.handle}</Text>
                         </View>
                       </Pressable>
@@ -58,7 +70,7 @@ export default function YourPeople({ friends, live, onChanged }: { friends: Frie
                 <Pressable key={f.other_id} onPress={() => f.handle && openPerson(f.handle)} style={({ pressed }) => [styles.cell, pressed && s.pressed]} accessibilityRole="button">
                   <View style={[styles.bigFace, out && s.faceLive]}><Avatar name={f.handle ?? f.display_name ?? '?'} size={60} /></View>
                   <Text style={styles.cellName} numberOfLines={1}>{(f.display_name ?? f.handle ?? '').toLowerCase()}</Text>
-                  <Text style={[styles.cellState, out && s.metaLive]} numberOfLines={1}>{out ? t('messages.outNow') : ' '}</Text>
+                  {isTestHandle(f.handle) && !out ? <TestTag plain /> : <Text style={[styles.cellState, out && s.metaLive]} numberOfLines={1}>{out ? t('messages.outNow') : ' '}</Text>}
                 </Pressable>
               );
             })}
@@ -70,6 +82,13 @@ export default function YourPeople({ friends, live, onChanged }: { friends: Frie
           </View>
           {!accepted.length ? <Text style={s.note}>{t('messages.new.noFriends')}</Text> : null}
           <SuggestedRow />
+          <View style={styles.testRow}>
+            <Pressable onPress={flip} accessibilityRole="switch" accessibilityState={{ checked: testOn }} hitSlop={6} style={({ pressed }) => [styles.testSwitch, testOn && styles.testSwitchOn, pressed && s.pressed]}>
+              <View style={[styles.knob, testOn && styles.knobOn]} />
+            </Pressable>
+            <Text style={styles.testText}>{t('social.test.people')}</Text>
+            <InfoTip title={t('social.test.title')} text={t('social.test.switch')} size={16} />
+          </View>
         </>
       )}
       {said ? <Text style={[s.note, s.bad]}>{said}</Text> : null}
@@ -79,6 +98,14 @@ export default function YourPeople({ friends, live, onChanged }: { friends: Frie
 
 const styles = StyleSheet.create({
   search: { marginTop: 14 },
+  nameRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  shrink: { flexShrink: 1 },
+  testRow: { flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: 22 },
+  testSwitch: { width: 34, height: 20, borderRadius: 10, borderWidth: 1, borderColor: colors.ink3, padding: 2, justifyContent: 'center' },
+  testSwitchOn: { backgroundColor: colors.spot, borderColor: colors.spot },
+  knob: { width: 14, height: 14, borderRadius: 7, backgroundColor: colors.mute },
+  knobOn: { alignSelf: 'flex-end', backgroundColor: colors.ink },
+  testText: { fontFamily: fonts.regular, fontSize: 13, color: colors.mute },
   rowLeft: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 12 },
   accept: { height: 30, paddingHorizontal: 12, borderRadius: radius.pill, backgroundColor: colors.paper, justifyContent: 'center' },
   acceptText: { fontFamily: fonts.medium, fontSize: 12, color: colors.ink },

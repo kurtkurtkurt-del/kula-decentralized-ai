@@ -1,11 +1,13 @@
 import { useEffect, useState } from 'react';
-import { StyleSheet, Text, View } from 'react-native';
+import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { router, useLocalSearchParams } from 'expo-router';
 import StaffPage, { Said } from '@/components/StaffPage';
 import Button from '@/components/Button';
 import Input from '@/components/Input';
 import { useAuth } from '@/auth/AuthContext';
-import { COOP_COLORS, coopJoin, coopPeek, why, type Peek } from '@/data/coops';
+import { COOP_COLORS, coopJoin, coopPeek, testCoopCodes, why, type Peek } from '@/data/coops';
+import { useTestPeople } from '@/data/local/gate';
+import { TestTag } from '@/components/connect/TestTag';
 import { invalidate } from '@/lib/offline';
 import { useLang } from '@/i18n';
 import { colors, fonts, radius } from '@/theme/tokens';
@@ -18,7 +20,13 @@ export default function JoinCoopScreen() {
   const [code, setCode] = useState(c ?? '');
   const [peek, setPeek] = useState<Peek | null>(null);
   const [said, setSaid] = useState<string | null>(null);
+  const [testOn] = useTestPeople();
   const look = (v = code) => coopPeek(v.trim().toUpperCase()).then((p) => { setPeek(p); setSaid(p ? null : t('err.code')); }, (e) => setSaid(why(e)));
+  const tryCode = (k: string) => {
+    setCode(k);
+    setPeek(null);
+    look(k);
+  };
   useEffect(() => { if (c) look(c); }, [c]); // eslint-disable-line react-hooks/exhaustive-deps
   // a guest joins like anyone (5.11.2026: no sign-up in the way)
   const join = async () => {
@@ -40,6 +48,21 @@ export default function JoinCoopScreen() {
         </View>
       ) : null}
       <Said text={said} bad />
+      {testOn ? (
+        <View style={styles.tests}>
+          <View style={styles.testsHead}>
+            <Text style={styles.testsWord}>{t('social.coop.tests')}</Text>
+            <TestTag />
+          </View>
+          <View style={styles.chips}>
+            {testCoopCodes().map((k) => (
+              <Pressable key={k} onPress={() => tryCode(k)} accessibilityRole="button" style={({ pressed }) => [styles.chip, pressed && styles.pressed]}>
+                <Text style={styles.chipText}>{k}</Text>
+              </Pressable>
+            ))}
+          </View>
+        </View>
+      ) : null}
     </StaffPage>
   );
 }
@@ -49,4 +72,11 @@ const styles = StyleSheet.create({
   emoji: { fontSize: 28 },
   name: { fontFamily: fonts.semibold, fontSize: 22, letterSpacing: -0.5, color: colors.paper },
   meta: { fontFamily: fonts.regular, fontSize: 13, color: colors.mute },
+  tests: { marginTop: 28, gap: 10 },
+  testsHead: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  testsWord: { fontFamily: fonts.regular, fontSize: 13, color: colors.mute },
+  chips: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  chip: { paddingHorizontal: 14, height: 34, borderRadius: radius.pill, borderWidth: 1, borderColor: colors.ink3, justifyContent: 'center' },
+  chipText: { fontFamily: fonts.jet, fontSize: 13, letterSpacing: 1, color: colors.paper },
+  pressed: { opacity: 0.6 },
 });
