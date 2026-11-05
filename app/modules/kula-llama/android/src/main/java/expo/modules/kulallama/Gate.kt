@@ -59,6 +59,7 @@ object Gate {
   const val HANDSHAKE_MS = 5000
   private val random = SecureRandom()
   private val NONCE = Regex("[0-9a-f]{32}")
+  private val CLOCK = Regex("[0-9]{1,16}")
 
   fun newSecret(): String = randomHex(32)
   /** The one-time pairing code shown in the v3 qr: 16 hex characters. */
@@ -161,7 +162,8 @@ object Gate {
       val nonceC = p[2]
       if (channel != "rpc" && channel != "api") return refuse(s, out, peer, channel, "bad channel")
       if (!nonceC.matches(NONCE)) return refuse(s, out, peer, channel, "bad nonce")
-      val clientMs = if (p.size == 4) (p[3].toLongOrNull() ?: return refuse(s, out, peer, channel, "bad hello")) else null
+      // digits only, as gate.ts: toLongOrNull would also take "-5" and "+5"
+      val clientMs = if (p.size == 4) (p[3].takeIf { it.matches(CLOCK) }?.toLongOrNull() ?: return refuse(s, out, peer, channel, "bad hello")) else null
       // an auditor that throws must not take the gate down; its verdicts do refuse
       val verdict = runCatching { auditor?.onHello(peer, nonceC, clientMs) }.onFailure { Log.w(TAG, "auditor hello: ${it.message}") }.getOrNull()
       if (verdict != null && !verdict.ok) return refuse(s, out, peer, channel, verdict.reason ?: "audit")
@@ -198,7 +200,7 @@ object Gate {
       val nonceC = p[2]
       if (channel != "rpc" && channel != "api") return refuse2(channel, "bad channel")
       if (!nonceC.matches(NONCE)) return refuse2(channel, "bad nonce")
-      val clientMs = p[3].toLongOrNull() ?: return refuse2(channel, "bad hello")
+      val clientMs = p[3].takeIf { it.matches(CLOCK) }?.toLongOrNull() ?: return refuse2(channel, "bad hello")
       val verdict: Verdict = runCatching { auditor?.onHello(peer, nonceC, clientMs) }.onFailure { Log.w(TAG, "auditor hello: ${it.message}") }.getOrNull() ?: run {
         Checks.replay(ring, nonceC, peer).takeIf { !it.ok } ?: Checks.clock(clientMs, System.currentTimeMillis())
       }
