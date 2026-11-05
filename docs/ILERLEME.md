@@ -22,6 +22,24 @@ ne yapıldı, ne doğrulandı, ne kaldı. Döndüğünde önce burayı oku.
 | Bölüm 2 kula-node | yapıldı (ayrı oturum) | dal `claude/kula-node-bcceb3`, 4 commit, push yok; 9 test; Mac'te gerçek model api kanalından aktı. **Bu dala henüz birleştirilmedi** |
 | Bölüm 3 beyin/check | taslak | `~/Desktop/claudecode/beyin/check/spec/PROTOCOL.md` (kendi git reposu); kod yok |
 
+## 5.11 cloud: beyin denetimi arayüzü (`claude/audit-ui`)
+
+- `origin/claude/quirky-einstein-hy2v69` (beyin/check v0) üstüne `release/local-2026-10-20` birleştirildi, üstüne:
+- **Ayarlar → uygulama → beyin denetimi** (`app/src/app/audit.tsx`): defterin son 200 satırı (en yeni üstte), tipine göre
+  süzme çipleri (eşleşme / bağlantı / ret / yükleme / iddia-ölçüm / sağlık / bitiş), üstte ret · uyarı · satır sayaçları,
+  zincir doğrulaması (her satırın `prev`'i bir öncekinin sha256'sı mı; pencere ortadan başlıyorsa "bu pencerede sağlam",
+  kırıksa kırmızı kutu ve satır numarası), "dışa aktar" (expo-sharing, `beyin-<tarih>.jsonl`), "defteri temizle" (onaylı).
+- **Eşler**: her cihazın yanında rozet — doğrulandı (adaçayı) / uyarı (altın) / reddedildi (kiremit) / henüz yok (meta);
+  defterdeki o adrese ait en yeni satırdan (`peerBadge`). Renkler `theme/tokens` → `theme/audit.ts`.
+- `app/src/llm/audit.ts`: satır tipleri, `parseLedger`, `verifyChain`, `summarize`, `peerBadge`, `detailOf`, saf TS sha256.
+  Test: `src/__tests__/audit.test.ts` (örnek defter, kırık zincir, eksik satır, boş defter, rozetler).
+- Native: `auditLedger(limit)` (gateLedger ile aynı kuyruk), `clearAuditLedger()`; `Ledger.clear` döndürülmüş dosyaları da
+  siler, temizlikten sonraki ilk `append` zinciri sıfırdan (genesis) başlatır — işçi süreci defteri açık tutsa bile.
+  JVM testi `LedgerTest.clearRemovesEveryFileAndRestartsTheChain`. JVM testleri (`audit-jvm`, `gradle test`) 18/18 yeşil; Expo modülü (`KulaLlamaModule.kt`) Android SDK ister, cloud’da derlenmedi.
+- i18n: `src/i18n/parts/audit.ts` (en/de/tr), `dict.ts`'e eklendi. `npx tsc --noEmit`, `npm test` (70 test) yeşil;
+  lint'te yalnız dalın öncesinden gelen `index.tsx` hatası var, bu dalın dosyaları temiz.
+- Apk derlenmedi (cloud); Android tarafı emülatörde denenmeli: paylaş → başka cihazdan bağlan → ayarlar → beyin denetimi.
+
 ## nasıl test edilir (emülatör + Mac)
 
 ```bash
