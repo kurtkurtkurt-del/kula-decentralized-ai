@@ -42,6 +42,7 @@
         <span class="where-text" id="where-text">no model yet</span>
       </button>
       <div class="top-right">
+        <button type="button" class="pill owner-only devices-btn" id="open-devices" title="add and see devices">devices <b id="dev-count"></b></button>
         <button type="button" class="pill owner-only" id="open-connect">connect</button>
         <button type="button" class="icon owner-only" id="open-invite" aria-label="invite a device on this wi-fi" title="invite a device">
           <svg viewBox="0 0 20 20" aria-hidden="true"><rect x="3.5" y="3.5" width="5" height="5" rx="1"/><rect x="11.5" y="3.5" width="5" height="5" rx="1"/><rect x="3.5" y="11.5" width="5" height="5" rx="1"/><path d="M11.5 11.5h2v2M16.5 11.5v5h-5M13.5 16.5v-1"/></svg>
@@ -102,15 +103,9 @@
 <dialog class="sheet" id="connect" aria-labelledby="connect-title">
   <form method="dialog" class="sheet-head">
     <h2 id="connect-title">connect</h2>
-    <span class="head-tools">
-    <button type="button" class="pill refresh" id="connect-refresh" title="look again: cables, devices, what is loaded">
-      <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M15.5 9.5a5.5 5.5 0 1 1-1.8-4.1"/><path d="M15.5 3.5v3h-3"/></svg>
-      <span>refresh</span>
-    </button>
     <button class="icon" value="close" aria-label="close">
       <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M5.5 5.5l9 9M14.5 5.5l-9 9"/></svg>
     </button>
-    </span>
   </form>
   <div class="sheet-body">
     <div class="wiz" id="wiz">
@@ -126,6 +121,52 @@
 
     <div class="advanced" id="advanced" hidden>
     <div class="row"><button type="button" class="link" id="wiz-steps">‹ back to the steps</button></div>
+
+    <section class="block">
+      <div class="block-head"><h3>how to run it</h3></div>
+      <div class="modes" id="modes" role="radiogroup" aria-label="mode">
+        <button type="button" role="radio" class="mode" data-mode="phone"><b>on the phone</b><span>one phone runs it; this computer relays</span></button>
+        <button type="button" role="radio" class="mode" data-mode="apart"><b>apart</b><span>each device its own copy; the fastest free answers</span></button>
+        <button type="button" role="radio" class="mode" data-mode="split"><b>split</b><span>one model spread over this computer and phones</span></button>
+        <button type="button" role="radio" class="mode" data-mode="here"><b>here</b><span>only this computer</span></button>
+      </div>
+      <p class="hint" id="mode-note"></p>
+    </section>
+
+    <section class="block">
+      <div class="block-head"><h3>model</h3><span class="hint" id="model-for"></span></div>
+      <div id="model-list" class="model-list" role="radiogroup" aria-label="model"></div>
+    </section>
+
+    <section class="block load-block">
+      <div class="progress" id="load-progress" hidden><div class="bar" id="load-bar"></div></div>
+      <p class="msg" id="load-msg" role="status"></p>
+      <div class="row end">
+        <button type="button" class="ghost" id="unload" hidden>unload</button>
+        <button type="button" class="ghost" id="load-stop" hidden>stop</button>
+        <button type="button" class="primary" id="load">load</button>
+      </div>
+    </section>
+    </div>
+  </div>
+</dialog>
+
+<!-- devices (6.11.2026): a bubble under the top right. add phones one by one (cable or
+     network), see how each is reached, forget one. running a model stays in connect. -->
+<dialog class="pop" id="devices" aria-labelledby="devices-title">
+  <form method="dialog" class="sheet-head">
+    <h2 id="devices-title">devices</h2>
+    <span class="head-tools">
+    <button type="button" class="pill refresh" id="connect-refresh" title="look again: cables, devices, what is loaded">
+      <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M15.5 9.5a5.5 5.5 0 1 1-1.8-4.1"/><path d="M15.5 3.5v3h-3"/></svg>
+      <span>refresh</span>
+    </button>
+    <button class="icon" value="close" aria-label="close">
+      <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M5.5 5.5l9 9M14.5 5.5l-9 9"/></svg>
+    </button>
+    </span>
+  </form>
+  <div class="sheet-body">
     <section class="block" id="cable-block">
       <div class="block-head"><h3>on a cable</h3><span class="hint" id="cable-note"></span></div>
       <div id="cable-list" class="peer-list" aria-live="polite"></div>
@@ -166,33 +207,6 @@
       </details>
       <p class="msg" id="add-msg" role="status"></p>
     </section>
-
-    <section class="block">
-      <div class="block-head"><h3>how to run it</h3></div>
-      <div class="modes" id="modes" role="radiogroup" aria-label="mode">
-        <button type="button" role="radio" class="mode" data-mode="phone"><b>on the phone</b><span>one phone runs it; this computer relays</span></button>
-        <button type="button" role="radio" class="mode" data-mode="apart"><b>apart</b><span>each device its own copy; the fastest free answers</span></button>
-        <button type="button" role="radio" class="mode" data-mode="split"><b>split</b><span>one model spread over this computer and phones</span></button>
-        <button type="button" role="radio" class="mode" data-mode="here"><b>here</b><span>only this computer</span></button>
-      </div>
-      <p class="hint" id="mode-note"></p>
-    </section>
-
-    <section class="block">
-      <div class="block-head"><h3>model</h3><span class="hint" id="model-for"></span></div>
-      <div id="model-list" class="model-list" role="radiogroup" aria-label="model"></div>
-    </section>
-
-    <section class="block load-block">
-      <div class="progress" id="load-progress" hidden><div class="bar" id="load-bar"></div></div>
-      <p class="msg" id="load-msg" role="status"></p>
-      <div class="row end">
-        <button type="button" class="ghost" id="unload" hidden>unload</button>
-        <button type="button" class="ghost" id="load-stop" hidden>stop</button>
-        <button type="button" class="primary" id="load">load</button>
-      </div>
-    </section>
-    </div>
   </div>
 </dialog>
 

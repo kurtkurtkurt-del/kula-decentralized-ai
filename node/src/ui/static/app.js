@@ -594,7 +594,10 @@ $('open-connect').addEventListener('click', openConnect);
 
 async function refreshPeers(probe) {
   if (isGuest()) return;
+  const before = new Set(S.peers.map((p) => p.id));
   try { S.peers = probe ? await postJson('peers/probe') : await getJson('peers'); } catch (e) { toast(e.message); }
+  const fresh = before.size ? S.peers.filter((p) => !before.has(p.id)).map((p) => p.id) : [];
+  if (fresh.length && settings.peers.length && settings.mode !== 'phone') { settings.peers = [...new Set([...settings.peers, ...fresh])]; saveSettings(); }
   renderPeers();
   renderModels();
   if ($('app').classList.contains('brain-open')) renderBrain();
@@ -610,16 +613,11 @@ function selectedPeers() {
 function renderPeers() {
   const box = $('peer-list');
   box.replaceChildren();
+  $('dev-count').textContent = S.peers.length ? String(S.peers.length) : '';
   if (!S.peers.length) { box.appendChild(el('p', 'none', 'no device yet. add your phone below.')); $('add').open = true; return; }
-  const mode = settings.mode;
-  const sel = new Set(selectedPeers());
   for (const p of S.peers) {
-    const row = el('div', `peer${mode !== 'here' ? ' pick' : ''}${mode !== 'here' && sel.has(p.id) ? ' on' : ''}`);
-    let pick;
-    if (mode === 'phone') { pick = el('input'); pick.type = 'radio'; pick.name = 'peer'; }
-    else if (mode === 'here') { pick = el('span', `dot ${p.reach ? (p.reach.ok ? 'ok' : 'no') : ''}`); }
-    else { pick = el('input'); pick.type = 'checkbox'; }
-    if (pick.tagName === 'INPUT') { pick.checked = sel.has(p.id); pick.setAttribute('aria-label', p.name); }
+    const row = el('div', 'peer');
+    const pick = el('span', `dot ${p.cable?.plugged === false ? 'no' : p.reach ? (p.reach.ok ? 'ok' : 'no') : ''}`);
     const who = el('div', 'who');
     const name = el('b', '', p.name);
     name.appendChild(viaTag(p));
@@ -643,14 +641,6 @@ function renderPeers() {
       refreshPeers(false);
     });
     row.append(pick, who, x);
-    if (mode !== 'here') row.addEventListener('click', (e) => {
-      if (e.target === x || x.contains(e.target)) return;
-      if (mode === 'phone') settings.peers = [p.id];
-      else { const cur = new Set(selectedPeers()); cur.has(p.id) ? cur.delete(p.id) : cur.add(p.id); settings.peers = [...cur]; }
-      saveSettings();
-      renderPeers();
-      renderModels();
-    });
     box.appendChild(row);
   }
 }
@@ -678,6 +668,10 @@ async function refreshAll() {
   }
 }
 $('connect-refresh').addEventListener('click', refreshAll);
+$('open-devices').addEventListener('click', () => { const d = $('devices'); if (d.open) return d.close(); d.showModal(); renderPeers(); renderCable(); refreshAll(); });
+$('devices').addEventListener('click', (e) => { if (e.target === $('devices')) $('devices').close(); }); // a click on the backdrop
+$('devices').addEventListener('close', () => stopScan());
+refreshPeers(false); // the count on the devices button from the start
 
 $('probe').addEventListener('click', async () => { $('probe').textContent = 'checking…'; await refreshPeers(true); $('probe').textContent = 'check again'; });
 
@@ -817,7 +811,7 @@ async function pairCable(serial) {
 }
 
 // looked at while the advanced part shows, or while the wizard is on a cable step
-setInterval(() => { if ($('connect').open && !document.hidden && (!$('advanced').hidden || WIZ_CABLE.has(W.step))) refreshCable(); }, 1500);
+setInterval(() => { if (!document.hidden && ($('devices').open || ($('connect').open && (!$('advanced').hidden || WIZ_CABLE.has(W.step))))) refreshCable(); }, 1500);
 
 // ---------- connect: add a device
 
