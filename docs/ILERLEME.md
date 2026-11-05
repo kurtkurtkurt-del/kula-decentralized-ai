@@ -56,6 +56,45 @@ tutularak çözüldü). PR yok, release/main'e dokunulmadı.
 - Belgeler: `docs/NODE.md` (pano bölümü, metinle), `node/README.md` kısa bölüm.
 - Denenmedi: gerçek telefonla eşleşme ve gerçek llama.cpp ile yükleme (cloud'da ikili yok). Sabah: Mac'te
   `npm test`, `npm run dev -- share`, adresi aç, "yükle" ile bir gguf seç, sohbet kutusunu dene.
+## 5.11 ölçüm: planlayıcıya gerçek sayılar (`claude/bench`, Mac'te yerel oturum)
+
+Dal: `origin/claude/node-master` + `integrate-night` + `planner-sim` merge'leri (çakışma: bu dosya, ikisi de
+tutuldu; `node/src/planner.ts` planner-sim'in çekirdeğiyle, `Peer` tipi `peers.ts`'den; `split.ts`/`mastercmd`
+artık `model`+`ctx` alıyor, gguf başlığı `node/src/gguf.ts` okuyor). Ayrıntı: `docs/BENCH.md`.
+
+- **Ortak kayıt**: `tools/bench-schema.json`; `app/src/bench/core.ts` (şema denetimi, medyan, `/blob` kuralı,
+  `measuredTps`) = `node/src/benchcore.ts` bayt bayt (test karşılaştırıyor).
+- **`kula-node bench --model <gguf> [--peer …]`**: yerel istem ve üretim tok/s (llama-server `timings`, 3 tur,
+  medyan), ilk token, bellek bant genişliği, kapı gidiş-dönüş, tünel hızı (10 MB `/blob`), eş başına ayrı mod
+  tok/s, ikili + eş varsa bölünmüş yükleme süresi ve token süresi; yoksa `skipped` ile sebebi. Eş yoksa kapı ve
+  tünel kendi kapısına (loopback). `~/.kula-node/bench/<tarih>.json` + tablo.
+- **İşçi API'si**: `GET /blob?mb=N` (N ≤ 64, sıfır baytlar, sabit uzunluk) hem `node/src/api.ts` hem
+  `ApiServer.kt`; uyum testleri (başlıklar ham soketten, kapı tüneli üzerinden 10 MB). **`ApiServer.kt` derlenmedi**
+  (bu Mac'te gradle çalıştırılmadı); `blobMb` TS'deki vakaları elle izliyor.
+- **Uygulama**: ayarlar → "hızı ölç" (`app/src/app/bench.tsx`): native `memBandwidth`, modeli tek başına yükleyip
+  64 token × 3 (`generate`), istem hızı bağlamdan, eşlere `probePeer` süresi ve `apiTunnel` + `/blob` hızı; sonuç
+  kartı, json paylaş (expo-sharing), geçmiş kv-store'da (son 20). Başka bir model/mod yüklüyse dokunmuyor, söylüyor.
+  i18n en/de/tr (`parts/bench.ts`). Telefonda ayrı/bölünmüş mod ölçümü yok (kula-node'un işi).
+- **Planlayıcı**: o cihaz+model için ölçüm varsa `withMeasured` (sim çekirdeği) cihazın `eff`'ini ölçülen tok/s'yi
+  verecek şekilde ayarlıyor → `cluster.planSplit`, `node/planner`, model sayfası tahminleri, `fit.ts` (`fit.measured`,
+  sayfada "ölçüldü"), ayrı mod dağıtıcısının başlangıç hızı (telefon `engine.ts`, bilgisayar `apart.ts`). Ölçüm
+  yoksa eski tahmin.
+- Eski lint hatası (`index.tsx:14`, effect içinde setState) düzeltildi: yönlendirme artık türetiliyor.
+- **Testler**: app `npx jest` 97/97 (yeni `bench.test.ts` 7), `tsc` temiz, `expo lint` 0 hata (8 eski uyarı);
+  node `npm test` 57 (56 geçti, 1 eski atlama; yeni: bench 8, `/blob` uyum 2).
+- **Gerçek ölçüm** (Mac M1 8 GB, Qwen3 0.6B Q8_0, eş yok): üretim **59.1 tok/s** (59.1 / 65.5 / 58.6), istem
+  1202 tok/s (123 token), ilk token 104 ms, bellek 51.0 GB/s, loopback kapı 1 ms, tünel 446 MB/s. Profillerdeki
+  34 tok/s (sohbet uç noktasıyla) bundan düşük; fark henüz açıklanmadı. Bölünmüş/ayrı mod: eş yoktu, atlandı.
+
+### telefonda yapılacak 3 ölçüm
+1. **S25+ tek başına**: `npm run apk` ile derle (ApiServer.kt değişti), ayarlar → hızı ölç, model Gemma 3 1B.
+   Beklenen: bellek ~60 GB/s civarı, üretim tok/s; tahminle (65.9 × 0.6 / 0.75 GB ≈ 50) karşılaştır. "json olarak
+   paylaş" ile kaydı Mac'e gönder.
+2. **Telefon ↔ Mac, aynı wi-fi**: Mac'te `kula-node share`, telefonda QR ile eşle, sonra telefonda hızı ölç: kapı
+   gidiş-dönüş ve tünel MB/s (5 GHz'de 20–30 MB/s beklenir; emülatörde 1.3 idi). Bu sayı bölünmüş modun hızını belirler.
+3. **Mac'ten telefona**: telefonda "telefonu paylaş", Mac'te `kula-node peers add …` ve
+   `kula-node bench --model <gemma gguf> --peer <telefon>`: telefonun ayrı mod tok/s'si ve bölünmüş yükleme süresi +
+   token süresi. Sonra `kula-node chat --mode split` planı ölçülen sayılarla kuruyor mu, logda "measured tok/s" satırı.
 
 ## 5.11 cloud: bilgisayardan küme yönetimi (`claude/node-master`)
 
@@ -237,6 +276,22 @@ https://github.com/kurtkurtkurt-del/kula-decentralized-ai/actions/runs/419881144
 `KULA_KEYSTORE_B64` (`base64 -i kula.keystore`), `KULA_KEYSTORE_PASSWORD`, `KULA_KEY_ALIAS`, `KULA_KEY_PASSWORD`;
 yoksa apk debug imzalı çıkar ve koşu uyarı taşır. Gradle cache yalnız main'de yazılır (`cache-read-only`); dal
 release'e/main'e alınınca ısınır. `claude/ci` release ve main'e dokunmadı, PR açılmadı.
+- `kula-node peers add|list|rm|probe|scan`: eşler `~/.kula-node/peers.json`'da (600). `add` QR json v2, base64url kod
+  (`list --code`) veya `host:port:secret` alır. `probe` iki kanalda TCP+el sıkışma (2 sn), `scan` `_kula._tcp`
+  (bonjour-service). Secret ekrana yazılmaz.
+- `kula-node chat --model <gguf> --mode apart|split [--peer …] [--batch] [--prompt]`:
+  - ayrı: yerel llama-server + her eşin `api` kanalına tünel → `/load`, `/chat` SSE; istem en hızlı boş cihaza
+    (önce bant genişliği, sonra ölçülen tok/s). Eşler modeli bu bilgisayardan çeker (rastgele yollu HTTP, Range var;
+    `--model-url` ile dış adres). `--batch` 8 istemi dağıtır, cihaz başına tok/s yazar.
+  - bölünmüş: `src/planner.ts` = `app/src/llm/cluster.ts`'nin kopyası (çıktı katmanı yerelde, 0.7/0.75/1.1); eş başına
+    `rpc` tüneli, `llama-server --rpc 127.0.0.1:p1,… --tensor-split yerel,p1,…`.
+  - Yüklemeden önce 2 sn probe; cevap vermeyen eş sebebiyle düşer, `ggml_backend_rpc_add_server` abort etmez.
+- İkili yoksa: split "run kula-node setup" der ve durur; apart yerel cihazı düşürüp eşlerle devam eder.
+- Testler (42, hepsi geçti; llama ikilisi yok, sahte süreçler): planlayıcı birimleri, eş defteri + yanlış secret reddi,
+  ayrı mod uçtan uca (iki sahte işçi gerçek kapı arkasında, 8 istem, tok/s), split planı + tüneller + sahte llama-server.
+- Gerçek cihazla denenmedi (cloud'da telefon/ikili yok). Sabah: Mac'te `npm test`, sonra emülatör "telefonu paylaş" QR'ı ile
+  `peers add` → `peers probe` → `chat --mode apart --batch`.
+
 ## planlayıcı simülatörü (5.11 gece, cloud oturumu, dal `claude/planner-sim`, `integrate-night` üstüne)
 
 Birleştirilmedi, PR yok. Ayrıntı: `docs/PLANNER.md`.

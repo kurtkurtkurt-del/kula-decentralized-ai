@@ -12,7 +12,8 @@ export type Fit = {
   haveMb: number;          // what this device can give a model
   verdict: 'fits' | 'tight' | 'no';
   maxCtx: number;          // the largest ctx (power of two ≥ 512) that fits, 0 when none
-  tps: { low: number; high: number } | null; // from the passport's bandwidth
+  tps: { low: number; high: number } | null; // from the passport's bandwidth, or measured
+  measured: boolean;       // tps is this phone's bench on this model (docs/BENCH.md)
 };
 
 export const OVERHEAD_MB = 300;
@@ -34,7 +35,11 @@ export function haveMb(p: Passport | null): number {
   return Math.round(Math.max(free, cap));
 }
 
-export function fitOn(p: Passport | null, m: FitInput): Fit {
+/**
+ * `measured`: this phone's bench tok/s on this model (bench/store.ts measuredFor), when there
+ * is one; it replaces the bandwidth estimate as the high end (hot phones still at half).
+ */
+export function fitOn(p: Passport | null, m: FitInput, measured?: number | null): Fit {
   const have = haveMb(p);
   const need = needMb(m);
   let maxCtx = 0;
@@ -43,9 +48,10 @@ export function fitOn(p: Passport | null, m: FitInput): Fit {
   const bw = p ? Number(p.mem_bw_read_gbs) || Number(p.mem_bw_gbs) || 0 : 0;
   const gb = m.size / 1024 ** 3;
   // a token streams the weights once: tok/s ≈ bandwidth × efficiency / size; hot phones at half
-  const high = bw > 0 ? r1((bw * COMBINE.efficiency) / gb) : 0;
+  const isMeasured = !!measured && measured > 0;
+  const high = isMeasured ? r1(measured) : bw > 0 ? r1((bw * COMBINE.efficiency) / gb) : 0;
   const tps = high > 0 ? { low: r1(high * COMBINE.hot), high } : null;
-  return { needMb: need, haveMb: have, verdict, maxCtx, tps };
+  return { needMb: need, haveMb: have, verdict, maxCtx, tps, measured: isMeasured };
 }
 
 /** Across devices (split mode): budgets add up; speed is the slowest link plus the hops. */
@@ -71,7 +77,7 @@ export function fitTogether(ps: Passport[], m: FitInput): Fit & { shares: { name
     const cool = shares.reduce((a, s) => a + s.mb / 1024 / (s.bw * COMBINE.efficiency), 0) + Math.max(0, shares.length - 1) * COMBINE.hopS;
     tps = { low: r1(COMBINE.hot / cool), high: r1(1 / cool) };
   }
-  return { needMb: need, haveMb: have, verdict, maxCtx, tps, shares: shares.map(({ name, mb }) => ({ name, mb })) };
+  return { needMb: need, haveMb: have, verdict, maxCtx, tps, measured: false, shares: shares.map(({ name, mb }) => ({ name, mb })) };
 }
 
 const bwOf = (p: Passport) => Number(p.mem_bw_read_gbs) || Number(p.mem_bw_gbs) || 0;

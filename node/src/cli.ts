@@ -10,6 +10,7 @@ import { version, isPacked } from './build.js';
 import { ledgerCommand } from './ledgercmd.js';
 import { collectInfo, infoText } from './info.js';
 import { peersCommand, chatCommand } from './mastercmd.js';
+import { benchCommand } from './bench.js';
 
 const HELP = `kula-node: make this computer a worker in a kula cluster
 
@@ -54,6 +55,11 @@ running a cluster from this computer:
       --probe-ms <n>     how long a worker has to answer before it is dropped (default 2000)
       a peer far away (relay) is used in apart mode only; split mode leaves it out and says so
       --dashboard <n>    local dashboard port on 127.0.0.1 (default 50580); --no-dashboard turns it off
+  kula-node bench [--model <file.gguf>] [--peer id…] [options]   measure, save to ~/.kula-node/bench/<date>.json
+      local prompt and generation tok/s (3 runs, median), memory bandwidth, gate round trip,
+      tunnel speed (10 MB), each peer's tok/s in apart mode, split load time and token time
+      --runs <n> (3)  --tokens <n> (64)  --ctx <n> (2048)  --tunnel-mb <n> (10, at most 64)
+      --no-apart  --no-split  --json (print the record)  --out <dir>
 
 the dashboard: while share or chat runs, http://127.0.0.1:50580/<random>/ (the exact
 url is printed) shows this computer, the gate, the peers, the ledger, a chat box
@@ -63,7 +69,7 @@ files live in ${home()} (KULA_NODE_HOME overrides)
 `;
 
 // flags that never take a value, so `--json host` does not swallow the host
-const BOOLEAN = new Set(['json', 'help', 'check', 'dry-run', 'no-qr', 'no-dashboard', 'verify', 'no-local', 'keep-local', 'code']);
+const BOOLEAN = new Set(['json', 'help', 'check', 'dry-run', 'no-qr', 'no-dashboard', 'verify', 'no-local', 'keep-local', 'code', 'tls', 'no-apart', 'no-split', 'no-bandwidth']);
 
 export function parse(argv: string[]): { cmd: string; flags: Record<string, string | boolean>; rest: string[] } {
   const [cmd = 'help', ...tail] = argv;
@@ -192,6 +198,7 @@ export async function main(argv: string[]): Promise<number> {
 
   if (cmd === 'peers') return peersCommand(rest[0], rest.slice(1), flags);
   if (cmd === 'chat') return chatCommand(flags);
+  if (cmd === 'bench') return benchCommand(flags);
 
   if (cmd === 'ledger') {
     return ledgerCommand({ verify: flags.verify === true, tail: flags.tail !== undefined ? num(flags.tail, 20) : undefined });

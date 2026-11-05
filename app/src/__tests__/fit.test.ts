@@ -57,7 +57,7 @@ describe('the header over the stored figure', () => {
 });
 
 describe('the context suggestion', () => {
-  const fit = (maxCtx: number): Fit => ({ needMb: 0, haveMb: 0, verdict: maxCtx ? 'fits' : 'no', maxCtx, tps: null });
+  const fit = (maxCtx: number): Fit => ({ needMb: 0, haveMb: 0, verdict: maxCtx ? 'fits' : 'no', maxCtx, tps: null, measured: false });
   it('is the largest power of two that fits, within the model’s own limit and 8k', () => {
     expect(suggestCtx(fit(4096), 40960)).toBe(4096);
     expect(suggestCtx(fit(16384), 40960)).toBe(8192);

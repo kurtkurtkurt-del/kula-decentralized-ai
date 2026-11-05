@@ -18,6 +18,9 @@ import { DashboardState, type DeviceView } from './dashboard/state.js';
 import { startDashboard, BATCH_PROMPTS, type Dashboard } from './dashboard/server.js';
 import { selfView, peerActions, ledgerActions, hostName, DASHBOARD_PORT } from './dashboard/wire.js';
 import { deviceId } from './share.js';
+import { simModelOf } from './gguf.js';
+import { readBenches } from './bench.js';
+import { measuredTps } from './benchcore.js';
 
 type Flags = Record<string, string | boolean>;
 const stamp = () => new Date().toISOString().slice(11, 19);
@@ -136,7 +139,16 @@ export async function chatCommand(flags: Flags): Promise<number> {
     if (!llama) { console.error('split mode needs llama.cpp on this computer: run kula-node setup'); return 1; }
     let setup;
     try {
-      setup = await prepareSplit({ modelBytes: size, localFreeMb: freeRamMB(), localBw: bw, peers, share: flags['keep-local'] !== true, probeMs, log, identity: me });
+      // the shape from the gguf header (a guess from the size when it cannot be read); measured
+      // tok/s on this model (kula-node bench) replace bandwidth x efficiency
+      const sm = simModelOf(modelFile);
+      const benches = readBenches();
+      const key = { id: sm.id, file: path.basename(modelFile), size };
+      const localTps = measuredTps(benches, 'self', key);
+      const peerTps = Object.fromEntries(peers.map((p) => [p.id, measuredTps(benches, p.id, key)]));
+      const known = [localTps ? `here ${localTps}` : null, ...peers.filter((p) => peerTps[p.id]).map((p) => `${p.name} ${peerTps[p.id]}`)].filter(Boolean);
+      if (known.length) log(`measured tok/s used by the planner: ${known.join(', ')}`);
+      setup = await prepareSplit({ model: sm, ctx, localFreeMb: freeRamMB(), localBw: bw, localTps, peerTps, peers, share: flags['keep-local'] !== true, probeMs, log, identity: me });
     } catch (e) {
       if (e instanceof TooBig) { console.error(e.message); return 1; }
       throw e;
@@ -162,9 +174,12 @@ export async function chatCommand(flags: Flags): Promise<number> {
       url = srv.url;
       log(`serving the model to the peers at ${url.replace(/\/m\/[0-9a-f]+\//, '/m/…/')}`);
     }
+    const benches = readBenches();
+    const key = { id: simModelOf(modelFile).id, file: path.basename(modelFile), size };
+    const measured = Object.fromEntries([['local', measuredTps(benches, 'self', key)], ...peers.map((p) => [p.id, measuredTps(benches, p.id, key)])]);
     cluster = await openApart({
       model: { url: url ?? 'file://' + modelFile, sha256, size, name: path.basename(modelFile), ctx },
-      localModelFile: flags['no-local'] === true ? null : modelFile, localBw: bw, llama, peers, probeMs, log, identity: me,
+      localModelFile: flags['no-local'] === true ? null : modelFile, localBw: bw, llama, peers, probeMs, log, identity: me, measuredTps: measured,
     });
   }
   // what the probe learned (a far peer's certificate, a spent pin, last_ok) goes back to the book

@@ -236,6 +236,18 @@ llama-server --host 127.0.0.1 -m <gguf> --rpc 127.0.0.1:p1,127.0.0.1:p2 --tensor
 Without llama.cpp on the computer, `split` says "run kula-node setup" and stops; `apart`
 drops the local device with the same hint and carries on with the peers.
 
+### measuring
+
+```bash
+kula-node bench --model <file.gguf> [--peer id,id…] [--no-apart] [--no-split] [--json]
+```
+
+Local prompt and generation tok/s, memory bandwidth, the gate round trip and tunnel speed
+to each peer (tls and far peers too), each peer's tok/s in apart mode and a split run; one
+record in `~/.kula-node/bench/`. `chat` then plans with the measured tok/s instead of
+bandwidth × efficiency, and with the model's shape from its gguf header. Fields and how to
+read them: [BENCH.md](BENCH.md).
+
 ## files
 
 | path | what |
