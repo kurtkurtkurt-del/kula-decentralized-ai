@@ -3,7 +3,95 @@
 `node/` is the command line program that makes a computer part of a kula
 cluster: a worker (`kula-node share`) or the computer that runs the cluster
 (`kula-node peers …`, `kula-node chat …`). The full reference is
-[`node/README.md`](../node/README.md). This page covers the local dashboard.
+[`node/README.md`](../node/README.md). This page covers installing it and the
+local dashboard.
+
+## install
+
+kula-node ships as one file per platform: Node 24 and kula-node packed together,
+so nothing else needs to be installed first. Each GitHub release of a `v*` tag
+carries `kula-node-mac-arm64`, `kula-node-mac-x64`, `kula-node-linux-x64`,
+`kula-node-linux-arm64`, `kula-node-win-x64.exe`, two `.deb`s, and
+`sha256sums.txt`. The install scripts check the download against that file and
+install nothing when it does not match.
+
+**macOS and Linux** (into `~/.local/bin`, no sudo):
+
+```sh
+curl -fsSL https://github.com/kurtkurtkurt-del/kula-decentralized-ai/releases/latest/download/install.sh | sh
+kula-node setup
+kula-node share
+```
+
+The script says so when `~/.local/bin` is not on your `PATH` and prints the
+line to add. `KULA_NODE_VERSION=0.1.0` picks a version, `KULA_NODE_BIN_DIR`
+another folder.
+
+**Windows** (PowerShell, into `%LOCALAPPDATA%\Programs\kula-node`, added to
+your user `PATH`, no admin):
+
+```powershell
+irm https://github.com/kurtkurtkurt-del/kula-decentralized-ai/releases/latest/download/install.ps1 | iex
+kula-node setup
+kula-node share
+```
+
+Open a new terminal after the install so the new `PATH` is seen. The first
+`kula-node share` makes Windows Defender Firewall ask about kula-node: allow
+it on **private** networks (your home wi-fi) only. Without that the phone
+cannot reach the gate.
+
+**Debian / Ubuntu**, from the release's `.deb`:
+
+```sh
+v=0.1.0; a=$(dpkg --print-architecture)   # amd64 or arm64
+curl -fsSLO https://github.com/kurtkurtkurt-del/kula-decentralized-ai/releases/download/v$v/kula-node_${v}_$a.deb
+sudo apt install ./kula-node_${v}_$a.deb
+```
+
+**By hand**: download the file for your platform and `sha256sums.txt` from the
+release, `shasum -a 256 -c --ignore-missing sha256sums.txt` (Linux:
+`sha256sum -c --ignore-missing sha256sums.txt`), `chmod +x`, put it on your
+`PATH`. The macOS binaries are signed ad hoc; downloaded with a browser they
+carry the quarantine flag, so run `xattr -d com.apple.quarantine kula-node-mac-*`
+once (curl and the install script do not set it).
+
+A homebrew formula and winget manifests are drafted under `packaging/`; the
+release job attaches filled-in copies (with the real sha256s) to each release.
+Neither is published to a tap or to winget-pkgs yet. The repository has to be
+public (or the release assets otherwise reachable) for the one-line installs
+above to work.
+
+Running bare, `kula-node` shows a short menu (setup, share, peers, help); on
+Windows a double-clicked `kula-node.exe` lands there too and waits for enter
+before closing. `kula-node setup` says up front which files it will fetch, how
+big they are in total and which sha256 each must have, then draws a progress
+bar. `--json` gives machine-readable output for `--version`, `setup --check`,
+`setup --dry-run`, `setup`, `probe`, `peers list` and `peers probe`.
+
+### making the binaries
+
+```sh
+cd node
+npm ci
+npm run pack:bin                                  # this machine's binary, then runs it (--version, --help)
+node tools/pack.mjs --target linux-x64,win-x64    # other targets; mac ones only on a Mac (codesign)
+node tools/release-files.mjs dist-bin             # .debs, formula, winget, sha256sums.txt next to them
+```
+
+`tools/pack.mjs` bundles `src/` with esbuild into one CommonJS file (the
+dashboard's three static files baked in), turns it into a single executable
+application blob with Node's `--experimental-sea-config`, and injects that with
+postject into the official Node 24 binary of each target. Those come from
+nodejs.org, checked against the release's `SHASUMS256.txt`, whose own sha256 is
+pinned in `tools/packlib.mjs`. The macOS binaries are then signed ad hoc
+(`codesign --sign -`). The dependencies (`bonjour-service`,
+`qrcode-terminal`) are plain JavaScript; the pack fails if a native addon ever
+gets into the bundle. Output goes to `node/dist-bin/` and downloads to
+`node/.pack-cache/`, both git-ignored. A binary is about 95 MB (Windows) to
+127 MB (Linux). `.github/workflows/node-pack.yml` does all of this on a `v*`
+tag and uploads the files to that tag's release (a draft when there is none);
+the tag must match `node/package.json`'s version.
 
 ## the dashboard
 

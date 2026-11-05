@@ -3,6 +3,33 @@
 Plan: `~/.claude/plans/memoized-kindling-puddle.md` (4.11.2026). Bu dosya her adımda güncellenir:
 ne yapıldı, ne doğrulandı, ne kaldı. Döndüğünde önce burayı oku.
 
+## 5.11 Mac: tek dosya kula-node (`claude/node-pack`)
+
+`origin/claude/node-master` + `integrate-night` + `web-dashboard` merge'leri üstüne (ILERLEME çakışmaları iki taraf
+tutularak çözüldü). Node kurmadan çalışan tek dosya ikililer. PR yok, tag/release yok, release/main'e dokunulmadı.
+
+- `node/tools/pack.mjs`: esbuild tek CJS paket (pano dosyaları içine gömülü) → Node SEA blob'u → postject ile resmi
+  Node 24.22.2 ikilisine. Hedefler: mac-arm64, mac-x64, linux-x64, linux-arm64, win-x64. Node arşivleri nodejs.org
+  `SHASUMS256.txt` ile, o dosyanın kendi sha256'sı `tools/packlib.mjs`'de sabit. Mac ikilileri `codesign --sign -`.
+  Bağımlılıklar saf JS (bonjour-service, qrcode-terminal); bundle'a native addon girerse pack durur.
+- `packaging/install.sh` (mac/linux, `~/.local/bin`, PATH notu), `packaging/install.ps1` (Windows, kullanıcı PATH'i,
+  güvenlik duvarı notu): ikisi de `sha256sums.txt` ile doğrular, tutmazsa hiçbir şey kurmaz. `packaging/homebrew/`
+  ve `packaging/winget/` taslak (sha yerine yer tutucu); `tools/release-files.mjs` gerçek sha'larla doldurur, .deb'i
+  de yazar (dpkg-deb gerekmez). Sürüm hep `node/package.json`'dan.
+- `.github/workflows/node-pack.yml`: `v*` tag'de test → hedef başına iş → .deb/formül/winget/kurulum betikleri/
+  `sha256sums.txt` → o tag'in release'ine (yoksa taslak release). Aksiyonlar sha ile sabit. Tag ≠ package.json sürümü
+  ise durur. Henüz hiç çalışmadı (tag yok).
+- İlk açılış: argümansız `kula-node` kısa menü (setup, share, peers, help; bench komutu yok). `setup` önce toplam
+  indirme boyutunu ve her dosyanın sha256'sını yazar, sonra ilerleme çubuğu. Linux/Windows llama arşivi artık
+  github'ın `digest` alanıyla da doğrulanıyor; ne sidecar ne digest varsa reddediliyor (önceden atlıyordu).
+  `--json`: `--version`, `setup --check/--dry-run`, `setup`, `probe`, `peers list`, `peers probe`.
+- Denendi: bu Mac'te mac-arm64 ikilisi yapıldı (122.6 MB), `--version`, `--help`, menü, `setup --dry-run`, `share`
+  + pano (200) çalıştı; install.sh yerel sunucudan gerçek ikiliyi kurdu. mac-x64 Rosetta altında `--version` verdi;
+  linux-x64 (127 MB) ve win-x64 (94 MB) yapıldı ama çalıştırılmadı. `npm test`: 65 test, 64 geçti, 1 atlandı (eski,
+  127.0.0.2 yok). Windows'ta install.ps1 denenmedi (pwsh yok).
+- Açık: depo özelse `curl … | sh` çalışmaz (release dosyaları herkese açık olmalı); ikililer imzasız (Windows
+  SmartScreen uyarır, mac'te tarayıcıyla inene `xattr -d com.apple.quarantine`); linux-arm64 CI'da çalıştırılmıyor.
+
 ## 5.11 cloud: yerel pano (`claude/web-dashboard`)
 
 `origin/claude/node-master` + `origin/claude/integrate-night` merge'i üstüne (ILERLEME çakışması iki taraf da
