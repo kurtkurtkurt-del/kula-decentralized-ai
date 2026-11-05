@@ -83,7 +83,7 @@ export function back(w) {
     case 'wifi-apart': return w.found?.paired ? 'wifi-list' : 'wifi-code';
     case 'hotspot': return 'wifi-apart';
     case 'connected': return w.way === 'cable' ? 'how' : 'wifi-list';
-    case 'model': return w.peerId ? 'connected' : 'how';
+    case 'model': return w.chat ? null : w.peerId ? 'connected' : 'how';
     case 'mode': return 'model';
     case 'pick': return 'mode';
     case 'load': return w.mode === 'split' && w.picked ? 'pick' : 'mode';

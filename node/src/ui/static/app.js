@@ -499,7 +499,7 @@ function whereText() {
     box.append(el('b', '', l.model.name), ` on ${names} · ${l.mode === 'phone' ? 'phone' : l.mode}`);
     return;
   }
-  box.append('no model yet · connect a phone');
+  box.append('no model yet · start a chat');
 }
 
 function updateEmpty() {
@@ -515,7 +515,7 @@ function updateEmpty() {
     sub.textContent = 'nothing is loaded yet: whoever runs kula on that computer picks a model.';
   } else {
     sub.append('nothing is loaded yet. ');
-    const b = el('button', 'link', 'connect a phone');
+    const b = el('button', 'link', 'start a chat');
     b.type = 'button';
     b.addEventListener('click', openConnect);
     sub.append(b, ' and pick a model.');
@@ -668,7 +668,9 @@ function renderBrain() {
     t.title = b.name;
     t.setAttribute('role', 'listitem');
     const busy = b.id === 'executor' && (S.status?.loaded?.devices ?? []).some((d) => d.busy) || b.id === 'planner' && !!S.status?.loading;
-    t.append(el('span', 'bt-n', String(b.n)), el('b', '', b.name), el('span', 'bt-stat', b.built ? b.stat() : 'not built yet'));
+    const head = el('span', 'bt-head');
+    head.append(el('span', 'bt-n', String(b.n)), el('b', '', b.name));
+    t.append(head, el('span', 'bt-stat', b.built ? b.stat() : 'not built yet'));
     if (busy) t.appendChild(el('span', 'dot busy bt-live'));
     t.addEventListener('click', () => openBranch(b.id));
     return t;
@@ -898,7 +900,8 @@ async function refreshAll() {
   }
 }
 $('connect-refresh').addEventListener('click', refreshAll);
-$('open-devices').addEventListener('click', () => { const d = $('devices'); if (d.open) return d.close(); d.showModal(); renderPeers(); renderCable(); refreshAll(); });
+function openDevices() { const d = $('devices'); if (d.open) return d.close(); d.showModal(); renderPeers(); renderCable(); refreshAll(); }
+$('open-devices').addEventListener('click', openDevices);
 $('devices').addEventListener('click', (e) => { if (e.target === $('devices')) $('devices').close(); }); // a click on the backdrop
 $('devices').addEventListener('close', () => stopScan());
 refreshPeers(false); // the count on the devices button from the start
@@ -1484,8 +1487,9 @@ const VIEWS = {
     const phone = phoneNow();
     const out = [q('which model?')];
     const sub = el('p', 'wiz-p');
-    sub.append(phone ? `for ${phone.name}. ` : 'no phone answers right now. ');
-    sub.appendChild(btn('connect another device', 'link', () => go({ type: 'another' })));
+    const n = S.peers.filter((p) => p.reach?.ok).length;
+    sub.append(n ? `${n} device${n === 1 ? '' : 's'} answer${n === 1 ? 's' : ''}${phone ? `, ${phone.name} first` : ''}. ` : S.status?.llama ? 'no device answers: it can still run on this computer. ' : 'no device answers right now. ');
+    sub.appendChild(btn('+ add a device', 'link', () => { $('connect').close(); openDevices(); }))
     out.push(sub);
     const l = S.status?.loaded;
     if (l) {
@@ -1600,10 +1604,12 @@ function renderWiz(force = false) {
   wizSig = sig;
   body.replaceChildren(...(VIEWS[W.step] ?? VIEWS.how)());
   // the dots: where this question sits
-  const stage = wiz.stageOf(W.step);
+  const first = W.chat ? 3 : 0; // start a chat: model · mode · load
+  const stage = Math.max(0, wiz.stageOf(W.step) - first);
+  const names = wiz.STAGES.slice(first);
   const dots = $('wiz-dots');
-  dots.replaceChildren(...wiz.STAGES.map((name, i) => { const li = el('li', i < stage ? 'past' : i === stage ? 'now' : ''); if (i === stage) li.setAttribute('aria-current', 'step'); return li; }));
-  dots.setAttribute('aria-label', `step ${stage + 1} of ${wiz.STAGES.length}`);
+  dots.replaceChildren(...names.map((name, i) => { const li = el('li', i < stage ? 'past' : i === stage ? 'now' : ''); if (i === stage) li.setAttribute('aria-current', 'step'); return li; }));
+  dots.setAttribute('aria-label', `step ${stage + 1} of ${names.length}`);
   $('wiz-back').hidden = !wiz.back(W) || W.step === 'checking' || W.step === 'done' || (W.step === 'load' && !!loadRun);
   if (wizStepShown !== W.step) { wizStepShown = W.step; $('wiz-q')?.focus(); }
   else if (active && $(active)) { const i = $(active); i.focus(); i.setSelectionRange?.(i.value.length, i.value.length); }
@@ -1762,8 +1768,10 @@ async function openConnect(auto) {
   getJson('models').then((m) => { S.models = m; if (run === wizRun) renderWiz(); }).catch(() => {});
   let peers = S.peers;
   try { peers = S.peers = await getJson('peers'); } catch {}
-  let start = wiz.startStep({ peers, status: S.status, explicit: !auto });
-  if (start === 'done') return;
+  // start a chat (6.11.2026): devices are added in the devices bubble, so this sheet begins at
+  // the model (or the load running); the cable and wi-fi steps are reached from "add a device"
+  let start = S.status?.loading ? 'load' : 'model';
+  W = { ...W, chat: true };
   const d = $('connect');
   const show = (step) => {
     W = { ...W, step };
@@ -1777,8 +1785,7 @@ async function openConnect(auto) {
     show('checking');
     try { peers = S.peers = await postJson('peers/probe'); wizModelsProbed = Date.now(); } catch {}
     if (run !== wizRun) return;
-    start = wiz.startStep({ peers, status: S.status, explicit: !auto });
-    if (start === 'done') { d.close(); return; }
+    start = S.status?.loading ? 'load' : 'model';
   }
   show(start);
   enterStep();

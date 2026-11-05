@@ -37,13 +37,13 @@
       <button type="button" class="icon" id="side-open" aria-label="show the chat list" title="chats">
         <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M3.5 6h13M3.5 10h13M3.5 14h13"/></svg>
       </button>
-      <button type="button" class="where" id="where" title="connect a device, pick a model">
+      <button type="button" class="where" id="where" title="start a chat: pick a model and how it runs">
         <span class="dot" id="where-dot"></span>
         <span class="where-text" id="where-text">no model yet</span>
       </button>
       <div class="top-right">
         <button type="button" class="pill owner-only devices-btn" id="open-devices" title="add and see devices">devices <b id="dev-count"></b></button>
-        <button type="button" class="pill owner-only" id="open-connect">connect</button>
+        <button type="button" class="pill owner-only start-btn" id="open-connect">start a chat</button>
         <button type="button" class="icon owner-only" id="open-invite" aria-label="invite a device on this wi-fi" title="invite a device">
           <svg viewBox="0 0 20 20" aria-hidden="true"><rect x="3.5" y="3.5" width="5" height="5" rx="1"/><rect x="11.5" y="3.5" width="5" height="5" rx="1"/><rect x="3.5" y="11.5" width="5" height="5" rx="1"/><path d="M11.5 11.5h2v2M16.5 11.5v5h-5M13.5 16.5v-1"/></svg>
         </button>
@@ -106,7 +106,7 @@
 
 <dialog class="sheet" id="connect" aria-labelledby="connect-title">
   <form method="dialog" class="sheet-head">
-    <h2 id="connect-title">connect</h2>
+    <h2 id="connect-title">start a chat</h2>
     <button class="icon" value="close" aria-label="close">
       <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M5.5 5.5l9 9M14.5 5.5l-9 9"/></svg>
     </button>
