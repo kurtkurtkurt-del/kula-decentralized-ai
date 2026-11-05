@@ -225,6 +225,8 @@ export default function ModelScreen() {
         ) : (
           <Button label={t('model.start')} onPress={() => (fit && ctx > Math.max(fit.maxCtx, 1024) ? saveSettings({ ctx: fit.maxCtx > 0 ? defaultCtx(fit) : 1024 }) : null, setAsk(true))} kind="red" />
         )}
+        {/* the other way round: this phone works for another device (a computer's chat page, a master phone) */}
+        <Button label={t('share.title')} onPress={() => router.push('/share')} kind="line" />
       </View>
 
       {/* the mode question, asked every time: three cards, the chosen one lit, one start */}

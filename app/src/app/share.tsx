@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import * as Brightness from 'expo-brightness';
 import QRCode from 'react-native-qrcode-svg';
+import * as Clipboard from 'expo-clipboard';
 import Button from '@/components/Button';
 import StaffPage from '@/components/StaffPage';
 import { useAppSize } from '@/hooks/useAppSize';
@@ -27,6 +28,7 @@ export default function ShareScreen() {
   const { width } = useAppSize();
   const mine = useShare();
   const [qr, setQr] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
   const [status, setStatus] = useState<WorkerStatus | null>(null);
   const [wifi, setWifi] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -124,7 +126,13 @@ export default function ShareScreen() {
             <QRCode value={qr} size={Math.min(width - 96, 280)} color={colors.paper} backgroundColor={colors.ink} ecl="L" />
           </View>
           <Text style={styles.mono}>{up(`${mine?.name ?? ''} · ${wifi ?? ''}:${mine?.port ?? ''}`)}</Text>
-          {status?.fp ? <Text style={styles.mono}>{up(`${t('share.fp')} ${status.fp.slice(0, 8)} ${status.fp.slice(8, 16)}${status.pin ? ` · ${t('share.pin')} ${status.pin}` : ''}`)}</Text> : null}
+          {status?.fp ? <Text style={styles.mono} selectable>{up(`${t('share.fp')} ${status.fp.slice(0, 8)} ${status.fp.slice(8, 16)}${status.pin ? ` · ${t('share.pin')} ${status.pin}` : ''}`)}</Text> : null}
+          {/* the qr's text, for a device that cannot scan (a computer's chat page: "paste a code").
+              it carries the pairing code (or the v2 secret): copied only on a press, said so */}
+          <Pressable onPress={() => { Clipboard.setStringAsync(qr).then(() => { tapDone(); setCopied(true); setTimeout(() => setCopied(false), 2500); }).catch(() => {}); }} accessibilityRole="button" accessibilityLabel={t('share.copy')} hitSlop={8} style={styles.linkHit}>
+            <Text style={styles.link}>{copied ? t('share.copied') : t('share.copy')} ›</Text>
+          </Pressable>
+          <Text style={styles.hint}>{t('share.copy.hint')}</Text>
           {mine?.relay ? (
             status?.relay ? (
               <>

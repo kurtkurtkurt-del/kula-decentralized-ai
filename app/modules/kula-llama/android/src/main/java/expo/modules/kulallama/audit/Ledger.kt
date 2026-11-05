@@ -65,7 +65,9 @@ class Ledger(
 
   companion object {
     const val GENESIS = "0000000000000000000000000000000000000000000000000000000000000000"
-    private val sigTail = Regex(""","sig":"([A-Za-z0-9+/=]*)"}$""")
+    // the closing brace escaped: java's regex takes a bare "}" as a literal, android's ICU
+    // engine refuses it (the worker process died at class load, 5.11.2026)
+    private val sigTail = Regex(""","sig":"([A-Za-z0-9+/=]*)"\}$""")
     private val prevField = Regex(""""prev":"([0-9a-f]{64})"""")
 
     fun sha256Hex(bytes: ByteArray): String =
