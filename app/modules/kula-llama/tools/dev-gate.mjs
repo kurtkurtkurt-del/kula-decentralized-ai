@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 // A gate on this Mac for testing the phone cluster without a second phone: the same
 // handshake as Gate.kt (KULA1, HMAC-SHA256 over "nonce_c|nonce_s|channel"), piping the rpc
-// channel to a ggml-rpc-server it starts on 127.0.0.1 and the api channel to llama-server.
+// channel to a ggml-rpc-server it starts on 127.0.0.1 and the api channel to llama-server
+// through a shim that speaks the worker API (/status /load /chat /stop).
 // kula-node (node/) is the real thing; this is the smallest piece of it, kept here so the
 // module's own tests do not depend on node/.
 //
@@ -12,7 +13,8 @@ import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { createServer, connect } from 'node:net';
 import { existsSync } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
+import { createServer as createHttpServer } from 'node:http';
+import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const args = Object.fromEntries(process.argv.slice(2).map((a, i, all) => (a.startsWith('--') ? [a.slice(2), all[i + 1] ?? true] : [])).filter((x) => x.length));
@@ -43,13 +45,91 @@ async function ensureApi() {
   if (!args.model) return null;
   apiPort = await freePort();
   const p = spawn(join(host, 'llama-server'), ['-m', String(args.model), '--host', '127.0.0.1', '--port', String(apiPort), '-c', '2048'], { stdio: 'inherit', env: { ...process.env, DYLD_LIBRARY_PATH: host } });
-  p.on('exit', () => (apiPort = 0));
-  await new Promise((r) => setTimeout(r, 1500));
-  return apiPort;
+  p.on('exit', () => { apiPort = 0; apiReady = null; });
+  // llama-server answers 503 on /health while the model loads; a tunnel opened before that
+  // would hand the peer a refusal, so wait until it is healthy (a few seconds for small models)
+  const port = apiPort;
+  for (let i = 0; i < 240; i++) {
+    const ok = await fetch(`http://127.0.0.1:${port}/health`).then((r) => r.ok).catch(() => false);
+    if (ok) return port;
+    if (!apiPort) return null;
+    await new Promise((r) => setTimeout(r, 500));
+  }
+  return null;
+}
+let apiReady = null;
+const ensureApiOnce = () => (apiReady ??= ensureApi().then((p) => { if (!p) apiReady = null; return p; }));
+
+// The app's api channel speaks kula's worker API (ApiServer.kt: /status /load /chat /stop),
+// not llama-server's; this shim translates, so a Mac with only llama-server acts as a worker.
+let shimPort = 0;
+let shimReady = null;
+const ensureShim = () => (shimReady ??= startShim().then((p) => { if (!p) shimReady = null; return p; }));
+async function startShim() {
+  if (shimPort) return shimPort;
+  const upstream = await ensureApiOnce();
+  if (!upstream) return null;
+  const served = basename(String(args.model));
+  const srv = createHttpServer(async (req, res) => {
+    let body = '';
+    for await (const c of req) body += c;
+    console.log('api', req.method, req.url, body.length, 'bytes');
+    const json = body ? JSON.parse(body) : {};
+    // close-delimited like ApiServer.kt (no chunked framing): the app reads until the socket ends
+    const sse = () => { res.useChunkedEncodingByDefault = false; res.chunkedEncoding = false; res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'close' }); };
+    const send = (o) => res.write(`data: ${JSON.stringify(o)}\n\n`);
+    if (req.method === 'GET' && req.url === '/status') {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ loaded: true, model: served, busy: false, ctx: 2048 }));
+    }
+    if (req.method === 'POST' && req.url === '/stop') { res.writeHead(200); return res.end('{"ok":true}'); }
+    if (req.method === 'POST' && req.url === '/load') {
+      sse();
+      if (json.name && json.name !== served) send({ error: `dev gate serves ${served} only` });
+      else send({ done: true, ctx: 2048, sha256: json.sha256 ?? null });
+      return res.end();
+    }
+    if (req.method === 'POST' && req.url === '/chat') {
+      sse();
+      const start = Date.now();
+      let first = 0, n = 0;
+      try {
+        const r = await fetch(`http://127.0.0.1:${upstream}/v1/chat/completions`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ messages: json.messages ?? [], max_tokens: json.maxTokens ?? 512, temperature: json.temperature ?? 0.7, top_p: json.topP ?? 0.95, top_k: json.topK ?? 40, min_p: json.minP ?? 0.05, repeat_penalty: json.repeatPenalty ?? 1.1, stream: true }),
+        });
+        let buf = '';
+        for await (const chunk of r.body) {
+          buf += Buffer.from(chunk).toString('utf8');
+          let i;
+          while ((i = buf.indexOf('\n')) >= 0) {
+            const line = buf.slice(0, i).trim();
+            buf = buf.slice(i + 1);
+            if (!line.startsWith('data: ') || line === 'data: [DONE]') continue;
+            const piece = JSON.parse(line.slice(6)).choices?.[0]?.delta?.content;
+            if (piece) { if (!first) first = Date.now(); n++; send({ t: piece }); }
+          }
+        }
+        const ms = Date.now() - start;
+        console.log('api chat done', n, 'pieces in', Date.now() - start, 'ms');
+        send({ done: true, tokens: n, ms, firstMs: first ? first - start : ms, tps: n && ms ? (n * 1000) / ms : 0 });
+      } catch (e) {
+        console.log('api chat failed', e);
+        send({ error: String(e.message ?? e) });
+      }
+      return res.end();
+    }
+    res.writeHead(404, { 'Content-Type': 'application/json' });
+    res.end('{"error":"no such route"}');
+  });
+  shimPort = await new Promise((r) => srv.listen(0, '127.0.0.1', () => r(srv.address().port)));
+  console.log(`kula api shim on 127.0.0.1:${shimPort} -> llama-server ${upstream}`);
+  return shimPort;
 }
 
 const ledger = [];
-createServer((sock) => {
+// half-open on both legs: a client that finishes sending (FIN) still gets the whole reply
+createServer({ allowHalfOpen: true }, (sock) => {
   const peer = sock.remoteAddress;
   let buf = Buffer.alloc(0);
   let step = 0, nonceC = '', nonceS = '', channel = '';
@@ -73,13 +153,18 @@ createServer((sock) => {
       } else {
         clearTimeout(timer);
         if (!same(line, hmac(nonceC, nonceS, channel))) return refuse('wrong secret');
-        const target = channel === 'rpc' ? await ensureRpc().catch(() => null) : await ensureApi();
+        const target = channel === 'rpc' ? await ensureRpc().catch(() => null) : await ensureShim();
         if (!target) return refuse('channel closed');
-        const local = connect(target, '127.0.0.1');
+        const local = connect({ port: target, host: '127.0.0.1', allowHalfOpen: true });
         local.on('connect', () => {
           sock.write(`OK ${hmac(nonceS, nonceC, channel)}\n`);
           if (buf.length) local.write(buf);
           sock.pipe(local).pipe(sock);
+          let up = 0, down = 0;
+          local.on('data', (d) => (down += d.length));
+          sock.on('data', (d) => (up += d.length));
+          local.on('end', () => console.log('target ended', channel, 'up', up, 'down', down));
+          sock.on('close', () => console.log('peer closed', channel, 'up', up, 'down', down));
           ledger.push({ t: Date.now(), kind: 'connect', peer, channel });
           console.log('connected', peer, channel, '->', target);
         });
@@ -91,5 +176,6 @@ createServer((sock) => {
   sock.on('error', () => {});
 }).listen(port, '0.0.0.0', () => {
   console.log(`dev gate on 0.0.0.0:${port}`);
+  if (args.model) ensureShim().then((p) => { if (!p) console.log('llama-server failed'); });
   console.log(JSON.stringify({ k: 'kula-peer', v: 2, id: 'dev-gate', name: 'this mac', host: args.host ?? '10.0.2.2', port, secret, kind: 'pc', ram: 8000, bw: 60 }));
 });

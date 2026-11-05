@@ -1,0 +1,7 @@
+<!-- Release only: the api channel is plain HTTP to the gate's tunnel on 127.0.0.1 (the bytes
+     cross the network inside the authenticated tunnel, never as cleartext HTTP). Release builds
+     forbid cleartext by default, which blocked every fetch to the tunnel; this allows it for
+     the loopback addresses and nothing else. Debug builds keep Expo's usesCleartextTraffic. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+  <application android:networkSecurityConfig="@xml/kula_network_security" />
+</manifest>
