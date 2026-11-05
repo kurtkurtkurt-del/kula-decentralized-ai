@@ -24,7 +24,7 @@ const ASKED = 'push.asked';
 export const pushSupported = Device.isDevice && !(Platform.OS === 'android' && Constants.executionEnvironment === ExecutionEnvironment.StoreClient);
 
 let loaded: NotificationsModule | null = null;
-function notifications(): NotificationsModule | null {
+export function notifications(): NotificationsModule | null {
   if (!pushSupported) return null;
   if (!loaded) {
     // eslint-disable-next-line @typescript-eslint/no-require-imports -- must not load in Expo Go on Android

@@ -24,6 +24,8 @@ export const common = {
   'word.signout': { en: 'sign out', de: 'abmelden', tr: 'çıkış yap' },
   'word.save': { en: 'save', de: 'speichern', tr: 'kaydet' },
   'word.cancel': { en: 'cancel', de: 'abbrechen', tr: 'vazgeç' },
+  'word.on': { en: 'on', de: 'an', tr: 'açık' },
+  'word.off': { en: 'off', de: 'aus', tr: 'kapalı' },
   'word.close': { en: 'close', de: 'schließen', tr: 'kapat' },
   'word.back': { en: 'back', de: 'zurück', tr: 'geri' },
   'word.guest': { en: 'guest', de: 'gast', tr: 'misafir' },

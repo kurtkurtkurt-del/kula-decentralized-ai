@@ -15,8 +15,10 @@ import { myCards, toCardData, type CardRow } from '@/data/contribution';
 import { measure, passportJson, usePassport, type Passport } from '@/data/passport';
 import { nativeAvailable } from '@/passport/measure';
 import { useProfile } from '@/data/profile';
-import { nightWindow } from '@/data/settings';
-import { endNow, useNight } from '@/night/useNight';
+import { nightRules, nightWindow } from '@/data/settings';
+import { endNow, recheck, useNight } from '@/night/useNight';
+import { setWantTonight, wantTonight } from '@/night/conditions';
+import { useReports } from '@/night/report';
 import { useRefreshOnFocus } from '@/hooks/useRefresh';
 import { upperData, useLang } from '@/i18n';
 import { colors, fonts, radius } from '@/theme/tokens';
@@ -44,6 +46,10 @@ export default function PassportScreen() {
   const { width, height } = useAppSize();
   const passport = usePassport();
   const night = useNight();
+  const reports = useReports();
+  const last = reports.at(-1) ?? null;
+  const [want, setWant] = useState(wantTonight);
+  const flipWant = () => { setWantTonight(!want); setWant(!want); recheck(); };
   const tick = useRefreshOnFocus('cards', 'profile');
   const profile = useProfile(tick);
   const [busy, setBusy] = useState(false);
@@ -83,7 +89,7 @@ export default function PassportScreen() {
   const cardW = Math.round(width * CARD);
   const cardH = cardW * 1.5;
   const name = (profile?.display_name ?? profile?.handle ?? t('passport.you')).toLowerCase();
-  const waiting = night.state === 'waiting' && night.reason ? t(`night.waiting.${night.reason}`) : null;
+  const waiting = night.state === 'waiting' && night.reason ? t(`night.waiting.${night.reason}`, { n: nightRules().minBattery }) : null;
 
   return (
     <View style={styles.root}>
@@ -163,7 +169,7 @@ export default function PassportScreen() {
             <View style={styles.between}>
               <View style={{ flex: 1 }}>
                 <Text style={styles.nightTitle} numberOfLines={1}>{(night.slug ?? '').replace(/-/g, ' ') || t('night.waiting.noproject')}</Text>
-                <Text style={styles.meta}>{night.state === 'running' ? up(t('night.running')) : night.state === 'done' ? t('night.done') : (waiting ?? '')}</Text>
+                <Text style={styles.meta}>{night.state === 'running' ? up(t('night.running')) : night.phase === 'paused' ? `${up(t('night.paused'))}${waiting ? ` · ${waiting}` : ''}` : night.state === 'done' || night.phase === 'done' ? t('night.done') : (waiting ?? '')}</Text>
               </View>
               <Text style={styles.count}>{fmtTokens(night.tokens)}</Text>
             </View>
@@ -186,6 +192,15 @@ export default function PassportScreen() {
               {' · '}
               {t('night.foreground')}
             </Text>
+            {/* night-2: the switch for tonight, and last night's report in one line */}
+            <View style={styles.between}>
+              <Pressable onPress={flipWant} hitSlop={8} accessibilityRole="switch" accessibilityState={{ checked: want }}>
+                <Text style={[styles.meta, styles.link]}>{`${t('night.tonight.on')}: ${want ? t('word.on') : t('word.off')}`}</Text>
+              </Pressable>
+              <Pressable onPress={() => router.push('/night/report')} hitSlop={8} accessibilityRole="link">
+                <Text style={[styles.meta, styles.link]} numberOfLines={1}>{last ? t('night.report.last', { units: last.units, tps: last.tps, wh: last.wh }) : t('night.report')}</Text>
+              </Pressable>
+            </View>
           </View>
         </View>
 

@@ -29,6 +29,19 @@ export async function saveSettings(patch: SettingsPatch) {
 }
 export const nightWindow = () => ({ from: Storage.getItemSync('night.from') ?? '23:00', to: Storage.getItemSync('night.to') ?? '07:30', wifiOnly: Storage.getItemSync('night.wifi') !== '0' });
 
+// The rest of the night's rules live only on the phone (night-2, 5.11.2026): the server's
+// settings_set does not know them yet. Defaults: on charge only, battery at least 30 %.
+export type NightRules = { from: string; to: string; wifiOnly: boolean; chargeOnly: boolean; minBattery: number };
+export const MIN_BATTERY_CHOICES = [20, 30, 50, 80];
+export function nightRules(): NightRules {
+  const n = Number(Storage.getItemSync('night.minBattery'));
+  return { ...nightWindow(), chargeOnly: Storage.getItemSync('night.charge') !== '0', minBattery: n > 0 && n <= 100 ? n : 30 };
+}
+export function saveNightRules(patch: Partial<Pick<NightRules, 'chargeOnly' | 'minBattery'>>) {
+  if (patch.chargeOnly !== undefined) Storage.setItemSync('night.charge', patch.chargeOnly ? '1' : '0');
+  if (patch.minBattery !== undefined) Storage.setItemSync('night.minBattery', String(patch.minBattery));
+}
+
 // ok · empty · format · taken · yours
 export async function handleStatus(handle: string): Promise<string> {
   const { data, error } = await supabase.rpc('handle_status', { p_handle: handle });
