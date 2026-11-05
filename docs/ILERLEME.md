@@ -399,3 +399,17 @@ Yalnız JS; native dokunulmadı (indirici parça başına aynı `download(id,url
   99 test yeşil. `docs.expo.dev` bu konteynerden erişilemedi; API'ler kurulu paketlerin tip dosyalarından okundu.
 - Eksik: ölçülen W passport'a girmedi (3 W varsayılıyor); canlı sunucuda `night_report` rpc'si; typed routes
   dosyası `expo start` ile yenilenmeli (`/night/report` yeni).
+## 5.11 sabaha karşı: cloud 2. dalga (kullanıcı: "hepsini cloud ile kodla")
+
+Opus oturumu durduruldu; `release/local-2026-10-20` origin'e itildi (`9a2f91f`). Altı cloud oturumu, her biri kendi dalı:
+
+| dal | iş | üstüne kurulduğu dal |
+|---|---|---|
+| `claude/integrate-night` | üç gece dalını release üstüne birleştir, testler, inceleme | release |
+| `claude/audit-ui` | ayarlar → beyin denetimi sayfası, eş rozetleri, `llm/audit.ts` | quirky-einstein |
+| `claude/node-master` | kula-node yönetici modu: `peers`, `chat --mode apart\|split`, planlayıcı portu | loving-dijkstra |
+| `claude/models-library` | çok parçalı gguf, HF lisans/gated, disk, gerçek kv ile fit | release |
+| `claude/gate-tls` | kapı protokol v2: TLS 1.3 + parmak izi, QR v3, vektörler, `docs/GATE.md` | quirky-einstein |
+| `claude/night-2` | gece işçisi koşulları, planlayıcı, sabah raporu, ayarlar | vibrant-cori |
+
+Hiçbiri release'e dokunmaz, PR açmaz. Cloud oturumları bitince haber vermez: sabah `git fetch origin && git branch -r`.
