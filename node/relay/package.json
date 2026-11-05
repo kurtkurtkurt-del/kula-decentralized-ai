@@ -1,0 +1,25 @@
+{
+  "name": "kula-relay",
+  "version": "0.1.0",
+  "description": "a blind pipe between two kula devices behind nat; the gate's tls runs end to end through it",
+  "license": "MIT",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=20" },
+  "bin": { "kula-relay": "dist/main.js" },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/main.js",
+    "dev": "tsx src/main.ts",
+    "test": "cd .. && node --import tsx --test test/relay.test.ts"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "@types/ws": "^8.5.12",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0"
+  }
+}
