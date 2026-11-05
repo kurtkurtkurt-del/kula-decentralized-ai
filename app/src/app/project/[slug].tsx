@@ -4,17 +4,18 @@ import { useAppSize } from '@/hooks/useAppSize';
 import { Image } from 'expo-image';
 import { SvgUri } from 'react-native-svg';
 import { StatusBar } from 'expo-status-bar';
-import { router, useLocalSearchParams } from 'expo-router';
+import { useLocalSearchParams } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import BackButton from '@/components/BackButton';
 import Button from '@/components/Button';
+import NightNetwork from '@/components/NightNetwork';
 import PullDownScroll from '@/components/PullDownScroll';
 import ShareButton from '@/components/ShareButton';
 import Tips from '@/components/Tips';
 import { useAuth } from '@/auth/AuthContext';
 import { aboutFor, samplesFor, type About, type Sample } from '@/data/about';
 import { monthNights, useNightSummary } from '@/data/night';
-import { fetchProject, peekProject, posterUrl, swipe, type Project, type ProjectPage } from '@/data/projects';
+import { fetchProject, peekProject, posterUrl, keepProject, type Project, type ProjectPage } from '@/data/projects';
 import { OfflineError, useShelf } from '@/lib/offline';
 import { shareProject } from '@/lib/share';
 import { chooseTonight, recheck, tonightProject } from '@/night/useNight';
@@ -22,7 +23,6 @@ import { upperData, useLang } from '@/i18n';
 import { colors, fonts, radius } from '@/theme/tokens';
 import { brand } from '@/theme/layout';
 
-const fallback = require('../../../assets/intro/concert.jpg');
 
 // The project page (the night page's layout): the poster, the title and the model, a
 // perforated line, a stub with nights · phones · energy large, and the red action: work
@@ -69,15 +69,11 @@ export default function ProjectScreen() {
   const keep = () => {
     if (!p) return;
     setKept(true);
-    if (session) swipe(p.slug, 'right').catch(() => {});
+    if (session) keepProject(p.slug).catch(() => {});
   };
   // "work on it tonight": the night worker picks this project when the conditions are met.
   const pickTonight = () => {
     if (!p) return;
-    if (!session || session.user.is_anonymous) {
-      router.push('/signup');
-      return;
-    }
     if (!kept) keep();
     chooseTonight(tonight ? null : p.slug);
     setTonight(!tonight);
@@ -97,7 +93,7 @@ export default function ProjectScreen() {
           <View style={styles.ticketWrap}>
             <View style={styles.ticket}>
               <View style={[styles.ticketPhoto, { height: (width - brand.left * 2) * 0.78 }]}>
-                {p.image_url ? <Image source={{ uri: p.image_url }} style={styles.fill} contentFit="cover" /> : poster ? <SvgUri uri={poster} width="100%" height="100%" onError={() => setBroken(true)} /> : <Image source={fallback} style={styles.fill} contentFit="cover" />}
+                {p.image_url ? <Image source={{ uri: p.image_url }} style={styles.fill} contentFit="cover" /> : poster ? <SvgUri uri={poster} width="100%" height="100%" onError={() => setBroken(true)} /> : <NightNetwork seed={p.slug.length * 13 + (p.poster_no ?? 0)} />}
                 <ShareButton onPress={() => shareProject(p)} style={styles.ticketShare} />
               </View>
               <View style={styles.ticketHead}>
@@ -169,7 +165,7 @@ export default function ProjectScreen() {
                 </View>
               </View>
             ) : null}
-            <Text style={styles.mono}>{up(tn('deck.nights', p.nights_wanted))} · {upperData(p.model)}</Text>
+            <Text style={styles.mono}>{up(tn('project.nightsFor', p.nights_wanted))} · {upperData(p.model)}</Text>
           </View>
         </PullDownScroll>
       ) : (

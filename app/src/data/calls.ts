@@ -12,7 +12,7 @@ export type CallPerson = { handle: string | null; display_name: string | null; h
 export async function callCreate(slug: string, night: string, reach: Reach, note: string | null): Promise<string> {
   const { data, error } = await supabase.rpc('call_create', { p_slug: slug, p_night: night, p_reach: reach, p_note: note });
   if (error) throw error;
-  invalidate('callMine', 'kept', 'deck');
+  invalidate('callMine', 'kept');
   return String(data);
 }
 export async function callAudience(): Promise<Audience | null> {
@@ -34,7 +34,7 @@ export async function callInbox(): Promise<CallInvite[]> {
   const w = waiting();
   return list.filter((i) => !['in', 'out', 'cancel'].includes(w.get(i.id) ?? ''));
 }
-const CALL_SHELVES = ['callInbox', 'callMine', 'callPeople', 'kept', 'deck'];
+const CALL_SHELVES = ['callInbox', 'callMine', 'callPeople', 'kept'];
 outbox(
   'callAnswer',
   async (j) => {

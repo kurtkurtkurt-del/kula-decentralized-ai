@@ -2,6 +2,7 @@ import { lastPassport } from '@/data/passport';
 import { chat, engine, load, unload } from '@/llm/engine';
 import { defaultCtx, fitOn } from '@/llm/fit';
 import { llama } from '@/llm/native';
+import { note, noteUnit } from '@/llm/brainlog';
 import { localById, localModels, peers, settings, type LocalModel } from '@/llm/store';
 import { DemoJobs, SYSTEM, checkAnswer, type JobSource, type Unit } from './jobs';
 import { PEER_WATTS, WATTS, type NightDevice, type NightStatus, type NightWorker } from './NightWorker';
@@ -54,6 +55,7 @@ export class LlamaWorker implements NightWorker {
     this.measure();
     this.s = { ...this.s, state: 'done' };
     this.tell();
+    note({ at: this.opt.now(), kind: 'night', key: 'brain.night.end', vars: { units: this.s.units ?? 0, tokens: this.s.tokens, right: (this.s.checked ?? 0) - (this.s.wrong ?? 0), checked: this.s.checked ?? 0 }, tone: 'info' });
     llama?.keepScreenOn(false).catch(() => {});
     void unload().catch(() => {});
   }
@@ -102,11 +104,18 @@ export class LlamaWorker implements NightWorker {
       const devs = engine().devices;
       this.s = { ...this.s, model: model.name, devices: devs.map((d) => ({ id: d.id, name: d.name, tokens: 0, units: 0 })) };
       this.tell();
+      note({ at: this.opt.now(), kind: 'night', key: 'brain.night.start', vars: { model: model.name, n: devs.length, slug: (this.s.slug ?? '').replace(/-/g, ' ') }, detail: devs.map((d) => d.name.toLowerCase()).join('  ·  '), tone: 'info' });
       await Promise.all(devs.map((d) => this.loop(run, d.id)));
       // the source ran dry: the night is over on its own
-      if (this.alive(run)) this.stop();
-    } catch {
-      if (this.alive(run)) this.stop();
+      if (this.alive(run)) {
+        note({ at: this.opt.now(), kind: 'night', key: 'brain.night.drained', tone: 'ok' });
+        this.stop();
+      }
+    } catch (e) {
+      if (this.alive(run)) {
+        this.stop();
+        note({ at: this.opt.now(), kind: 'error', key: 'brain.night.failed', detail: (e as Error).message, tone: 'bad' });
+      }
     }
   }
 
@@ -140,6 +149,10 @@ export class LlamaWorker implements NightWorker {
       this.inFlight.delete(dev);
       if (!this.alive(run)) return; // stopped under it: not counted, the pile is done with
       const ok = unit.expected ? checkAnswer(unit.expected, text) : undefined;
+      const name = (this.s.devices ?? []).find((d) => d.id === dev)?.name.toLowerCase() ?? dev;
+      // the brain tab: the unit on its device's running line; a wrong known answer on its own
+      if (ok === false) note({ at: this.opt.now(), kind: 'check', key: 'brain.check.wrong', vars: { device: name, type: unit.type }, detail: `${unit.expected} ≠ ${text.trim().slice(0, 40)}`, tone: 'bad' });
+      else noteUnit(this.opt.now(), name, r.tokens, ok === true);
       await this.source!.done(unit, { text, device: r.device, tokens: r.tokens, ms: r.ms, ok }).catch(() => {});
       const devices = (this.s.devices ?? []).map((d): NightDevice => (d.id === dev ? { ...d, tokens: d.tokens + r.tokens, units: d.units + 1, out: false } : d));
       this.s = { ...this.s, tokens: this.s.tokens + r.tokens, units: (this.s.units ?? 0) + 1, checked: (this.s.checked ?? 0) + (ok === undefined ? 0 : 1), wrong: (this.s.wrong ?? 0) + (ok === false ? 1 : 0), devices };
@@ -150,6 +163,7 @@ export class LlamaWorker implements NightWorker {
       if (!this.alive(run)) return;
       // out for five minutes; the unit goes back for another device
       this.outUntil.set(dev, this.opt.now() + this.opt.outMs);
+      note({ at: this.opt.now(), kind: 'out', key: 'brain.out', vars: { device: (this.s.devices ?? []).find((d) => d.id === dev)?.name.toLowerCase() ?? dev, min: Math.round(this.opt.outMs / 60000) }, tone: 'warn' });
       await this.source!.retry?.(unit);
       this.s = { ...this.s, devices: (this.s.devices ?? []).map((d) => (d.id === dev ? { ...d, out: true } : d)) };
       this.tell();

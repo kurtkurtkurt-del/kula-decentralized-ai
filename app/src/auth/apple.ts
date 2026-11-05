@@ -10,7 +10,7 @@ import { supabase } from '@/lib/supabase';
 //
 // Apple gives the name only on the very first sign-in, so it is stored then.
 // Pressed as a guest it signs in normally (Supabase cannot link an id token to an
-// anonymous user); the guest's swipes stay with the guest, as with Google when
+// anonymous user); the guest's keeps stay with the guest, as with Google when
 // manual linking is off.
 
 export async function appleAvailable(): Promise<boolean> {

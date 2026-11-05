@@ -237,7 +237,7 @@ type ReadOptions = {
   fresh?: boolean;
 };
 
-// group: a shelf (deck, comments …), key: slot on the shelf, max: shelf capacity.
+// group: a shelf (kept, coops …), key: slot on the shelf, max: shelf capacity.
 // stale: true when the value came from the phone, not from the server just now.
 export async function cachedRead<T>(group: string, key: string, work: () => Promise<T>, max = 1, opts: ReadOptions = {}): Promise<{ value: T; stale: boolean }> {
   const shelfKey = `cache.${who()}.${group}`;
@@ -278,7 +278,7 @@ export function peek<T>(group: string, key: string): T | null {
   return s ? (s.v as T) : null;
 }
 
-// Put something on a shelf directly (nights from the deck, so night pages open offline).
+// Put something on a shelf directly (projects from a list, so their pages open offline).
 export async function shelve(group: string, entries: [string, unknown][], max: number) {
   if (!entries.length) return;
   const shelfKey = `cache.${who()}.${group}`;
@@ -288,8 +288,8 @@ export async function shelve(group: string, entries: [string, unknown][], max: n
 }
 
 // Kept / let go on this phone (the project page).
-export async function markSwiped(slug: string, on = true) {
-  const key = `cache.${who()}.swiped`;
+export async function markKept(slug: string, on = true) {
+  const key = `cache.${who()}.swiped`; // the shelf's first name, kept so phones keep their list
   let list: string[] = [];
   try {
     list = JSON.parse(get(key) ?? '[]');

@@ -4,7 +4,6 @@ import PullDownScroll from '@/components/PullDownScroll';
 import { StatusBar } from 'expo-status-bar';
 import { router } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import Button from '@/components/Button';
 import Input from '@/components/Input';
 import Avatar from '@/components/Avatar';
 import { PeopleResults, PeopleSearch, SuggestedRow, openPerson } from '@/components/People';
@@ -31,7 +30,7 @@ export default function MessagesScreen() {
   const { t, up } = useLang();
   const tick = useRefreshOnFocus('dms', 'friends', 'live');
   const [tab, setTab] = useState<Tab>('direct');
-  const [dms, setDms] = useState<DmThread[] | null>(null);
+  const [dmsRead, setDms] = useState<DmThread[] | null>(null);
   const [live, setLive] = useState<LiveFriend[]>([]);
   const [friends, setFriends] = useState<FriendRow[]>([]);
   const [query, setQuery] = useState('');
@@ -46,6 +45,9 @@ export default function MessagesScreen() {
     friendsList().then(setFriends, () => {});
   }, [uid]);
   useEffect(load, [load, tick]);
+  // a guest counts as signed in (auth/AuthContext.tsx); with no session at all (offline
+  // before the guest was made) the page is the same, only empty
+  const dms = uid ? dmsRead : [];
 
   const pick = (f: FriendRow) => {
     if (!f.handle) return;
@@ -87,14 +89,7 @@ export default function MessagesScreen() {
           ))}
         </View>
 
-        {!session ? (
-          <View style={styles.empty}>
-            <Text style={styles.note}>{t('messages.new.noFriends')}</Text>
-            <View style={styles.cta}><Button label={t('word.signup')} onPress={() => router.push('/signup')} /></View>
-          </View>
-        ) : null}
-
-        {session && tab === 'direct' ? (
+        {tab === 'direct' ? (
           <>
             <Pressable onPress={() => (setPicking(true), setWho(''))} accessibilityRole="button" style={({ pressed }) => [styles.newRow, pressed && styles.pressed]}>
               <View style={styles.newMark}><Text style={styles.newPlus}>+</Text></View>
@@ -126,7 +121,7 @@ export default function MessagesScreen() {
           </>
         ) : null}
 
-        {session && tab === 'people' ? (
+        {tab === 'people' ? (
           <>
             <View style={styles.search}><PeopleSearch value={query} onChange={setQuery} /></View>
             {query.trim() ? (
@@ -218,8 +213,6 @@ const styles = StyleSheet.create({
   tabText: { fontFamily: fonts.medium, fontSize: 13, color: colors.paper },
   tabTextOn: { color: colors.ink },
   note: { fontFamily: fonts.regular, fontSize: 14, lineHeight: 20, color: colors.mute, marginTop: 12 },
-  empty: { marginTop: 36 },
-  cta: { marginTop: 20 },
   section: { fontFamily: fonts.regular, fontSize: 11, letterSpacing: 1.4, color: colors.mute, marginTop: 24 },
   sectionLive: { color: colors.spotText },
   search: { marginTop: 14 },

@@ -39,7 +39,6 @@ export const coops = {
   'coops.join.look': { en: 'look', de: 'ansehen', tr: 'bak' },
   'coops.join.mine': { en: 'you are already in it', de: 'du bist schon drin', tr: 'zaten içindesin' },
   'coops.join.closed': { en: 'this code is used up; ask for a new one.', de: 'dieser code ist aufgebraucht; frag nach einem neuen.', tr: 'bu kodun süresi doldu; yenisini iste.' },
-  'coops.join.account': { en: 'coops need an account', de: 'koops brauchen ein konto', tr: 'kooperatifler için hesap gerekir' },
   'coops.join.come': { en: 'come too', de: 'komm mit', tr: 'sen de gel' },
   'coops.join.about': { en: 'they work nights together on the same project.', de: 'sie arbeiten nächte zusammen am selben projekt.', tr: 'aynı projede birlikte gece çalışıyorlar.' },
   'report.coop': { en: 'report this coop', de: 'diese koop melden', tr: 'bu kooperatifi şikayet et' },

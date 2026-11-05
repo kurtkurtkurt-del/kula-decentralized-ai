@@ -46,7 +46,7 @@ export default function CoopScreen() {
     ]);
   const remove = (uid: string, name: string) =>
     Alert.alert(t('coops.remove'), name, [{ text: t('word.cancel'), style: 'cancel' }, { text: t('coops.remove'), style: 'destructive', onPress: () => coopRemove(id, uid).then(load, (e) => setSaid(why(e))) }]);
-  if (!coop) return <StaffPage title={t('coops.title')}><Said text={said ?? t('flow.loading')} bad={!!said} /></StaffPage>;
+  if (!coop) return <StaffPage title={t('coops.title')}><Said text={said ?? t('word.loading')} bad={!!said} /></StaffPage>;
   const tint = COOP_COLORS[coop.color];
   return (
     <StaffPage title={`${coop.emoji} ${coop.name.toLowerCase()}`}>

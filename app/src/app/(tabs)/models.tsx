@@ -19,12 +19,12 @@ import { fitOn, fitTogether, type Fit } from '@/llm/fit';
 import { FILE_FILTERS, HfError, SUGGESTED_QUERIES, ggufFiles, hfUrl, isSplit, kvGuess, licenseUrl, paramsOf, quantOf, repoUrl, searchGguf, type HfFile, type HfRepo } from '@/llm/hf';
 import { KEEP_FREE, freeDiskBytes } from '@/llm/disk';
 import { hasNative, llama } from '@/llm/native';
-import { cancelDownload, describe, forgetModel, forgetUnused, initStore, rememberQuery, retryDownload, saveSettings, startDownload, unusedModels, useDownloads, useHfHistory, useLocalModels, usePeers, useSettings, useUxFlags, type Download, type LocalModel } from '@/llm/store';
+import { describe, forgetModel, forgetUnused, initStore, rememberQuery, saveSettings, startDownload, unusedModels, useDownloads, useHfHistory, useLocalModels, usePeers, useSettings, useUxFlags, type LocalModel } from '@/llm/store';
 import { tapSelect } from '@/lib/haptics';
 import { colors, fonts, radius } from '@/theme/tokens';
 import { brand } from '@/theme/layout';
 
-// The models tab (4.11.2026; it took the swipe deck's place): what is on this phone, what
+// The models tab (4.11.2026): what is on this phone, what
 // would fit it (the chosen list, sorted by the passport), and a Hugging Face search. A
 // download is verified by sha256 and continues after a kill. "run" opens the model page,
 // where the mode (alone · apart · split) is asked every time.

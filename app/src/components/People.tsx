@@ -35,14 +35,13 @@ export function PeopleSearch({ value, onChange }: { value: string; onChange: (v:
 export const refreshPeople = () => invalidate('friends', 'friendsKept', 'suggested', 'dms');
 
 export function useConnect() {
-  const { session, isAnonymous } = useAuth();
+  const { ensureSession } = useAuth();
   const [after, setAfter] = useState<Record<string, Relation>>({});
   const [busy, setBusy] = useState<string | null>(null);
-  const member = !!session && !isAnonymous;
   const act = async (p: { id: string; handle: string }, relation: Relation) => {
     if (relation === 'friend') return openPerson(p.handle);
     if (relation === 'outgoing') return;
-    if (!member) return router.push('/signup');
+    if (!(await ensureSession())) return; // a guest adds friends like anyone
     setBusy(p.id);
     try {
       if (relation === 'incoming') {
@@ -59,7 +58,7 @@ export function useConnect() {
       setBusy(null);
     }
   };
-  return { after, busy, act, member };
+  return { after, busy, act };
 }
 
 export function confirmBlock(p: { id: string; name: string }, t: (k: Key, v?: Record<string, string | number>) => string, done: () => void) {

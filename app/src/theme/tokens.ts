@@ -47,6 +47,22 @@ export const colors = {
   violet: '#C86A51',         // terracotta where violet was
 } as const;
 
+// The night scene drawn in code (components/NightNetwork.tsx, 5.11.2026; it replaced the
+// concert photo afterhours opened on): the sky from almost black to kula's deep brown, the
+// glow of the lines gold, the screens sage.
+export const night = {
+  sky0: '#110E0A',
+  sky1: colors.paper,
+  sky2: colors.paper2,
+  star: colors.ink2,
+  line: colors.gold,
+  phone: '#2A231B',
+  edge: '#5A4636',
+  screen: '#1B2219',
+  lit: colors.green,
+  bolt: colors.gold,
+} as const;
+
 // Corner radii: small squares (initials, marks) xs · inner buttons, chips sm ·
 // buttons, panels, cards md · bottom sheets, large cards lg · pill buttons pill.
 export const radius = {
@@ -69,7 +85,7 @@ export const fonts = {
 // Intro timing, ms.
 export const intro = {
   hold: 300,       // paper holds empty
-  photoIn: 1400,   // photo fades in
+  photoIn: 1400,   // the night scene fades in
   wordDelay: 900,  // name starts to appear
   word: 800,       // name fade duration
   leaveAt: 3200,   // move to the next screen

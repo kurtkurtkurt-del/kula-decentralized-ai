@@ -4,7 +4,7 @@ import { useAppSize } from '@/hooks/useAppSize';
 import { StatusBar } from 'expo-status-bar';
 import { router } from 'expo-router';
 import * as Clipboard from 'expo-clipboard';
-import AfterhoursCard from '@/components/AfterhoursCard';
+import NightCard from '@/components/NightCard';
 import Devices from '@/components/Devices';
 import Icon from '@/components/Icon';
 import Tips from '@/components/Tips';
@@ -40,7 +40,7 @@ const at = (iso: string) => {
 };
 
 export default function PassportScreen() {
-  const { session, isAnonymous } = useAuth();
+  const { session } = useAuth();
   const { t, tn, up } = useLang();
   const insets = useSafeAreaInsets();
   const tabSpace = useTabBarSpace();
@@ -87,7 +87,7 @@ export default function PassportScreen() {
     setTimeout(() => setCopied(false), 1500);
   };
   const w = nightWindow();
-  const signedIn = !!session && !isAnonymous;
+  const signedIn = !!session; // a guest counts (5.11.2026)
   const cardW = Math.round(width * CARD);
   const cardH = cardW * 1.5;
   const name = (profile?.display_name ?? profile?.handle ?? t('passport.you')).toLowerCase();
@@ -209,26 +209,21 @@ export default function PassportScreen() {
         </View>
 
         {/* the cards */}
-        <View style={[styles.row, styles.deckHead]}>
+        <View style={[styles.row, styles.cardsHead]}>
           <View style={styles.rowLeft}>
-            <Text style={styles.deckTitle}>{t('passport.cards')}</Text>
+            <Text style={styles.cardsTitle}>{t('passport.cards')}</Text>
             <View style={styles.dot} />
           </View>
-          <Text style={styles.small} numberOfLines={1}>{up(signedIn ? (cards.length ? `${tn('passport.nNights', cards.length)} · ${profile?.credits ?? 0} ${t('passport.credits')}` : t('passport.cards.empty')) : t('passport.guest'))}</Text>
+          <Text style={styles.small} numberOfLines={1}>{up(cards.length ? `${tn('passport.nNights', cards.length)} · ${profile?.credits ?? 0} ${t('passport.credits')}` : t('passport.cards.empty'))}</Text>
         </View>
         {cards.length ? (
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} style={[styles.deckScroll, { height: cardH }]} contentContainerStyle={styles.deck}>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} style={[styles.cardsScroll, { height: cardH }]} contentContainerStyle={styles.cardsRow}>
             {cards.map((c, i) => (
               <Pressable key={`${c.card_no}-${i}`} onPress={() => { setSide('front'); setOpen(i); }} style={({ pressed }) => [i > 0 && { marginLeft: -Math.round(cardW * (1 - STEP)) }, pressed && styles.pressed]}>
-                <AfterhoursCard data={toCardData(c)} index={c.card_no || i} width={cardW} />
+                <NightCard data={toCardData(c)} index={c.card_no || i} width={cardW} />
               </Pressable>
             ))}
           </ScrollView>
-        ) : null}
-        {!signedIn ? (
-          <Pressable onPress={() => router.push('/signup')} style={({ pressed }) => [styles.btn, styles.btnWide, pressed && styles.pressed]}>
-            <Text style={styles.btnText}>{t('word.signup')}</Text>
-          </Pressable>
         ) : null}
       </ScrollView>
 
@@ -236,7 +231,7 @@ export default function PassportScreen() {
         <Pressable style={styles.dim} onPress={() => setOpen(null)}>
           {open !== null && cards[open] ? (
             <Pressable onPress={() => setSide((s) => (s === 'front' ? 'back' : 'front'))}>
-              <AfterhoursCard data={toCardData(cards[open])} index={cards[open].card_no || open} side={side} width={Math.min(width - 48, 360, Math.floor((height - 300) / 1.5))} />
+              <NightCard data={toCardData(cards[open])} index={cards[open].card_no || open} side={side} width={Math.min(width - 48, 360, Math.floor((height - 300) / 1.5))} />
             </Pressable>
           ) : null}
           <Text style={styles.small}>{up(t('passport.flip'))}</Text>
@@ -301,11 +296,11 @@ const styles = StyleSheet.create({
   sim: { fontFamily: fonts.regular, fontSize: 10.5, color: colors.meta, marginTop: 2 },
   row: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12, paddingHorizontal: brand.left },
   rowLeft: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  deckHead: { paddingTop: 30 },
-  deckTitle: { fontFamily: fonts.medium, fontSize: 15, letterSpacing: -0.2, color: colors.paper },
+  cardsHead: { paddingTop: 30 },
+  cardsTitle: { fontFamily: fonts.medium, fontSize: 15, letterSpacing: -0.2, color: colors.paper },
   dot: { width: 6, height: 6, borderRadius: 3, backgroundColor: colors.spot },
   small: { flexShrink: 1, fontFamily: fonts.regular, fontSize: 11, letterSpacing: 1.4, color: colors.mute },
-  deckScroll: { flexGrow: 0, marginTop: 12 },
-  deck: { paddingHorizontal: brand.left },
+  cardsScroll: { flexGrow: 0, marginTop: 12 },
+  cardsRow: { paddingHorizontal: brand.left },
   dim: { flex: 1, backgroundColor: 'rgba(255,255,255,0.92)', alignItems: 'center', justifyContent: 'center', gap: 18 },
 });

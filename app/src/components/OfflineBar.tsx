@@ -7,8 +7,8 @@ import { colors, fonts, radius } from '@/theme/tokens';
 
 // What each kind of waiting job is called in the list under the bar.
 const KIND: Record<string, string> = {
-  swipe: 'offline.kind.swipe',
-  unswipe: 'offline.kind.swipe',
+  swipe: 'offline.kind.keep', // a keep or let-go (the outbox job's first name)
+  unswipe: 'offline.kind.keep',
   settings: 'offline.kind.settings',
   nightStart: 'offline.kind.night',
   nightEnd: 'offline.kind.night',

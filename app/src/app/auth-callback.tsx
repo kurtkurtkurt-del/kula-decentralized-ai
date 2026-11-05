@@ -19,13 +19,8 @@ export default function AuthCallback() {
       if (url) await sessionFromUrl(url).catch(() => false);
       const { data } = await supabase.auth.getSession();
       if (!live) return;
-      if (!data.session) {
-        router.replace('/signup');
-        return;
-      }
-      const { data: me } = await supabase.rpc('profile_me');
-      const row = Array.isArray(me) ? me[0] : me;
-      if (live) router.replace('/models');
+      // no session from the link: the app goes on as before (a guest enters by itself)
+      router.replace(data.session ? '/models' : '/');
     })();
     return () => {
       live = false;

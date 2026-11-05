@@ -1,9 +1,8 @@
 /* eslint-disable */
-// web sitesinin afterhours kart üreteci, olduğu gibi (claudecode/afterhours/cards.js).
-// tek fark: fontlar inter tight, ve dışa aktarım module. svg dizesi döner; SvgXml çizer.
-/* afterhours — a deck of ten night cards (the user's own design).
-   Taken from an earlier sketch; only the demo render was removed, and it
-   was wrapped in its own scope so it does not pollute the global names. */
+// kula's night card: 400×600, front and back, as an svg string (components/NightCard.tsx
+// draws it with SvgXml). The metals and motifs are the user's own design from an earlier
+// card sketch; 5.11.2026 the words became kula's (model, project, devices, tokens, credits,
+// energy) and the sample nights that came with the sketch went.
 
 const CARDS = (function () {
 
@@ -161,59 +160,6 @@ const MOTIFS = {
       <path d="M200 196 L200 250"/><path d="M178 230 L200 252 L222 230"/></g>`
 };
 
-// ─────────── NIGHTS ───────────
-const EVENTS = [
- {t:'A$AP Rocky',   ty:'KONZERT',    v:'OLYMPIAHALLE',      d:'11.09.26', metal:'gold',       motif:'rays',
-  in:'23:47', out:'03:12', dur:'3H 25M', crew:['L','E','J','M'], more:9, aud:'0:38', msg:14, who:'MIRA',
-  froze:'13.09', no:'0147', at1:'01:04', at2:'02:19',
-  q1:['what even was that set','E','04:12'], q2:['who is still standing','L','05:47']},
-
- {t:'Nick Cave',    ty:'KONZERT',    v:'OLYMPIAPARK',       d:'23.08.26', metal:'nickel',     motif:'oval',
-  in:'20:12', out:'23:40', dur:'3H 28M', crew:['S','K','T'], more:4, aud:'1:12', msg:6, who:'KAAN',
-  froze:'25.08', no:'0092', at1:'21:38', at2:'22:50',
-  q1:['when the strings came in','S','22:04'], q2:['i will not forget tonight','T','23:31']},
-
- {t:'Bonez & RAF',  ty:'KONZERT',    v:'OLYMPIAHALLE',      d:'21.12.26', metal:'brass',      motif:'diagonal',
-  in:'20:03', out:'01:18', dur:'5H 15M', crew:['D','Y','B','N','C'], more:16, aud:'0:22', msg:31, who:'DENİZ',
-  froze:'23.12', no:'0311', at1:'22:47', at2:'00:16',
-  q1:['ten years, i do not believe it','Y','23:12'], q2:['it is freezing outside','B','01:22']},
-
- {t:'Thirty Seconds to Mars', ty:'KONZERT', v:'OLYMPIAHALLE', d:'12.04.27', metal:'titanium', motif:'orbit',
-  in:'19:52', out:'23:14', dur:'3H 22M', crew:['A','R'], more:2, aud:'0:47', msg:9, who:'ARDA',
-  froze:'14.04', no:'0428', at1:'21:20', at2:'22:36',
-  q1:['we were right at the front','A','21:44'], q2:['my ears are ringing','R','23:26']},
-
- {t:'AnnenMayKantereit', ty:'KONZERT', v:'OLYMPIAPARK',     d:'15.09.26', metal:'copper',     motif:'bands',
-  in:'19:30', out:'23:02', dur:'3H 32M', crew:['F','P','G'], more:6, aud:'1:04', msg:12, who:'PINAR',
-  froze:'17.09', no:'0163', at1:'20:58', at2:'22:14',
-  q1:['everyone was singing along','F','21:36'], q2:['sitting on the grass helped','G','22:48']},
-
- {t:'Elysium',      ty:'FESTIVAL',   v:'MAXVORSTADT',       d:'12.09.26', metal:'chrome',     motif:'grid',
-  in:'22:14', out:'06:02', dur:'7H 48M', crew:['V','H','O','Z'], more:22, aud:'0:31', msg:47, who:'ZEYNEP',
-  froze:'14.09', no:'0158', at1:'01:22', at2:'03:48',
-  q1:['all three stages are full','V','00:41'], q2:['sun is up, shall we go','O','05:54']},
-
- {t:'Mondscheinexpress', ty:'FESTIVAL', v:'BAHNWÄRTER THIEL', d:'19.11.26', metal:'gunmetal', motif:'moon',
-  in:'21:06', out:'02:44', dur:'5H 38M', crew:['I','U','W'], more:8, aud:'0:56', msg:18, who:'İLKE',
-  froze:'21.11', no:'0219', at1:'23:12', at2:'01:30',
-  q1:['it started to snow','I','23:48'], q2:['we moved next to the fire','U','01:52']},
-
- {t:'Blitz',        ty:'RAVE',       v:'MUSEUMSINSEL 1',    d:'05.09.26', metal:'anthracite', motif:'moire',
-  in:'23:59', out:'07:18', dur:'7H 19M', crew:['L','E','J','M'], more:11, aud:'0:38', msg:26, who:'LINA',
-  froze:'07.09', no:'0151', at1:'02:15', at2:'04:40',
-  q1:['no phones, thank god','J','02:31'], q2:['let this b2b never end','M','05:12']},
-
- {t:'Silo West',    ty:'RAVE',       v:'MÜNCHEN',           d:'05.09.26', metal:'steel',      motif:'iso',
-  in:'14:22', out:'21:05', dur:'6H 43M', crew:['B','N'], more:5, aud:'0:44', msg:15, who:'BERK',
-  froze:'07.09', no:'0149', at1:'16:40', at2:'18:52',
-  q1:['a daytime rave is another thing','B','17:18'], q2:['the sunset came right on time','N','20:04']},
-
- {t:'Unterwelt',    ty:'CLUB NIGHT', v:'SUNNY RED',         d:'02.10.26', metal:'rose',       motif:'descend',
-  in:'22:38', out:'04:26', dur:'5H 48M', crew:['C','Ş','A'], more:7, aud:'0:29', msg:21, who:'CEREN',
-  froze:'04.10', no:'0186', at1:'00:52', at2:'02:38',
-  q1:['it gets warmer further down','Ş','01:10'], q2:['that last track was a legend','C','04:12']}
-];
-
 // ─────────── DEFS ───────────
 function defs(id,m){
   const gs=m.grad.map((c,i)=>`<stop offset="${Math.round(i*100/(m.grad.length-1))}%" stop-color="${c}"/>`).join('');
@@ -267,19 +213,19 @@ function front(e,i){
   <line x1="0" y1="302" x2="400" y2="302" stroke="${m.mid}" stroke-width="1"/>
 
   <text x="34" y="52" font-family="InterTight_400Regular" font-size="11" letter-spacing="3" fill="${m.mid}">${esc(e.ty)}</text>
-  <text x="366" y="52" text-anchor="end" font-family="InterTight_400Regular" font-size="11" letter-spacing="3" fill="${e.blank?m.faint:(m.light?m.hi:m.accent)}">${e.blank?'NOT YET':'CHECKED IN'}</text>
+  <text x="366" y="52" text-anchor="end" font-family="InterTight_400Regular" font-size="11" letter-spacing="3" fill="${e.blank?m.faint:(m.light?m.hi:m.accent)}">${e.blank?'ON ITS WAY':esc(e.froze)}</text>
 
   <text x="34" y="348" font-family="InterTight_500Medium" font-size="${e.t.length>26?19:(e.t.length>16?26:(e.t.length>12?31:37))}" letter-spacing="-1.4" fill="url(#g${id})">${esc(e.t.toUpperCase())}</text>
   <text x="34" y="372" font-family="InterTight_400Regular" font-size="10.5" letter-spacing="2" fill="${m.sub}">${[e.d,e.v,e.blank?'':e.in].filter(Boolean).map(esc).join(' · ')}</text>
 
   ${rule(m,398)}
-  <text x="34" y="424" font-family="InterTight_400Regular" font-size="10" letter-spacing="3" fill="${m.sub}">WHO WAS THERE</text>
+  <text x="34" y="424" font-family="InterTight_400Regular" font-size="10" letter-spacing="3" fill="${m.sub}">WORKED ON IT</text>
   ${av}
   ${rule(m,514)}
   <g font-family="InterTight_400Regular" font-size="10.5" letter-spacing="1.6">
-    <text x="34" y="540" fill="${m.sub}">AUDIO</text><text x="34" y="558" fill="${e.blank?m.faint:m.hi}">${e.blank?'—:—':esc(e.aud)}</text>
-    <text x="140" y="540" fill="${m.sub}">MESSAGES</text><text x="140" y="558" fill="${e.blank?m.faint:m.hi}">${e.blank?'—':esc(e.msg)}</text>
-    <text x="260" y="540" fill="${m.sub}">ROOM</text><text x="260" y="558" fill="${m.faint}">${e.blank?'OPEN':'FROZEN'}</text>
+    <text x="34" y="540" fill="${m.sub}">TOKENS</text><text x="34" y="558" fill="${e.blank?m.faint:m.hi}">${e.blank?'—':esc(e.aud)}</text>
+    <text x="140" y="540" fill="${m.sub}">CREDITS</text><text x="140" y="558" fill="${e.blank?m.faint:m.hi}">${e.blank?'—':esc(e.msg)}</text>
+    <text x="260" y="540" fill="${m.sub}">ENERGY</text><text x="260" y="558" fill="${e.blank?m.faint:m.hi}">${e.blank?'—':esc(e.who)}</text>
   </g>
   <rect x="7" y="7" width="386" height="586" fill="none" stroke="url(#e${id})" stroke-width="4"/>
   <rect x="13" y="13" width="374" height="574" fill="none" stroke="${m.deep}" stroke-width="1"/>
@@ -288,18 +234,17 @@ function front(e,i){
 // ─────────── THE BACK ───────────
 function back(e,i){
   const m=METALS[e.metal]||METALS.steel, id='b'+i;
-  /* The unearned back: the same four marks, none of them struck. A
-     timeline with nothing on it yet is still a timeline, and it says
-     what the night is going to be asked to fill. */
+  /* A card still on its way (the night's end is in the outbox): the same four marks, none
+     of them struck. A timeline with nothing on it yet is still a timeline. */
   const marks=e.blank
-    ?[['—:—','ARRIVED',m.faint,0],
-      ['—:—','VOICE NOTE',m.faint,0],
-      ['—:—','MESSAGES',m.faint,0],
-      ['—:—','LEFT',m.faint,0]]
-    :[[e.in,'ARRIVED · WITH '+e.crew.length,m.hi,1],
-      [e.at1,'VOICE NOTE',m.accent,1],
-      [e.at2,e.msg+' MESSAGES',m.mid,1],
-      [e.out,'LEFT',m.sub,0]];
+    ?[['—:—','STARTED',m.faint,0],
+      ['—','TOKENS',m.faint,0],
+      ['—','CREDITS',m.faint,0],
+      ['—:—','ENDED',m.faint,0]]
+    :[[e.in,'STARTED · '+(e.crew.length+e.more)+' WITH IT',m.hi,1],
+      [e.aud,'TOKENS',m.accent,1],
+      [String(e.msg),'CREDITS',m.mid,1],
+      [e.out,'ENDED',m.sub,0]];
   const tl=marks.map((k,n)=>{
     const y=106+n*56;
     return (k[3]?`<rect x="42" y="${y}" width="12" height="12" fill="${k[2]}"/>`
@@ -320,27 +265,27 @@ function back(e,i){
   <g font-family="InterTight_400Regular" letter-spacing="1.4">${tl}</g>
 
   ${rule(m,318)}
-  <text x="34" y="344" font-family="InterTight_400Regular" font-size="10" letter-spacing="3" fill="${m.sub}">VOICE NOTE · SOON</text>
+  <text x="34" y="344" font-family="InterTight_400Regular" font-size="10" letter-spacing="3" fill="${m.sub}">THE NIGHT'S WORK</text>
   ${e.blank?`<g opacity="0.16">${wave(id,m,34,387)}</g>`:wave(id,m,34,387)}
   ${e.blank
-    ?`<g transform="translate(34,444)"><rect width="34" height="34" fill="none" stroke="${m.faint}" stroke-width="1.2" stroke-dasharray="4 4"/><path d="M12 9 L25 17 L12 25 Z" fill="${m.faint}"/></g>`
-    :`<g transform="translate(34,444)"><rect width="34" height="34" fill="url(#g${id})"/><path d="M12 9 L25 17 L12 25 Z" fill="${m.poster}"/></g>`}
-  <text x="80" y="466" font-family="InterTight_400Regular" font-size="10.5" letter-spacing="1.6" fill="${m.sub}">${e.blank?'NOBODY HAS SPOKEN YET':esc(e.who)+' · '+esc(e.at1)}</text>
+    ?`<g transform="translate(34,444)"><rect width="34" height="34" fill="none" stroke="${m.faint}" stroke-width="1.2" stroke-dasharray="4 4"/><path d="M19 7 L11 18 L16 18 L14 27 L23 15 L18 15 Z" fill="${m.faint}"/></g>`
+    :`<g transform="translate(34,444)"><rect width="34" height="34" fill="url(#g${id})"/><path d="M19 7 L11 18 L16 18 L14 27 L23 15 L18 15 Z" fill="${m.poster}"/></g>`}
+  <text x="80" y="466" font-family="InterTight_400Regular" font-size="10.5" letter-spacing="1.6" fill="${m.sub}">${e.blank?'ON CHARGE · NOT COUNTED YET':esc(e.who)+' · '+esc(e.dur)}</text>
 
   ${rule(m,498)}
   <g font-family="InterTight_400Regular" font-size="11">${e.blank
-    ?`<text x="34" y="524" letter-spacing="1.6" font-size="10" fill="${m.faint}">OVERHEARD · NOTHING YET</text>
+    ?`<text x="34" y="524" letter-spacing="1.6" font-size="10" fill="${m.faint}">THE MODEL · THE PROJECT</text>
       <line x1="34" y1="546" x2="366" y2="546" stroke="${m.faint}" stroke-width="1" stroke-dasharray="4 5" opacity="0.7"/>`
-    :`${e.q1?`<text x="34" y="524" fill="${m.light?m.accent:m.txt}">"${esc(e.q1[0])}"</text><text x="366" y="524" text-anchor="end" font-size="9.5" fill="${m.faint}">${esc(e.q1[1])} · ${esc(e.q1[2])}</text>`:''}
-      ${e.q2?`<text x="34" y="548" fill="${m.light?m.accent:m.txt}">"${esc(e.q2[0])}"</text><text x="366" y="548" text-anchor="end" font-size="9.5" fill="${m.faint}">${esc(e.q2[1])} · ${esc(e.q2[2])}</text>`:''}`}
+    :`<text x="34" y="524" letter-spacing="1.6" font-size="10" fill="${m.sub}">THE MODEL</text><text x="366" y="524" text-anchor="end" fill="${m.light?m.accent:m.txt}">${esc(e.ty)}</text>
+      <text x="34" y="548" letter-spacing="1.6" font-size="10" fill="${m.sub}">FOR</text><text x="366" y="548" text-anchor="end" fill="${m.light?m.accent:m.txt}">${esc(e.v)}</text>`}
   </g>
-  <text x="34" y="578" font-family="InterTight_400Regular" font-size="9.5" letter-spacing="2" fill="${m.faint}">${e.blank?'ROOM NOT FROZEN · NO. NOT ISSUED':'ROOM FROZEN '+esc(e.froze)+' · NO. '+esc(e.no)}</text>
+  <text x="34" y="578" font-family="InterTight_400Regular" font-size="9.5" letter-spacing="2" fill="${m.faint}">${e.blank?'ON ITS WAY · NO. NOT ISSUED':esc(e.froze)+' · KULA · NO. '+esc(e.no)}</text>
 
   <rect x="7" y="7" width="386" height="586" fill="none" stroke="url(#e${id})" stroke-width="4"/>
   <rect x="13" y="13" width="374" height="574" fill="none" stroke="${m.deep}" stroke-width="1"/>
 </svg>`;}
 
-  return { nights: EVENTS, front, back };
+  return { front, back };
 })();
 
 export default CARDS;

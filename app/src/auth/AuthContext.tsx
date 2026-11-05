@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from 'react';
+import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
 import type { Session } from '@supabase/supabase-js';
 import * as Linking from 'expo-linking';
 import { supabase } from '@/lib/supabase';
@@ -12,7 +12,7 @@ import type { Key } from '@/i18n/dict';
 
 // The links in kula's emails (confirm the sign-up, reset the password) come back into the
 // app, to auth-callback, which takes the session from the link (as Google sign-in does).
-// Until 21.10.2026 they opened afterhours' website. In kula's Supabase project the address
+// In kula's Supabase project the address
 // must be listed under Authentication → URL Configuration → Redirect URLs
 // (pasaport://auth-callback; exp://** for Expo Go).
 const RESET_URL = Linking.createURL('auth-callback');
@@ -22,12 +22,18 @@ type Auth = {
   session: Session | null;
   ready: boolean;
   isAnonymous: boolean;
+  // A guest on the shared demo account (demo@kula.app): signed in like anyone, but the
+  // settings still offer to make a real account.
+  isDemo: boolean;
   // Creates an account; signs in if it exists; upgrades an anonymous session in place.
   // Returns an error message, or null on success.
   signUp: (email: string, password: string, city?: string) => Promise<string | null>;
   signIn: (email: string, password: string) => Promise<string | null>;
-  // Browsing without an account: a device-bound anonymous user whose swipes are upgraded later.
+  // Browsing without an account: a device-bound anonymous user, upgraded in place later.
   signInAsGuest: () => Promise<string | null>;
+  // A session for an action that needs one: the current one, else a guest (anonymous, or the
+  // demo account) made on the spot. false only when even that failed (offline).
+  ensureSession: () => Promise<boolean>;
   resetPassword: (email: string) => Promise<string | null>;
   signOut: (everywhere?: boolean) => Promise<void>;
 };
@@ -36,9 +42,11 @@ const Ctx = createContext<Auth>({
   session: null,
   ready: false,
   isAnonymous: false,
+  isDemo: false,
   signUp: async () => t('auth.notready'),
   signIn: async () => t('auth.notready'),
   signInAsGuest: async () => t('auth.notready'),
+  ensureSession: async () => false,
   resetPassword: async () => t('auth.notready'),
   signOut: async () => {},
 });
@@ -95,13 +103,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const isAnonymous = !!session?.user?.is_anonymous;
+  const isDemo = session?.user?.email === DEMO_EMAIL;
 
   const signIn = useCallback(async (email: string, password: string) => {
     const bad = checkEmail(email);
     if (bad) return bad;
     const { data, error } = await supabase.auth.signInWithPassword({ email: email.trim(), password });
     if (error) return plain(error.message);
-    // Swipes made as a guest before this sign-in come along (80_guest_merge.sql).
+    // What a guest kept before this sign-in comes along (80_guest_merge.sql).
     if (data.user) mergeGuest(data.user.id).catch(() => {});
     return null;
   }, []);
@@ -112,7 +121,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (bad) return bad;
       const { data: cur } = await supabase.auth.getSession();
       if (cur.session?.user.is_anonymous) {
-        // The anonymous session becomes an account: swipes and profile stay on the same user.
+        // The anonymous session becomes an account: keeps and profile stay on the same user.
         // With email confirmation on, the user stays anonymous until they click the link.
         const { data, error } = await supabase.auth.updateUser({ email: email.trim(), password }, { emailRedirectTo: CONFIRM_URL });
         if (error) {
@@ -155,6 +164,29 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return null;
   }, []);
 
+  // 5.11.2026: nobody is asked to sign up to look around. With no session the app enters as
+  // a guest by itself (once per signed-out stretch; again after a sign-out), so messages,
+  // connect and the rest open their normal page. A real account is made in the settings.
+  const tried = useRef(false);
+  useEffect(() => {
+    if (!ready) return;
+    if (session) {
+      tried.current = false;
+      return;
+    }
+    if (tried.current) return;
+    tried.current = true;
+    signInAsGuest().catch(() => null);
+  }, [ready, session, signInAsGuest]);
+
+  const ensureSession = useCallback(async () => {
+    const { data } = await supabase.auth.getSession();
+    if (data.session) return true;
+    const err = await signInAsGuest().catch((e: Error) => e.message);
+    if (err) return false;
+    return !!(await supabase.auth.getSession()).data.session;
+  }, [signInAsGuest]);
+
   const resetPassword = useCallback(async (email: string) => {
     const bad = checkEmail(email);
     if (bad) return bad;
@@ -172,7 +204,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (data.session) forgetCache(data.session.user.id);
   }, []);
 
-  return <Ctx.Provider value={{ session, ready, isAnonymous, signUp, signIn, signInAsGuest, resetPassword, signOut }}>{children}</Ctx.Provider>;
+  return <Ctx.Provider value={{ session, ready, isAnonymous, isDemo, signUp, signIn, signInAsGuest, ensureSession, resetPassword, signOut }}>{children}</Ctx.Provider>;
 }
 
 export const useAuth = () => useContext(Ctx);

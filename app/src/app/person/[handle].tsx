@@ -5,7 +5,7 @@ import { router, useLocalSearchParams } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Avatar from '@/components/Avatar';
 import BackButton from '@/components/BackButton';
-import AfterhoursCard from '@/components/AfterhoursCard';
+import NightCard from '@/components/NightCard';
 import { ActionButton, confirmBlock, refreshPeople, useConnect } from '@/components/People';
 import { useReport } from '@/components/ReportSheet';
 import { useAuth } from '@/auth/AuthContext';
@@ -64,11 +64,11 @@ export default function PersonScreen() {
           </View>
         ) : null}
         <Text style={styles.section}>{up(t('passport.cards'))}</Text>
-        {relation !== 'friend' ? <Text style={styles.quietIn}>{t('person.deck.locked')}</Text> : null}
-        {relation === 'friend' && !cards.length ? <Text style={styles.quietIn}>{t('person.deck.empty')}</Text> : null}
+        {relation !== 'friend' ? <Text style={styles.quietIn}>{t('person.cards.locked')}</Text> : null}
+        {relation === 'friend' && !cards.length ? <Text style={styles.quietIn}>{t('person.cards.empty')}</Text> : null}
         {relation === 'friend' && cards.length ? (
           <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.strip}>
-            {cards.map((c, i) => <AfterhoursCard key={`${c.card_no}-${i}`} data={toCardData(c)} index={i} width={width} />)}
+            {cards.map((c, i) => <NightCard key={`${c.card_no}-${i}`} data={toCardData(c)} index={i} width={width} />)}
           </ScrollView>
         ) : null}
         {session ? (

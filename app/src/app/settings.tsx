@@ -27,7 +27,7 @@ const HOURS = Array.from({ length: 48 }, (_, i) => `${String(Math.floor(i / 2)).
 // (name, handle, city, bio), what you get told about, privacy, language, account.
 export default function SettingsScreen() {
   const { t } = useLang();
-  const { session, isAnonymous, signOut } = useAuth();
+  const { session, isAnonymous, isDemo, signOut } = useAuth();
   const tick = useRefreshOnFocus('profile');
   const profile = useProfile(tick);
   const { cities } = useCities();
@@ -44,7 +44,10 @@ export default function SettingsScreen() {
   const [bio, setBio] = useState('');
   const [city, setCity] = useState<string | null>(null);
   const [said, setSaid] = useState<string | null>(null);
-  const member = !!session && !isAnonymous;
+  // a guest (anonymous, or the shared demo account) counts as signed in: every page opens
+  // as it does for an account; making a real one is the one thing only offered here
+  const member = !!session;
+  const guest = !session || isAnonymous || isDemo;
   const flip = (k: 'wifi_only' | 'discoverable' | 'notify_friends' | 'notify_calls' | 'notify_coops' | 'notify_dms' | 'notify_cards') =>
     profile && saveSettings({ [k]: !profile[k] }).catch((e) => setSaid(serverText(e)));
   const startEdit = () => {
@@ -76,7 +79,6 @@ export default function SettingsScreen() {
       </Panel>
 
       <Section title={t('settings.profile')} />
-      {!member ? <Text style={styles.hint}>{t('settings.guest.hint')}</Text> : null}
       {member && !editing ? (
         <Panel>
           <Row label={t('settings.name')} right={<Value text={profile?.display_name ?? '—'} />} />
@@ -132,7 +134,9 @@ export default function SettingsScreen() {
       <Section title={t('settings.account')} />
       <Panel>
         {member ? <Row label={t('settings.export')} hint={t('settings.export.hint')} onPress={exportMe} right={<Value text="" more />} /> : null}
-        {session ? <Row label={t('settings.leave')} hint={t('settings.leave.hint')} onPress={leave} danger /> : <Row label={t('word.signup')} onPress={() => router.push('/signup')} right={<Value text="" more />} />}
+        {guest ? <Row label={t('settings.makeAccount')} hint={t('settings.guest.hint')} onPress={() => router.push({ pathname: '/signup', params: { mode: 'up' } })} right={<Value text="" more />} /> : null}
+        {guest ? <Row label={t('word.signin')} onPress={() => router.push({ pathname: '/signup', params: { mode: 'in' } })} right={<Value text="" more />} /> : null}
+        {session ? <Row label={t('settings.leave')} hint={t('settings.leave.hint')} onPress={leave} danger /> : null}
       </Panel>
       <Said text={said} bad />
 
