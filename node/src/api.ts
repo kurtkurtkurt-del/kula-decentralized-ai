@@ -1,12 +1,15 @@
 // The api channel: the same tiny http api a phone offers in "apart" mode.
-// GET /status, POST /load, POST /chat, POST /stop. Streams are server sent
-// events, one JSON object per `data:` line. Behind it runs llama-server.
+// GET /status, POST /load, POST /chat, POST /stop, GET /blob?mb=N. Streams are
+// server sent events, one JSON object per `data:` line. Behind it runs llama-server.
+// /blob is the bench's tunnel speed test: N MB (1024²) of zeros, N capped at 64
+// (BLOB_MAX_MB), the same bytes and headers as ApiServer.kt on a phone.
 import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
 import { download, sha256Of } from './download.js';
 import { freePort, startChild, type Child } from './children.js';
 import type { LlamaBinaries } from './llama.js';
+import { blobMb } from './benchcore.js';
 
 export interface ApiStatus {
   loaded: boolean;
@@ -66,6 +69,26 @@ class Sse {
   }
   send(obj: unknown) { this.res.write(`data: ${JSON.stringify(obj)}\n\n`); }
   end(obj?: unknown) { if (obj !== undefined) this.send(obj); this.res.end(); }
+}
+
+// N MB of zeros in 64 KB writes, honouring backpressure; no compression, a fixed length.
+function blob(q: string | null, res: http.ServerResponse) {
+  const mb = blobMb(q);
+  if (mb === null) return json(res, 400, { error: 'need mb' });
+  const total = mb * 1024 * 1024;
+  res.writeHead(200, { 'content-type': 'application/octet-stream', 'content-length': total, 'cache-control': 'no-store' });
+  const chunk = Buffer.alloc(64 * 1024);
+  let sent = 0;
+  const pump = () => {
+    while (sent < total) {
+      const n = Math.min(chunk.length, total - sent);
+      sent += n;
+      if (!res.write(n === chunk.length ? chunk : chunk.subarray(0, n))) { res.once('drain', pump); return; }
+    }
+    res.end();
+  };
+  res.on('close', () => { sent = total; });
+  pump();
 }
 
 function safeName(name: string): string {
@@ -233,6 +256,7 @@ export async function startApiServer(opts: ApiOptions): Promise<ApiServer> {
     const url = (req.url ?? '/').split('?')[0];
     try {
       if (req.method === 'GET' && url === '/status') return json(res, 200, state);
+      if (req.method === 'GET' && url === '/blob') return blob(new URLSearchParams((req.url ?? '').split('?')[1] ?? '').get('mb'), res);
       if (req.method === 'POST' && url === '/load') return handleLoad(await readJson(req), res);
       if (req.method === 'POST' && url === '/chat') return handleChat(await readJson(req), res);
       if (req.method === 'POST' && url === '/stop') { current?.abort(); return json(res, 200, { ok: true, wasBusy: state.busy }); }

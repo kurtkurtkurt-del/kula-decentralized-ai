@@ -10,7 +10,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { createHash, randomBytes } from 'node:crypto';
 import { startApiServer } from '../src/api.ts';
-import { startGateServer, handshake, GateRefused } from '../src/gate.ts';
+import { startGateServer, handshake, GateRefused, Tunnel } from '../src/gate.ts';
+import { blobMb, BLOB_MAX_MB } from '../src/benchcore.ts';
 
 type Srv = { port: number; close: () => void };
 const listen = (s: http.Server): Promise<Srv> => new Promise((r) => s.listen(0, '127.0.0.1', () => r({ port: (s.address() as any).port, close: () => s.close() })));
@@ -162,5 +163,66 @@ test('the gate answers NO busy to a second rpc peer and OK to the same ip again'
     for (const s of [a, a2, b, b2]) s.destroy();
     await gate.close();
     echo.close();
+  }
+});
+
+// GET /blob?mb=N: the bench's tunnel speed test. ApiServer.kt writes the same status line
+// fields, headers and bytes (its blobMb follows these cases); the raw http is read here so
+// the headers are what is on the wire, not what fetch() makes of them.
+function rawGet(port: number, p: string): Promise<{ head: string; body: Buffer }> {
+  return new Promise((resolve, reject) => {
+    const s = net.connect({ host: '127.0.0.1', port }, () => s.write(`GET ${p} HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n`));
+    const parts: Buffer[] = [];
+    s.on('data', (d) => parts.push(d));
+    s.on('end', () => {
+      const all = Buffer.concat(parts);
+      const cut = all.indexOf('\r\n\r\n');
+      resolve({ head: all.subarray(0, cut).toString('latin1'), body: all.subarray(cut + 4) });
+    });
+    s.on('error', reject);
+  });
+}
+
+test('/blob?mb=N sends N MB of zeros with a fixed length; bad N is a json 400; N is capped at 64', async () => {
+  const models = fs.mkdtempSync(path.join(os.tmpdir(), 'kula-conf-'));
+  const api = await startApiServer({ models, llama: null, startBackend: async () => { throw new Error('must not start'); } });
+  try {
+    const r = await rawGet(api.port, '/blob?mb=2');
+    assert.match(r.head, /^HTTP\/1\.1 200 OK\r\n/);
+    assert.match(r.head, /\r\ncontent-type: application\/octet-stream\r\n/i);
+    assert.match(r.head, /\r\ncontent-length: 2097152\r\n/i);
+    assert.match(r.head, /\r\ncache-control: no-store\r\n/i);
+    assert.equal(r.body.length, 2 * 1024 * 1024);
+    assert.ok(r.body.every((b) => b === 0));
+    for (const bad of ['/blob', '/blob?mb=', '/blob?mb=0', '/blob?mb=-1', '/blob?mb=1.5', '/blob?mb=x']) {
+      const res = await fetch(`http://127.0.0.1:${api.port}${bad}`);
+      assert.deepEqual({ status: res.status, type: res.headers.get('content-type'), text: await res.text() }, { status: 400, type: 'application/json', text: '{"error":"need mb"}' }, bad);
+    }
+    const ac = new AbortController();
+    const capped = await fetch(`http://127.0.0.1:${api.port}/blob?mb=9999999999`, { signal: ac.signal });
+    assert.equal(capped.headers.get('content-length'), String(BLOB_MAX_MB * 1024 * 1024));
+    ac.abort();
+    assert.equal((await fetch(`http://127.0.0.1:${api.port}/blob?mb=1`, { method: 'POST' })).status, 404);
+    // the cases ApiServer.kt's blobMb copies
+    assert.deepEqual(['1', '007', '64', '65', '1000000000', '0', '', 'x', '-3', '2.0', null].map(blobMb), [1, 7, 64, 64, 64, null, null, null, null, null, null]);
+  } finally {
+    await api.close();
+    fs.rmSync(models, { recursive: true, force: true });
+  }
+});
+
+test("/blob through the gate's api channel arrives whole (what the bench times)", async () => {
+  const models = fs.mkdtempSync(path.join(os.tmpdir(), 'kula-conf-'));
+  const api = await startApiServer({ models, llama: null });
+  const gate = await startGateServer({ port: 0, host: '127.0.0.1', secret: 'sb', targets: (ch) => (ch === 'api' ? api.port : null) });
+  const tunnel = new Tunnel('127.0.0.1', gate.port, 'sb', 'api');
+  const port = await tunnel.listen();
+  try {
+    const res = await fetch(`http://127.0.0.1:${port}/blob?mb=10`);
+    assert.equal(res.status, 200);
+    assert.equal((await res.arrayBuffer()).byteLength, 10 * 1024 * 1024);
+  } finally {
+    await tunnel.close(); await gate.close(); await api.close();
+    fs.rmSync(models, { recursive: true, force: true });
   }
 });

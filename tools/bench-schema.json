@@ -1,0 +1,151 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://kula.local/bench-schema/1",
+  "title": "kula bench result",
+  "description": "One bench run on one device: what it measured on itself and on the peers it reached. Written by `kula-node bench` (~/.kula-node/bench/<date>.json) and by the app's bench screen (kv-store, shared as json). docs/BENCH.md explains every field.",
+  "type": "object",
+  "required": ["v", "kind", "at", "source", "device", "model", "local", "peers", "split", "skipped"],
+  "additionalProperties": false,
+  "properties": {
+    "v": { "const": 1 },
+    "kind": { "const": "kula-bench" },
+    "at": { "type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}" },
+    "source": { "enum": ["node", "app"] },
+    "app_version": { "type": ["string", "null"] },
+    "device": {
+      "type": "object",
+      "required": ["id", "name", "kind", "os", "ram_total_mb", "ram_free_mb"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "kind": { "enum": ["phone", "tablet", "pc"] },
+        "os": { "type": "string" },
+        "cpu": { "type": ["string", "null"] },
+        "threads": { "type": ["integer", "null"], "minimum": 0 },
+        "ram_total_mb": { "type": ["number", "null"], "minimum": 0 },
+        "ram_free_mb": { "type": ["number", "null"], "minimum": 0 }
+      }
+    },
+    "model": {
+      "type": ["object", "null"],
+      "required": ["id", "file", "size_bytes", "quant"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string" },
+        "file": { "type": "string" },
+        "size_bytes": { "type": "integer", "minimum": 0 },
+        "quant": { "type": ["string", "null"] },
+        "layers": { "type": ["integer", "null"], "minimum": 0 }
+      }
+    },
+    "local": {
+      "type": "object",
+      "required": ["mem_bw_gbs", "prompt", "gen", "first_token_ms"],
+      "additionalProperties": false,
+      "properties": {
+        "mem_bw_gbs": { "type": ["number", "null"], "minimum": 0 },
+        "prompt": { "$ref": "#/$defs/tps_or_null" },
+        "gen": { "$ref": "#/$defs/tps_or_null" },
+        "first_token_ms": { "$ref": "#/$defs/ms_or_null" }
+      }
+    },
+    "peers": {
+      "type": "array",
+      "maxItems": 64,
+      "items": {
+        "type": "object",
+        "required": ["id", "name", "loopback", "gate_rtt_ms", "tunnel_mb_s", "tunnel_mb", "apart", "error"],
+        "additionalProperties": false,
+        "properties": {
+          "id": { "type": "string" },
+          "name": { "type": "string" },
+          "loopback": { "type": "boolean" },
+          "gate_rtt_ms": { "$ref": "#/$defs/ms_or_null" },
+          "tunnel_mb_s": { "type": ["number", "null"], "minimum": 0 },
+          "tunnel_mb": { "type": "integer", "minimum": 0, "maximum": 64 },
+          "apart": {
+            "type": ["object", "null"],
+            "required": ["gen", "first_token_ms"],
+            "additionalProperties": false,
+            "properties": {
+              "gen": { "$ref": "#/$defs/tps" },
+              "first_token_ms": { "$ref": "#/$defs/ms_or_null" }
+            }
+          },
+          "error": { "type": ["string", "null"] }
+        }
+      }
+    },
+    "split": {
+      "type": ["object", "null"],
+      "required": ["peers", "load_s", "token_ms", "tps"],
+      "additionalProperties": false,
+      "properties": {
+        "peers": { "type": "array", "items": { "type": "string" } },
+        "load_s": { "type": "number", "minimum": 0 },
+        "token_ms": { "$ref": "#/$defs/ms" },
+        "tps": { "type": "number", "minimum": 0 }
+      }
+    },
+    "skipped": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["what", "why"],
+        "additionalProperties": false,
+        "properties": {
+          "what": { "enum": ["prompt", "gen", "mem_bw", "gate", "tunnel", "apart", "split", "model"] },
+          "why": { "type": "string" }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "runs": { "type": "array", "maxItems": 16, "items": { "type": "number", "minimum": 0 } },
+    "tps": {
+      "type": "object",
+      "required": ["unit", "runs", "median"],
+      "additionalProperties": false,
+      "properties": {
+        "unit": { "const": "tok/s" },
+        "runs": { "$ref": "#/$defs/runs" },
+        "median": { "type": "number", "minimum": 0 },
+        "tokens": { "type": ["integer", "null"], "minimum": 0 }
+      }
+    },
+    "tps_or_null": {
+      "type": ["object", "null"],
+      "required": ["unit", "runs", "median"],
+      "additionalProperties": false,
+      "properties": {
+        "unit": { "const": "tok/s" },
+        "runs": { "$ref": "#/$defs/runs" },
+        "median": { "type": "number", "minimum": 0 },
+        "tokens": { "type": ["integer", "null"], "minimum": 0 }
+      }
+    },
+    "ms": {
+      "type": "object",
+      "required": ["unit", "runs", "median"],
+      "additionalProperties": false,
+      "properties": {
+        "unit": { "const": "ms" },
+        "runs": { "$ref": "#/$defs/runs" },
+        "median": { "type": "number", "minimum": 0 },
+        "tokens": { "type": ["integer", "null"], "minimum": 0 }
+      }
+    },
+    "ms_or_null": {
+      "type": ["object", "null"],
+      "required": ["unit", "runs", "median"],
+      "additionalProperties": false,
+      "properties": {
+        "unit": { "const": "ms" },
+        "runs": { "$ref": "#/$defs/runs" },
+        "median": { "type": "number", "minimum": 0 },
+        "tokens": { "type": ["integer", "null"], "minimum": 0 }
+      }
+    }
+  }
+}
