@@ -117,7 +117,8 @@ test('fuzz: serialisation is stable: same input, same bytes; the signed part is 
     // ed25519 is deterministic; p256 is not, so compare the unsigned part
     assert.equal(unsignedOf(a.line), unsignedOf(b.line));
     assert.ok(unsignedOf(a.line)!.endsWith(`"prev":"${prev}"`));
-    assert.deepEqual(JSON.parse(a.line), a.entry);
+    // json has no -0: compare the entry through json too
+    assert.deepEqual(JSON.parse(a.line), JSON.parse(JSON.stringify(a.entry)));
     // the body re-serialises to the same text: no ambiguity another writer could exploit
     const o = JSON.parse(a.line);
     delete o.sig;
