@@ -19,6 +19,7 @@ export interface Plan {
   used: (Peer & { assignedMb: number; layers: number })[];
   skipped: { peer: Peer; why: string }[];
   localMb: number;
+  localLayers?: number;
   fitsAlone: boolean;
   aloneFaster: boolean;
   totalMb: number;
@@ -43,6 +44,7 @@ export interface PlanInput {
   peers: Peer[];        // the ones that answered the probe
   skipped?: { peer: Peer; why: string }[];
   share: boolean;       // when it fits alone: share anyway?
+  all?: boolean;        // every peer given gets a part (the person chose them)
   net?: SimNet;
   // measured decoding tok/s on this model (kula-node bench); they replace bw × eff
   localTps?: number | null;
@@ -59,7 +61,7 @@ export function planSplit(input: PlanInput): Plan {
   const net = input.net ?? { mbps: 30, rttMs: 3 };
   try {
     const sim = planShares({
-      model: input.model, ctx: input.ctx, share: input.share, net,
+      model: input.model, ctx: input.ctx, share: input.share, all: input.all, net,
       local: withMeasured({ id: 'me', capMb: input.localFreeMb * LOCAL_SHARE, bw: input.localBw || DEFAULT_BW, eff: input.localEff ?? DEFAULT_EFF }, input.model, input.localTps),
       workers: input.peers.map((p) => withMeasured({ id: p.id, capMb: (p.ram ?? 2000) * WORKER_SHARE, bw: p.bw ?? DEFAULT_BW, eff: p.kind === 'pc' ? 0.3 : DEFAULT_EFF }, input.model, input.peerTps?.[p.id])),
     });
@@ -67,7 +69,7 @@ export function planSplit(input: PlanInput): Plan {
       mode: 'split',
       used: sim.used.map((u) => ({ ...(input.peers.find((p) => p.id === u.id) as Peer), assignedMb: u.assignedMb, layers: u.layers })),
       skipped: input.skipped ?? [],
-      localMb: sim.localMb, fitsAlone: sim.fitsAlone, aloneFaster: sim.aloneFaster, totalMb: sim.totalMb, needMb: sim.needMb, est: sim.est, estAlone: sim.estAlone,
+      localMb: sim.localMb, localLayers: sim.localLayers, fitsAlone: sim.fitsAlone, aloneFaster: sim.aloneFaster, totalMb: sim.totalMb, needMb: sim.needMb, est: sim.est, estAlone: sim.estAlone,
     };
   } catch (e) {
     if ((e as Error).message === 'toobig' || (e as Error).message === 'local') {

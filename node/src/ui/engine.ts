@@ -72,7 +72,9 @@ export interface ModelRow {
 }
 
 export interface DeviceRow { id: string; name: string; local: boolean; busy: boolean; tps: number | null; done: number }
-export interface Loaded { mode: Mode; model: { id: string; name: string; file: string; size: number }; ctx: number; devices: DeviceRow[]; since: number }
+// parts: in split mode, who holds which share of the model (this computer first); the phones in it are active
+export interface Part { id: string; name: string; local: boolean; mb: number; layers: number }
+export interface Loaded { mode: Mode; model: { id: string; name: string; file: string; size: number }; ctx: number; devices: DeviceRow[]; since: number; parts?: Part[] }
 export interface Status {
   loaded: Loaded | null;
   loading: { mode: Mode; model: string; since: number; line: string } | null;
@@ -605,7 +607,7 @@ export class Engine {
     return ids.map((r) => { const p = findPeer(all, String(r)); if (!p) throw new Error(`no such device: ${r}`); return p; });
   }
 
-  async load(req: { model?: unknown; mode?: unknown; peers?: unknown; ctx?: unknown }, emit: (e: LoadEvent) => void): Promise<Status> {
+  async load(req: { model?: unknown; mode?: unknown; peers?: unknown; ctx?: unknown; all?: unknown }, emit: (e: LoadEvent) => void): Promise<Status> {
     if (this.loading) throw new Error('already loading: wait, or stop it');
     const mode = String(req.mode ?? 'phone') as Mode;
     if (!MODES.includes(mode)) throw new Error('mode must be phone, apart, split or here');
@@ -662,6 +664,7 @@ export class Engine {
       };
       const common = { probeMs: this.opts.probeMs ?? 2500, log: (s: string) => this.log(s), identity: this.identity(), onProgress, signal: ac.signal };
       let cluster: Cluster;
+      let splitParts: Part[] | undefined;
       let file: string;
       let size: number;
 
@@ -698,16 +701,18 @@ export class Engine {
           for (const p of peers.filter((p) => p.relay)) plan.push(`${p.name} is far away (relay): split needs the lan, so it is left out.`);
           let setup;
           try {
-            setup = await prepareSplit({ model: simModelOf(file), ctx, localFreeMb: freeRamMB(), localBw: bw, peers: near, share: true, probeMs: common.probeMs, log: common.log, identity: common.identity });
+            setup = await prepareSplit({ model: simModelOf(file), ctx, localFreeMb: freeRamMB(), localBw: bw, peers: near, share: true, all: req.all === true, probeMs: common.probeMs, log: common.log, identity: common.identity });
           } catch (e) {
             if (e instanceof TooBig) throw new Error(`too big: the model needs about ${e.needMb} MB, these devices offer ${e.totalMb} MB`);
             throw e;
           }
           this.extraClose.push(setup.close);
           const pl = setup.plan;
+          splitParts = [{ id: 'local', name: 'this computer', local: true, mb: pl.localMb, layers: pl.localLayers ?? 0 }, ...pl.used.map((u) => ({ id: u.id, name: u.name, local: false, mb: u.assignedMb, layers: u.layers }))];
           plan.push(`${modelName} is split: this computer keeps ${pl.localMb} MB of it${pl.used.length ? `, ${pl.used.map((u) => `${u.name} ${u.assignedMb} MB (${u.layers} layers)`).join(', ')}` : ''}.`);
           if (!pl.used.length) plan.push('no phone answered on its rpc channel: the model runs here alone.');
           if (pl.fitsAlone) plan.push(`it would fit here alone${pl.aloneFaster ? ' and would be faster that way' : ''}; it is shared because split was asked for.`);
+          if (req.all === true) plan.push('every device you picked holds a part, even where fewer would be faster.');
           for (const s of pl.skipped) plan.push(`${s.peer.name} left out: ${s.why}.`);
           if (pl.est) plan.push(`estimate: about ${Math.round(pl.est.tps * 10) / 10} tok/s.`);
           cluster = await openApart({ ...common, model: ref, peers: [], localModelFile: file, llama, startBackend: (f, c) => startSplitServer(llama, f, c, setup!, common.log) });
@@ -717,7 +722,7 @@ export class Engine {
       for (const r of cluster.stamped) this.reach.set(r.id, { r: { ok: !cluster.skipped.some((s) => s.peer?.id === r.id) }, at: Date.now() });
       for (const s of cluster.skipped) if (s.peer) { plan.push(`${s.peer.name} left out: ${s.why}.`); this.reach.set(s.peer.id, { r: { ok: false, reason: s.why }, at: Date.now() }); }
       this.cluster = cluster;
-      this.loaded = { mode, model: { id: cat?.id ?? `local:${localOnly!.name}`, name: modelName, file: path.basename(file), size }, ctx, devices: [], since: Date.now() };
+      this.loaded = { mode, model: { id: cat?.id ?? `local:${localOnly!.name}`, name: modelName, file: path.basename(file), size }, ctx, devices: [], since: Date.now(), ...(splitParts ? { parts: splitParts } : {}) };
       this.plan = plan;
       this.note(`${modelName} ready on ${cluster.devices.map((d) => d.name).join(', ')} (${mode})`);
       const st = this.status();

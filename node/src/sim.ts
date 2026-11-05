@@ -66,6 +66,7 @@ export type PlanInput = {
   workers: SimDevice[];
   net: SimNet;
   share: boolean;        // when it fits alone: share anyway
+  all?: boolean;         // use every worker given, not the fastest few (6.11.2026: the person picked them)
 };
 
 export const kvMb = (m: SimModel, ctx: number) => (m.kvMbPer1k * ctx) / 1024;
@@ -185,14 +186,15 @@ export function planShares(input: PlanInput): SplitPlan {
     localMb: Math.round(need), used: [], needMb: Math.round(need), totalMb: Math.round(totalMb), fitsAlone, aloneFaster: true,
     est: estAlone!, estAlone, localLayers: model.layers,
   });
-  if (fitsAlone && !input.share) return alonePlan();
+  if (fitsAlone && !input.share && !input.all) return alonePlan();
 
   let best: { rows: { dev: SimDevice; mb: number }[]; est: Estimate } | null = null;
-  for (let k = 1; k <= workers.length; k++) {
+  for (let k = input.all ? workers.length : 1; k <= workers.length; k++) {
     const devs = [local, ...workers.slice(0, k)];
     const caps = devs.map((d, i) => (i === 0 ? d.capMb - fixedLocal : d.capMb));
     let filled: number[] | null;
-    if (fitsAlone) {
+    // all: every picked device takes a part, so the bytes go out by speed in proportion
+    if (fitsAlone || input.all) {
       filled = waterfill(devs.map((d, i) => ({ want: speed(d), cap: caps[i] })), spread);
     } else {
       // the fastest first, up to its capacity

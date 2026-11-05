@@ -504,3 +504,17 @@ ul.wiz-steps li::before { content: "› "; color: var(--meta); }
 .bd-note { font-size: 12.5px; color: var(--mute); margin-top: 12px; }
 
 @media (min-width: 861px) { #brain-close { display: none; } }
+
+/* active: the device is part of the loaded model right now (6.11.2026) */
+.active-tag { display: inline-flex; align-items: center; gap: 5px; margin-left: 8px; padding: 1px 8px 1px 7px; border-radius: 999px; font-size: 11px; font-weight: 600; vertical-align: 1px; color: #fff; background: var(--sage); }
+.active-tag::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: #fff; animation: pulse 1.4s ease-in-out infinite; }
+#dev-list .dev .who span.role { color: var(--words); font-weight: 500; }
+/* the split pick step */
+.pick-list { display: grid; gap: 8px; margin: 6px 0 14px; }
+.pick { display: grid; grid-template-columns: 22px auto auto 1fr; column-gap: 8px; align-items: center; padding: 11px 14px; border-radius: 12px; border: 1px solid var(--line2); background: var(--card); cursor: pointer; }
+.pick.on { border-color: var(--accent); background: var(--accent-soft); }
+.pick.off { opacity: 0.55; cursor: default; }
+.pick.fixed { cursor: default; }
+.pick input { width: 17px; height: 17px; accent-color: var(--accent); margin: 0; }
+.pick .sub { grid-column: 2 / -1; font-size: 12px; color: var(--mute); }
+.pick .via { justify-self: start; }

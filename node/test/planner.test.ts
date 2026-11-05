@@ -72,3 +72,19 @@ test('planWithProbe drops the peers that did not answer in time and says why', a
   assert.deepEqual(plan.used.map((u) => u.id), ['live']);
   assert.deepEqual(plan.skipped.map((s) => [s.peer.id, s.why]), [['dead', 'timeout']]);
 });
+
+test('all: every device the person picked holds a part, even where fewer would be faster', () => {
+  const peers = [peer('fast', 6000, 30), peer('slow', 6000, 8)];
+  const best = planSplit({ model: q06, ctx: 2048, localFreeMb: 4000, localBw: 50, peers, share: true });
+  const all = planSplit({ model: q06, ctx: 2048, localFreeMb: 4000, localBw: 50, peers, share: true, all: true });
+  assert.deepEqual(all.used.map((u) => u.id).sort(), ['fast', 'slow']);
+  assert.ok(all.used.every((u) => u.layers > 0 && u.assignedMb > 0));
+  assert.ok(best.used.length <= all.used.length);
+});
+
+test('all, when it does not fit alone: every picked device still gets a part', () => {
+  const peers = [peer('p1', 6000, 20), peer('p2', 6000, 20)];
+  const plan = planSplit({ model: q7, ctx: 2048, localFreeMb: 4000, localBw: 50, peers, share: true, all: true });
+  assert.deepEqual(plan.used.map((u) => u.id).sort(), ['p1', 'p2']);
+  assert.ok(plan.used.every((u) => u.assignedMb > 0));
+});

@@ -2,7 +2,7 @@
 // or the same wi-fi), the steps of that way, then the model, how it runs, and the load. Pure:
 // no DOM and no fetch, so app.js draws what these say and test/wizard.test.ts walks them.
 //
-//   how ─┬─ cable-plug ── cable-share ── cable-code ──┬─ connected ── model ── mode ── load ── done
+//   how ─┬─ cable-plug ── cable-share ── cable-code ──┬─ connected ── model ── mode ── (pick) ── load ── done
 //        └─ wifi-share ── wifi-list ─┬─ wifi-code ────┤
 //                                    └─ wifi-check ───┘
 //                    wifi-code / wifi-check ── wifi-apart ─┬─ cable-plug   (use the cable instead)
@@ -16,13 +16,13 @@ const STAGE_OF = {
   how: 0,
   'cable-plug': 1, 'wifi-share': 1, 'wifi-list': 1,
   'cable-share': 2, 'cable-code': 2, 'wifi-code': 2, 'wifi-check': 2, 'wifi-apart': 2, hotspot: 2, connected: 2,
-  model: 3, mode: 4, load: 5, done: 5,
+  model: 3, mode: 4, pick: 4, load: 5, done: 5,
 };
 export const stageOf = (step) => STAGE_OF[step] ?? 0;
 const CABLE_STEPS = new Set(['cable-plug', 'cable-share', 'cable-code']);
 
 export function initial(way = null) {
-  return { step: 'how', way, serial: null, used: [], found: null, typed: false, peerId: null, error: null, model: null, mode: null, returning: false };
+  return { step: 'how', way, serial: null, used: [], found: null, typed: false, peerId: null, error: null, model: null, mode: null, picked: null, returning: false };
 }
 
 // Where the sheet starts. A load running: its progress. A model loaded: no sheet at all when
@@ -85,7 +85,8 @@ export function back(w) {
     case 'connected': return w.way === 'cable' ? 'how' : 'wifi-list';
     case 'model': return w.peerId ? 'connected' : 'how';
     case 'mode': return 'model';
-    case 'load': return 'mode';
+    case 'pick': return 'mode';
+    case 'load': return w.mode === 'split' && w.picked ? 'pick' : 'mode';
     default: return null;
   }
 }
@@ -123,7 +124,9 @@ export function next(w, ev) {
     case 'on-hotspot': return w.step === 'hotspot' ? to('wifi-list') : w;
     case 'continue': return w.step === 'connected' ? to('model') : w;
     case 'model': return to('mode', { model: ev.id });
-    case 'mode': return to('load', { mode: ev.mode });
+    // split asks which devices hold a part (6.11.2026); the others go straight to the load
+    case 'mode': return ev.mode === 'split' ? to('pick', { mode: ev.mode, picked: null }) : to('load', { mode: ev.mode, picked: null });
+    case 'picked': return w.step === 'pick' && ev.ids?.length ? to('load', { picked: ev.ids }) : w;
     case 'loaded': return to('done');
     case 'load-failed': return { ...w, error: ev.error };
     default: return w;

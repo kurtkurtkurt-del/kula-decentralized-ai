@@ -592,6 +592,7 @@ const BRANCHES = [
       const st = S.status;
       const out = [];
       if (st?.loaded) out.push(kv('model', st.loaded.model.name), kv('mode', MODE_WORD[st.loaded.mode] || st.loaded.mode), kv('context', `${st.loaded.ctx} tokens`), kv('since', clock(st.loaded.since)));
+      if (st?.loaded?.parts) out.push(el('h4', '', 'who holds what'), bdList(st.loaded.parts.map((p) => devLine(p.name, `${p.layers} layers · ${p.mb} MB${p.local ? ' · main device' : ''}`, 'ok')), ''));
       if (st?.loading) out.push(kv('loading', st.loading.line || st.loading.model, 'busy'));
       out.push(el('h4', '', 'why it sits there'), bdList(st?.plan ?? [], 'nothing loaded, nothing planned.'));
       return out;
@@ -688,7 +689,7 @@ function brainWatch(was, st) {
   for (const d of st.decisions ?? []) if (d.at > seenDecision) { seenDecision = d.at; if (was) feed('memory', `noted: ${d.text}`, { at: d.at }); }
   if (st.loading && !loadLine) loadLine = feed('planner', `loading ${st.loading.model} (${MODE_WORD[st.loading.mode] || st.loading.mode})…`, { active: true });
   if (st.loading && loadLine && st.loading.line) { loadLine.text = `loading ${st.loading.model}: ${st.loading.line}…`; renderFeed(); }
-  if (!st.loading && loadLine) { feedDone(loadLine, st.loaded ? `${st.loaded.model.name} is loaded, ${MODE_WORD[st.loaded.mode] || st.loaded.mode}, on ${st.loaded.devices.length} device${st.loaded.devices.length === 1 ? '' : 's'}` : 'the load stopped'); loadLine = null; }
+  if (!st.loading && loadLine) { feedDone(loadLine, st.loaded ? `${st.loaded.model.name} is loaded, ${MODE_WORD[st.loaded.mode] || st.loaded.mode}, on ${(st.loaded.parts?.length || st.loaded.devices.length)} device${(st.loaded.parts?.length || st.loaded.devices.length) === 1 ? '' : 's'}${st.loaded.parts ? `: ${st.loaded.parts.map((p) => `${p.name} ${p.layers} layers`).join(', ')}` : ''}` : 'the load stopped'); loadLine = null; }
   if (was?.loaded && !st.loaded) feed('planner', `${was.loaded.model.name} unloaded`);
   const busy = (st.loaded?.devices ?? []).filter((d) => d.busy);
   if (busy.length && !answerLine) answerLine = feed('executor', `answering on ${busy.map((d) => d.name).join(', ')}…`, { active: true });
@@ -774,6 +775,16 @@ const VIA_ICON = {
 };
 const devKey = (name) => String(name || '').toLowerCase().replace(/samsung|galaxy/g, '').replace(/[^a-z0-9]/g, '');
 
+// what a device does in the loaded model, by peer id: a split part, or its own copy
+function activeRoles() {
+  const L = S.status?.loaded;
+  const m = new Map();
+  if (!L) return m;
+  for (const p of L.parts ?? []) if (!p.local) m.set(p.id, `holds ${p.layers} layers of ${L.model.name} (${p.mb} MB)`);
+  for (const d of L.devices ?? []) if (!d.local && !m.has(d.id)) m.set(d.id, `${d.busy ? 'answering with' : 'runs'} ${L.model.name}${d.tps ? ` · ${d.tps} tok/s` : ''}`);
+  return m;
+}
+
 function deviceGroups() {
   const groups = [];
   for (const d of S.cable?.adb === false ? [] : S.cable?.devices || []) groups.push({ key: devKey(d.model || d.name), name: d.name, cable: d, peers: [] });
@@ -792,9 +803,12 @@ function deviceGroups() {
     g.via = g.cableOn ? 'cable' : g.wifiOn ? 'wifi' : g.cable || cablePeer ? 'cable' : 'wifi';
     g.cablePeer = cablePeer;
     g.wifiPeer = wifiPeer;
+    const roles = activeRoles();
+    const inUse = g.peers.find((p) => roles.has(p.id));
+    g.role = inUse ? roles.get(inUse.id) : null;
     if (!g.cable && cablePeer) g.name = cablePeer.name;
   }
-  return groups.sort((a, b) => Number(b.active) - Number(a.active) || a.name.localeCompare(b.name));
+  return groups.sort((a, b) => Number(!!b.role) - Number(!!a.role) || Number(b.active) - Number(a.active) || a.name.localeCompare(b.name));
 }
 
 function renderDevices() {
@@ -809,7 +823,9 @@ function renderDevices() {
     mark.classList.add('dev-mark');
     const who = el('div', 'who');
     const name = el('b', '', g.name);
+    if (g.role) name.appendChild(el('small', 'active-tag', 'active'));
     who.appendChild(name);
+    if (g.role) who.appendChild(el('span', 'role', g.role));
     const lines = [];
     if (g.cable || g.cablePeer) {
       const st = g.cable ? (STATE_WORDS[g.cable.state] || g.cable.state) : 'unplugged';
@@ -1286,10 +1302,12 @@ function enterStep() {
       postJson('peers/probe').then((list) => { if (run !== wizRun) return; S.peers = list; renderPeers(); renderWiz(true); }).catch(() => {});
     }
   }
+  if (W.step === 'pick') { wizPick = null; renderWiz(true); }
   if (W.step === 'load') wizLoad(run);
   if (W.step === 'done') setTimeout(() => { if ($('connect').open) $('connect').close(); input.focus(); }, 700);
 }
 
+let wizPick = null; // the split pick step's ticked devices
 const phoneNow = () => wiz.choosePhone(S.peers, [W.peerId, ...settings.peers].filter(Boolean));
 
 // ---- drawing
@@ -1509,6 +1527,36 @@ const VIEWS = {
     return out;
   },
 
+  // split: which devices hold a part. every device ticked here gets one, even where the
+  // planner would have used fewer (that is slower, and the page says so)
+  pick: () => {
+    const cands = S.peers.filter((p) => !p.far);
+    if (!wizPick) wizPick = new Set(cands.filter((p) => p.reach?.ok).map((p) => p.id));
+    const out = [q('which devices hold a part?'), para('this computer always keeps the first and the last layers. tick every device that should take some of the rest.')];
+    const box = el('div', 'pick-list');
+    const me = el('label', 'pick on fixed');
+    me.append(el('input'), el('b', '', 'this computer'), el('span', 'via cable', 'main device'));
+    me.firstChild.type = 'checkbox'; me.firstChild.checked = true; me.firstChild.disabled = true;
+    box.appendChild(me);
+    for (const p of cands) {
+      const l = el('label', `pick${wizPick.has(p.id) ? ' on' : ''}${p.reach?.ok ? '' : ' off'}`);
+      const c = el('input');
+      c.type = 'checkbox';
+      c.checked = wizPick.has(p.id);
+      c.disabled = !p.reach?.ok;
+      c.addEventListener('change', () => { c.checked ? wizPick.add(p.id) : wizPick.delete(p.id); renderWiz(true); });
+      l.append(c, el('b', '', p.name), viaTag(p), el('span', 'sub', p.reach?.ok ? `${p.ram ? `${(p.ram / 1024).toFixed(1)} GB free · ` : ''}reachable${p.reach.ms ? ` (${p.reach.ms} ms)` : ''}` : 'not reachable now'));
+      box.appendChild(l);
+    }
+    out.push(box);
+    const n = [...wizPick].filter((id) => cands.some((p) => p.id === id && p.reach?.ok)).length;
+    const go1 = btn(n ? `split over ${n + 1} devices` : 'pick at least one', 'primary big', () => go({ type: 'picked', ids: [...wizPick] }));
+    go1.disabled = !n;
+    out.push(row(go1));
+    if (n > 1) out.push(para('more devices = more room for a big model; for a small one every extra hop makes each word a little slower.', 'hint'));
+    return out;
+  },
+
   load: () => {
     const st = S.status;
     const name = S.models.find((m) => m.id === W.model)?.name ?? st?.loading?.model ?? 'the model';
@@ -1537,7 +1585,7 @@ function wizSignature() {
     c && [c.step, c.problem, c.error, c.busy, W.step === 'cable-code' ? null : c.lines, c.name],
     W.step === 'wifi-list' ? found : null,
     W.step === 'connected' ? S.peers.find((x) => x.id === W.peerId)?.name : null,
-    W.step === 'model' || W.step === 'mode' ? [S.models.length, S.peers.map((x) => [x.id, x.reach?.ok, x.holds, x.ram]), settings.model, S.status?.loaded?.model?.id, !!S.status?.llama] : null]);
+    W.step === 'model' || W.step === 'mode' || W.step === 'pick' ? [S.models.length, S.peers.map((x) => [x.id, x.reach?.ok, x.holds, x.ram]), settings.model, S.status?.loaded?.model?.id, !!S.status?.llama] : null]);
 }
 
 function renderWiz(force = false) {
@@ -1673,7 +1721,8 @@ async function wizLoad(run) {
     return;
   }
   const mode = W.mode ?? settings.mode;
-  const body = { model: W.model ?? settings.model, mode, peers: wiz.loadPeers(mode, phoneNow(), S.peers), ctx: settings.ctx };
+  const picked = mode === 'split' && W.picked?.length ? W.picked : null;
+  const body = { model: W.model ?? settings.model, mode, peers: picked ?? wiz.loadPeers(mode, phoneNow(), S.peers), ctx: settings.ctx, ...(picked ? { all: true } : {}) };
   if (mode !== 'here') { settings.peers = body.peers; saveSettings(); }
   $('wiz-back').hidden = true;
   const ok = await runLoad(body, show);
