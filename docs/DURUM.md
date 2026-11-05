@@ -81,6 +81,25 @@ için hiç apk derlenmedi**. Telefonda bakılacaklar:
 9. Android 7 (API 24) telefonda işçi süreci (`B64.kt`).
 10. `apk.yml` CI'da hiç koşmadı (önce `min` profili).
 
+## yapılacaklar (kullanıcının istekleri, 5.11.2026; sırayla)
+
+1. **Projects sekmesi: gece işleri.** "connect" sekmesi "projects" olur: proje hazırla (başlık,
+   ne istediğin, fotoğraf, cevabın biçimi), gece bırak; gece işçisi taslak → eleştiri → son cevap
+   diye çalıştırır (gerekirse kümede bölünmüş modda büyük model), sabah cevap projede ve
+   bildirimde, sabah raporunda. Fotoğraf için llama.cpp'nin `mtmd`'si native modülde açılmalı
+   ve telefona sığan bir görsel model (SmolVLM gibi, mmproj ile) kataloğa girmeli; olmazsa
+   fotoğraf saklanır, metin işleri yine çalışır. (Bir ajan başladı, kullanıcı durdurdu; geride iş yok.)
+2. **Alt çubuk:** models · connect · the brain · projects · passport. "connect" messages'ın
+   yerine geçer, mesajlar connect'in içine girer.
+3. **MoE desteği ve Gemma 4 26B-A4B:** katalogda MoE modeller (Gemma 4 26B-A4B, Qwen3 30B-A3B),
+   sığma ve planlayıcı hızı aktif parametreden hesaplasın (bugün toplam boyuttan hesaplıyor ve
+   MoE'yi yavaş sanıyor).
+4. **the brain sekmesinde "bu telefonu paylaş" düğmesi;** cihaz satırında ad iki kez yazıyor
+   ("this phone · this phone").
+5. **Geliştirme sürümü (Metro):** JavaScript değişiklikleri apk beklemeden telefona gelsin.
+6. **iOS:** Xcode kurulunca iOS modülünün derlenmesi ve iPhone'a kurulum (kullanıcı Xcode'u
+   kuracak).
+
 ## kalanlar
 
 - fuzz ve ios-module dallarının alınması; iki telefonla bir küme turu.
