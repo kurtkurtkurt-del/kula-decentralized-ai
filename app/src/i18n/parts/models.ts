@@ -55,6 +55,9 @@ export const models = {
   'model.err.toobig': { en: 'too big even for all these devices together.', de: 'zu groß, selbst für alle geräte zusammen.', tr: 'bu cihazların hepsine birlikte bile sığmıyor.' },
   'model.err.nonative': { en: 'models run only in the android app.', de: 'modelle laufen nur in der android-app.', tr: 'modeller yalnızca android uygulamasında çalışır.' },
   'model.err.nopeers': { en: 'connect a device first.', de: 'verbinde zuerst ein gerät.', tr: 'önce bir cihaz bağla.' },
+  'model.err.nomodel': { en: 'no model is running.', de: 'kein modell läuft.', tr: 'çalışan model yok.' },
+  'chat.err.gone': { en: 'the device went away.', de: 'das gerät ist weg.', tr: 'cihaz koptu.' },
+  'chat.err.busy': { en: 'the device is busy with something else.', de: 'das gerät ist mit etwas anderem beschäftigt.', tr: 'cihaz başka bir işle meşgul.' },
 
   'mode.title': { en: 'how should it run?', de: 'wie soll es laufen?', tr: 'nasıl çalışsın?' },
   'mode.alone': { en: 'only this phone', de: 'nur dieses telefon', tr: 'yalnız bu telefon' },

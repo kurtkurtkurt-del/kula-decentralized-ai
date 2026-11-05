@@ -22,6 +22,8 @@ const BATCH = ['name three fruits.', 'what is 17 × 6?', 'one sentence about the
 
 export default function ChatScreen() {
   const { t, up } = useLang();
+  // what a failed turn says: the engine's codes in the app's language, anything else as it came
+  const errText = (msg: string) => (msg === 'nomodel' ? t('model.err.nomodel') : msg === 'peer gone' ? t('chat.err.gone') : /^peer http 409/.test(msg) ? t('chat.err.busy') : msg);
   const insets = useSafeAreaInsets();
   const engine = useEngine();
   const settings = useSettings();
@@ -50,7 +52,7 @@ export default function ChatScreen() {
       const stats = await run;
       setTurns((xs) => xs.map((x, i) => (i === xs.length - 1 ? { ...x, text: acc, stats } : x)));
     } catch (e) {
-      setTurns((xs) => xs.map((x, i) => (i === xs.length - 1 ? { ...x, text: `${acc}\n— ${(e as Error).message}` } : x)));
+      setTurns((xs) => xs.map((x, i) => (i === xs.length - 1 ? { ...x, text: `${acc}\n— ${errText((e as Error).message)}` } : x)));
     } finally {
       running.current = null;
     }
@@ -79,7 +81,7 @@ export default function ChatScreen() {
           tokens += r.tokens;
           lines.push(`${devices[i].name.toLowerCase()} · ${r1(r.tps)} tok/s · ${q} → ${shown(acc).trim().slice(0, 60)}`);
         } catch (e) {
-          lines.push(`${devices[i].name.toLowerCase()} · ${(e as Error).message}`);
+          lines.push(`${devices[i].name.toLowerCase()} · ${errText((e as Error).message)}`);
         }
         setBatch({ n: lines.length, s: (Date.now() - t0) / 1000, tps: Math.round((tokens / ((Date.now() - t0) / 1000)) * 10) / 10, lines: [...lines] });
       }
