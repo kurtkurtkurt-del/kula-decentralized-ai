@@ -107,6 +107,52 @@ PR açılmadı. Bu dalı release'e sen alacaksın.
 | Bölüm 2 kula-node | yapıldı (ayrı oturum) | dal `claude/kula-node-bcceb3`, 4 commit, push yok; 9 test; Mac'te gerçek model api kanalından aktı. **Bu dala henüz birleştirilmedi** |
 | Bölüm 3 beyin/check | taslak | `~/Desktop/claudecode/beyin/check/spec/PROTOCOL.md` (kendi git reposu); kod yok |
 
+## 5.11 cloud: özellik tabanlı testler / fuzz (`claude/fuzz`)
+
+`origin/claude/integrate-night` + `claude/gate-tls` + `claude/audit-ui` birleştirildi (çakışmalar: `node/src/gate.ts`,
+`Gate.kt`, `dev-gate.mjs` — TLS dalının yapısı alındı, integrate-night'ın sertleştirmeleri üstüne yeniden kondu:
+denetçi hataları kapıyı düşürmez (`audit {}`), yarım-açık soketler + `open` kümesi, rpc yuvası bağlanmadan önce alınır,
+`hello.trim()`; ILERLEME'de iki bölüm de kaldı). `fast-check` iki tarafta da devDependency (`npm i -D`, expo install değil).
+
+**Yeni testler** (hepsi yeşil: node 36→57, app jest 82→110, JVM 29→36; `tsc` iki tarafta temiz):
+
+| alan | dosya | ne denenir |
+|---|---|---|
+| kapı (node) | `node/test/fuzz-gate.test.ts` | rastgele/bozuk/çok uzun/UTF-8 çöpü/4. alanlı hello → her zaman tek `NO <neden>` + kapanış; ilk bayt 0x16 → `no tls`, diğerleri v1; üretilen geçerli el sıkışma her zaman `OK` + boru; `LineReader` bekleyen okuyucu varken 4 KiB'i aşmaz; baytlık/tek seferlik besleme aynı |
+| kapı (kotlin) | `GateFuzzTest.kt` | aynı özellikler gerçek `Gate.Server` üstünde (tohumlu `Random`); saat alanı yalnız rakam |
+| SSE | `node/test/fuzz-sse.test.ts`, `app/src/__tests__/fuzz-sse.test.ts` | `api.ts Sse` yazıcı ↔ `app/src/llm/sse.ts SseReader` okuyucu gidiş-dönüş rastgele chunk sınırlarında; çöp satırlar atlanır; `done` sonrası yok sayılır; `chatRemote` sahte XHR ile parça parça |
+| defter | `node/test/fuzz-ledger.test.ts`, `fuzz-audit.test.ts`, `LedgerFuzzTest.kt` | rastgele satır dizileri doğrulanır (node + telefon okuyucusu + Kotlin); tek karakter/bayt değişince düşer; silme/yer değiştirme; JSON yazıcı kararlı (Kotlin `Json.obj` ↔ org.json; TS `makeLine`); vektörler iki okuyucudan geçer |
+| QR | `fuzz-qr.test.ts` | v2/v3 make→parse kimlik; rastgele alan eksiltme/çöp → yalnız `notPeer`/`old`/`self`; 4 KB üstü ret |
+| hf adları | `fuzz-hf.test.ts` | `quantOf`/`paramsOf`/`shardOf`/`isWholeGguf` hiç fırlatmaz; bilinen örnekler |
+| GGUF | `fuzz-gguf.test.ts`, `app/src/llm/gguf.ts` | sınırlı TS başlık okuyucu + yazıcı: yaz→oku kimlik, `metaOf` native kaydın ikizi, her bozulma `GgufError`, limitler tahsisten önce |
+| GGUF (C++) | `cpp/gguf_meta.h`, `cpp/fuzz/` | `kula_gguf_meta` JNI ile fuzzer'ın ortak kodu; libFuzzer hedefi `gguf_meta_fuzz` + `gguf_meta_corpus` (CMake `-DKULA_FUZZ=ON`, clang); 25 dosyalık corpus (`make-corpus.mjs`) |
+
+**Bulgular ve düzeltmeler**
+
+| # | yer | bulgu | düzeltme / regresyon |
+|---|---|---|---|
+| 1 | `node/src/audit/ledger.ts verifyLines` | `null`, `7`, `[]` gibi JSON-ama-nesne-değil satır `TypeError` ile çöküyordu (`kula-node ledger verify` düşer) | nesne değilse `json` sorunu; `fuzz-ledger` regresyon testi |
+| 2 | `node makeLine` | tamsayı görünümlü alan adı (`"0"`) `JSON.stringify`'da öne geçiyor, `t,kind,peer` düzeni ve Kotlin ikiziyle bayt eşitliği bozuluyordu | böyle alan atlanır; regresyon testi |
+| 3 | `app/src/llm/peers.ts parsePeerQr` | port `"50551"`/`0`/`70000`/`1.5`, id sayı, host dizi, name nesne, ram/bw string, passport dizi/string kabul ediliyordu; boyut sınırı yoktu | tip + 1..65535 denetimi, `MAX_QR_BYTES` 4096, name 64/id 128/host 253 sınırı; regresyon testi |
+| 4 | `app/src/llm/engine.ts chatRemote` | `done` sonrası gelen `t` olayları `onToken`'a gidiyordu; ayrıştırıcı XHR içinde gömülüydü | `SseReader` (done'dan sonra durur, `data:` boşluksuz ve CRLF okur), `apiLoad` da onu kullanır |
+| 5 | `app/src/llm/hf.ts` | `licenseOf` string olmayan tag'de fırlatıyordu; `ggufFiles`/`searchGguf` liste olmayan gövdede fırlatıyordu; `lfs.oid` doğrulanmıyordu | tip denetimleri, `shardOf`/`isWholeGguf` dışa açıldı |
+| 6 | `cpp ggufMeta` | `general.architecture` (ya da `general.name`) string değilse `gguf_get_val_str` `GGML_ASSERT` ile **süreci düşürür** — indirilen dosyadan tetiklenebilir | `gguf_meta.h` tipli okuma; corpus `arch_not_string.gguf`; TS `metaOf` aynı davranış (boş arch) |
+| 7 | `tools/dev-gate.mjs` | satırsonu gelmeyen bağlantıda tampon sınırsız büyüyordu | 4 KiB üstü `NO no hello` |
+| 8 | `Gate.kt` | 4. alan `toLongOrNull` ile `-5`/`+5` kabul ediyordu, `gate.ts` yalnız rakam | `CLOCK` regex; `theClockFieldIsDigitsOnly` |
+
+Bug olmayan ama not edilen: imzanın base64 dolgu bitleri değişince imza aynı kalır (kanonik base64 denetimi yok — kayıt
+değişmediği için zararsız); telefon okuyucusu pencerenin ilk satırının `prev`'ini denetlemez (tasarım: kuyruk penceresi), ilk
+satırı silmek yalnız "genesis'ten değil" olarak görünür; JS `\b`/`\f` ve yalnız vekil (lone surrogate) kaçışları Kotlin
+`Json`'dan farklı (iki yazar aynı satırı yazmadığından imza/zincir etkilenmez, çapraz vektör üretirken dikkat); `-0`
+JSON'da `0`; node `LineReader` bekleyen okuyucu yokken ara tamponu sınırlamaz (el sıkışmada her adımda bekleyen var).
+
+**Derlenmeyen:** C++ fuzz hedefi burada derlenmedi (cloud'da llama.cpp kaynağını derleme izni yok; `clang++ -fsyntax-only`
+ile gguf.h'ye karşı sözdizimi denetlendi). Mac'te: `cd app/modules/kula-llama/android && cmake -S . -B build-fuzz -DKULA_FUZZ=ON
+-DKULA_CPU_VARIANTS=min -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ && cmake --build build-fuzz --target gguf_meta_fuzz
+gguf_meta_corpus && ./build-fuzz/gguf_meta_corpus src/main/cpp/fuzz/corpus/* && ./build-fuzz/gguf_meta_fuzz src/main/cpp/fuzz/corpus
+-max_len=65536`. Android derlenmedi (SDK yok): `Gate.kt` ve `kula_llama.cpp` değişiklikleri JVM testleri / sözdizimi ile sınırlı.
+JVM için maven central ilk denemelerde 429 verdi, üçüncü denemede indi.
+
 ## 5.11 cloud: kapı v2 — TLS, cihaz sertifikaları (`claude/gate-tls`)
 
 `origin/claude/quirky-einstein-hy2v69` üstüne `release/local-2026-10-20` ve `loving-dijkstra`
