@@ -258,6 +258,8 @@ read them: [BENCH.md](BENCH.md).
 | `~/.kula-node/device_key.pem` | the Ed25519 (or P-256) device key |
 | `~/.kula-node/gate_key.pem`, `gate_cert.der`, `paired` | the TLS identity and the pinned masters (v2) |
 | `~/.kula-node/ledger.jsonl` | the signed ledger |
+| `~/.kula-node/chats/` | the chat page's conversations (600; guests' under `guests/<session>/`) |
+| `~/.kula-node/ui-token` | the chat page's `/v1` bearer token (600) |
 
 ## a typical first run (phone as master)
 
@@ -308,7 +310,10 @@ cd node && npm test      # node --test, localhost only, never fetches llama.cpp
 byte for byte against `ApiServer.kt`), `audit.test.ts`, `setup.test.ts` (`pickAsset` over a
 recorded release), `planner.test.ts`, `peers.test.ts`,
 `apart.test.ts` (two fake workers behind real gates), `split.test.ts` (plan, tunnels, the
-`--rpc`/`--tensor-split` arguments against a fake llama-server).
+`--rpc`/`--tensor-split` arguments against a fake llama-server), `ui.test.ts` (the chat page:
+loopback, prefix, origin, no secret in a body, conversations, a fake phone behind a tls gate
+paired by hand and chatting end to end, stop, `/v1` shapes, the markdown escaping, the catalog
+copy), `ui-invite.test.ts` (invite mode: cookie, wrong token, guest limits, rotation).
 
 ## the dashboard
 
@@ -324,3 +329,94 @@ command starts (`dashboard on http://127.0.0.1:50580/…/ (this computer only)`)
 `--dashboard <port>` moves it, `--no-dashboard` turns it off. It needs no
 build step and no dependency: three static files under
 `node/src/dashboard/static/` and an event stream.
+
+## the chat page
+
+A chat page in the style of claude.ai on this computer, for a model that runs on your phone:
+the phone does the work, the computer only carries the words.
+
+1. **Phone:** kula → **share this phone**. It shows a qr code, its address
+   (`192.168.1.20:50551`) and a one-time code under it.
+2. **Computer:** `kula-node ui` (from the repo: `cd node && npm run dev -- ui`). The page opens
+   at `http://127.0.0.1:50590/<random>/`; `--port` moves it, `--no-open` keeps the browser shut.
+3. **connect → add a device.** Either *type it* (the address and the 16-character code; the
+   first 16 of the certificate too, to be sure), or *paste a code* (the qr text, a base64url
+   code, `host:port:secret`, or a six digit relay code with its relay), or *scan the qr* with
+   this computer's camera (Chromium, where `BarcodeDetector` exists). One tls handshake with the
+   code pairs the two for good (the code's proof covers both certificates).
+4. **Pick a model and a mode, load.** *on the phone* (the main use): the phone is told the
+   model's public Hugging Face url and sha256 from the catalog (`node/src/ui/catalog.ts`, a
+   copy of `app/src/llm/catalog.ts`) and downloads it itself, so the worker's private-url rule
+   never bites; a phone that already has the file starts at once. *apart*: every chosen device
+   its own copy, a prompt to the fastest free one; this computer joins when it has the file.
+   *split*: the model here, its layers spread over phones by `--rpc` (lan only). *here*: only
+   this computer's llama-server. split and here need `kula-node setup`; a catalog model they
+   need is downloaded to `~/.kula-node/models` first (sha256-checked). A `.gguf` that only
+   lives on this computer (`~/.kula-node/models`, the repo's `.llama/models`) can only run in
+   split or here: phones fetch from the public internet only, and the page says so.
+5. **Chat.** Streaming answers with markdown (escaped: model text never becomes html), a
+   collapsible "thinking" block for qwen3's `<think>`, tok/s, first-token time and the device
+   under each answer, stop, answer again, edit and resend the last message. **the brain** (the
+   icon top right) shows the devices, why the model sits where it sits, and the last decisions.
+   Settings: temperature, max tokens, context (next load), a system prompt, light/dark.
+
+Conversations are JSON files in `~/.kula-node/chats/` (600, in a 700 folder); the title is the
+first message until renamed. The catalog copy is regenerated with `npx tsx tools/ui-catalog.ts`
+(in `node/`); `test/ui.test.ts` fails while it is behind the app's.
+
+### the openai-compatible endpoint
+
+The same server answers `GET /v1/models` and `POST /v1/chat/completions` (`stream: true` gives
+`chat.completion.chunk` lines and `data: [DONE]`) with whatever is loaded, so an editor can use
+the phone. It wants `Authorization: Bearer <token>`: printed at start, shown under settings,
+kept in `~/.kula-node/ui-token` (600; `--new-token` makes a new one). The model name is free:
+`kula` is always listed. 127.0.0.1 only, also in invite mode. For Continue
+(`~/.continue/config.yaml`):
+
+```yaml
+models:
+  - name: kula (phone)
+    provider: openai
+    model: kula
+    apiBase: http://127.0.0.1:50590/v1
+    apiKey: kula-…            # the token kula-node ui printed
+    roles: [chat, edit, apply]
+```
+
+AnythingLLM: LLM provider "Generic OpenAI", base url `http://127.0.0.1:50590/v1`, the token
+as api key, model `kula`. `curl` check:
+
+```bash
+curl -N http://127.0.0.1:50590/v1/chat/completions -H "authorization: Bearer $TOKEN" \
+  -H 'content-type: application/json' -d '{"model":"kula","stream":true,"messages":[{"role":"user","content":"hi"}]}'
+```
+
+### invite mode: other devices on the wi-fi
+
+`kula-node ui --lan`, or **invite a device** (the qr icon) → *let devices on this wi-fi join*.
+The page then also listens on this computer's lan address (same port) and shows a big qr,
+printed in the terminal too: `http://<lan ip>:50590/<random>/join?k=<32 random bytes>`. Any
+phone, tablet or laptop on that network scans it and is in the chat, nothing installed.
+
+- `/join` swaps the token for a session cookie (HttpOnly, SameSite=Strict, the page's path);
+  every request that does not come in on 127.0.0.1 needs it. An invite lasts 8 hours; **new
+  invite** makes a new token and ends every guest's session at once. Off ends them too, and
+  closes the lan listener.
+- Guests chat with whatever is loaded, see the model and the devices, and keep their own chats
+  (`~/.kula-node/chats/guests/<session>/`). They cannot add, remove or check devices, load or
+  unload, see settings or the `/v1` token, or read the owner's or another guest's chats. The
+  owner is whoever uses 127.0.0.1.
+- Limits: `/join` 20 tries and 6 wrong tokens per address per 10 minutes; a guest gets one
+  answer at a time and 12 prompts a minute; at most 64 guests.
+- **It is plain http on the local network:** anyone on the same wi-fi who listens in can read
+  what is typed and answered (and could take a guest's cookie). Use it on a network you trust,
+  switch it off when the guests are gone.
+
+### security notes
+
+- Bound to 127.0.0.1 (plus the lan address only in invite mode); a foreign `Host` header is
+  refused (dns rebinding), every page route is under a random prefix, a POST needs the page's
+  own `Origin`. The page has a strict content security policy and loads nothing from anywhere.
+- Peer secrets and pairing codes never reach the page: devices go out without them.
+- The `/v1` token is the one secret the owner's page is given (to show it in settings).
+- llama.cpp's rpc stays behind the gate as everywhere else; the chat page adds no port to it.
