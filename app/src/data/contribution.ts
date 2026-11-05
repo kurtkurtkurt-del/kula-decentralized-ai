@@ -4,7 +4,6 @@ import { OfflineError, invalidate, must, newId, outbox, peek, pendingJobs, remem
 import type { Project } from '@/data/projects';
 import type { NightCardData } from '@/content/cardsgen';
 import type { Key } from '@/i18n/dict';
-import type { NightReport } from '@/night/report';
 
 // 08_contributions.sql: contribution_start, contribution_end, contribution_open,
 // my_cards, person_cards, credits_mine, friends_live.
@@ -51,24 +50,6 @@ outbox(
   },
   NIGHT_SHELVES,
 );
-
-// The morning report (night-2): night_report takes the report as one json. The live
-// server has no such rpc yet, so it is only sent to the demo server; elsewhere the report
-// stays on the phone (night/report.ts) and the function says so.
-outbox(
-  'nightReport',
-  async (j) => {
-    const r = await supabase.rpc('night_report', { p_report: j.report, p_client_id: j.id });
-    if (r.error) throw r.error;
-    return String(r.data);
-  },
-  ['reports'],
-);
-export async function sendNightReport(report: NightReport): Promise<boolean> {
-  if (!DEMO) return false;
-  await send({ kind: 'nightReport', report });
-  return true;
-}
 
 // The night begins: the server's id, or null while it waits in the outbox (the job id
 // then stands in for it: the end sends it along).

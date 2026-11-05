@@ -13,6 +13,7 @@ export const pages = {
   'project.energy': { en: 'energy', de: 'energie', tr: 'enerji' },
   'project.phonesIn': { en: '{n} phones in', de: '{n} handys dabei', tr: '{n} telefon katıldı' },
   'project.nightsDone': { en: '{n} nights done', de: '{n} nächte gemacht', tr: '{n} gece yapıldı' },
+  'project.nightsMonth': { en: 'you: {n} nights here this month', de: 'du: {n} nächte hier diesen monat', tr: 'sen: bu projeye bu ay {n} gece' },
   'project.tokens': { en: '{n} tokens so far', de: 'bisher {n} tokens', tr: 'şimdiye kadar {n} token' },
   'project.friends': { en: '{names} keep it', de: '{names} behalten es', tr: '{names} saklıyor' },
   'project.org': { en: 'run by', de: 'getragen von', tr: 'yürüten' },

@@ -19,6 +19,7 @@ import { nightRules, nightWindow } from '@/data/settings';
 import { endNow, recheck, useNight } from '@/night/useNight';
 import { setWantTonight, wantTonight } from '@/night/conditions';
 import { useReports } from '@/night/report';
+import { bestStreak, monthTotal, useNightSummary } from '@/data/night';
 import { useRefreshOnFocus } from '@/hooks/useRefresh';
 import { upperData, useLang } from '@/i18n';
 import { colors, fonts, radius } from '@/theme/tokens';
@@ -52,6 +53,7 @@ export default function PassportScreen() {
   const flipWant = () => { setWantTonight(!want); setWant(!want); recheck(); };
   const tick = useRefreshOnFocus('cards', 'profile');
   const profile = useProfile(tick);
+  const nightRows = useNightSummary(session?.user.id, tick);
   const [busy, setBusy] = useState(false);
   const [copied, setCopied] = useState(false);
   const [note, setNote] = useState<string | null>(null);
@@ -201,6 +203,8 @@ export default function PassportScreen() {
                 <Text style={[styles.meta, styles.link]} numberOfLines={1}>{last ? t('night.report.last', { units: last.units, tps: last.tps, wh: last.wh }) : t('night.report')}</Text>
               </Pressable>
             </View>
+            {/* backend-night: what the server has of this account's nights this month */}
+            {session ? <Text style={styles.meta} numberOfLines={1}>{monthTotal(nightRows) > 0 ? t('night.month', { n: monthTotal(nightRows), s: bestStreak(nightRows) }) : t('night.month.none')}</Text> : null}
           </View>
         </View>
 

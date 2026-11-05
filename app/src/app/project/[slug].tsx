@@ -13,6 +13,7 @@ import ShareButton from '@/components/ShareButton';
 import Tips from '@/components/Tips';
 import { useAuth } from '@/auth/AuthContext';
 import { aboutFor, samplesFor, type About, type Sample } from '@/data/about';
+import { monthNights, useNightSummary } from '@/data/night';
 import { fetchProject, peekProject, posterUrl, swipe, type Project, type ProjectPage } from '@/data/projects';
 import { OfflineError, useShelf } from '@/lib/offline';
 import { shareProject } from '@/lib/share';
@@ -43,6 +44,8 @@ export default function ProjectScreen() {
   const [tonight, setTonight] = useState(() => tonightProject() === slug);
   const [broken, setBroken] = useState(false);
   const fresh = useShelf('projectPage');
+  const nightRows = useNightSummary(session?.user.id);
+  const myNights = slug ? monthNights(nightRows, slug) : 0;
   useEffect(() => {
     if (!slug) return;
     let live = true;
@@ -130,6 +133,7 @@ export default function ProjectScreen() {
                 {up(`${t('project.phonesIn', { n: page.phones_in })} · ${t('project.nightsDone', { n: page.nights_done })} · ${t('project.tokens', { n: fmt(Number(page.tokens)) })}`)}
               </Text>
             ) : null}
+            {myNights > 0 ? <Text style={styles.mono}>{up(t('project.nightsMonth', { n: myNights }))}</Text> : null}
             {page?.friends.length ? <Text style={[styles.mono, styles.red]}>{up(t('project.friends', { names: page.friends.join(', ') }))}</Text> : null}
 
             {about ? (
