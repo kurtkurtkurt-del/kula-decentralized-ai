@@ -9,6 +9,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { EventEmitter } from 'node:events';
+import net from 'node:net';
 
 const HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'kula-wiz-home-'));
 process.env.KULA_NODE_HOME = HOME;
@@ -16,7 +17,8 @@ after(() => fs.rmSync(HOME, { recursive: true, force: true }));
 
 const wiz = await import('../src/ui/static/wizard.js');
 const { Engine } = await import('../src/ui/engine.ts');
-const { writePeers } = await import('../src/peers.ts');
+const { writePeers, readPeers } = await import('../src/peers.ts');
+const { startGateServer } = await import('../src/gate.ts');
 
 const SERIAL = 'R3CY10FLZLB';
 const dev = (o: Record<string, unknown> = {}) => ({ serial: SERIAL, name: 'SM S936B', model: 'SM S936B', state: 'device', help: null, installed: true, peer: null, job: null, ...o });
@@ -295,4 +297,49 @@ test('discover: kula devices on this network from a (fake) mdns browser: name, h
   assert.equal(rows[0].holds, null);
   assert.ok(!/secret|"pin"|abab/.test(JSON.stringify(rows)));
   await engine.close();
+});
+
+// ---------- a paired phone on a new address
+
+test('probe: a paired wi-fi phone mdns heard at a new address is kept there once its handshake passes; an impostor at the heard address is not', async () => {
+  const sink = net.createServer((s) => s.on('error', () => {}));
+  await new Promise<void>((r) => sink.listen(0, '127.0.0.1', () => r()));
+  const sinkPort = (sink.address() as net.AddressInfo).port;
+  const gate = (secret: string) => startGateServer({ port: 0, host: '127.0.0.1', secret, targets: (ch) => (ch === 'api' ? sinkPort : null) });
+  const phone = await gate('aa'.repeat(16));
+  const impostor = await gate('bb'.repeat(16));
+  const gone = net.createServer();
+  await new Promise<void>((r) => gone.listen(0, '127.0.0.1', () => r()));
+  const oldPort = (gone.address() as net.AddressInfo).port;
+  await new Promise<void>((r) => gone.close(() => r()));
+
+  const run = async (heardPort: number) => {
+    const file = path.join(HOME, `moved-${heardPort}.json`);
+    writePeers([{ id: 'phone-1', name: 'pixel', host: '127.0.0.1', port: oldPort, secret: 'aa'.repeat(16), fp: '', pin: null, relay: null, kind: 'phone', ram: null, bw: null, added_at: new Date().toISOString() }], file);
+    const fake = () => {
+      const browser = Object.assign(new EventEmitter(), { services: [] as any[], stop() {}, start() {} });
+      setTimeout(() => browser.emit('up', { name: 'kula pixel', port: heardPort, addresses: ['127.0.0.1'], txt: { id: 'phone-1', name: 'pixel', kind: 'phone', v: 'rpc7' } }), 10);
+      return { find: () => browser as any, destroy: () => {} };
+    };
+    const engine = new Engine({ peersFile: file, bonjour: fake as any, discoverMs: 80, probeMs: 1500 });
+    const found = await engine.discover();
+    assert.equal(found[0].paired, 'phone-1');
+    const [row] = await engine.probe(['phone-1']);
+    const saved = readPeers(file)[0];
+    await engine.close();
+    return { row, saved };
+  };
+
+  const good = await run(phone.port);
+  assert.equal(good.row.reach?.ok, true);
+  assert.equal(good.saved.port, phone.port);
+  assert.ok(good.saved.last_ok);
+
+  const bad = await run(impostor.port);
+  assert.equal(bad.row.reach?.ok, false);
+  assert.equal(bad.saved.port, oldPort);
+
+  await phone.close();
+  await impostor.close();
+  sink.close();
 });

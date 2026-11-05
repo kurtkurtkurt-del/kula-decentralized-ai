@@ -158,6 +158,10 @@ export class Engine {
   private jobs = new Map<string, CableJob>();
   private held = new Map<string, string | null>();
   private discovering: Promise<FoundRow[]> | null = null;
+  // a paired wi-fi phone that mdns heard at another address than the peer book has (it got a
+  // new ip on this network): tried by the next probe when the saved address does not answer,
+  // and kept only when the handshake there proves it is that phone
+  private heard = new Map<string, { host: string; port: number }>();
   readonly catalog: CatalogEntry[];
 
   constructor(private readonly opts: EngineOptions = {}) {
@@ -208,6 +212,20 @@ export class Engine {
     const wanted = all.filter((p) => asked(p) && !(p.cable && this.reach.get(p.id)?.r.reason === UNPLUGGED));
     if (wanted.length) {
       const results: PeerProbe[] = await probePeers(wanted, this.opts.probeMs ?? 2000, ['api'], undefined, this.identity());
+      // the saved address is silent but mdns heard the phone elsewhere: the handshake there
+      // (its pinned certificate or the shared secret) decides whether the new address is kept
+      const moved = results.filter((r) => !r.api.ok && this.heard.has(r.peer.id))
+        .map((r) => ({ ...r.peer, ...this.heard.get(r.peer.id)! }));
+      for (const p of moved) this.heard.delete(p.id);
+      if (moved.length) {
+        const again = await probePeers(moved, this.opts.probeMs ?? 2000, ['api'], undefined, this.identity());
+        for (const r of again) {
+          if (!r.api.ok) continue;
+          const i = results.findIndex((x) => x.peer.id === r.peer.id);
+          this.note(`${r.peer.name} answered at its new address (${whereIs(r.peer)})`);
+          results[i] = r;
+        }
+      }
       const at = Date.now();
       for (const r of results) this.reach.set(r.peer.id, { r: r.api as Reach, at });
       this.stamp(results.map((r) => r.peer));
@@ -247,6 +265,7 @@ export class Engine {
       const peers = readPeers(this.file());
       return found.map((f) => {
         const p = peers.find((x) => (f.id && x.id === f.id) || (x.host === f.host && x.port === f.port && !x.relay && !x.cable)) ?? null;
+        if (p && !p.relay && !p.cable && (p.host !== f.host || p.port !== f.port)) this.heard.set(p.id, { host: f.host, port: f.port });
         return { name: String(f.name).slice(0, 60), host: f.host, port: f.port, kind: f.kind, v: f.v, paired: p ? p.id : null };
       });
     }).finally(() => { this.discovering = null; });
