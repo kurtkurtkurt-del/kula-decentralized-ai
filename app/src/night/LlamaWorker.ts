@@ -18,7 +18,7 @@ import { PEER_WATTS, WATTS, type NightDevice, type NightStatus, type NightWorker
 const OUT_MS = 5 * 60_000;
 const IDLE_MS = 1000; // how long a device with nothing to do waits before looking again
 
-type Options = { source?: () => JobSource; now?: () => number; outMs?: number; idleMs?: number };
+type Options = { source?: (key?: string) => JobSource; now?: () => number; outMs?: number; idleMs?: number };
 
 const fresh = (): NightStatus => ({ state: 'idle', slug: null, startedAt: null, tokens: 0, seconds: 0, kwh: 0, tps: 0, real: true, units: 0, checked: 0, wrong: 0, devices: [] });
 
@@ -36,10 +36,10 @@ export class LlamaWorker implements NightWorker {
     this.opt = { source: () => new DemoJobs(), now: () => Date.now(), outMs: OUT_MS, idleMs: IDLE_MS, ...opt };
   }
 
-  start(slug: string, tps: number) {
+  start(slug: string, tps: number, key?: string) {
     this.stop();
     const run = ++this.run;
-    this.source = this.opt.source();
+    this.source = this.opt.source(key);
     this.drained = false;
     this.outUntil.clear();
     this.s = { ...fresh(), state: 'running', slug, startedAt: this.opt.now(), tps };
