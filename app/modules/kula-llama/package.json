@@ -1,7 +1,7 @@
 {
   "name": "kula-llama",
   "version": "0.1.0",
-  "description": "llama.cpp on the phone and the phone cluster (android, arm64)",
+  "description": "llama.cpp on the phone and the phone cluster (android arm64, ios arm64 + metal)",
   "main": "index.ts",
   "private": true
 }

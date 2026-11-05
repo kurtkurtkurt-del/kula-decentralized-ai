@@ -2,3 +2,5 @@
 android/src/main/cpp/llama.cpp/
 android/build/
 android/.cxx/
+# built by tools/ios-llama.sh (llama.cpp as an xcframework for the KulaLlama pod)
+ios/llama/
