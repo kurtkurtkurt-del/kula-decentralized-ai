@@ -39,7 +39,7 @@
 
 * { box-sizing: border-box; }
 html, body { margin: 0; height: 100%; }
-body { background: var(--ground); color: var(--words); font: 15px/1.55 var(--sans); -webkit-font-smoothing: antialiased; overflow: hidden; }
+body { background: var(--ground); color: var(--words); font: 15px/1.55 var(--sans); font-weight: var(--body-w, 400); -webkit-font-smoothing: antialiased; overflow: hidden; }
 button, input, textarea, select { font: inherit; color: inherit; }
 button { cursor: pointer; }
 svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; flex: none; }
