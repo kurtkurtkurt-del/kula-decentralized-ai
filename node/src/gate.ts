@@ -17,6 +17,12 @@ export type Channel = 'rpc' | 'api';
 export const CHANNELS: Channel[] = ['rpc', 'api'];
 export const HANDSHAKE_MS = 5000;
 export const FP_MISMATCH = 'fingerprint mismatch';
+// Connections allowed to sit in a handshake at once; the next one is told "NO overloaded"
+// and dropped at once, so a flood of half-open connections cannot pin memory or threads.
+export const MAX_HANDSHAKES = 32;
+// A pairing code lives this long after it was made (shown in a qr); then "NO pin expired"
+// and a fresh one is made, so a photographed qr stops working in minutes, not days.
+export const PIN_TTL_MS = 10 * 60_000;
 
 // v: which protocol the connection spoke; fp: the client's certificate fingerprint (v2).
 export type GateEvent =
@@ -32,6 +38,8 @@ export interface TlsServer {
   identity: GateIdentity;
   paired: Paired;
   pin: string | null;
+  // when `pin` stops working (unix ms); unset: no expiry (tests, dev-gate)
+  pinExpiresAt?: number | null;
   onPinUsed?: () => void;
 }
 
@@ -199,7 +207,9 @@ export type Admit = (peer: string, nonceC: string, unixMs: number | null) => str
 export interface GateServerOptions {
   port: number;
   host?: string;
-  secret: string;
+  // the v1 secret; null turns v1 off: a plain hello is told "NO no v1" (a v2 worker that
+  // never handed out a secret has no reason to take the unauthenticated-tls path)
+  secret: string | null;
   targets: Targets;
   onEvent?: (e: GateEvent) => void;
   admit?: Admit;
@@ -267,8 +277,9 @@ export async function startGateServer(opts: GateServerOptions): Promise<GateServ
   const ring = new ReplayCheck();
   const secureContext = opts.tls ? tls.createSecureContext({ key: opts.tls.identity.keyPem, cert: opts.tls.identity.certPem, minVersion: 'TLSv1.3' }) : null;
 
-  // After the proof: find the target, say OK, pipe until either side closes.
-  const admitted = async (socket: Duplex, peer: string, channel: Channel, okLine: string, rest: Buffer, v: 1 | 2, fp: string | undefined, refuse: (reason: string) => void) => {
+  // After the proof: find the target, say OK, pipe until either side closes. `handshakeDone`
+  // gives the handshake slot back once the connection is piped.
+  const admitted = async (socket: Duplex, peer: string, channel: Channel, okLine: string, rest: Buffer, v: 1 | 2, fp: string | undefined, refuse: (reason: string) => void, handshakeDone: () => void) => {
     let targetPort: number | null = null;
     try { targetPort = await opts.targets(channel); } catch { targetPort = null; }
     if (targetPort == null) return refuse('channel closed');
@@ -281,13 +292,14 @@ export async function startGateServer(opts: GateServerOptions): Promise<GateServ
     target.setNoDelay(true);
     writeLine(socket, okLine);
     const at = Date.now();
+    handshakeDone();
     emit({ type: 'open', channel, peer, at, v, fp });
     const counts = await pipeBoth(socket, target, rest);
     letGo();
     emit({ type: 'close', channel, peer, at: Date.now(), ms: Date.now() - at, bytesIn: counts.aToB, bytesOut: counts.bToA, v, fp });
   };
 
-  const servePlain = async (socket: net.Socket, peer: string, first: Buffer) => {
+  const servePlain = async (socket: net.Socket, peer: string, first: Buffer, handshakeDone: () => void) => {
     const reader = new LineReader(socket);
     reader.feed(first);
     let channel: Channel | null = null;
@@ -297,6 +309,8 @@ export async function startGateServer(opts: GateServerOptions): Promise<GateServ
       socket.end();
       setTimeout(() => socket.destroy(), 200);
     };
+    if (opts.secret === null) return refuse('no v1');
+    const secret = opts.secret;
     let hello: string;
     try { hello = await reader.line(HANDSHAKE_MS); } catch { return refuse('no hello'); }
     const parts = hello.trim().split(' ');
@@ -318,12 +332,12 @@ export async function startGateServer(opts: GateServerOptions): Promise<GateServ
     writeLine(socket, nonceS);
     let proof: string;
     try { proof = await reader.line(HANDSHAKE_MS); } catch { return refuse('no proof'); }
-    if (!sameHex(proof.trim(), clientProof(opts.secret, nonceC, nonceS, channel))) return refuse('wrong secret');
+    if (!sameHex(proof.trim(), clientProof(secret, nonceC, nonceS, channel))) return refuse('wrong secret');
     socket.setTimeout(0);
-    await admitted(socket, peer, channel, `OK ${serverProof(opts.secret, nonceC, nonceS, channel)}`, reader.release(), 1, undefined, refuse);
+    await admitted(socket, peer, channel, `OK ${serverProof(secret, nonceC, nonceS, channel)}`, reader.release(), 1, undefined, refuse, handshakeDone);
   };
 
-  const serveTls = async (raw: net.Socket, peer: string, first: Buffer, t: TlsServer) => {
+  const serveTls = async (raw: net.Socket, peer: string, first: Buffer, t: TlsServer, handshakeDone: () => void) => {
     const socket = new tls.TLSSocket(prefixed(raw, first), { isServer: true, secureContext: secureContext!, requestCert: true, rejectUnauthorized: false });
     socket.on('error', () => {});
     const secure = await new Promise<boolean>((resolve) => {
@@ -360,7 +374,13 @@ export async function startGateServer(opts: GateServerOptions): Promise<GateServ
     if (why) return refuse(why);
     if (!fpC) return refuse('no client cert');
     const paired = t.paired.has(fpC);
-    const pin = t.pin;
+    let pin = t.pin;
+    if (!paired && pin !== null && t.pinExpiresAt != null && Date.now() > t.pinExpiresAt) {
+      // the code is spent by time: the next qr shows a new one
+      t.pin = null; pin = null;
+      t.onPinUsed?.();
+      return refuse('pin expired');
+    }
     if (!paired && pin === null) return refuse('not paired');
     const nonceS = nonce();
     writeLine(socket, `${nonceS} ${paired ? 'paired' : 'pin'}`);
@@ -380,19 +400,32 @@ export async function startGateServer(opts: GateServerOptions): Promise<GateServ
       t.onPinUsed?.();
       okLine = `OK ${pinProofServer(pin!, nonceC, nonceS, channel, fpS, fpC)}`;
     }
-    await admitted(socket, peer, channel, okLine, reader.release(), 2, fpC, refuse);
+    await admitted(socket, peer, channel, okLine, reader.release(), 2, fpC, refuse, handshakeDone);
   };
 
   // Half-open on every leg: a peer that sends its FIN after the request still gets the
   // answer (llama.cpp's tunnels and the phone's Tunnel shut their write side first). The
   // open sockets are kept so close() can end them; net.Server.close() only stops listening.
   const open = new Set<net.Socket>();
+  // connections between accept and the end of their handshake
+  let inHandshake = 0;
   const server = net.createServer({ allowHalfOpen: true }, (socket) => {
     open.add(socket);
     socket.once('close', () => open.delete(socket));
     socket.setNoDelay(true);
     const peer = socket.remoteAddress ?? '?';
     socket.on('error', () => {});
+    if (inHandshake >= MAX_HANDSHAKES) {
+      emit({ type: 'reject', channel: null, peer, at: Date.now(), reason: 'overloaded', v: 1 });
+      try { socket.end('NO overloaded\n'); } catch {}
+      setTimeout(() => socket.destroy(), 200);
+      return;
+    }
+    inHandshake++;
+    let counted = true;
+    const uncount = () => { if (counted) { counted = false; inHandshake--; } };
+    // the slot is given back when the pipe starts (open event) or the socket is gone
+    socket.once('close', uncount);
     (async () => {
       const first = await waitFirstChunk(socket, HANDSHAKE_MS);
       if (!first) {
@@ -406,9 +439,9 @@ export async function startGateServer(opts: GateServerOptions): Promise<GateServ
           socket.end('NO no tls\n');
           return;
         }
-        return serveTls(socket, peer, first, opts.tls);
+        return serveTls(socket, peer, first, opts.tls, uncount);
       }
-      return servePlain(socket, peer, first);
+      return servePlain(socket, peer, first, uncount);
     })().catch(() => socket.destroy());
   });
 

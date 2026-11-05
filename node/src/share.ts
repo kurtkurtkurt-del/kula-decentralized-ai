@@ -7,7 +7,7 @@ import path from 'node:path';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { Bonjour } from 'bonjour-service';
 import qrcode from 'qrcode-terminal';
-import { startGateServer, type GateEvent, type Channel, type TlsServer } from './gate.js';
+import { startGateServer, PIN_TTL_MS, type GateEvent, type Channel, type TlsServer } from './gate.js';
 import { loadOrCreateIdentity, newPin, Paired } from './tls.js';
 import { findLlama, TAG } from './llama.js';
 import { home, expandHome } from './paths.js';
@@ -76,7 +76,9 @@ export async function share(opts: ShareOptions): Promise<() => Promise<void>> {
 
   const host = lanIPv4();
   if (!host) log('no lan ipv4 address found; the phone will not reach this computer');
-  const secret = opts.secret ?? newSecret();
+  // v1 needs a secret in a qr. With --tls the qr carries none, so unless one was given
+  // on purpose (--secret, for old phones) v1 is off: there is nothing it could prove.
+  const secret: string | null = opts.secret ?? (opts.tls ? null : newSecret());
   const id = deviceId();
   const name = opts.name ?? os.hostname().replace(/\.local$/, '');
 
@@ -140,7 +142,7 @@ export async function share(opts: ShareOptions): Promise<() => Promise<void>> {
   let tlsServer: TlsServer | undefined;
   const printQr = (port: number) => {
     const common = { k: 'kula-peer' as const, id, name, host: host ?? '0.0.0.0', port, kind: 'pc' as const, ram, bw, gpu: gpu.name, vram: gpu.vramMB };
-    const payload: PeerPayload = tlsServer ? { ...common, v: 3, fp: tlsServer.identity.fp, pin: tlsServer.pin ?? undefined } : { ...common, v: 2, secret };
+    const payload: PeerPayload = tlsServer ? { ...common, v: 3, fp: tlsServer.identity.fp, pin: tlsServer.pin ?? undefined } : { ...common, v: 2, secret: secret! };
     const text = JSON.stringify(payload);
     if (!opts.noQr) qrcode.generate(text, { small: true }, (q) => console.log(q));
     console.log(text);
@@ -149,14 +151,14 @@ export async function share(opts: ShareOptions): Promise<() => Promise<void>> {
   if (opts.tls) {
     const identity = loadOrCreateIdentity(home(), key);
     const paired = new Paired(path.join(home(), 'paired'));
-    tlsServer = { identity, paired, pin: newPin() };
-    // the code is spent by the phone that used it; the next qr gets a fresh one
-    tlsServer.onPinUsed = () => { tlsServer!.pin = newPin(); log('pairing code used; a new qr follows'); printQr(opts.port); };
-    log(`tls certificate ${identity.fp.slice(0, 16)}… (${paired.size} paired)`);
+    tlsServer = { identity, paired, pin: newPin(), pinExpiresAt: Date.now() + PIN_TTL_MS };
+    // the code is spent by the phone that used it, or by time; the next qr gets a fresh one
+    tlsServer.onPinUsed = () => { tlsServer!.pin = newPin(); tlsServer!.pinExpiresAt = Date.now() + PIN_TTL_MS; log('pairing code used or expired; a new qr follows'); printQr(opts.port); };
+    log(`tls certificate ${identity.fp.slice(0, 16)}… (${paired.size} paired); ${secret ? 'v1 on (--secret)' : 'v1 off'}`);
   }
 
   const gate = await startGateServer({ port: opts.port, secret, targets, onEvent, admit: (peer, nonceC, unixMs) => auditor.hello(peer, nonceC, unixMs), tls: tlsServer });
-  log(`gate listening on 0.0.0.0:${gate.port}${tlsServer ? ' (v1 and v2 tls)' : ''}`);
+  log(`gate listening on 0.0.0.0:${gate.port}${tlsServer ? (secret ? ' (v1 and v2 tls)' : ' (v2 tls only)') : ''}`);
   printQr(gate.port);
 
   const bonjour = new Bonjour();

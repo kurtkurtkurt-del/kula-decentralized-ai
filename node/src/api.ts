@@ -5,6 +5,7 @@ import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
 import { download, sha256Of } from './download.js';
+import { SHA256_RE, sizeProblem, urlProblem } from './policy.js';
 import { freePort, startChild, type Child } from './children.js';
 import type { LlamaBinaries } from './llama.js';
 
@@ -31,6 +32,8 @@ export interface ApiOptions {
   defaultCtx?: number;
   // told about every /load: the sha256 asked for and the one on disk (null when nothing usable arrived)
   onLoad?: (name: string, wantSha256: string, gotSha256: string | null) => void;
+  // tests serve their files from 127.0.0.1; a worker never takes a private url
+  allowPrivateUrls?: boolean;
 }
 
 export interface ApiServer {
@@ -111,7 +114,12 @@ export async function startApiServer(opts: ApiOptions): Promise<ApiServer> {
     const { url, sha256, size, name } = body ?? {};
     if (typeof url !== 'string' || typeof sha256 !== 'string' || typeof name !== 'string') return json(res, 400, { error: 'need url, sha256, size, name' });
     const want = sha256.toLowerCase();
-    const ctx = Number(body.ctx) > 0 ? Math.floor(Number(body.ctx)) : (opts.defaultCtx ?? 4096);
+    if (!SHA256_RE.test(want)) return json(res, 400, { error: 'sha256 must be 64 hex characters' });
+    const sizeWhy = sizeProblem(size);
+    if (sizeWhy) return json(res, 400, { error: sizeWhy });
+    const urlWhy = urlProblem(url, opts.allowPrivateUrls);
+    if (urlWhy) return json(res, 400, { error: urlWhy });
+    const ctx = Number(body.ctx) > 0 ? Math.min(Math.floor(Number(body.ctx)), 1 << 20) : (opts.defaultCtx ?? 4096);
     let file: string;
     try { file = path.join(opts.models, safeName(name)); } catch (e) { return json(res, 400, { error: (e as Error).message }); }
     state.busy = true;
@@ -133,7 +141,7 @@ export async function startApiServer(opts: ApiOptions): Promise<ApiServer> {
       if (!have) {
         log(`downloading ${name} from ${url}`);
         sse.send({ state: 'running', got: 0, total: size ?? 0 });
-        await download(url, file, (got, total) => sse.send({ state: 'running', got, total: total || size || 0 }), ac.signal);
+        await download(url, file, (got, total) => sse.send({ state: 'running', got, total: total || size || 0 }), ac.signal, { size: Number(size), allowPrivate: opts.allowPrivateUrls });
         sse.send({ state: 'checking', got: 0, total: size ?? 0 });
         const sum = await sha256Of(file, (got, total) => sse.send({ state: 'checking', got, total }));
         opts.onLoad?.(name, want, sum);
