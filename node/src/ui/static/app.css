@@ -544,5 +544,7 @@ ul.wiz-steps li::before { content: "› "; color: var(--meta); }
 .where { border-color: var(--line2); background: var(--card); color: var(--mute); padding: 6px 10px 6px 12px; }
 .where::after { content: ''; width: 7px; height: 7px; margin-left: 2px; border-right: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor; transform: translateY(-2px) rotate(45deg); flex: none; opacity: 0.7; }
 .where:hover { border-color: var(--accent); }
-.where.empty { border-color: color-mix(in srgb, var(--accent) 45%, transparent); background: var(--accent-soft); }
-.where.empty .where-text b { color: var(--accent); }
+.where.nomodel { border-color: color-mix(in srgb, var(--accent) 45%, transparent); background: var(--accent-soft); }
+.where.nomodel .where-text b { color: var(--accent); }
+.where { max-width: calc(100% - 130px); }
+.devices-btn { white-space: nowrap; }

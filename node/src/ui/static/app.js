@@ -490,7 +490,7 @@ function whereText() {
   box.replaceChildren();
   const dot = $('where-dot');
   dot.className = 'dot';
-  $('where').classList.remove('empty');
+  $('where').classList.remove('nomodel');
   if (st?.loading) {
     dot.classList.add('busy');
     box.append('loading ', el('b', '', st.loading.model), ` · ${st.loading.line}`);
@@ -503,7 +503,7 @@ function whereText() {
     box.append(el('b', '', l.model.name), ` on ${names} · ${l.mode === 'phone' ? 'phone' : l.mode}`);
     return;
   }
-  $('where').classList.add('empty');
+  $('where').classList.add('nomodel');
   box.append('no model yet · ', el('b', '', 'start a chat'));
 }
 
