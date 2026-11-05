@@ -1,7 +1,7 @@
 import Svg, { Circle, Path, Rect } from 'react-native-svg';
 import { colors } from '@/theme/tokens';
 
-export type IconName = 'flow' | 'people' | 'yours' | 'map' | 'network' | 'passport' | 'account' | 'settings' | 'photo' | 'chat' | 'panel';
+export type IconName = 'models' | 'flow' | 'people' | 'yours' | 'map' | 'network' | 'passport' | 'account' | 'settings' | 'photo' | 'chat' | 'panel';
 type Props = { name: IconName; size?: number; color: string; strokeWidth?: number; filled?: boolean; hole?: string };
 
 // 1.5 px line icons on a 24 grid. filled: the solid version of the tab icons (the open tab,
@@ -12,6 +12,14 @@ export default function Icon({ name, size = 22, color, strokeWidth = 1.5, filled
   const cut = { ...p, stroke: hole, fill: hole };
   return (
     <Svg width={size} height={size} viewBox="0 0 24 24">
+      {name === 'models' && (
+        <>
+          {/* a model: a chip with pins (4.11.2026) */}
+          <Rect x={6} y={6} width={12} height={12} rx={2} {...f} />
+          <Rect x={9.5} y={9.5} width={5} height={5} rx={1} {...(filled ? cut : p)} />
+          <Path d="M9 3v3M12 3v3M15 3v3M9 18v3M12 18v3M15 18v3M3 9h3M3 12h3M3 15h3M18 9h3M18 12h3M18 15h3" {...p} />
+        </>
+      )}
       {name === 'flow' && (
         <>
           <Rect x={7} y={4} width={12} height={16} rx={filled ? 2 : 0} {...f} />

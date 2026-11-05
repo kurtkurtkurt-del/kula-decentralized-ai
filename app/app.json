@@ -97,7 +97,16 @@
         }
       ],
       "expo-apple-authentication",
-      "expo-image"
+      "expo-image",
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "useLegacyPackaging": true,
+            "extraMavenRepos": []
+          }
+        }
+      ]
     ],
     "scheme": "pasaport",
     "experiments": {

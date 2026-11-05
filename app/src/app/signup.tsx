@@ -31,6 +31,8 @@ export default function SignUpScreen() {
   // "sign in" on the home screen passes ?mode=in; "sign up" passes nothing.
   const params = useLocalSearchParams<{ mode?: string }>();
   const [mode, setMode] = useState<'up' | 'in'>(params.mode === 'in' ? 'in' : 'up');
+  // 5.11.2026: the app is tried without a password. The account form opens only on request.
+  const [withAccount, setWithAccount] = useState(params.mode === 'in');
 
   // Creates the account (or signs in if it exists) and enters the app.
   // Empty fields start an anonymous, device-bound user: browsing is free and swipes are
@@ -48,7 +50,7 @@ export default function SignUpScreen() {
           : await signUp(email.trim(), password, undefined);
       if (guest) {
         // Anonymous sign-in disabled in the dashboard: enter anyway, swipes are not recorded.
-        router.replace('/passport');
+        router.replace('/models');
         return;
       }
       if (err) {
@@ -58,7 +60,7 @@ export default function SignUpScreen() {
       // No handle yet means registration is unfinished: do that step first.
       const { data } = await supabase.rpc('profile_me');
       const row = Array.isArray(data) ? data[0] : data;
-      router.replace('/passport');
+      router.replace('/models');
     } catch (e) {
       setNote(authMessage(String((e as Error).message ?? e)).toLowerCase());
     } finally {
@@ -84,7 +86,7 @@ export default function SignUpScreen() {
       if (!inside) return; // window closed
       const { data } = await supabase.rpc('profile_me');
       const row = Array.isArray(data) ? data[0] : data;
-      router.replace('/passport');
+      router.replace('/models');
     } catch (e) {
       setNote(authMessage(String((e as Error).message ?? e)).toLowerCase());
     } finally {
@@ -100,9 +102,20 @@ export default function SignUpScreen() {
         {/* Bottom padding lives here: the keyboard wrapper overrides its own paddingBottom. */}
         <View style={{ paddingBottom: insets.bottom + 24 }}>
         <View style={styles.heading}>
-          <Text style={styles.line}>{mode === 'up' ? t('signup.up.line1') : t('signup.in.line1')}</Text>
-          <Text style={styles.line}>{mode === 'up' ? t('signup.up.line2') : t('signup.in.line2')}</Text>
+          <Text style={styles.line}>{withAccount ? (mode === 'up' ? t('signup.up.line1') : t('signup.in.line1')) : t('signup.demo.line1')}</Text>
+          <Text style={styles.line}>{withAccount ? (mode === 'up' ? t('signup.up.line2') : t('signup.in.line2')) : t('signup.demo.line2')}</Text>
         </View>
+        {!withAccount ? (
+          <View style={styles.form}>
+            <Text style={styles.note}>{t('signup.demo.why')}</Text>
+            <Button label={busy ? t('word.moment') : t('signup.demo.go')} onPress={enter} kind="red" />
+            {note && <Text style={styles.note}>{note}</Text>}
+            <Pressable hitSlop={8} onPress={() => setWithAccount(true)}>
+              <Text style={styles.small}>{t('signup.demo.account')}</Text>
+            </Pressable>
+            <BackButton inline />
+          </View>
+        ) : (
         <View style={styles.form}>
           <Pressable onPress={google} disabled={busy} accessibilityRole="button" accessibilityLabel={t('signup.google')} style={({ pressed }) => [styles.google, pressed && styles.pressed]}>
             <GoogleMark />
@@ -163,9 +176,12 @@ export default function SignUpScreen() {
               <Text style={styles.small}>{t('signup.resend')}</Text>
             </Pressable>
           ) : null}
-          <Text style={styles.small}>{t('signup.guest')}</Text>
+          <Pressable hitSlop={8} onPress={() => setWithAccount(false)}>
+            <Text style={styles.small}>{t('signup.demo.back')}</Text>
+          </Pressable>
           <BackButton inline />
         </View>
+        )}
         </View>
       </KeyboardAvoidingView>
     </View>

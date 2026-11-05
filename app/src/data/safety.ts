@@ -4,7 +4,7 @@ import Constants from 'expo-constants';
 import Storage from 'expo-sqlite/kv-store';
 import { supabase } from '@/lib/supabase';
 import { must } from '@/lib/offline';
-import { SITE } from '@/data/deck';
+import { SITE } from '@/data/projects';
 
 // 14_safety.sql: what the stores require — the terms, reports, client errors — and an
 // account deletion that takes the Apple link with it.

@@ -1,0 +1,4 @@
+# fetched by tools/llama-src.mjs (pinned release + patches); never edited by hand
+android/src/main/cpp/llama.cpp/
+android/build/
+android/.cxx/

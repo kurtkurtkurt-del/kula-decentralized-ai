@@ -1,0 +1,60 @@
+plugins {
+  id 'com.android.library'
+  id 'expo-module-gradle-plugin'
+}
+
+group = 'expo.modules.kulallama'
+version = '0.1.0'
+
+// llama.cpp is not in git: tools/llama-src.mjs fetches the pinned release (b11157, PrivateLM's,
+// so the cluster protocol matches) into src/main/cpp/llama.cpp and applies tools/patches/.
+// It runs before every build and is a no-op once the tree is at the right tag.
+def nodeBinary = [System.getenv('NODE_BINARY'), '/usr/local/bin/node', '/opt/homebrew/bin/node', 'node']
+  .find { it && (it == 'node' || new File(it).canExecute()) }
+tasks.register('fetchLlamaSource', Exec) {
+  workingDir file("${projectDir}/..")
+  commandLine nodeBinary, 'tools/llama-src.mjs'
+  standardOutput = System.out
+  errorOutput = System.err
+}
+preBuild.dependsOn fetchLlamaSource
+
+android {
+  namespace "expo.modules.kulallama"
+  ndkVersion "27.1.12297006"
+  defaultConfig {
+    versionCode 1
+    versionName '0.1.0'
+    ndk { abiFilters 'arm64-v8a' }
+    externalNativeBuild {
+      cmake {
+        cppFlags '-std=c++17', '-fvisibility=hidden'
+        arguments '-DANDROID_STL=c++_shared', '-DANDROID_ARM_NEON=ON',
+                  "-DKULA_CPU_VARIANTS=${findProperty('kulaLlamaVariants') ?: 'all'}"
+      }
+    }
+  }
+  externalNativeBuild {
+    cmake {
+      path 'CMakeLists.txt'
+      version '3.22.1'
+    }
+  }
+  testOptions {
+    // GateTest runs on the JVM: android.util.Log returns defaults, org.json comes from the real jar below
+    unitTests.returnDefaultValues = true
+  }
+  packagingOptions {
+    jniLibs {
+      pickFirsts += ['**/libc++_shared.so']
+      // armv9 variants aborted on a Pixel 8 (SVE2 repack); never shipped
+      excludes += ['**/libggml-cpu-android_armv9*.so']
+    }
+  }
+}
+
+dependencies {
+  implementation "org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0"
+  testImplementation "junit:junit:4.13.2"
+  testImplementation "org.json:json:20240303"
+}

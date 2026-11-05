@@ -11,7 +11,7 @@ import { useAuth } from '@/auth/AuthContext';
 import { useProfile } from '@/data/profile';
 import { exportToFile, saveProfile, saveSettings } from '@/data/settings';
 import { useCities } from '@/data/cities';
-import { SITE } from '@/data/deck';
+import { SITE } from '@/data/projects';
 import { invalidate } from '@/lib/offline';
 import { serverText } from '@/lib/serverText';
 import { useRefreshOnFocus } from '@/hooks/useRefresh';

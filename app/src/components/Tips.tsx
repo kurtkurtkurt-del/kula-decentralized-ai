@@ -12,7 +12,7 @@ import { colors, fonts, radius, tint } from '@/theme/tokens';
 // motion: swipe (a small card going right, then left), tap (a ring that pulses).
 
 export type Tip = { title: Key; body: Key; motion?: 'swipe' | 'tap' };
-export const TIP_PAGES = ['flow', 'people', 'network', 'passport', 'panel', 'project', 'call', 'coop'] as const;
+export const TIP_PAGES = ['models', 'people', 'network', 'passport', 'panel', 'project', 'call', 'coop'] as const;
 type Page = (typeof TIP_PAGES)[number];
 
 const key = (page: Page) => `tip.${page}`;

@@ -13,7 +13,7 @@ import ShareButton from '@/components/ShareButton';
 import Tips from '@/components/Tips';
 import { useAuth } from '@/auth/AuthContext';
 import { aboutFor, samplesFor, type About, type Sample } from '@/data/about';
-import { fetchProject, peekProject, posterUrl, swipe, type Project, type ProjectPage } from '@/data/deck';
+import { fetchProject, peekProject, posterUrl, swipe, type Project, type ProjectPage } from '@/data/projects';
 import { OfflineError, useShelf } from '@/lib/offline';
 import { shareProject } from '@/lib/share';
 import { chooseTonight, recheck, tonightProject } from '@/night/useNight';

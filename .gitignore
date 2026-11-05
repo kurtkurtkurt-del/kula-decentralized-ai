@@ -8,3 +8,4 @@ dist/
 
 # build caches left from when the Kotlin app lived here (it moved to ../device-passport)
 native/passport-measure-android/
+.llama/

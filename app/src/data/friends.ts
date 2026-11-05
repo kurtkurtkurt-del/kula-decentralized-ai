@@ -1,5 +1,5 @@
 import { supabase } from '@/lib/supabase';
-import { stashProjects, type Project } from '@/data/deck';
+import { stashProjects, type Project } from '@/data/projects';
 import { invalidate, must, outbox, pendingJobs, remember, send } from '@/lib/offline';
 
 // 04_profiles.sql + 05_friends.sql + 06 (friends_kept)

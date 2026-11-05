@@ -20,7 +20,21 @@ const FLING = 900;   // or flung this fast
 // When scrolled, the gesture scrolls; back at the top it pulls again.
 // header: the page's top band, rendered inside the card so it moves with it and the
 // handle can sit above it.
-export default function PullDownScroll({ children, style, header, ...rest }: ScrollViewProps & { header?: ReactNode }) {
+// closable=false (the five main tabs, 5.11.2026): a plain scroll with the header, no pull-to-close,
+// no handle. A tab is not a card; pulling it down used to send the app to '/'.
+export default function PullDownScroll({ children, style, header, closable = true, ...rest }: ScrollViewProps & { header?: ReactNode; closable?: boolean }) {
+  if (!closable) {
+    return (
+      <View style={styles.wrap}>
+        <Animated.ScrollView style={style} {...rest}>{children}</Animated.ScrollView>
+        {header}
+      </View>
+    );
+  }
+  return <ClosableScroll style={style} header={header} {...rest}>{children}</ClosableScroll>;
+}
+
+function ClosableScroll({ children, style, header, ...rest }: ScrollViewProps & { header?: ReactNode }) {
   const t = useT();
   const { height } = useWindowDimensions();
   const insets = useSafeAreaInsets();

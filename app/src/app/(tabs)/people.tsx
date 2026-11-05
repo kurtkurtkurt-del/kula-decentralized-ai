@@ -12,7 +12,7 @@ import { callInbox, type CallInvite } from '@/data/calls';
 import { COOP_COLORS, myCoops, type CoopRow } from '@/data/coops';
 import { friendsLive, type LiveFriend } from '@/data/contribution';
 import { friendsKept, kept, type FriendKept } from '@/data/friends';
-import type { Project } from '@/data/deck';
+import type { Project } from '@/data/projects';
 import { useRefreshOnFocus } from '@/hooks/useRefresh';
 import { upperData, useLang } from '@/i18n';
 import { dayLabel } from '@/data/when';
@@ -58,6 +58,7 @@ export default function ConnectScreen() {
     <View style={styles.root}>
       <StatusBar style="dark" />
       <PullDownScroll
+        closable={false}
         header={<View style={styles.band}><Text style={styles.title}>{t('connect.title')}</Text></View>}
         contentContainerStyle={[styles.body, { paddingBottom: tabSpace + insets.bottom + 28 }]}
         showsVerticalScrollIndicator={false}

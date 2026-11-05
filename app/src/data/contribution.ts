@@ -1,7 +1,7 @@
 import { serverText } from '@/lib/serverText';
 import { supabase } from '@/lib/supabase';
 import { OfflineError, invalidate, must, newId, outbox, peek, pendingJobs, remember, send, type Job } from '@/lib/offline';
-import type { Project } from '@/data/deck';
+import type { Project } from '@/data/projects';
 import type { NightCardData } from '@/content/cardsgen';
 import type { Key } from '@/i18n/dict';
 

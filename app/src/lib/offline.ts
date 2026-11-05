@@ -287,7 +287,7 @@ export async function shelve(group: string, entries: [string, unknown][], max: n
   entries.forEach(([k, v]) => store(shelfKey, k, v, max, now));
 }
 
-// Swiped on this phone: keep them out while an older saved deck is shown.
+// Kept / let go on this phone (the project page).
 export async function markSwiped(slug: string, on = true) {
   const key = `cache.${who()}.swiped`;
   let list: string[] = [];
@@ -297,16 +297,6 @@ export async function markSwiped(slug: string, on = true) {
   list = list.filter((s) => s !== slug);
   if (on) list.push(slug);
   put(key, JSON.stringify(list.slice(-1500)));
-}
-export async function swipedHere(): Promise<Set<string>> {
-  try {
-    return new Set(JSON.parse(get(`cache.${who()}.swiped`) ?? '[]') as string[]);
-  } catch {
-    return new Set();
-  }
-}
-export function forgetSwiped() {
-  put(`cache.${who()}.swiped`, null);
 }
 
 // Turns Supabase's {data, error} response into one that throws.

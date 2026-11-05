@@ -1,0 +1,188 @@
+import { useEffect, useState } from 'react';
+import { lastPassport } from '@/data/passport';
+import { native, type LoadResult, type Message } from '@/llm/native';
+import { peerArgs, planSplit, probeAll, splitSummary, type Plan } from '@/llm/cluster';
+import { type LocalModel, type Mode, type Peer, saveSettings } from '@/llm/store';
+
+// The engine: one model loaded at a time, in one of three ways. `alone` and `split` run
+// in this process (split: the layers this phone does not hold sit on tunnelled peers).
+// `apart` keeps a copy on each device: this phone's own in-process model plus every peer's
+// over its api channel; a chat goes to one device, a batch to all of them at once.
+// Screens subscribe with useEngine(); everything else is plain async functions.
+export type Device = { id: string; name: string; local: boolean; busy: boolean; apiPort?: number; peer?: Peer; tps?: number };
+export type EngineState = {
+  model: LocalModel | null;
+  mode: Mode;
+  loading: string | null; // what it is doing, or null
+  error: string | null;
+  load: LoadResult | null;
+  plan: Plan | null;
+  split: { name: string; gb: number }[];
+  devices: Device[];
+  generating: boolean;
+};
+const state: EngineState = { model: null, mode: 'alone', loading: null, error: null, load: null, plan: null, split: [], devices: [], generating: false };
+const listeners = new Set<() => void>();
+const emit = () => listeners.forEach((fn) => fn());
+const set = (patch: Partial<EngineState>) => {
+  Object.assign(state, patch);
+  emit();
+};
+export const engine = () => state;
+export function useEngine(): EngineState {
+  const [, tick] = useState(0);
+  useEffect(() => {
+    const fn = () => tick((n) => n + 1);
+    listeners.add(fn);
+    return () => {
+      listeners.delete(fn);
+    };
+  }, []);
+  return state;
+}
+
+const thisName = () => lastPassport()?.device ?? 'this phone';
+
+/** Loads a model in a mode. `share` answers "keep it here or share" when it fits alone. */
+export async function load(model: LocalModel, mode: Mode, ctx: number, peers: Peer[], share = false): Promise<void> {
+  const llama = native();
+  set({ loading: 'preparing', error: null, model, mode, plan: null, load: null, split: [], devices: [] });
+  try {
+    const info = await llama.info();
+    const bw = Number(lastPassport()?.mem_bw_read_gbs) || Number(lastPassport()?.mem_bw_gbs) || 0;
+    if (mode === 'split') {
+      set({ loading: 'probing' });
+      const plan = await planSplit(model, info.ramFreeMb, bw, peers, share);
+      set({ plan, loading: 'loading' });
+      const res = await llama.loadModel(model.path, ctx, 0, peerArgs(plan), plan.localMb);
+      const names = new Map<string, string>(); // tunnels hide the real hosts; map by order
+      // RPC buffers are named by the 127.0.0.1:<port> the tunnel listened on; the native side
+      // adds them in the order given, so pair them with plan.used by index.
+      const rpc = res.split.filter((s) => /^RPC\d+\[/.test(s.buffer)).map((s) => s.buffer.match(/\[([^\]]+)\]/)![1]);
+      Array.from(new Set(rpc)).forEach((ep, i) => names.set(ep, plan.used[i]?.name ?? ep));
+      set({ load: res, split: splitSummary(res.split, names, thisName()), devices: [{ id: 'me', name: thisName(), local: true, busy: false }], loading: null });
+    } else if (mode === 'apart') {
+      set({ loading: 'probing' });
+      const { ok, bad } = await probeAll(peers, 'api');
+      const devices: Device[] = [{ id: 'me', name: thisName(), local: true, busy: false }];
+      set({ loading: 'loading' });
+      const res = await llama.loadModel(model.path, ctx, 0, [], 1);
+      // every peer loads the same file (its own download when missing), in parallel
+      await Promise.all(ok.map(async (p) => {
+        try {
+          const port = await llama.apiTunnel(p.host, p.port, p.secret);
+          set({ loading: `loading on ${p.name}` });
+          await apiLoad(port, model, ctx);
+          devices.push({ id: p.id, name: p.name, local: false, busy: false, apiPort: port, peer: p });
+        } catch (e) {
+          bad.push({ peer: p, why: (e as Error).message });
+        }
+      }));
+      set({ load: res, devices, plan: { mode: 'apart', used: [], skipped: bad, localMb: 0, fitsAlone: true, totalMb: 0, needMb: 0 }, split: [{ name: thisName(), gb: Math.round(model.size / 1024 ** 3 * 10) / 10 }], loading: null });
+    } else {
+      set({ loading: 'loading' });
+      const res = await llama.loadModel(model.path, ctx, 0, [], 1);
+      set({ load: res, split: [{ name: thisName(), gb: Math.round(model.size / 1024 ** 3 * 10) / 10 }], devices: [{ id: 'me', name: thisName(), local: true, busy: false }], loading: null });
+    }
+    saveSettings({ modelId: model.id, ctx, lastMode: mode });
+  } catch (e) {
+    set({ loading: null, error: (e as Error).message, model: null, load: null });
+    await llama.unload().catch(() => {});
+    throw e;
+  }
+}
+
+export async function unload() {
+  await native().unload().catch(() => {});
+  set({ model: null, load: null, plan: null, split: [], devices: [], error: null });
+}
+
+// ---- generation -----------------------------------------------------------------------
+export type Reply = { tokens: number; ms: number; firstMs: number; tps: number; stopped: boolean; device: string };
+
+/** Streams a reply on this phone; resolves with the stats. */
+export function chatLocal(messages: Message[], onToken: (t: string) => void, opts: { maxTokens: number; temperature: number; reset?: boolean }): Promise<Reply> & { stop: () => void } {
+  const llama = native();
+  let id = -1;
+  const p = new Promise<Reply>((resolve) => {
+    const subs = [
+      llama.addListener('onToken', (e) => {
+        if (e.id === id) onToken(e.text);
+      }),
+      llama.addListener('onDone', (e) => {
+        if (e.id !== id) return;
+        subs.forEach((s) => s.remove());
+        set({ generating: false });
+        if (e.error) throw new Error(e.error);
+        resolve({ tokens: e.tokens, ms: e.ms, firstMs: e.firstMs, tps: e.tps, stopped: e.stopped, device: thisName() });
+      }),
+    ];
+    set({ generating: true });
+    id = llama.generate(messages, opts.maxTokens, opts.temperature, 0.95, !!opts.reset);
+  }) as Promise<Reply> & { stop: () => void };
+  p.stop = () => llama.stop();
+  return p;
+}
+
+/** Streams a reply from a peer over its api tunnel (SSE over fetch; XHR fallback for RN). */
+export function chatRemote(dev: Device, messages: Message[], onToken: (t: string) => void, opts: { maxTokens: number; temperature: number; reset?: boolean }): Promise<Reply> & { stop: () => void } {
+  const xhr = new XMLHttpRequest();
+  const p = new Promise<Reply>((resolve, reject) => {
+    let seen = 0;
+    let last: Reply | null = null;
+    xhr.open('POST', `http://127.0.0.1:${dev.apiPort}/chat`);
+    xhr.setRequestHeader('Content-Type', 'application/json');
+    xhr.onreadystatechange = () => {
+      if (xhr.readyState >= 3) {
+        const text = xhr.responseText.slice(seen);
+        // no early return: the last bytes usually arrive in a readyState 3 event, and the
+        // readyState 4 that follows must still reach the resolve below
+        const cut = text.lastIndexOf('\n\n');
+        if (cut >= 0) seen += cut + 2;
+        for (const line of cut >= 0 ? text.slice(0, cut).split('\n') : []) {
+          if (!line.startsWith('data: ')) continue;
+          try {
+            const o = JSON.parse(line.slice(6));
+            if (o.t) onToken(o.t);
+            if (o.error) reject(new Error(o.error));
+            if (o.done) last = { tokens: o.tokens, ms: o.ms, firstMs: o.firstMs, tps: o.tps, stopped: false, device: dev.name };
+          } catch {}
+        }
+      }
+      if (xhr.readyState === 4) {
+        if (last) resolve(last);
+        else reject(new Error(xhr.status ? `peer http ${xhr.status}` : 'peer gone'));
+      }
+    };
+    xhr.onerror = () => reject(new Error('peer gone'));
+    xhr.send(JSON.stringify({ messages, maxTokens: opts.maxTokens, temperature: opts.temperature, reset: !!opts.reset }));
+  }) as Promise<Reply> & { stop: () => void };
+  p.stop = () => {
+    fetch(`http://127.0.0.1:${dev.apiPort}/stop`, { method: 'POST' }).catch(() => {});
+    xhr.abort();
+  };
+  return p;
+}
+
+/** Picks a free device (local first) and streams from it. */
+export function chat(messages: Message[], onToken: (t: string) => void, opts: { maxTokens: number; temperature: number; reset?: boolean; device?: string }) {
+  const dev = (opts.device ? state.devices.find((d) => d.id === opts.device) : null) ?? state.devices.find((d) => !d.busy) ?? state.devices[0];
+  if (!dev) throw new Error('nomodel');
+  dev.busy = true;
+  emit();
+  const run = dev.local ? chatLocal(messages, onToken, opts) : chatRemote(dev, messages, onToken, opts);
+  const done = run.finally(() => {
+    dev.busy = false;
+    emit();
+  }) as Promise<Reply> & { stop: () => void };
+  done.stop = run.stop;
+  return done;
+}
+
+async function apiLoad(port: number, model: LocalModel, ctx: number): Promise<void> {
+  const res = await fetch(`http://127.0.0.1:${port}/load`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ url: model.url, sha256: model.sha256, size: model.size, name: model.file, ctx }) });
+  const text = await res.text();
+  const lines = text.split('\n').filter((l) => l.startsWith('data: ')).map((l) => JSON.parse(l.slice(6)));
+  const last = lines[lines.length - 1];
+  if (!last || last.error) throw new Error(last?.error ?? 'peer did not answer');
+}
