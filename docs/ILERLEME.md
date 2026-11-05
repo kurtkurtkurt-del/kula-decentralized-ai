@@ -10,7 +10,7 @@ audit-ui bu dalda yok). Sonuç: app 176 test (önce 68), node 40 (önce 28), `np
 0 hata (9 eski uyarı). Tek komut: `cd app && npm run gate` (tsc → lint → jest → i18n denetimi).
 
 ### i18n bütünlük testi (`app/src/__tests__/i18n.test.ts`, `npm run i18n`)
-- 792 anahtarın üçü de (en/de/tr) dolu, `{yer}` tutucuları üç dilde aynı, küçük harf üslubu (biri büyükle başlıyorsa
+- 795 anahtarın üçü de (en/de/tr) dolu, `{yer}` tutucuları üç dilde aynı, küçük harf üslubu (biri büyükle başlıyorsa
   üçü de), her `.one/.other` çiftinde `{n}` var.
 - Kaynak taraması (`src/`, testler/vendor/i18n hariç): `t('…')`, `tn('…')`, `tx('…')` ile istenen her anahtar sözlükte;
   `tx('day.' + x)` ve ``t(`peers.kind.${…}`)`` gibi 13 ön ek için arkasında en az bir anahtar var; anahtar tabloları
