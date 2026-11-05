@@ -32,6 +32,7 @@
 #include "llama.h"
 #include "ggml-backend.h"
 #include "gguf.h"
+#include "gguf_meta.h"
 
 #define LOG_TAG "kula-llama"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
@@ -341,39 +342,8 @@ static jboolean nInitBackends(JNIEnv* env, jclass, jstring lib_dir) {
 // "key\tvalue\n" lines of the GGUF header kula needs for the fit estimate and the template.
 static jstring nGgufMeta(JNIEnv* env, jclass, jstring jpath) {
     const std::string path = jstr(env, jpath);
-    gguf_init_params params = {true, nullptr};
-    gguf_context* gguf = gguf_init_from_file(path.c_str(), params);
-    if (!gguf) return nullptr;
     std::string out;
-    auto put = [&](const char* name, const std::string& v) { out.append(name).append("\t").append(v).append("\n"); };
-    const int64_t arch_id = gguf_find_key(gguf, "general.architecture");
-    std::string arch = arch_id >= 0 ? gguf_get_val_str(gguf, arch_id) : "";
-    put("arch", arch);
-    auto num = [&](const char* suffix, const char* name) {
-        const int64_t id = gguf_find_key(gguf, (arch + "." + suffix).c_str());
-        if (id < 0) return;
-        switch (gguf_get_kv_type(gguf, id)) {
-            case GGUF_TYPE_UINT32: put(name, std::to_string(gguf_get_val_u32(gguf, id))); break;
-            case GGUF_TYPE_INT32: put(name, std::to_string(gguf_get_val_i32(gguf, id))); break;
-            case GGUF_TYPE_UINT64: put(name, std::to_string(gguf_get_val_u64(gguf, id))); break;
-            default: break;
-        }
-    };
-    num("block_count", "layers");
-    num("context_length", "ctx");
-    num("embedding_length", "embd");
-    num("attention.head_count", "heads");
-    num("attention.head_count_kv", "heads_kv");
-    num("attention.key_length", "key_len");
-    num("attention.value_length", "value_len");
-    for (const char* k : {"general.name", "general.license", "general.size_label", "general.file_type"}) {
-        const int64_t id = gguf_find_key(gguf, k);
-        if (id < 0) continue;
-        if (gguf_get_kv_type(gguf, id) == GGUF_TYPE_STRING) put(k + 8, gguf_get_val_str(gguf, id));
-        else if (gguf_get_kv_type(gguf, id) == GGUF_TYPE_UINT32) put(k + 8, std::to_string(gguf_get_val_u32(gguf, id)));
-    }
-    put("template", gguf_find_key(gguf, "tokenizer.chat_template") >= 0 ? "1" : "0");
-    gguf_free(gguf);
+    if (!kula_gguf_meta(path.c_str(), out)) return nullptr;
     return env->NewStringUTF(out.c_str());
 }
 

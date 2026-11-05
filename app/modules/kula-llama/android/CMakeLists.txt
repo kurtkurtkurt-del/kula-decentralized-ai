@@ -54,3 +54,10 @@ target_compile_definitions(kula_llama PRIVATE KULA_BACKEND_DL=1)
 target_include_directories(kula_llama PRIVATE
   src/main/cpp/llama.cpp/include
   src/main/cpp/llama.cpp/ggml/include)
+
+# KULA_FUZZ=ON adds the libFuzzer targets in src/main/cpp/fuzz (host clang only, never the apk):
+#   cmake -S . -B build-fuzz -DKULA_FUZZ=ON -DKULA_CPU_VARIANTS=min -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++
+option(KULA_FUZZ "build the libFuzzer targets (needs clang)" OFF)
+if(KULA_FUZZ)
+  add_subdirectory(src/main/cpp/fuzz)
+endif()
