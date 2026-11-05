@@ -2,6 +2,8 @@
 # Builds the web app and publishes it as a PWA to GitHub Pages:
 # https://kurtkurtkurt-del.github.io/afterhours-pwa/
 # Run from app/: tools/publish-pwa.sh   (REPO=... BASE=... to publish elsewhere)
+# NOTE (5.11.2026): the defaults below are still afterhours' PWA repository from before the fork;
+# kula has no PWA target yet. Pass REPO and BASE, or do not run it, until one is chosen.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 REPO="${REPO:-https://github.com/kurtkurtkurt-del/afterhours-pwa.git}"

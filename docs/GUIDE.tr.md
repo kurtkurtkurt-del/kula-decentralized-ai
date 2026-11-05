@@ -157,7 +157,8 @@ Bilgisayar kümeyi kendisi de yönetebilir, telefonlar işçi olur: `kula-node p
 
 ## 7. gece
 
-Projeler sekmesinde bir proje tut. Passport kartında **bu gece çalış** anahtarı ve durum var:
+Bir projeyi kendi sayfasında tut (ağ sekmesi şehir şehir projeleri, kişiler sekmesi arkadaşlarının
+tuttuklarını gösterir). Passport kartında **bu gece çalış** anahtarı ve durum var:
 bekliyor ve neden, çalışıyor ve sayaçlar, ya da dün gecenin satırı.
 
 Gece şunların hepsi tutunca başlar: anahtar açık, bir proje tutulmuş, telefon ölçülmüş, saat

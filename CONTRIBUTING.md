@@ -1,9 +1,10 @@
 # contributing
 
 Short, because the tree has a few hard rules and the rest is ordinary. The architecture is
-in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md); every decision so far is logged, in
-Turkish, in [docs/ILERLEME.md](docs/ILERLEME.md). Read the log's top section before
-starting anything: it says what was tried last and what is open.
+in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md); where the project stands is in
+[docs/DURUM.md](docs/DURUM.md) and every decision so far is logged, both in Turkish, in
+[docs/ILERLEME.md](docs/ILERLEME.md). Read DURUM before starting anything: it says what is
+done, what was never run on a device and what is open.
 
 ## the rules of the tree
 
@@ -61,9 +62,12 @@ Mac-as-worker recipe (`tools/dev-gate.mjs`) are in the progress log under "nası
 | `app/android` | `./gradlew :kula-llama:testReleaseUnitTest` | the same Kotlin tests with the SDK |
 | `backend/` | `npm test` | the schema, the rules, the seeds on PGlite |
 | root | `node tools/docs-links.mjs` | every relative link and anchor in the markdown resolves |
+| root | `python3 tools/passport-mac.py --check` | `web/passport/mac.sh` is what its sources make |
+| `backend/` | `npm run gate` | sql stamps, backend, app types, lint, jest, passport snapshot, mac script, docs links; then the proof in `.qa/` the pre-push hook asks for |
 
-Run types, lint and jest before saying a task is done. CI (`.github/workflows/test.yml`)
-runs the backend and the app's checks on every push to `main` and every pull request.
+Run types, lint and jest before saying a task is done. CI (`.github/workflows/check.yml`) runs
+the app, kula-node (node 20 and 22), the JVM audit tests and the gate on every push and pull
+request; `apk.yml` builds an apk by hand or on a `v*` tag.
 
 A change to Kotlin or C++ needs an apk and a run on a device or the emulator; the JVM
 tests do not load the native library. Say so in the progress log when you could not.

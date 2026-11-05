@@ -1,5 +1,10 @@
 # ilerleme — gerçek modeller, telefon kümesi, bilgisayarlar, beyin v0
 
+> **Önce [DURUM.md](DURUM.md)'yi oku**: neyin bittiği, neyin cihazda denenmediği, hangi kararların
+> beklediği orada kısaca. Bu dosya günlük; bölümler yazıldıkları dallardaki hâliyle kaldı, içlerindeki
+> eski yollar (kökteki `passport/`, `pc/`, `tools-docs-links.mjs`, `AFTERHOURS.md`) 5.11.2026
+> temizliğinden önceki yerleri gösterir: bugün `web/`, `tools/docs-links.mjs`, [HISTORY.md](HISTORY.md).
+
 Plan: `~/.claude/plans/memoized-kindling-puddle.md` (4.11.2026). Bu dosya her adımda güncellenir:
 ne yapıldı, ne doğrulandı, ne kaldı. Döndüğünde önce burayı oku.
 
