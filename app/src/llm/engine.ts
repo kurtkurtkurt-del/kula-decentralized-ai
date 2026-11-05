@@ -3,13 +3,17 @@ import { lastPassport } from '@/data/passport';
 import { native, type LoadResult, type Message } from '@/llm/native';
 import { peerArgs, peerTls, planSplit, probeAll, splitSummary, type Plan } from '@/llm/cluster';
 import { type LocalModel, type Mode, type Peer, registerEngine, saveSettings } from '@/llm/store';
+import { assign, estimateAlone, pickDevice } from '@/llm/sim/model';
+import { localFromPassport, modelProfile, workerFromPeer } from '@/llm/sim/profiles';
 
 // The engine: one model loaded at a time, in one of three ways. `alone` and `split` run
 // in this process (split: the layers this phone does not hold sit on tunnelled peers).
 // `apart` keeps a copy on each device: this phone's own in-process model plus every peer's
 // over its api channel; a chat goes to one device, a batch to all of them at once.
 // Screens subscribe with useEngine(); everything else is plain async functions.
-export type Device = { id: string; name: string; local: boolean; busy: boolean; apiPort?: number; peer?: Peer; tps?: number };
+// A device in apart mode carries what the dispatcher (sim/model.ts pickDevice) needs: its
+// decoding speed (estimated until the first reply measures it) and when its queue ends.
+export type Device = { id: string; name: string; local: boolean; busy: boolean; apiPort?: number; peer?: Peer; tps: number; busyUntil: number; out?: boolean };
 export type EngineState = {
   model: LocalModel | null;
   mode: Mode;
@@ -42,6 +46,9 @@ export function useEngine(): EngineState {
 }
 
 const thisName = () => lastPassport()?.device ?? 'this phone';
+const me = (model: LocalModel, freeMb: number): Device => ({ id: 'me', name: thisName(), local: true, busy: false, tps: estimateAlone(modelProfile(model), localFromPassport(lastPassport(), freeMb)).tps, busyUntil: 0 });
+const ofPeer = (model: LocalModel, p: Peer, apiPort: number): Device => ({ id: p.id, name: p.name, local: false, busy: false, apiPort, peer: p, tps: estimateAlone(modelProfile(model), workerFromPeer(p)).tps, busyUntil: 0 });
+export const OUT_MS = 5 * 60 * 1000; // a device that dropped a request sits out this long
 
 /** Loads a model in a mode. `share` answers "keep it here or share" when it fits alone. */
 export async function load(model: LocalModel, mode: Mode, ctx: number, peers: Peer[], share = false): Promise<void> {
@@ -52,7 +59,7 @@ export async function load(model: LocalModel, mode: Mode, ctx: number, peers: Pe
     const bw = Number(lastPassport()?.mem_bw_read_gbs) || Number(lastPassport()?.mem_bw_gbs) || 0;
     if (mode === 'split') {
       set({ loading: 'probing' });
-      const plan = await planSplit(model, info.ramFreeMb, bw, peers, share);
+      const plan = await planSplit(model, info.ramFreeMb, bw, peers, share, ctx);
       set({ plan, loading: 'loading' });
       const res = await llama.loadModel(model.path, ctx, 0, peerArgs(plan), plan.localMb);
       const names = new Map<string, string>(); // tunnels hide the real hosts; map by order
@@ -60,11 +67,11 @@ export async function load(model: LocalModel, mode: Mode, ctx: number, peers: Pe
       // adds them in the order given, so pair them with plan.used by index.
       const rpc = res.split.filter((s) => /^RPC\d+\[/.test(s.buffer)).map((s) => s.buffer.match(/\[([^\]]+)\]/)![1]);
       Array.from(new Set(rpc)).forEach((ep, i) => names.set(ep, plan.used[i]?.name ?? ep));
-      set({ load: res, split: splitSummary(res.split, names, thisName()), devices: [{ id: 'me', name: thisName(), local: true, busy: false }], loading: null });
+      set({ load: res, split: splitSummary(res.split, names, thisName()), devices: [me(model, info.ramFreeMb)], loading: null });
     } else if (mode === 'apart') {
       set({ loading: 'probing' });
       const { ok, bad } = await probeAll(peers, 'api');
-      const devices: Device[] = [{ id: 'me', name: thisName(), local: true, busy: false }];
+      const devices: Device[] = [me(model, info.ramFreeMb)];
       set({ loading: 'loading' });
       const res = await llama.loadModel(model.path, ctx, 0, [], 1);
       // every peer loads the same file (its own download when missing), in parallel
@@ -73,7 +80,7 @@ export async function load(model: LocalModel, mode: Mode, ctx: number, peers: Pe
           const port = await llama.apiTunnel(p.host, p.port, p.secret, peerTls(p));
           set({ loading: `loading on ${p.name}` });
           await apiLoad(port, model, ctx);
-          devices.push({ id: p.id, name: p.name, local: false, busy: false, apiPort: port, peer: p });
+          devices.push(ofPeer(model, p, port));
         } catch (e) {
           bad.push({ peer: p, why: (e as Error).message });
         }
@@ -82,7 +89,7 @@ export async function load(model: LocalModel, mode: Mode, ctx: number, peers: Pe
     } else {
       set({ loading: 'loading' });
       const res = await llama.loadModel(model.path, ctx, 0, [], 1);
-      set({ load: res, split: [{ name: thisName(), gb: Math.round(model.size / 1024 ** 3 * 10) / 10 }], devices: [{ id: 'me', name: thisName(), local: true, busy: false }], loading: null });
+      set({ load: res, split: [{ name: thisName(), gb: Math.round(model.size / 1024 ** 3 * 10) / 10 }], devices: [me(model, info.ramFreeMb)], loading: null });
     }
     saveSettings({ modelId: model.id, ctx, lastMode: mode });
   } catch (e) {
@@ -168,18 +175,60 @@ export function chatRemote(dev: Device, messages: Message[], onToken: (t: string
   return p;
 }
 
-/** Picks a free device (local first) and streams from it. */
-export function chat(messages: Message[], onToken: (t: string) => void, opts: { maxTokens: number; temperature: number; reset?: boolean; device?: string }) {
-  const dev = (opts.device ? state.devices.find((d) => d.id === opts.device) : null) ?? state.devices.find((d) => !d.busy) ?? state.devices[0];
-  if (!dev) throw new Error('nomodel');
-  dev.busy = true;
-  emit();
-  const run = dev.local ? chatLocal(messages, onToken, opts) : chatRemote(dev, messages, onToken, opts);
-  const done = run.finally(() => {
-    dev.busy = false;
+/**
+ * Picks the device expected to finish first (its queue, the prompt, the answer) and
+ * streams from it. A peer that drops the request before its first token sits out for
+ * OUT_MS and the request goes to the next device, once. A measured reply refines the
+ * device's speed for the next pick.
+ */
+export function chat(messages: Message[], onToken: (t: string) => void, opts: { maxTokens: number; temperature: number; reset?: boolean; device?: string; now?: () => number }) {
+  const now = opts.now ?? Date.now;
+  const req = { promptTokens: Math.ceil(messages.reduce((a, m) => a + m.content.length, 0) / 4), maxTokens: opts.maxTokens };
+  const pick = (except: string | null): Device | null => {
+    const t = now();
+    for (const d of state.devices) if (d.out && d.busyUntil <= t) d.out = false;
+    const forced = opts.device && !except ? state.devices.find((d) => d.id === opts.device && !d.out) : null;
+    return forced ?? pickDevice(state.devices.filter((d) => d.id !== except), req, t) ?? null;
+  };
+  let sawToken = false;
+  const start = (dev: Device) => {
+    dev.busy = true;
+    assign(dev, req, now());
     emit();
+    const tok = (t: string) => {
+      sawToken = true;
+      onToken(t);
+    };
+    const inner = dev.local ? chatLocal(messages, tok, opts) : chatRemote(dev, messages, tok, opts);
+    const p = inner.finally(() => {
+      dev.busy = false;
+      dev.busyUntil = Math.min(dev.busyUntil, now());
+      emit();
+    }) as Promise<Reply> & { stop: () => void };
+    p.stop = inner.stop;
+    return p;
+  };
+  const first = pick(null);
+  if (!first) throw new Error('nomodel');
+  let current = first;
+  let run = start(current);
+  const measured = (r: Reply) => {
+    if (r.tps > 0) current.tps = Math.round(r.tps * 10) / 10;
+    return r;
+  };
+  const done = run.then(measured, (e: Error) => {
+    if (current.local || sawToken) throw e;
+    // the peer dropped the request before a token: out for a while, the request moves on
+    current.out = true;
+    current.busyUntil = now() + OUT_MS;
+    emit();
+    const next = pick(current.id);
+    if (!next) throw e;
+    current = next;
+    run = start(current);
+    return run.then(measured);
   }) as Promise<Reply> & { stop: () => void };
-  done.stop = run.stop;
+  done.stop = () => run.stop();
   return done;
 }
 

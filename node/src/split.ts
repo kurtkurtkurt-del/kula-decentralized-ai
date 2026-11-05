@@ -5,7 +5,8 @@
 // layers on the main device. Before any of that a 2 s probe drops the peers
 // that do not answer: ggml_backend_rpc_add_server aborts on a dead address.
 import { Tunnel } from './gate.js';
-import { planWithProbe, tensorSplit, type Plan, type ProbeFn } from './planner.js';
+import { planWithProbe, simModel, tensorSplit, type Plan, type ProbeFn } from './planner.js';
+import type { SimModel } from './sim.js';
 import type { Peer } from './peers.js';
 import { freePort, startChild, type Child } from './children.js';
 import type { LlamaBinaries } from './llama.js';
@@ -22,6 +23,8 @@ export interface SplitSetup {
 
 export interface SplitOptions {
   modelBytes: number;
+  model?: SimModel;      // the model's shape when the gguf header was read; else a rough one from the size
+  ctx?: number;
   localFreeMb: number;
   localBw: number;
   peers: Peer[];
@@ -34,7 +37,8 @@ export interface SplitOptions {
 // Plans and opens the tunnels. Throws TooBig when even together it does not fit.
 export async function prepareSplit(opts: SplitOptions): Promise<SplitSetup> {
   const log = opts.log ?? (() => {});
-  const plan = await planWithProbe({ modelBytes: opts.modelBytes, localFreeMb: opts.localFreeMb, localBw: opts.localBw, wanted: opts.peers, share: opts.share ?? true, timeoutMs: opts.probeMs ?? 2000, probe: opts.probe });
+  const model = opts.model ?? simModel({ id: 'model', size: opts.modelBytes, layers: 28, hidden: 2048, vocab: 150000, quant: 'Q4_K_M', kv_mb_per_1k: 112 });
+  const plan = await planWithProbe({ model, ctx: opts.ctx ?? 2048, localFreeMb: opts.localFreeMb, localBw: opts.localBw, wanted: opts.peers, share: opts.share ?? true, timeoutMs: opts.probeMs ?? 2000, probe: opts.probe });
   for (const s of plan.skipped) log(`${s.peer.name}: skipped, ${s.why}`);
   const tunnels: SplitSetup['tunnels'] = [];
   for (const u of plan.used) {

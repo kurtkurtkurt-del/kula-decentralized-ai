@@ -1,4 +1,6 @@
 import { llama, native, type PeerArg, type PeerFound, type PeerTls } from '@/llm/native';
+import { DEFAULT_BW, DEFAULT_EFF, LOCAL_SHARE, planShares, type Estimate, type SimNet } from '@/llm/sim/model';
+import { modelProfile, NETWORKS, workerFromPeer } from '@/llm/sim/profiles';
 import { peers as savedPeers, touchPeer, type LocalModel, type Mode, type Peer } from '@/llm/store';
 
 // The planner (after PrivateLM's cluster_service.dart, 31.10.2026): before a load, which
@@ -13,12 +15,12 @@ export type Plan = {
   fitsAlone: boolean;
   totalMb: number;
   needMb: number;
+  aloneFaster?: boolean;      // the split is not worth it by the estimate; the user may still want it
+  est?: Estimate;             // the chosen plan's expected load time and token time
+  estAlone?: Estimate | null; // the same for this phone alone, when it fits
 };
 
-const MB = 1024 * 1024;
-export const LOCAL_SHARE = 0.7;   // of this phone's free RAM a model may take
-export const WORKER_SHARE = 0.75; // of a worker's advertised free RAM
-export const NEED_FACTOR = 1.1;   // file × this: buffers and the context
+export { LOCAL_SHARE, WORKER_SHARE } from '@/llm/sim/model';
 
 export async function probeAll(list: Peer[], channel: 'rpc' | 'api' = 'rpc'): Promise<{ ok: Peer[]; bad: { peer: Peer; why: string }[] }> {
   if (!llama) return { ok: [], bad: list.map((peer) => ({ peer, why: 'nonative' })) };
@@ -63,12 +65,15 @@ export async function relocate(peer: Peer, ms = 4000): Promise<Peer | null> {
 }
 
 /**
- * Plans a split load: capacities from free RAM, the fastest device first. If the model fits
- * on this phone alone the caller asks "keep it here (faster) or share"; `share` says what
- * they chose. Throws 'toobig' when even together it does not fit.
+ * Plans a split load with the simulator's core (sim/model.ts planShares): capacities from
+ * free RAM, the layer bytes spread by speed and water-filled into them, the embedding and
+ * output matrices kept here, and the number of workers chosen by the estimated time per
+ * token on this network (fewer on a slow one). If the model fits on this phone alone the
+ * caller asks "keep it here (faster) or share"; `share` says what they chose. Throws
+ * 'toobig' when even together it does not fit, 'local' when this phone cannot hold the
+ * output layer.
  */
-export async function planSplit(model: LocalModel, localFreeMb: number, localBw: number, wanted: Peer[], share: boolean): Promise<Plan> {
-  const needMb = Math.round((model.size / MB) * NEED_FACTOR);
+export async function planSplit(model: LocalModel, localFreeMb: number, localBw: number, wanted: Peer[], share: boolean, ctx = 2048, net: SimNet = NETWORKS.wifi5): Promise<Plan> {
   const probed = await probeAll(wanted, 'rpc');
   const skipped = [...probed.bad];
   // a peer that moved: one try to find it again
@@ -82,39 +87,13 @@ export async function planSplit(model: LocalModel, localFreeMb: number, localBw:
       }
     }
   }
-  const local = { capMb: localFreeMb * LOCAL_SHARE, bw: localBw || 4 };
-  const workers = probed.ok.map((p) => ({ peer: p, capMb: (p.ram ?? 2000) * WORKER_SHARE, bw: p.bw ?? 4 }));
-  const totalMb = local.capMb + workers.reduce((a, w) => a + w.capMb, 0);
-  if (needMb > totalMb) throw new Error('toobig');
-  const fitsAlone = needMb <= local.capMb;
-  type Row = { peer: Peer | null; capMb: number; bw: number; assignedMb: number };
-  const rows: Row[] = [{ peer: null, ...local, assignedMb: 0 }, ...workers.map((w) => ({ ...w, assignedMb: 0 }))];
-  if (fitsAlone && !share) {
-    rows[0].assignedMb = needMb;
-  } else if (fitsAlone && share) {
-    // split by speed, capped by capacity, overflow redistributed
-    const sumBw = rows.reduce((a, r) => a + r.bw, 0);
-    let left = needMb;
-    for (const r of rows) r.assignedMb = Math.min(r.capMb, (needMb * r.bw) / sumBw);
-    left -= rows.reduce((a, r) => a + r.assignedMb, 0);
-    for (const r of rows.sort((a, b) => b.bw - a.bw)) {
-      if (left <= 0) break;
-      const extra = Math.min(r.capMb - r.assignedMb, left);
-      r.assignedMb += extra;
-      left -= extra;
-    }
-  } else {
-    // does not fit here: fill the fastest first, up to capacity; phones not needed stay out
-    let left = needMb;
-    for (const r of [...rows].sort((a, b) => b.bw - a.bw)) {
-      const take = Math.min(r.capMb, left);
-      r.assignedMb = take;
-      left -= take;
-      if (left <= 0) break;
-    }
-  }
-  const used = rows.filter((r) => r.peer && r.assignedMb > 0).map((r) => ({ ...(r.peer as Peer), assignedMb: Math.round(r.assignedMb) }));
-  return { mode: 'split', used, skipped, localMb: Math.round(rows.find((r) => !r.peer)!.assignedMb), fitsAlone, totalMb: Math.round(totalMb), needMb };
+  const sim = planShares({
+    model: modelProfile(model), ctx, share, net,
+    local: { id: 'me', capMb: localFreeMb * LOCAL_SHARE, bw: localBw || DEFAULT_BW, eff: DEFAULT_EFF },
+    workers: probed.ok.map(workerFromPeer),
+  });
+  const used = sim.used.map((u) => ({ ...(probed.ok.find((p) => p.id === u.id) as Peer), assignedMb: u.assignedMb }));
+  return { mode: 'split', used, skipped, localMb: sim.localMb, fitsAlone: sim.fitsAlone, totalMb: sim.totalMb, needMb: sim.needMb, aloneFaster: sim.aloneFaster, est: sim.est, estAlone: sim.estAlone };
 }
 
 /** Protocol v2 for a v3 peer (its fingerprint, and the pairing code until the first connection spent it), v1 for a v2 peer. */

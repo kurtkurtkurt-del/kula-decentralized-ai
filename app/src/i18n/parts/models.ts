@@ -98,6 +98,12 @@ export const models = {
   'mode.needPeers': { en: 'needs a connected device', de: 'braucht ein verbundenes gerät', tr: 'bağlı bir cihaz gerekir' },
   'mode.addPeer': { en: 'connect a device', de: 'gerät verbinden', tr: 'cihaz bağla' },
   'mode.tryAnyway': { en: 'the estimate says it is too big; the phone may still manage a small context.', de: 'die schätzung sagt zu groß; mit kleinem kontext schafft es das telefon vielleicht trotzdem.', tr: 'tahmin büyük diyor; küçük bağlamla telefon yine de kaldırabilir.' },
+  'mode.est.tps': { en: '~{tps} tok/s', de: '~{tps} tok/s', tr: '~{tps} tok/sn' },
+  'mode.est.load': { en: 'ready in ~{s} s', de: 'bereit in ~{s} s', tr: '~{s} sn’de hazır' },
+  'mode.est.token': { en: 'on wi-fi each token ~{ms} ms', de: 'im wlan jedes token ~{ms} ms', tr: 'wi-fi’de her token ~{ms} ms' },
+  'mode.est.aloneFaster': { en: 'alone would be faster (~{tps} tok/s)', de: 'allein wäre schneller (~{tps} tok/s)', tr: 'tek başına daha hızlı olurdu (~{tps} tok/sn)' },
+  'mode.est.together': { en: '{n} devices · ~{tps} tok/s together', de: '{n} geräte · zusammen ~{tps} tok/s', tr: '{n} cihaz · birlikte ~{tps} tok/sn' },
+  'mode.est.how': { en: 'estimates from the planner’s model (docs/PLANNER.md); the first replies correct them.', de: 'schätzungen aus dem modell des planers (docs/PLANNER.md); die ersten antworten korrigieren sie.', tr: 'tahminler planlayıcının modelinden (docs/PLANNER.md); ilk cevaplar düzeltir.' },
   'mode.beyin': { en: 'beyin’s rule: jobs are split, models are not.', de: 'beyins regel: aufgaben werden geteilt, modelle nicht.', tr: 'beyin’in kuralı: işler bölünür, modeller bölünmez.' },
 
   'chat.title': { en: 'chat', de: 'chat', tr: 'sohbet' },

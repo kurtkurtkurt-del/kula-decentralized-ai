@@ -12,7 +12,8 @@ import { catalogById } from '@/llm/catalog';
 import { cancelDownload, describe, downloadOf, readMeta, startDownload, useDownloads } from '@/llm/store';
 import { licenseUrl, repoOfId, repoUrl } from '@/llm/hf';
 import { load, unload, useEngine } from '@/llm/engine';
-import { defaultCtx, fitOn, fitTogether, suggestCtx } from '@/llm/fit';
+import { defaultCtx, fitOn, fitTogether, haveMb, suggestCtx } from '@/llm/fit';
+import { estimateAlone, modelProfile, NETWORKS, planShares, workerFromPeer, type Estimate, type SimDevice, type SplitPlan } from '@/llm/sim';
 import { localById, saveSettings, useLocalModels, usePeers, useSettings, type LocalModel, type Mode } from '@/llm/store';
 import { colors, fonts, radius } from '@/theme/tokens';
 import { brand } from '@/theme/layout';
@@ -61,6 +62,33 @@ export default function ModelScreen() {
   const isHf = !!model && model.source === 'hf';
   const repo = isHf && model ? repoOfId(model.id) : null;
   const licenseLink = cat ? cat.license_url : repo ? licenseUrl(repo, model?.license ?? null) : null;
+  // the same model the planner runs at load time (sim/model.ts), fed from the passport
+  // (this phone) and the peers' qr numbers, on 5 ghz wi-fi: what each option would do
+  const est = useMemo(() => {
+    if (!model) return null;
+    const sim = modelProfile(model);
+    const bw = passport ? Number(passport.mem_bw_read_gbs) || Number(passport.mem_bw_gbs) || 4 : 4;
+    const local: SimDevice = { id: 'me', capMb: Math.max(haveMb(passport), 1), bw, eff: 0.6 };
+    const workers = peers.map(workerFromPeer);
+    const alone: Estimate = estimateAlone(sim, local);
+    const apartTps = [local, ...workers].reduce((a, d) => a + estimateAlone(sim, d).tps, 0);
+    let split: SplitPlan | null = null;
+    let splitErr: string | null = null;
+    if (workers.length) {
+      try {
+        split = planShares({ model: sim, ctx, local, workers, net: NETWORKS.wifi5, share: true });
+      } catch (e) {
+        splitErr = (e as Error).message;
+      }
+    }
+    return { alone, apartTps: Math.round(apartTps * 10) / 10, split, splitErr };
+  }, [model, passport, peers, ctx]);
+  const nameOf = (id: string) => (id === 'me' ? (passport?.device ?? t('mode.alone')) : peers.find((p) => p.id === id)?.name ?? id).toLowerCase();
+  const splitMeta = est?.split
+    ? [t('mode.est.load', { s: Math.round(est.split.est.loadS) }), t('mode.est.tps', { tps: est.split.est.tps }), t('mode.est.token', { ms: Math.round(est.split.est.netMsPerToken) }),
+      [{ id: 'me', assignedMb: est.split.localMb }, ...est.split.used].map((u) => `${nameOf(u.id)} ${(u.assignedMb / 1024).toFixed(1)} gb`).join(' · '),
+      ...(est.split.aloneFaster && est.split.estAlone ? [t('mode.est.aloneFaster', { tps: est.split.estAlone.tps })] : [])].join('\n')
+    : est?.splitErr ? tx(`model.err.${est.splitErr}`, est.splitErr) : '';
 
   if (!model) {
     return (
@@ -86,7 +114,7 @@ export default function ModelScreen() {
   };
   const pick = (mode: Mode) => {
     // split on a model that fits alone: ask whether to keep it here
-    if (mode === 'split' && fit && fit.verdict !== 'no') return setShareQ(mode);
+    if (mode === 'split' && est?.split?.fitsAlone) return setShareQ(mode);
     // choosing split is choosing to share: the planner's live free-RAM figure can say "fits
     // alone" where the passport said no, and must not quietly keep every layer here
     start(mode, mode === 'split');
@@ -177,9 +205,10 @@ export default function ModelScreen() {
         <Pressable style={styles.dim} onPress={() => setAsk(false)} />
         <View style={[styles.sheet, { paddingBottom: insets.bottom + 24 }]}>
           <Text style={styles.head}>{up(t('mode.title'))}</Text>
-          <Option title={t('mode.alone')} why={fit?.verdict === 'no' ? `${t('mode.alone.why')} ${t('mode.tryAnyway')}` : t('mode.alone.why')} meta={fit?.tps ? `${fit.tps.low}–${fit.tps.high} tok/s` : ''} onPress={() => pick('alone')} />
-          <Option title={t('mode.apart')} why={`${t('mode.apart.why')} ${t('mode.beyin')}`} meta={peers.length ? `${peers.length + 1} × ${fit?.tps ? `${fit.tps.low}–${fit.tps.high}` : '?'} tok/s` : t('mode.needPeers')} off={!peers.length} onPress={() => pick('apart')} />
-          <Option title={t('mode.split')} why={t('mode.split.why')} meta={together?.tps ? `${together.tps.low}–${together.tps.high} tok/s · ${together.shares.map((s) => `${s.name.toLowerCase()} ${(s.mb / 1024).toFixed(1)} gb`).join(' · ')}` : peers.length ? '' : t('mode.needPeers')} off={!peers.length || (!!together && together.verdict === 'no')} onPress={() => pick('split')} />
+          <Option title={t('mode.alone')} why={fit?.verdict === 'no' ? `${t('mode.alone.why')} ${t('mode.tryAnyway')}` : t('mode.alone.why')} meta={est ? `${t('mode.est.tps', { tps: est.alone.tps })} · ${t('mode.est.load', { s: Math.round(est.alone.loadS) })}` : ''} onPress={() => pick('alone')} />
+          <Option title={t('mode.apart')} why={`${t('mode.apart.why')} ${t('mode.beyin')}`} meta={peers.length && est ? t('mode.est.together', { n: peers.length + 1, tps: est.apartTps }) : t('mode.needPeers')} off={!peers.length} onPress={() => pick('apart')} />
+          <Option title={t('mode.split')} why={t('mode.split.why')} meta={peers.length ? splitMeta : t('mode.needPeers')} off={!peers.length || !est?.split} onPress={() => pick('split')} />
+          <Text style={styles.hint}>{t('mode.est.how')}</Text>
           {!peers.length ? (
             <Pressable onPress={() => { setAsk(false); router.push('/peers'); }} style={({ pressed }) => [styles.addPeer, pressed && styles.pressed]}>
               <Text style={styles.addPeerText}>{t('mode.addPeer')} ›</Text>
@@ -191,8 +220,8 @@ export default function ModelScreen() {
         <Pressable style={styles.dim} onPress={() => setShareQ(null)} />
         <View style={[styles.sheet, { paddingBottom: insets.bottom + 24 }]}>
           <Text style={styles.head}>{up(t('mode.share'))}</Text>
-          <Option title={t('mode.keep')} why={t('mode.alone.why')} onPress={() => start('alone')} />
-          <Option title={t('mode.shareAnyway', { n: peers.length })} why={t('mode.split.why')} onPress={() => start('split', true)} />
+          <Option title={t('mode.keep')} why={t('mode.alone.why')} meta={est ? t('mode.est.tps', { tps: est.alone.tps }) : ''} onPress={() => start('alone')} />
+          <Option title={t('mode.shareAnyway', { n: est?.split ? est.split.used.length : peers.length })} why={t('mode.split.why')} meta={splitMeta} onPress={() => start('split', true)} />
         </View>
       </Modal>
     </StaffPage>
