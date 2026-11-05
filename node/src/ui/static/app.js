@@ -1637,7 +1637,7 @@ refreshStatus().then(() => {
   refreshInvite();
   // nothing loaded: the connect sheet opens by itself, at the model question when a paired
   // phone answers, else at the first question; a model loaded: no sheet
-  if (!S.status?.loaded && !S.status?.loading) openConnect(true);
+  // 6.11.2026: no sheet opens by itself on load; the page waits for a click on connect or devices
 });
 setInterval(() => { if (!document.hidden) refreshStatus(); }, 2500);
 document.addEventListener('visibilitychange', () => { if (!document.hidden) refreshStatus(); });
