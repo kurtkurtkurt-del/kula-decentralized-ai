@@ -10,9 +10,26 @@ jest.mock('expo-speech', () => ({
   speak: (text: string, opts: Opts) => mockSpoken.push({ text, opts }),
   stop: async () => {},
   maxSpeechInputLength: 4000,
+  getAvailableVoicesAsync: async () => mockVoices,
+  VoiceQuality: { Default: 'Default', Enhanced: 'Enhanced' },
 }));
+const mockVoices: Parameters<typeof import("@/voice/speak").localVoice>[0] = [
+  { identifier: 'en-us-x-iog-server', language: 'en-US', quality: 'Enhanced' as never },
+  { identifier: 'tr-tr-x-cfs-network', language: 'tr-TR', quality: 'Enhanced' as never },
+  { identifier: 'tr-tr-x-cfs-local', language: 'tr-TR', quality: 'Default' as never },
+  { identifier: 'tr-tr-x-ama-local', language: 'tr-TR', quality: 'Enhanced' as never },
+  { identifier: 'en-gb-x-gba-local', language: 'en-GB', quality: 'Enhanced' as never },
+];
 
-import { Speaker } from '@/voice/speak';
+import { Speaker, localVoice } from '@/voice/speak';
+
+describe('localVoice', () => {
+  it('picks a voice installed on the phone, never a network or server one', () => {
+    expect(localVoice(mockVoices, 'tr-TR')).toBe('tr-tr-x-ama-local'); // local, enhanced first
+    expect(localVoice(mockVoices, 'en-US')).toBe('en-gb-x-gba-local'); // the server one is skipped; same language, other region
+    expect(localVoice(mockVoices, 'de-DE')).toBeNull(); // none: the engine's default for the language
+  });
+});
 
 describe('Speaker', () => {
   it('queues sentences in the voice, says sound once and drained after close', () => {

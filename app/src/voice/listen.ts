@@ -65,7 +65,10 @@ export function startListening(locale: string, onDevice: boolean) {
     maxAlternatives: 1,
     requiresOnDeviceRecognition: onDevice,
     addsPunctuation: false,
-    androidIntentOptions: { EXTRA_PREFER_OFFLINE: true, EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS: 1400 },
+    // no silence-length extra: Google's on-device recognizer (Soda) applied a 1.4 s "complete
+    // silence" to the wait before the first word too and closed the mic before anyone spoke
+    // (5.11.2026, Galaxy S25+). Its own default waits for speech and finds the end itself.
+    androidIntentOptions: { EXTRA_PREFER_OFFLINE: true },
   });
 }
 export const stopListening = () => R.stop();

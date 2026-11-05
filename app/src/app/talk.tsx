@@ -9,6 +9,7 @@ import { langNames, useLang } from '@/i18n';
 import { tapLight } from '@/lib/haptics';
 import { useEngine } from '@/llm/engine';
 import { voiceNative } from '@/voice/native';
+import { saveVoiceSettings } from '@/voice/settings';
 import { useTalk, type Banner } from '@/voice/useTalk';
 import { colors, fonts, night, radius } from '@/theme/tokens';
 import { brand } from '@/theme/layout';
@@ -62,6 +63,14 @@ export default function TalkScreen() {
       <View style={styles.top}>
         <Text style={styles.title}>{t('voice.title')}</Text>
         <Text style={styles.meta} numberOfLines={1}>{engine.model ? engine.model.name.toLowerCase() : ''}{n ? `  ·  ${headset}` : ''}</Text>
+        {/* the language you speak, in sight: it is often not the app's (an english app, a turkish voice) */}
+        <View style={styles.langs} accessibilityRole="radiogroup">
+          {(['tr', 'en', 'de'] as const).map((l) => (
+            <Pressable key={l} onPress={() => { tapLight(); talk.close(); saveVoiceSettings({ lang: l }); }} accessibilityRole="radio" accessibilityState={{ checked: talk.lang === l }} accessibilityLabel={langNames[l]} hitSlop={6} style={[styles.lang, talk.lang === l && styles.langOn]}>
+              <Text style={[styles.langText, talk.lang === l && styles.langTextOn]}>{l}</Text>
+            </Pressable>
+          ))}
+        </View>
       </View>
 
       {!engine.load ? (
@@ -179,6 +188,11 @@ function BannerBox({ kind, lang, downloading, onDismiss, onAllowMic, onOnline, o
 
 const CIRCLE = 190;
 const styles = StyleSheet.create({
+  langs: { flexDirection: 'row', gap: 8, marginTop: 10 },
+  lang: { minWidth: 44, height: 32, paddingHorizontal: 12, borderRadius: radius.pill, borderWidth: 1, borderColor: night.edge, alignItems: 'center', justifyContent: 'center' },
+  langOn: { backgroundColor: colors.paper, borderColor: colors.paper },
+  langText: { fontFamily: fonts.medium, fontSize: 13, color: colors.paper },
+  langTextOn: { color: colors.ink },
   root: { flex: 1, backgroundColor: night.sky0, paddingHorizontal: brand.left },
   top: { gap: 2 },
   title: { fontFamily: fonts.semibold, fontSize: 30, lineHeight: 32, letterSpacing: -0.9, color: night.star },

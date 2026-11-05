@@ -94,7 +94,9 @@ export class TalkController {
       final: (text) => this.dispatch({ type: 'final', text }),
       silence: () => this.dispatch({ type: 'silence' }),
       error: (code) => {
-        if ((code === 'language-not-supported' || code === 'service-not-allowed') && this.cfg.onDeviceOnly) {
+        // on-device only: a recognizer without the language's offline pack answers "network"
+        // (it would need its servers); that is the missing pack, not a broken connection
+        if ((code === 'language-not-supported' || code === 'service-not-allowed' || code === 'network') && this.cfg.onDeviceOnly) {
           this.onDevice = null;
           this.set({ banner: 'noModel' });
           this.dispatch({ type: 'close' });

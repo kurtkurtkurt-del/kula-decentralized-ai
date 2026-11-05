@@ -7,16 +7,58 @@ import * as Speech from 'expo-speech';
 
 export type SpeakerEvents = { sound: () => void; drained: () => void };
 
+// The phone's default voice can be a network one (Google TTS named "en-us-x-iog-server" on
+// the S25+, 5.11.2026): it needs the internet and sends the text out. Pick a voice of the
+// language that is installed on the phone; none found → the engine's default for the language.
+const NETWORKY = /network|server|cloud/i;
+const voices = new Map<string, string | null>();
+
+/** Of the voices the phone lists, one installed locally for the language (best quality first). */
+export function localVoice(list: Pick<Speech.Voice, 'identifier' | 'language' | 'quality'>[], language: string): string | null {
+  const want = language.toLowerCase().replace('_', '-');
+  const base = want.slice(0, 2);
+  const norm = (l: string) => l.toLowerCase().replace('_', '-');
+  const local = list.filter((v) => !NETWORKY.test(v.identifier));
+  const rank = (v: (typeof list)[number]) => (norm(v.language) === want ? 0 : 1) * 10 + (v.quality === Speech.VoiceQuality.Enhanced ? 0 : 1);
+  const match = local.filter((v) => norm(v.language) === want || norm(v.language).slice(0, 2) === base).sort((a, b) => rank(a) - rank(b));
+  return match[0]?.identifier ?? null;
+}
+
+async function voiceFor(language: string): Promise<string | null> {
+  if (voices.has(language)) return voices.get(language) ?? null;
+  try {
+    const id = localVoice(await Speech.getAvailableVoicesAsync(), language);
+    voices.set(language, id);
+    return id;
+  } catch {
+    return null;
+  }
+}
+
 export class Speaker {
   private queued = 0;
   private closed = false;
   private started = false;
   private gen = 0; // stop() moves on; callbacks of an older generation are ignored
 
-  constructor(private opts: { language: string; rate: number }, private on: SpeakerEvents) {}
+  private voice: string | null = null;
+
+  constructor(private opts: { language: string; rate: number }, private on: SpeakerEvents) {
+    this.pick();
+  }
 
   setVoice(language: string, rate: number) {
+    const changed = language !== this.opts.language;
     this.opts = { language, rate };
+    if (changed) this.pick();
+  }
+
+  private pick() {
+    const lang = this.opts.language;
+    this.voice = null;
+    voiceFor(lang).then((id) => {
+      if (this.opts.language === lang) this.voice = id;
+    });
   }
 
   /** A new reply: nothing queued, not closed. */
@@ -39,6 +81,7 @@ export class Speaker {
     };
     Speech.speak(t.slice(0, Math.max(100, Speech.maxSpeechInputLength || 4000)), {
       language: this.opts.language,
+      ...(this.voice ? { voice: this.voice } : {}),
       rate: this.opts.rate,
       onStart: () => {
         if (g !== this.gen || this.started) return;
@@ -74,5 +117,5 @@ export class Speaker {
 
 /** One short line, outside any reply (an error said in idle). */
 export function sayOnce(text: string, language: string, rate: number) {
-  Speech.speak(text, { language, rate });
+  voiceFor(language).then((voice) => Speech.speak(text, { language, rate, ...(voice ? { voice } : {}) }));
 }
