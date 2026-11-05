@@ -79,24 +79,22 @@
   </main>
 
   <aside class="brain" id="brain" aria-label="the brain">
+    <!-- the brain (6.11.2026): the twelve branches of the brain map as tiles, two by six.
+         a lit tile is built and shows what it does now; a dark one is not built yet. -->
     <div class="brain-head">
       <h2>the brain</h2>
-      <button type="button" class="icon" id="brain-close" aria-label="close the brain">
+      <span class="brain-sub" id="brain-sub"></span>
+      <button type="button" class="icon" id="brain-close" aria-label="hide the brain">
         <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M5.5 5.5l9 9M14.5 5.5l-9 9"/></svg>
       </button>
     </div>
-    <section>
-      <h3>devices</h3>
-      <div id="brain-devices" class="brain-devices"></div>
-    </section>
-    <section>
-      <h3>why it sits there</h3>
-      <ul id="brain-plan" class="brain-plan"></ul>
-    </section>
-    <section>
-      <h3>last decisions</h3>
-      <ol id="brain-log" class="brain-log"></ol>
-    </section>
+    <div class="bgrid" id="bgrid" role="list"></div>
+    <div class="bdetail" id="bdetail" hidden>
+      <button type="button" class="link bback" id="bback">‹ all twelve</button>
+      <div class="bd-head"><span class="bd-n" id="bd-n"></span><h3 id="bd-title"></h3><span class="bd-state" id="bd-state"></span></div>
+      <p class="bd-what" id="bd-what"></p>
+      <div class="bd-live" id="bd-live" aria-live="polite"></div>
+    </div>
   </aside>
 </div>
 

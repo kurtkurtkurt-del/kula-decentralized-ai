@@ -520,45 +520,95 @@ function updateEmpty() {
   }
 }
 
+// ---------- the brain (6.11.2026): the twelve branches of the brain map, two by six. A built
+// branch is lit and shows, live, what it does on this computer; one not built yet is dark,
+// says what it will do and stays a promise. A tap opens the branch's page; "all twelve" goes back.
+let brainOpen = null; // the branch whose page shows, or null for the tiles
+
+const MODE_WORD = { phone: 'on the phone', apart: 'apart', split: 'split', here: 'here' };
+const reachWord = (r) => (r ? (r.ok ? `reachable${r.ms ? ` · ${r.ms} ms` : ''}` : `not reachable: ${r.reason}`) : 'not checked yet');
+const kv = (k, v, cls = '') => { const r = el('div', `bd-row ${cls}`); r.append(el('span', 'k', k), el('span', 'v', v)); return r; };
+const bdList = (items, empty) => { const ul = el('ul', 'bd-list'); for (const t of items) ul.appendChild(typeof t === 'string' ? el('li', '', t) : t); if (!items.length) ul.appendChild(el('li', 'none', empty)); return ul; };
+const devLine = (name, sub, dot) => { const li = el('li', 'bd-dev'); li.append(el('span', `dot ${dot}`), el('b', '', name), el('span', 'sub', sub)); return li; };
+
+const BRANCHES = [
+  { n: 1, id: 'senses', name: 'senses', built: true,
+    what: 'it sees every device: is it there, how much memory is free, how fast it answers. every few seconds, and on refresh.',
+    stat: () => { const g = deviceGroups(); const ok = g.filter((x) => x.active).length; return g.length ? `${ok} of ${g.length} devices active` : 'no device yet'; },
+    live: () => [bdList(S.peers.map((p) => devLine(p.name, [reachWord(p.reach), p.ram ? `${(p.ram / 1024).toFixed(1)} GB free` : null, p.bw ? `${p.bw} GB/s` : null, p.probedAt ? `looked ${clock(p.probedAt)}` : null].filter(Boolean).join(' · '), p.reach ? (p.reach.ok ? 'ok' : 'no') : '')), 'no device yet. devices (top right) adds one.')] },
+  { n: 2, id: 'memory', name: 'memory', built: true,
+    what: 'what happened and why, kept on this computer: the decision log. the phones keep their own signed ledgers.',
+    stat: () => `${(S.status?.decisions ?? []).length} notes kept`,
+    live: () => [bdList([...(S.status?.decisions ?? [])].reverse().map((d) => { const li = el('li', 'bd-log'); li.append(el('time', '', clock(d.at)), el('span', '', d.text)); return li; }), 'nothing yet.')] },
+  { n: 3, id: 'forecast', name: 'forecast', built: false, what: 'will guess when each device is free and how fast it will be tonight, from what it saw before.' },
+  { n: 4, id: 'learning', name: 'learning loop', built: false, what: 'will compare each guess with what really happened in the morning and tune itself.' },
+  { n: 5, id: 'connections', name: 'connections', built: true,
+    what: 'how each device is reached: a usb cable through adb, or the wi-fi. no server outside, no relay by default.',
+    stat: () => { const c = S.peers.filter((p) => p.cable && p.cable.plugged !== false).length; const w = S.peers.filter((p) => !p.cable && !p.far).length; return `${c} cable · ${w} wi-fi`; },
+    live: () => {
+      const cab = (S.cable?.devices ?? []).map((d) => devLine(d.name, `cable · ${STATE_WORDS[d.state] || d.state}${d.peer ? ` · paired as ${d.peer.name}` : ' · not paired'}`, d.state === 'device' ? 'ok' : 'no'));
+      const net = S.peers.filter((p) => !p.cable).map((p) => devLine(p.name, `${p.far ? 'relay' : 'wi-fi'} · ${p.where} · ${reachWord(p.reach)}`, p.reach ? (p.reach.ok ? 'ok' : 'no') : ''));
+      return [el('h4', '', 'on a cable'), bdList(cab, S.cable?.adb === false ? 'adb is not on this computer.' : 'nothing plugged in.'), el('h4', '', 'over the network'), bdList(net, 'no device over the network.')];
+    } },
+  { n: 6, id: 'planner', name: 'planner', built: true,
+    what: 'decides where the model sits: one phone, a copy on each (apart) or one model across them (split), and says why.',
+    stat: () => (S.status?.loading ? `loading ${S.status.loading.model}` : S.status?.loaded ? `${MODE_WORD[S.status.loaded.mode] || S.status.loaded.mode} · ${S.status.loaded.model.name}` : 'nothing planned'),
+    live: () => {
+      const st = S.status;
+      const out = [];
+      if (st?.loaded) out.push(kv('model', st.loaded.model.name), kv('mode', MODE_WORD[st.loaded.mode] || st.loaded.mode), kv('context', `${st.loaded.ctx} tokens`), kv('since', clock(st.loaded.since)));
+      if (st?.loading) out.push(kv('loading', st.loading.line || st.loading.model, 'busy'));
+      out.push(el('h4', '', 'why it sits there'), bdList(st?.plan ?? [], 'nothing loaded, nothing planned.'));
+      return out;
+    } },
+  { n: 7, id: 'executor', name: 'executor', built: true,
+    what: 'sends each question to a device and brings the answer back; in apart mode the fastest free one answers.',
+    stat: () => { const d = S.status?.loaded?.devices ?? []; const busy = d.filter((x) => x.busy).length; const done = d.reduce((a, x) => a + (x.done || 0), 0); return d.length ? `${busy} answering · ${done} answers` : 'idle'; },
+    live: () => [bdList((S.status?.loaded?.devices ?? []).map((d) => devLine(d.name, `${d.busy ? 'answering now' : 'free'}${d.tps ? ` · ${d.tps} tok/s` : ''} · ${d.done} answer${d.done === 1 ? '' : 's'}`, d.busy ? 'busy' : 'ok')), 'no model loaded: nothing to send work to.'), kv('chats running', String(S.status?.chatting ?? 0))] },
+  { n: 8, id: 'trust', name: 'trust and verification', built: true,
+    what: 'v0, the auditor: every link is tls with the certificate pinned from the qr, pairing takes a one-time code, the model server stays on 127.0.0.1 behind the gate.',
+    stat: () => { const n = S.peers.length; const t = S.peers.filter((p) => p.tls).length; return n ? `${t} of ${n} tls-pinned` : 'nothing to check'; },
+    live: () => [bdList(S.peers.map((p) => devLine(p.name, `${p.tls ? 'tls · certificate pinned' : 'older pairing (shared secret)'}${p.waitingPair ? ' · waiting for the one-time code' : ''}`, p.tls ? 'ok' : 'busy')), 'no device paired.'), el('p', 'bd-note', 'nothing private goes into these checks: no prompts, no answers, only who connected and whether it was allowed.')] },
+  { n: 9, id: 'limits', name: 'limits', built: false, what: 'will keep phones cool and charged: heat, battery and energy rules a device may set for itself.' },
+  { n: 10, id: 'models', name: 'models and device care', built: true,
+    what: 'which model fits which device, files checked by sha256, what each device holds right now.',
+    stat: () => { const h = S.peers.filter((p) => p.holds).length; return S.status?.loaded ? `${S.status.loaded.model.name} loaded` : `${(S.models || []).length} models · ${h} held`; },
+    live: () => [el('h4', '', 'held now'), bdList(S.peers.filter((p) => p.holds).map((p) => devLine(p.name, `holds ${p.holds}`, 'ok')), 'no device holds a model.'), el('h4', '', 'the list'), bdList((S.models || []).slice(0, 8).map((m) => `${m.name}${m.size ? ` · ${(m.size / 1e9).toFixed(2)} GB` : ''}${m.here ? ' · on this computer' : ''}`), 'the list loads with connect.')] },
+  { n: 11, id: 'review', name: 'request review', built: false, what: 'will look at a job before it runs: is it allowed, is it safe to send to someone else’s phone.' },
+  { n: 12, id: 'advisor', name: 'advisor', built: false, what: 'will suggest: which model, which devices, which night, before you ask.' },
+];
+
 function renderBrain() {
-  const st = S.status;
-  const devs = $('brain-devices');
-  devs.replaceChildren();
-  const used = new Set();
-  for (const d of st?.loaded?.devices ?? []) {
-    used.add(d.id);
-    const card = el('div', 'dev');
-    const top = el('div', 'dev-top');
-    top.append(el('span', `dot ${d.busy ? 'busy' : 'ok'}`), el('b', '', d.name), el('span', 'tag', d.busy ? 'answering' : 'free'));
-    card.appendChild(top);
-    card.appendChild(el('p', '', `holds ${st.loaded.model.name}${d.tps ? ` · ${d.tps} tok/s` : ''} · ${d.done} answer${d.done === 1 ? '' : 's'}`));
-    devs.appendChild(card);
+  const grid = $('bgrid');
+  if (!grid) return;
+  const built = BRANCHES.filter((b) => b.built).length;
+  $('brain-sub').textContent = `${built} of 12 built`;
+  if (!S.models?.length && !renderBrain.asked) { renderBrain.asked = true; getJson('models').then((m) => { S.models = m; renderBrain(); }).catch(() => {}); }
+  const open = BRANCHES.find((b) => b.id === brainOpen) ?? null;
+  grid.hidden = !!open;
+  $('bdetail').hidden = !open;
+  if (open) {
+    $('bd-n').textContent = String(open.n);
+    $('bd-title').textContent = open.name;
+    $('bd-state').textContent = open.built ? 'live' : 'not built yet';
+    $('bd-state').className = `bd-state ${open.built ? 'on' : 'off'}`;
+    $('bd-what').textContent = open.what;
+    $('bd-live').replaceChildren(...(open.built ? open.live() : [el('p', 'bd-note', 'this part of the brain is on the map, not in the code yet.')]));
+    return;
   }
-  for (const p of S.peers) {
-    if (used.has(p.id)) continue;
-    const card = el('div', 'dev');
-    const top = el('div', 'dev-top');
-    top.append(el('span', `dot ${p.reach ? (p.reach.ok ? 'ok' : 'no') : ''}`), el('b', '', p.name), viaTag(p), el('span', 'tag', p.kind));
-    card.appendChild(top);
-    card.appendChild(el('p', '', p.reach ? (p.reach.ok ? `reachable${p.reach.ms ? `, ${p.reach.ms} ms` : ''}; holds nothing for this chat` : `not reachable: ${p.reach.reason}`) : 'not checked yet'));
-    devs.appendChild(card);
-  }
-  if (!devs.children.length) devs.appendChild(el('p', 'none', 'no devices yet. connect adds one.'));
-  const plan = $('brain-plan');
-  plan.replaceChildren();
-  for (const line of st?.plan ?? []) plan.appendChild(el('li', '', line));
-  if (st?.loading) plan.appendChild(el('li', '', `loading: ${st.loading.line}`));
-  if (!plan.children.length) plan.appendChild(el('li', 'none', 'nothing loaded, nothing planned.'));
-  const log = $('brain-log');
-  log.replaceChildren();
-  for (const d of [...(st?.decisions ?? [])].reverse()) {
-    const li = el('li');
-    const t = el('time', '', clock(d.at));
-    li.append(t, el('span', '', d.text));
-    log.appendChild(li);
-  }
-  if (!log.children.length) log.appendChild(el('li', 'none', 'nothing yet.'));
+  const tiles = BRANCHES.map((b) => {
+    const t = el('button', `btile ${b.built ? 'on' : 'off'}`);
+    t.type = 'button';
+    t.setAttribute('role', 'listitem');
+    const busy = b.id === 'executor' && (S.status?.loaded?.devices ?? []).some((d) => d.busy) || b.id === 'planner' && !!S.status?.loading;
+    t.append(el('span', 'bt-n', String(b.n)), el('b', '', b.name), el('span', 'bt-stat', b.built ? b.stat() : 'not built yet'));
+    if (busy) t.appendChild(el('span', 'dot busy bt-live'));
+    t.addEventListener('click', () => { brainOpen = b.id; renderBrain(); });
+    return t;
+  });
+  grid.replaceChildren(...tiles);
 }
+$('bback').addEventListener('click', () => { brainOpen = null; renderBrain(); });
 
 async function refreshStatus() {
   try { S.status = await getJson('status'); } catch { return; }
@@ -1681,7 +1731,7 @@ for (const b of document.querySelectorAll('#set-theme button')) b.addEventListen
 // ---------- start
 
 if (matchMedia('(max-width: 860px)').matches) setSide(false);
-try { if (localStorage.getItem('kula.chat.brain') === '1' && !matchMedia('(max-width: 860px)').matches) setBrain(true); } catch {}
+try { if (localStorage.getItem('kula.chat.brain') !== '0' && !matchMedia('(max-width: 860px)').matches) setBrain(true); } catch { setBrain(true); }
 const fromHash = location.hash.slice(1);
 newChat();
 // who is this: the owner at 127.0.0.1, or a guest who came in with an invite
@@ -1698,3 +1748,6 @@ refreshStatus().then(() => {
 setInterval(() => { if (!document.hidden) refreshStatus(); }, 2500);
 document.addEventListener('visibilitychange', () => { if (!document.hidden) refreshStatus(); });
 updateSend();
+
+// the senses look again every 15 s while the brain shows (a probe of every device)
+setInterval(() => { if (!document.hidden && $('app').classList.contains('brain-open') && !isGuest()) refreshPeers(true); }, 15000);
