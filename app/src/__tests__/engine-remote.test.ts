@@ -95,7 +95,7 @@ afterEach(() => {
   globalThis.fetch = realFetch;
 });
 
-const dev: Device = { id: 'p1', name: 'tablet', local: false, busy: false, apiPort: 41001 };
+const dev: Device = { id: 'p1', name: 'tablet', local: false, busy: false, apiPort: 41001, tps: 10, busyUntil: 0 };
 const line = (o: unknown) => `data: ${JSON.stringify(o)}\n\n`;
 const doneLine = line({ done: true, tokens: 3, ms: 30, firstMs: 10, tps: 100 });
 const ask = (script: Script) => {
@@ -182,6 +182,7 @@ describe('chat', () => {
     const devs = engine().devices;
     expect(devs.map((d) => d.id)).toEqual(['me', 'p1']);
     devs[0].busy = true; // this phone is in the middle of something: the tablet gets it
+    devs[0].busyUntil = Date.now() + 60_000; // the planner reads the queue, not the flag
     FakeXhr.script = { steps: [line({ t: 'x' }), doneLine] };
     const run = chat([{ role: 'user', content: 'q' }], () => {}, { maxTokens: 1, temperature: 0 });
     expect(devs[1].busy).toBe(true);
@@ -200,7 +201,7 @@ describe('load', () => {
     await load(model, 'alone', 2048, []);
     const s = engine();
     expect(s.mode).toBe('alone');
-    expect(s.devices).toEqual([{ id: 'me', name: 'Pixel', local: true, busy: false }]);
+    expect(s.devices).toEqual([expect.objectContaining({ id: 'me', name: 'Pixel', local: true, busy: false })]);
     expect(s.split).toEqual([{ name: 'Pixel', gb: 0.5 }]);
     expect(s.loading).toBeNull();
     expect(mockNative.loads[0]).toEqual(['/m/tiny.gguf', 2048, 0, [], 1]);
@@ -227,8 +228,8 @@ describe('load', () => {
     const s = engine();
     expect(s.plan!.used[0].id).toBe('p1');
     const args = mockNative.loads[0];
-    expect(args[3]).toEqual([{ host: '10.0.0.1', port: 50551, secret: 'a'.repeat(64), weight: 3000 }]);
-    expect(args[4]).toBe(1400);
+    expect(args[3]).toEqual([expect.objectContaining({ host: '10.0.0.1', port: 50551, secret: 'a'.repeat(64), weight: 3000 })]);
+    expect(args[4]).toBe(s.plan!.localMb); // the planner's local share (sim/model.ts), whatever its formula
     expect(s.split.map((x) => x.name)).toEqual(['peer1', 'Pixel']); // the rpc buffer named after the peer, biggest first
     expect(s.devices).toHaveLength(1);
   });

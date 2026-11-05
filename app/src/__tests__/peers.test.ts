@@ -17,7 +17,7 @@ jest.mock('expo-sqlite/kv-store', () => ({
 jest.mock('expo-device', () => ({ deviceType: 1, DeviceType: { TABLET: 2, DESKTOP: 3 }, osVersion: '15', totalMemory: 8e9 }));
 jest.mock('@/lib/supabase', () => ({ supabase: {} }));
 jest.mock('@/lib/offline', () => ({ newId: () => Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2), remember: async (_g: string, _k: string, w: () => Promise<unknown>) => w(), must: async (q: Promise<{ data: unknown }>) => (await q).data, send: async () => ({}), outbox: () => {}, invalidate: () => {}, pendingJobs: () => [], useShelf: () => 0 }));
-const mockLlama = { info: async () => ({ available: true, abi: 'arm64-v8a', fastCores: 4, ramFreeMb: 3000, modelsDir: '/m', freeDiskMb: 9000, workerId: 'me-1', wifiIp: '192.168.1.20' }) };
+const mockLlama = { info: async () => ({ available: true, abi: 'arm64-v8a', fastCores: 4, ramFreeMb: 3000, modelsDir: '/m', freeDiskMb: 9000, workerId: 'me-1', wifiIp: '192.168.1.20' }), workerStatus: async () => null };
 jest.mock('@/llm/native', () => ({ get llama() { return mockLlama; }, native: () => mockLlama, hasNative: () => true, GATE_PORT: 50551 }));
 
 import { isPeerQr, myPeerQr, setMyWorkerId, takePeerQr } from '@/llm/peers';
@@ -54,9 +54,9 @@ describe('takePeerQr', () => {
     }
     expect(peers()).toEqual([]);
   });
-  it('refuses another version as old, v1 and v3 alike', () => {
+  it('refuses another version as old (v1, a future v4); v3 is read since gate v2', () => {
     expect(() => takePeerQr(qr({ v: 1 }))).toThrow('old');
-    expect(() => takePeerQr(qr({ v: 3 }))).toThrow('old');
+    expect(() => takePeerQr(qr({ v: 4 }))).toThrow('old');
     expect(() => takePeerQr(qr({ v: '2' }))).toThrow('old');
     expect(() => takePeerQr(qr({ v: undefined }))).toThrow('old');
     expect(peers()).toEqual([]);

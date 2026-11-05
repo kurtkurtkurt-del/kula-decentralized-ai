@@ -36,7 +36,7 @@ const mockGate = {
 // getters: the factory runs when cluster.ts is first required, above the const
 jest.mock('@/llm/native', () => ({ get llama() { return mockGate; }, native: () => mockGate, hasNative: () => true, GATE_PORT: 50551 }));
 
-import { LOCAL_SHARE, NEED_FACTOR, WORKER_SHARE, peerArgs, planSplit, probeAll, relocate, splitSummary } from '@/llm/cluster';
+import { LOCAL_SHARE, WORKER_SHARE, peerArgs, planSplit, probeAll, relocate, splitSummary } from '@/llm/cluster';
 import { peers, rememberPeer, type LocalModel, type Peer } from '@/llm/store';
 
 const MB = 1024 * 1024;
@@ -103,45 +103,43 @@ describe('relocate', () => {
 });
 
 describe('planSplit', () => {
+  // The numbers come from the planner's model (sim/model.ts, its own tests in sim.test.ts);
+  // here the rules it must keep whatever the formula: the shares add up to the need, the
+  // output layer stays on this phone, the fastest leads, dead peers are left out with a reason.
+  const total = (r: Awaited<ReturnType<typeof plan>>) => r.localMb + sum(r.used.map((u) => u.assignedMb));
   it('with no peers keeps everything here when it fits, and says so', async () => {
     const r = await plan(model(1000), 4000, 20, [], false);
     expect(r.fitsAlone).toBe(true);
-    expect(r.needMb).toBe(Math.round(1000 * NEED_FACTOR));
+    expect(r.needMb).toBeGreaterThan(1000);
     expect(r.localMb).toBe(r.needMb);
     expect(r.used).toEqual([]);
     expect(r.skipped).toEqual([]);
-    expect(r.totalMb).toBe(Math.round(4000 * LOCAL_SHARE));
     expect(mockGate.probes).toEqual([]);
   });
   it('with no peers throws toobig when this phone cannot hold it', async () => {
     await expect(plan(model(4000), 4000, 20, [], false)).rejects.toThrow('toobig');
   });
-  it('with one answering peer and a model that does not fit here, fills the fastest first', async () => {
+  it('with one answering peer and a model that does not fit here, shares it and keeps the output layer here', async () => {
     mockGate.answers = { '10.0.0.1': null };
-    // need 1100: phone holds 700 (1000 × 0.7), the peer 2250; the peer is faster, so it leads
     const r = await plan(model(1000), 1000, 5, [peer('a', '10.0.0.1', 3000, 30)], false);
     expect(r.fitsAlone).toBe(false);
     expect(r.used.map((p) => p.id)).toEqual(['a']);
-    expect(r.used[0].assignedMb).toBe(1100);
-    expect(r.localMb).toBe(0);
-    // the slower phone leads when it is the faster one
-    const r2 = await plan(model(1000), 1000, 50, [peer('a', '10.0.0.1', 3000, 5)], false);
-    expect(r2.localMb).toBe(700);
-    expect(r2.used[0].assignedMb).toBe(400);
-    expect(r2.localMb + sum(r2.used.map((u) => u.assignedMb))).toBe(1100);
+    expect(r.localMb).toBeGreaterThan(0);
+    expect(r.localMb).toBeLessThanOrEqual(Math.round(1000 * LOCAL_SHARE));
+    expect(total(r)).toBe(r.needMb);
   });
   it('leaves out the peers that are not needed', async () => {
     mockGate.answers = { '10.0.0.1': null, '10.0.0.2': null };
     const r = await plan(model(1000), 1000, 1, [peer('a', '10.0.0.1', 4000, 30), peer('b', '10.0.0.2', 4000, 20)], false);
-    expect(r.used.map((p) => p.id)).toEqual(['a']); // a alone holds 3000 ≥ 1100
-    expect(r.localMb).toBe(0);
+    expect(r.used.map((p) => p.id)).toEqual(['a']); // a alone holds what this phone cannot
+    expect(total(r)).toBe(r.needMb);
   });
   it('skips an unreachable peer with its reason, and plans with the rest', async () => {
     mockGate.answers = { '10.0.0.1': null, '10.0.0.2': 'NO wrong secret' };
     const r = await plan(model(1000), 1000, 5, [peer('a', '10.0.0.1', 3000, 30), peer('b', '10.0.0.2', 3000, 40)], false);
     expect(r.used.map((p) => p.id)).toEqual(['a']);
-    expect(r.skipped).toEqual([{ peer: expect.objectContaining({ id: 'b' }), why: 'NO wrong secret' }]);
-    expect(peerArgs(r)).toEqual([{ host: '10.0.0.1', port: 50551, secret: 'a'.repeat(64), weight: 1100 }]);
+    expect(r.skipped).toEqual([expect.objectContaining({ peer: expect.objectContaining({ id: 'b' }), why: 'NO wrong secret' })]);
+    expect(peerArgs(r)).toEqual([expect.objectContaining({ host: '10.0.0.1', port: 50551, secret: 'a'.repeat(64), weight: r.used[0].assignedMb })]);
   });
   it('throws toobig when the only peer big enough is unreachable', async () => {
     await expect(plan(model(1000), 1000, 5, [peer('a', '10.0.0.1', 8000, 30)], false)).rejects.toThrow('toobig');
@@ -153,31 +151,32 @@ describe('planSplit', () => {
     expect(r.skipped).toEqual([]);
     expect(r.used[0]).toMatchObject({ id: 'a', host: '10.0.0.9' });
   });
-  it('shares by speed when asked to although it fits here, capped by capacity', async () => {
+  it('shares when asked to although it fits here, each side within its capacity', async () => {
     mockGate.answers = { '10.0.0.1': null };
-    // need 1100; phone bw 30 cap 2800, peer bw 10 cap 750 → 825 / 275
     const r = await plan(model(1000), 4000, 30, [peer('a', '10.0.0.1', 1000, 10)], true);
     expect(r.fitsAlone).toBe(true);
-    expect(r.localMb).toBe(825);
-    expect(r.used[0].assignedMb).toBe(275);
-    // a peer whose share would overflow its capacity: the overflow comes back here
+    expect(r.used).toHaveLength(1);
+    expect(r.localMb).toBeGreaterThan(r.used[0].assignedMb); // this phone is the faster one
+    expect(r.used[0].assignedMb).toBeLessThanOrEqual(Math.round(1000 * WORKER_SHARE));
+    expect(total(r)).toBe(r.needMb);
+    // a peer whose share would overflow its capacity: the overflow stays here
     const r2 = await plan(model(2000), 8000, 10, [peer('a', '10.0.0.1', 400, 30)], true);
-    expect(r2.used[0].assignedMb).toBe(300); // 400 × 0.75
-    expect(r2.localMb).toBe(2200 - 300);
+    expect(r2.used[0].assignedMb).toBeLessThanOrEqual(300); // 400 × 0.75
+    expect(total(r2)).toBe(r2.needMb);
   });
-  it('keeps the output layer here: this phone is in the plan unless the peers hold it all', async () => {
+  it('keeps everything here when it fits and sharing was not asked for', async () => {
     mockGate.answers = { '10.0.0.1': null };
     const r = await plan(model(1000), 4000, 30, [peer('a', '10.0.0.1', 1000, 10)], false);
     expect(r.used).toEqual([]);
-    expect(r.localMb).toBe(1100);
+    expect(r.localMb).toBe(r.needMb);
     expect(peerArgs(r)).toEqual([]);
   });
-  it('defaults an unknown bandwidth to 4 and an unknown ram to 2000 mb', async () => {
+  it('defaults an unknown bandwidth and an unknown ram (2000 mb)', async () => {
     mockGate.answers = { '10.0.0.1': null };
     const r = await plan(model(1000), 2000, 0, [{ ...peer('a', '10.0.0.1', 0, 0), ram: null, bw: null }], true);
-    // both at bw 4: half each, the peer capped at 2000 × 0.75 = 1500
-    expect(r.localMb).toBe(550);
-    expect(r.used[0].assignedMb).toBe(550);
+    expect(r.used).toHaveLength(1);
+    expect(r.used[0].assignedMb).toBeLessThanOrEqual(2000 * WORKER_SHARE);
+    expect(total(r)).toBe(r.needMb);
     expect(r.totalMb).toBe(Math.round(2000 * LOCAL_SHARE + 2000 * WORKER_SHARE));
   });
 });

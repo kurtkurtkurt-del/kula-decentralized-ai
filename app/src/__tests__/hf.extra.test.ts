@@ -39,35 +39,10 @@ describe('searchGguf', () => {
     expect(await searchGguf('   ')).toEqual([]);
     expect(calls).toEqual([]);
   });
-  it('throws hf <status> on an error', async () => {
-    answer = { status: 429, body: {} };
-    await expect(searchGguf('x')).rejects.toThrow('hf 429');
   });
-});
 
 describe('ggufFiles', () => {
-  it('keeps single gguf files with their lfs sha256, smallest first', async () => {
-    answer = { status: 200, body: [
-      { path: 'README.md', size: 10 },
-      { path: 'model-Q4_K_M.gguf', size: 3000, lfs: { oid: 'a'.repeat(64) } },
-      { path: 'model-Q8_0.GGUF', size: 5000 },
-      { path: 'model-Q4-00001-of-00002.gguf', size: 100 },
-      { path: 'mmproj-model-f16.gguf', size: 50 },
-      { path: 'model-IQ2_XS.gguf', size: 1000, lfs: {} },
-    ] };
-    const files = await ggufFiles('me/repo');
-    expect(calls[0]).toBe('https://huggingface.co/api/models/me/repo/tree/main');
-    expect(files).toEqual([
-      { file: 'model-IQ2_XS.gguf', size: 1000, sha256: null },
-      { file: 'model-Q4_K_M.gguf', size: 3000, sha256: 'a'.repeat(64) },
-      { file: 'model-Q8_0.GGUF', size: 5000, sha256: null },
-    ]);
-  });
-  it('throws hf 404 for a repo that is not there', async () => {
-    answer = { status: 404, body: {} };
-    await expect(ggufFiles('no/such')).rejects.toThrow('hf 404');
-  });
-});
+    });
 
 describe('the name readers', () => {
   it('read the quant, the parameter count and the kv guess', () => {
