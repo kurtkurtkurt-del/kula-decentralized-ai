@@ -33,7 +33,13 @@ major'ları hariç) günceller.
 **Yerelde doğrulananlar (bu kutuda):** `actionlint` 1.7.7 üç workflow'u temiz geçti (shellcheck kurulamadı,
 `act` yok). app: tsc ✓, lint ✓ (0 hata, 7 uyarı), jest 68/68 ✓, passport:check ✓. kula-node: 28/28 ✓.
 `backend/tools/gate.mjs`: GATE PASS (backend 40 s, 7 katman). audit-jvm gradle: bu kutunun proxy'si Maven
-Central'a 429 veriyor, kotlin derleyici inemedi — yerelde koşturulamadı; CI'daki sonucu aşağıda.
+Central'a 429 veriyordu; 6. denemede indi, 21/21 ✓.
+
+**CI turları:** 1. tur (`7ac35f5`): app ✓, node 20/22 ✓, gate ✓, audit-jvm ✗ — `AuditorGateTest.replayAndClock…`
+satır 61: beklenen `connect,end,reject,reject,connect,end` sırası bozuk. Sebep testte: gate önce `onEvent(end)`
+çağırıp sonra defter satırını yazıyor; test callback'i bekleyip hemen sonraki hello'yu attığı için yavaş runner'da
+`reject` satırı `end`'den önce düşüyor (Mac'te hiç görünmedi). Düzeltme yalnız testte (`waitForLines`: her
+hello'dan sonra defter satır sayısını bekle); Gate.kt değişmedi. Yerelde 21/21 ✓. 2. tur aşağıda.
 
 ## bütünleştirme (5.11 sabaha karşı, cloud oturumu, dal `claude/integrate-night`)
 

@@ -32,6 +32,11 @@ class AuditorGateTest {
     while (System.currentTimeMillis() < deadline && !cond()) Thread.sleep(20)
   }
 
+  // the gate answers the client first and writes the ledger line after, on the connection's
+  // thread: between two hellos, wait for the line, not for the answer (a slow ci runner lets
+  // the next connection's line land first otherwise)
+  private fun waitForLines(auditor: Auditor, n: Int) = waitFor { auditor.summary(100).size >= n }
+
   @Test fun replayAndClockAreRefusedAndTheLedgerRecordsTheSession() {
     val echo = ServerSocket(0, 1, InetAddress.getByName("127.0.0.1"))
     Thread { while (true) { val s = echo.accept(); Thread { runCatching { s.getInputStream().copyTo(s.getOutputStream()) }; s.close() }.start() } }.apply { isDaemon = true }.start()
@@ -48,14 +53,17 @@ class AuditorGateTest {
       val nonce = "00112233445566778899aabbccddeeff"
       // first use passes, the handshake completes and the connection ends when we close
       assertTrue(hello(port, secret, nonce, now + 1000).startsWith("OK "))
-      waitFor { events.count { it.kind == "end" } == 1 }
+      waitForLines(auditor, 2)
       // the same nonce again is a replay
       assertEquals("NO replay", hello(port, secret, nonce))
+      waitForLines(auditor, 3)
       // a clock two minutes and a bit off
       assertEquals("NO clock", hello(port, secret, "ffeeddccbbaa99887766554433221100", now + 130_000))
+      waitForLines(auditor, 4)
       // the plain v1 three-field hello still works (and the existing client does it)
       assertEquals(null, Gate.probe("127.0.0.1", port, secret, "rpc"))
       waitFor { events.count { it.kind == "end" } == 2 }
+      waitForLines(auditor, 6)
       val lines = auditor.summary(100)
       val kinds = lines.map { it.getString("kind") }
       assertEquals(listOf("connect", "end", "reject", "reject", "connect", "end"), kinds)
