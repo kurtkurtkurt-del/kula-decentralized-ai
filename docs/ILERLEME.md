@@ -39,7 +39,14 @@ Central'a 429 veriyordu; 6. denemede indi, 21/21 ✓.
 satır 61: beklenen `connect,end,reject,reject,connect,end` sırası bozuk. Sebep testte: gate önce `onEvent(end)`
 çağırıp sonra defter satırını yazıyor; test callback'i bekleyip hemen sonraki hello'yu attığı için yavaş runner'da
 `reject` satırı `end`'den önce düşüyor (Mac'te hiç görünmedi). Düzeltme yalnız testte (`waitForLines`: her
-hello'dan sonra defter satır sayısını bekle); Gate.kt değişmedi. Yerelde 21/21 ✓. 2. tur aşağıda.
+hello'dan sonra defter satır sayısını bekle); Gate.kt değişmedi. Yerelde 21/21 ✓. **2. tur (`fcde2eb`): altı iş de yeşil** (app, node 20, node 22, audit-jvm, gate, summary) —
+https://github.com/kurtkurtkurt-del/kula-decentralized-ai/actions/runs/41988114488
+
+**Kalan / sana:** apk.yml bu oturumda koşturulmadı (yalnız elle ya da `v*` etiketiyle tetiklenir; ilk `full` koşusu
+~1–2 saat, `min` ile başla: Actions → apk → Run workflow → profiles: min). İmza için repo secret'ları:
+`KULA_KEYSTORE_B64` (`base64 -i kula.keystore`), `KULA_KEYSTORE_PASSWORD`, `KULA_KEY_ALIAS`, `KULA_KEY_PASSWORD`;
+yoksa apk debug imzalı çıkar ve koşu uyarı taşır. Gradle cache yalnız main'de yazılır (`cache-read-only`); dal
+release'e/main'e alınınca ısınır. `claude/ci` release ve main'e dokunmadı, PR açılmadı.
 
 ## bütünleştirme (5.11 sabaha karşı, cloud oturumu, dal `claude/integrate-night`)
 
