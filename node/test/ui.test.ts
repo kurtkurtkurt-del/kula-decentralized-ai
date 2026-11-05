@@ -299,6 +299,10 @@ test('mode phone end to end: pair by hand through a real tls gate, the phone fet
     const st = await (await fetch(`${ui.url}api/status`)).json();
     assert.ok(st.plan.some((l: string) => /runs on pixel; this computer only carries the chat/.test(l)), st.plan.join('\n'));
     assert.ok(st.decisions.some((d: any) => /tiny 0\.1b ready on pixel/i.test(d.text)));
+    // a probe asks the phone what it has loaded (its /status): the connect sheet offers that first
+    assert.equal(row.holds, null);
+    const probed = await (await post(`${ui.url}api/peers/probe`, ui.port, { ids: [row.id] })).json();
+    assert.equal(probed.find((p: any) => p.id === row.id).holds, 'tiny-q8_0.gguf');
 
     // chat: tokens one by one, then done with the numbers and the device
     const chat = await sseAll(await post(`${ui.url}api/chat`, ui.port, { messages: [{ role: 'system', content: 'be kind' }, { role: 'user', content: 'hi' }], maxTokens: 64, temperature: 0.2 }));

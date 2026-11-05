@@ -339,12 +339,31 @@ the phone does the work, the computer only carries the words.
    (`192.168.1.20:50551`) and a one-time code under it.
 2. **Computer:** `kula-node ui` (from the repo: `cd node && npm run dev -- ui`). The page opens
    at `http://127.0.0.1:50590/<random>/`; `--port` moves it, `--no-open` keeps the browser shut.
-3. **connect → add a device.** Either *type it* (the address and the 16-character code; the
-   first 16 of the certificate too, to be sure), or *paste a code* (the qr text, a base64url
-   code, `host:port:secret`, or a six digit relay code with its relay), or *scan the qr* with
-   this computer's camera (Chromium, where `BarcodeDetector` exists). One tls handshake with the
-   code pairs the two for good (the code's proof covers both certificates).
-4. **Pick a model and a mode, load.** *on the phone* (the main use): the phone is told the
+3. **connect** asks one thing at a time (`node/src/ui/static/wizard.js` decides the steps,
+   `test/wizard.test.ts` walks them). First: *usb cable* or *same wi-fi* (or the phone's
+   hotspot); the last answer is remembered.
+   - **cable:** "plug the phone in" follows `adb devices` live: no adb → where to get Google's
+     platform-tools and how to turn on usb debugging; unauthorized → "tap allow on the phone";
+     a ready phone → kula forwards a port to it over adb, opens its share screen with
+     `start=1` and shows the progress; a phone that does not know this computer yet → "type the
+     code you see on the phone" → connected.
+   - **wi-fi:** "open share this phone and press start" → *it's on* → the kula phones this
+     computer hears on the network (mdns `_kula._tcp`; `GET discover` gives names and addresses,
+     never a secret), or *type its address* → the code (the certificate's first 16 optional, to
+     be sure). A phone that cannot be reached at all (host unreachable, timeout) leads to "this
+     network keeps devices apart" with *use the cable instead* or *try the phone's hotspot*.
+     One tls handshake with the code pairs the two for good (the code's proof covers both
+     certificates); a code works once, a wrong one means a new one on the phone.
+   - Coming back with a paired phone that answers, the sheet opens at the model; with a model
+     loaded it stays shut (connect opens it at the model; *connect another device* starts
+     over). *advanced* (bottom right) keeps the old one-page sheet: the cable list, *scan the
+     qr* (Chromium's `BarcodeDetector`), *paste a code* (the qr text, a base64url code,
+     `host:port:secret`, a six digit relay code with its relay), the device list.
+4. **Which model, how it runs, loading.** The model the phone has loaded (its `/status` at the
+   last probe) comes first, then the catalog with sizes and whether it fits on the phone; then
+   one tap on *on the phone* (recommended), *this computer*, *both, apart* or *split* (a card
+   that cannot work says why); the load shows the phone's download and closes the sheet when
+   the model is ready. *on the phone* (the main use): the phone is told the
    model's public Hugging Face url and sha256 from the catalog (`node/src/ui/catalog.ts`, a
    copy of `app/src/llm/catalog.ts`) and downloads it itself, so the worker's private-url rule
    never bites; a phone that already has the file starts at once. *apart*: every chosen device

@@ -107,6 +107,19 @@
     </button>
   </form>
   <div class="sheet-body">
+    <div class="wiz" id="wiz">
+      <div class="wiz-top">
+        <button type="button" class="icon wiz-back" id="wiz-back" aria-label="back">
+          <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M12.5 5 7.5 10l5 5"/></svg>
+        </button>
+        <ol class="wiz-dots" id="wiz-dots" aria-label="steps"></ol>
+      </div>
+      <div class="wiz-step" id="wiz-step" aria-live="polite"></div>
+      <div class="wiz-foot"><button type="button" class="link" id="wiz-advanced">advanced</button></div>
+    </div>
+
+    <div class="advanced" id="advanced" hidden>
+    <div class="row"><button type="button" class="link" id="wiz-steps">‹ back to the steps</button></div>
     <section class="block" id="cable-block">
       <div class="block-head"><h3>on a cable</h3><span class="hint" id="cable-note"></span></div>
       <div id="cable-list" class="peer-list" aria-live="polite"></div>
@@ -173,6 +186,7 @@
         <button type="button" class="primary" id="load">load</button>
       </div>
     </section>
+    </div>
   </div>
 </dialog>
 
