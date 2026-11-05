@@ -9,7 +9,7 @@ import { dmStart, why, type DmThread } from '@/data/dms';
 import type { FriendRow } from '@/data/friends';
 import { upperData, useLang } from '@/i18n';
 import { colors, fonts, radius } from '@/theme/tokens';
-import { brand } from '@/theme/layout';
+import { brand, MAX_WIDTH } from '@/theme/layout';
 import { isTestHandle } from '@/data/local/testPeople';
 import { connectStyles as s } from './styles';
 import { TestTag } from './TestTag';
@@ -107,8 +107,8 @@ const styles = StyleSheet.create({
   newMark: { width: 34, height: 34, borderRadius: 17, backgroundColor: colors.spot, alignItems: 'center', justifyContent: 'center' },
   newPlus: { fontFamily: fonts.medium, fontSize: 20, lineHeight: 22, color: colors.ink },
   newText: { fontFamily: fonts.medium, fontSize: 15, color: colors.paper },
-  scrim: { flex: 1, backgroundColor: 'rgba(31,26,20,0.4)' },
-  sheet: { backgroundColor: colors.ink, borderTopLeftRadius: radius.lg, borderTopRightRadius: radius.lg, borderTopWidth: 1, borderColor: colors.ink3, paddingHorizontal: brand.left, paddingTop: 18, gap: 12 },
+  scrim: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(31,26,20,0.4)' },
+  sheet: { marginTop: 'auto', alignSelf: 'center', width: '100%', maxWidth: MAX_WIDTH, backgroundColor: colors.ink, borderTopLeftRadius: radius.lg, borderTopRightRadius: radius.lg, borderTopWidth: 1, borderColor: colors.ink3, paddingHorizontal: brand.left, paddingTop: 18, gap: 12 },
   sheetTitle: { fontFamily: fonts.semibold, fontSize: 20, letterSpacing: -0.5, color: colors.paper },
   sheetList: { minHeight: 120 },
   count: { minWidth: 22, height: 22, paddingHorizontal: 6, borderRadius: 11, backgroundColor: colors.spot, color: colors.ink, fontFamily: fonts.semibold, fontSize: 11.5, lineHeight: 22, textAlign: 'center', overflow: 'hidden', marginRight: 8 },

@@ -19,7 +19,7 @@ import { load, unload, useEngine } from '@/llm/engine';
 import { defaultCtx, suggestCtx } from '@/llm/fit';
 import { localById, saveSettings, useLocalModels, usePeers, useSettings, type LocalModel, type Mode } from '@/llm/store';
 import { colors, fonts, radius } from '@/theme/tokens';
-import { brand } from '@/theme/layout';
+import { brand, MAX_WIDTH } from '@/theme/layout';
 
 // One model: its numbers, the context size, and "start", which asks how it should run,
 // every time (the user's wish, 4.11.2026): only this phone · apart (a copy per device, the
@@ -258,8 +258,8 @@ const styles = StyleSheet.create({
   err: { fontFamily: fonts.medium, fontSize: 13, color: colors.violet, marginTop: 14 },
   note: { fontFamily: fonts.regular, fontSize: 14, color: colors.mute },
   actions: { marginTop: 24, gap: 10 },
-  dim: { flex: 1, backgroundColor: 'rgba(255,255,255,0.6)' },
-  sheet: { backgroundColor: colors.ink, borderWidth: 1, borderBottomWidth: 0, borderColor: colors.ink3, borderTopLeftRadius: radius.lg, borderTopRightRadius: radius.lg, paddingHorizontal: brand.left, paddingTop: 12 },
+  dim: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(255,255,255,0.6)' },
+  sheet: { marginTop: 'auto', alignSelf: 'center', width: '100%', maxWidth: MAX_WIDTH, backgroundColor: colors.ink, borderWidth: 1, borderBottomWidth: 0, borderColor: colors.ink3, borderTopLeftRadius: radius.lg, borderTopRightRadius: radius.lg, paddingHorizontal: brand.left, paddingTop: 12 },
   head: { fontFamily: fonts.regular, fontSize: 11, letterSpacing: 1.4, color: colors.mute, marginBottom: 6 },
   cards: { maxHeight: 420 },
   cardsIn: { gap: 8, paddingTop: 4 },

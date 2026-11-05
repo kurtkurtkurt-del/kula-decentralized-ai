@@ -10,4 +10,4 @@ export const brand = {
 } as const;
 
 // The widest the app gets: on a tablet it is a centred column of this width (22.10.2026).
-export const MAX_WIDTH = 600;
+export const MAX_WIDTH = 720; // 6.11.2026: 600 → 720 for the galaxy tab s10 fe (about 800 dp wide upright)

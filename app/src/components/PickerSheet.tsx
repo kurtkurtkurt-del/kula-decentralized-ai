@@ -3,7 +3,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useLang } from '@/i18n';
 import { tapSelect } from '@/lib/haptics';
 import { colors, fonts, radius } from '@/theme/tokens';
-import { brand } from '@/theme/layout';
+import { brand, MAX_WIDTH } from '@/theme/layout';
 
 type Option = { id: string; label: string; extra?: string };
 type Props = {
@@ -57,8 +57,8 @@ export default function PickerSheet({ open, title, options, selected, onSelect, 
 }
 
 const styles = StyleSheet.create({
-  dim: { flex: 1, backgroundColor: 'rgba(255,255,255,0.6)' },
-  sheet: { backgroundColor: colors.ink, borderWidth: 1, borderBottomWidth: 0, borderColor: colors.ink3, borderTopLeftRadius: radius.lg, borderTopRightRadius: radius.lg, paddingHorizontal: brand.left, paddingTop: 12, maxHeight: '70%' },
+  dim: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(255,255,255,0.6)' },
+  sheet: { marginTop: 'auto', alignSelf: 'center', width: '100%', maxWidth: MAX_WIDTH, backgroundColor: colors.ink, borderWidth: 1, borderBottomWidth: 0, borderColor: colors.ink3, borderTopLeftRadius: radius.lg, borderTopRightRadius: radius.lg, paddingHorizontal: brand.left, paddingTop: 12, maxHeight: '70%' },
   head: { fontFamily: fonts.regular, fontSize: 11, letterSpacing: 1.4, color: colors.mute, marginBottom: 6 },
   list: { flexGrow: 0 },
   row: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 14, minHeight: 48, borderBottomWidth: 1, borderBottomColor: colors.ink3 },

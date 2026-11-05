@@ -12,7 +12,7 @@ import { voiceNative } from '@/voice/native';
 import { saveVoiceSettings } from '@/voice/settings';
 import { useTalk, type Banner } from '@/voice/useTalk';
 import { colors, fonts, night, radius } from '@/theme/tokens';
-import { brand } from '@/theme/layout';
+import { brand, MAX_WIDTH } from '@/theme/layout';
 
 // Talk mode (5.11.2026): speak with the phone's own model, hands-free, through the phone or
 // any headset (later the glasses clip). A calm dark screen: one large circle that breathes
@@ -226,7 +226,7 @@ const styles = StyleSheet.create({
   barText: { fontFamily: fonts.medium, fontSize: 12.5, color: night.star },
   off: { opacity: 0.35 },
   pressed: { opacity: 0.7 },
-  dim: { flex: 1, backgroundColor: 'rgba(0,0,0,0.45)' },
-  sheet: { maxHeight: '82%', backgroundColor: colors.ink, borderTopLeftRadius: radius.lg, borderTopRightRadius: radius.lg, paddingHorizontal: brand.left, paddingTop: 18 },
+  dim: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.45)' },
+  sheet: { marginTop: 'auto', alignSelf: 'center', width: '100%', maxWidth: MAX_WIDTH, maxHeight: '82%', backgroundColor: colors.ink, borderTopLeftRadius: radius.lg, borderTopRightRadius: radius.lg, paddingHorizontal: brand.left, paddingTop: 18 },
   sheetHead: { fontFamily: fonts.regular, fontSize: 10.5, letterSpacing: 1.4, color: colors.meta, marginBottom: 4 },
 });

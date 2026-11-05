@@ -1,8 +1,9 @@
 import { useEffect } from 'react';
 import { Stack } from 'expo-router';
-import { Platform, Text, View } from 'react-native';
+import { Platform, Text, View, useWindowDimensions } from 'react-native';
 import { NavigationBar } from 'expo-navigation-bar';
 import * as SplashScreen from 'expo-splash-screen';
+import * as ScreenOrientation from 'expo-screen-orientation';
 import Constants, { ExecutionEnvironment } from 'expo-constants';
 import {
   useFonts,
@@ -61,6 +62,15 @@ function RootLayout() {
     if (Platform.OS === 'android') NavigationBar.setHidden(true);
   }, []);
 
+  // Phones stay upright; a tablet turns (6.11.2026, the galaxy tab s10 fe). app.json allows
+  // every orientation, so a phone (shortest side under 600 dp) is locked to portrait here.
+  const { width: winW, height: winH } = useWindowDimensions();
+  const tablet = Math.min(winW, winH) >= 600;
+  useEffect(() => {
+    if (Platform.OS === 'web') return;
+    (tablet ? ScreenOrientation.unlockAsync() : ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT_UP)).catch(() => {});
+  }, [tablet]);
+
   // Same ink background as the splash while fonts load.
   if (!loaded) return <View style={{ flex: 1, backgroundColor: colors.ink }} />;
 
@@ -70,8 +80,8 @@ function RootLayout() {
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
     {/* a phone-shaped column, centred on a tablet (theme/layout.ts MAX_WIDTH) */}
-    <View style={{ flex: 1, backgroundColor: colors.ink, alignItems: 'center' }}>
-    <View style={{ flex: 1, width: '100%', maxWidth: MAX_WIDTH }}>
+    <View style={{ flex: 1, backgroundColor: winW > MAX_WIDTH ? colors.ink2 : colors.ink, alignItems: 'center' }}>
+    <View style={{ flex: 1, width: '100%', maxWidth: MAX_WIDTH, backgroundColor: colors.ink, ...(winW > MAX_WIDTH ? { borderLeftWidth: 1, borderRightWidth: 1, borderColor: colors.ink3 } : null) }}>
     <AuthProvider>
     <LanguageProvider>
       <Stack
