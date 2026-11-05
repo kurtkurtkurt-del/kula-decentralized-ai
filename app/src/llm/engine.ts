@@ -104,7 +104,7 @@ export type Reply = { tokens: number; ms: number; firstMs: number; tps: number; 
 export function chatLocal(messages: Message[], onToken: (t: string) => void, opts: { maxTokens: number; temperature: number; reset?: boolean }): Promise<Reply> & { stop: () => void } {
   const llama = native();
   let id = -1;
-  const p = new Promise<Reply>((resolve) => {
+  const p = new Promise<Reply>((resolve, reject) => {
     const subs = [
       llama.addListener('onToken', (e) => {
         if (e.id === id) onToken(e.text);
@@ -113,7 +113,9 @@ export function chatLocal(messages: Message[], onToken: (t: string) => void, opt
         if (e.id !== id) return;
         subs.forEach((s) => s.remove());
         set({ generating: false });
-        if (e.error) throw new Error(e.error);
+        // reject, not throw: a throw inside the listener never reached the caller and the
+        // promise stayed open for good (the night's loop on this phone would hang on it)
+        if (e.error) return reject(new Error(e.error));
         resolve({ tokens: e.tokens, ms: e.ms, firstMs: e.firstMs, tps: e.tps, stopped: e.stopped, device: thisName() });
       }),
     ];
