@@ -1,10 +1,14 @@
 import { llama, native, type PeerArg, type PeerFound } from '@/llm/native';
 import { peers as savedPeers, touchPeer, type LocalModel, type Mode, type Peer } from '@/llm/store';
+import { effectiveBw } from '@/llm/bench';
+import { lastPassport } from '@/data/passport';
 
 // The planner (after PrivateLM's cluster_service.dart, 31.10.2026): before a load, which
 // peers answer, how the model is shared between them, and whether sharing is worth it.
 // Every endpoint is probed through the gate first: llama.cpp aborts the whole app on an
-// unreachable worker, so only peers that answered are handed to the native side.
+// unreachable worker, so only peers that answered are handed to the native side. Shares
+// follow speed: a device's advertised memory bandwidth, or, when a bench run measured it
+// with this model (src/llm/bench.ts), the bandwidth that explains its measured tok/s.
 export type Plan = {
   mode: Mode;
   used: (Peer & { assignedMb: number })[];
@@ -82,8 +86,8 @@ export async function planSplit(model: LocalModel, localFreeMb: number, localBw:
       }
     }
   }
-  const local = { capMb: localFreeMb * LOCAL_SHARE, bw: localBw || 4 };
-  const workers = probed.ok.map((p) => ({ peer: p, capMb: (p.ram ?? 2000) * WORKER_SHARE, bw: p.bw ?? 4 }));
+  const local = { capMb: localFreeMb * LOCAL_SHARE, bw: effectiveBw(lastPassport()?.device_id, model.file, model.size, localBw || 4) };
+  const workers = probed.ok.map((p) => ({ peer: p, capMb: (p.ram ?? 2000) * WORKER_SHARE, bw: effectiveBw(p.id, model.file, model.size, p.bw ?? 4) }));
   const totalMb = local.capMb + workers.reduce((a, w) => a + w.capMb, 0);
   if (needMb > totalMb) throw new Error('toobig');
   const fitsAlone = needMb <= local.capMb;

@@ -174,11 +174,11 @@ export function pickModel(): LocalModel | null {
   const all = [...localModels()].sort((a, b) => b.size - a.size);
   const p = lastPassport();
   const ctx = settings().ctx;
-  return all.find((m) => fitOn(p, { size: m.size, kv_mb_per_1k: m.kv_mb_per_1k, ctx }).verdict !== 'no') ?? all[0] ?? null;
+  return all.find((m) => fitOn(p, { size: m.size, kv_mb_per_1k: m.kv_mb_per_1k, ctx, file: m.file }).verdict !== 'no') ?? all[0] ?? null;
 }
 
 async function loadApartOrAlone(model: LocalModel) {
-  const ctx = Math.min(settings().ctx, defaultCtx(fitOn(lastPassport(), { size: model.size, kv_mb_per_1k: model.kv_mb_per_1k, ctx: settings().ctx })));
+  const ctx = Math.min(settings().ctx, defaultCtx(fitOn(lastPassport(), { size: model.size, kv_mb_per_1k: model.kv_mb_per_1k, ctx: settings().ctx, file: model.file })));
   const ps = peers();
   if (ps.length) {
     try {

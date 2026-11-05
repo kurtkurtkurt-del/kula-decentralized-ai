@@ -1,16 +1,20 @@
 import { COMBINE, type Passport } from '@/passport/contract';
+import { effectiveBw, measuredTps } from '@/llm/bench';
 
 // Does this model fit this phone, and how fast would it go? Pure functions over the
 // passport (src/data/passport.ts) and a model's size, so the catalog can be sorted before
 // anything is downloaded. Numbers follow PrivateLM's pre-load check (file + KV + overhead)
-// and the passport's own budget rule (app_mem_cap, ram_free × 0.8).
-export type FitInput = { size: number; kv_mb_per_1k: number; ctx: number };
+// and the passport's own budget rule (app_mem_cap, ram_free × 0.8). When a bench run
+// (src/llm/bench.ts) measured this device with this model (`file` names it), the measured
+// tok/s replaces the bandwidth formula and `measured` says so.
+export type FitInput = { size: number; kv_mb_per_1k: number; ctx: number; file?: string };
 export type Fit = {
   needMb: number;          // file + kv + overhead at this ctx
   haveMb: number;          // what this device can give a model
   verdict: 'fits' | 'tight' | 'no';
   maxCtx: number;          // the largest ctx (power of two ≥ 512) that fits, 0 when none
-  tps: { low: number; high: number } | null; // from the passport's bandwidth
+  tps: { low: number; high: number } | null; // measured, else from the passport's bandwidth
+  measured: boolean;       // tps comes from a bench run of this device with this model
 };
 
 export const OVERHEAD_MB = 300;
@@ -38,12 +42,14 @@ export function fitOn(p: Passport | null, m: FitInput): Fit {
   let maxCtx = 0;
   for (let c = 512; c <= m.ctx * 4 && c <= 32768; c *= 2) if (needMb(m, c) <= have) maxCtx = c;
   const verdict: Fit['verdict'] = need <= have * 0.85 ? 'fits' : need <= have ? 'tight' : 'no';
+  const meas = measuredTps(p?.device_id, m.file);
+  if (meas) return { needMb: need, haveMb: have, verdict, maxCtx, tps: { low: r1(meas.tps * COMBINE.hot), high: r1(meas.tps) }, measured: true };
   const bw = p ? Number(p.mem_bw_read_gbs) || Number(p.mem_bw_gbs) || 0 : 0;
   const gb = m.size / 1024 ** 3;
   // a token streams the weights once: tok/s ≈ bandwidth × efficiency / size; hot phones at half
   const high = bw > 0 ? r1((bw * COMBINE.efficiency) / gb) : 0;
   const tps = high > 0 ? { low: r1(high * COMBINE.hot), high } : null;
-  return { needMb: need, haveMb: have, verdict, maxCtx, tps };
+  return { needMb: need, haveMb: have, verdict, maxCtx, tps, measured: false };
 }
 
 /** Across devices (split mode): budgets add up; speed is the slowest link plus the hops. */
@@ -53,14 +59,17 @@ export function fitTogether(ps: Passport[], m: FitInput): Fit & { shares: { name
   let maxCtx = 0;
   for (let c = 512; c <= m.ctx * 4 && c <= 32768; c *= 2) if (needMb(m, c) <= have) maxCtx = c;
   const verdict: Fit['verdict'] = need <= have * 0.85 ? 'fits' : need <= have ? 'tight' : 'no';
-  // fill the fastest device first, up to what it can hold (PrivateLM's _fillFastestFirst)
-  const sorted = [...ps].sort((a, b) => bwOf(b) - bwOf(a));
+  // fill the fastest device first, up to what it can hold (PrivateLM's _fillFastestFirst);
+  // a device measured with this model is as fast as it really was
+  const speed = (p: Passport) => effectiveBw(p.device_id, m.file, m.size, bwOf(p));
+  const measured = ps.some((p) => !!measuredTps(p.device_id, m.file));
+  const sorted = [...ps].sort((a, b) => speed(b) - speed(a));
   let left = m.size / MB;
   const shares: { name: string; mb: number; bw: number }[] = [];
   for (const p of sorted) {
     const mb = Math.min(haveMb(p) * 0.9, left);
     if (mb <= 0) continue;
-    shares.push({ name: p.device, mb: Math.round(mb), bw: bwOf(p) });
+    shares.push({ name: p.device, mb: Math.round(mb), bw: speed(p) });
     left -= mb;
     if (left <= 0) break;
   }
@@ -69,7 +78,7 @@ export function fitTogether(ps: Passport[], m: FitInput): Fit & { shares: { name
     const cool = shares.reduce((a, s) => a + s.mb / 1024 / (s.bw * COMBINE.efficiency), 0) + Math.max(0, shares.length - 1) * COMBINE.hopS;
     tps = { low: r1(COMBINE.hot / cool), high: r1(1 / cool) };
   }
-  return { needMb: need, haveMb: have, verdict, maxCtx, tps, shares: shares.map(({ name, mb }) => ({ name, mb })) };
+  return { needMb: need, haveMb: have, verdict, maxCtx, tps, measured, shares: shares.map(({ name, mb }) => ({ name, mb })) };
 }
 
 const bwOf = (p: Passport) => Number(p.mem_bw_read_gbs) || Number(p.mem_bw_gbs) || 0;

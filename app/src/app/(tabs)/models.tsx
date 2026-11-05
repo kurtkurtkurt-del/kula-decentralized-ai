@@ -59,8 +59,8 @@ export default function ModelsScreen() {
 
   const rows = useMemo(() => {
     const list = CATALOG.map((m) => {
-      const f = fitOn(passport, { size: m.size, kv_mb_per_1k: m.kv_mb_per_1k, ctx: 2048 });
-      const tog = pool.length > 1 && f.verdict === 'no' ? fitTogether(pool, { size: m.size, kv_mb_per_1k: m.kv_mb_per_1k, ctx: 2048 }) : null;
+      const f = fitOn(passport, { size: m.size, kv_mb_per_1k: m.kv_mb_per_1k, ctx: 2048, file: m.file });
+      const tog = pool.length > 1 && f.verdict === 'no' ? fitTogether(pool, { size: m.size, kv_mb_per_1k: m.kv_mb_per_1k, ctx: 2048, file: m.file }) : null;
       return { m, f, tog, rank: f.verdict === 'fits' ? 0 : f.verdict === 'tight' ? 1 : tog && tog.verdict !== 'no' ? 2 : 3 };
     });
     // without a passport nothing fits on paper: small first, so the first download is a sure one
@@ -159,7 +159,7 @@ export default function ModelsScreen() {
                 <Text style={styles.blurb}>{m.blurb[lang as 'en' | 'de' | 'tr'] ?? m.blurb.en}</Text>
                 <View style={styles.badges}>
                   <Badge fit={f} together={tog} />
-                  {f.tps ? <Text style={styles.tps}>{f.tps.low}–{f.tps.high} tok/s</Text> : null}
+                  {f.tps ? <Text style={styles.tps}>{f.tps.low}–{f.tps.high} tok/s{f.measured ? ' ✓' : ''}</Text> : null}
                   <Pressable onPress={() => Linking.openURL(m.license_url)} hitSlop={8}><Text style={styles.link}>{t('models.license')} ↗</Text></Pressable>
                 </View>
               </View>

@@ -49,8 +49,8 @@ export default function ModelScreen() {
   const ctx = settings.ctx;
 
   const pool: Passport[] = useMemo(() => [...(passport ? [passport] : []), ...linked.map((l) => l.data)], [passport, linked]);
-  const fit = model ? fitOn(passport, { size: model.size, kv_mb_per_1k: model.kv_mb_per_1k, ctx }) : null;
-  const together = model && pool.length > 1 ? fitTogether(pool, { size: model.size, kv_mb_per_1k: model.kv_mb_per_1k, ctx }) : null;
+  const fit = model ? fitOn(passport, { size: model.size, kv_mb_per_1k: model.kv_mb_per_1k, ctx, file: model.file }) : null;
+  const together = model && pool.length > 1 ? fitTogether(pool, { size: model.size, kv_mb_per_1k: model.kv_mb_per_1k, ctx, file: model.file }) : null;
   const running = !!model && engine.model?.id === model.id && !!engine.load;
 
   if (!model) {
@@ -87,7 +87,7 @@ export default function ModelScreen() {
     [t('model.size'), `${gb(model.size)} · ${model.params_b}B · ${model.quant}`],
     [t('models.license'), model.license ?? '—'],
     [t('model.ctx'), `${ctx} · ${t('models.fits').toLowerCase()} ≤ ${fit?.maxCtx || '—'}`],
-    [t('model.speed'), fit?.tps ? `${fit.tps.low}–${fit.tps.high} tok/s` : '—'],
+    [fit?.measured ? t('model.speedMeasured') : t('model.speed'), fit?.tps ? `${fit.tps.low}–${fit.tps.high} tok/s` : '—'],
   ];
 
   return (
