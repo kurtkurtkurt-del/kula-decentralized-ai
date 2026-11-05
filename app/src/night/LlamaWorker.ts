@@ -94,7 +94,11 @@ export class LlamaWorker implements NightWorker {
       const model = pickModel();
       if (!model) throw new Error('nomodel');
       await loadApartOrAlone(model);
-      if (!this.alive(run)) return;
+      if (!this.alive(run)) {
+        // stop() came while the model was loading: its unload ran too early, so once more
+        void unload().catch(() => {});
+        return;
+      }
       const devs = engine().devices;
       this.s = { ...this.s, model: model.name, devices: devs.map((d) => ({ id: d.id, name: d.name, tokens: 0, units: 0 })) };
       this.tell();
