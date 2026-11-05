@@ -35,6 +35,26 @@ class LedgerTest {
     assertEquals(0, Ledger.verify(f, other.publicKey, other.alg))
   }
 
+  @Test fun clearRemovesEveryFileAndRestartsTheChain() {
+    val d = dir()
+    val f = File(d, "ledger.jsonl")
+    var t = 1_700_000_000_000L
+    val l = Ledger(f, key, maxBytes = 600, now = { t++ })
+    for (i in 0 until 12) l.append("health", null, mapOf("throttled" to false, "batteryC" to 30, "batteryPct" to 80))
+    File(d, "other.jsonl").writeText("stays\n")
+    assertTrue(d.list()!!.size > 2)
+    assertTrue(l.clear())
+    assertEquals(listOf("other.jsonl"), d.list()!!.toList())
+    assertEquals(Ledger.GENESIS, l.lastHash)
+    // a ledger cleared behind a live instance (the worker process keeps one) also restarts
+    val live = Ledger(File(d, "live.jsonl"), key)
+    live.append("connect", "10.0.0.1", mapOf("channel" to "rpc"))
+    Ledger.clear(live.file)
+    val line = live.append("connect", "10.0.0.2", mapOf("channel" to "rpc"))
+    assertTrue(line.contains("\"prev\":\"${Ledger.GENESIS}\""))
+    assertEquals(-1, Ledger.verify(live.file, key.publicKey, key.alg))
+  }
+
   @Test fun rotationLinksFiles() {
     val d = dir()
     val f = File(d, "ledger.jsonl")

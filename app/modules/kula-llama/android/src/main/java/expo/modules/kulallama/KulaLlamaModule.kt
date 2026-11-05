@@ -204,11 +204,12 @@ class KulaLlamaModule : Module() {
         "paired" to s.optInt("paired"),
       )
     }
-    AsyncFunction("gateLedger") { limit: Int ->
-      // beyin's signed ledger (one JSON string per line); the old plain file is read while one is still around
-      val ledger = WorkerService.ledgerFile(context)
-      if (ledger.exists()) expo.modules.kulallama.audit.Ledger.tail(ledger, limit)
-      else File(context.filesDir, "kula_gate_ledger.jsonl").takeIf { it.exists() }?.readLines()?.takeLast(limit) ?: emptyList()
+    AsyncFunction("gateLedger") { limit: Int -> auditTail(limit) }
+    // settings → beyin audit: the same tail under its own name, and the one way to empty the ledger
+    AsyncFunction("auditLedger") { limit: Int -> auditTail(limit) }
+    AsyncFunction("clearAuditLedger") {
+      File(context.filesDir, "kula_gate_ledger.jsonl").delete()
+      expo.modules.kulallama.audit.Ledger.clear(WorkerService.ledgerFile(context))
     }
     AsyncFunction("keepScreenOn") { on: Boolean ->
       val activity = appContext.currentActivity
@@ -228,6 +229,13 @@ class KulaLlamaModule : Module() {
       }
       batteryUnrestricted()
     }
+  }
+
+  /** beyin's signed ledger, newest [limit] lines oldest first; the old plain gate file is read while one is still around. */
+  private fun auditTail(limit: Int): List<String> {
+    val ledger = WorkerService.ledgerFile(context)
+    if (ledger.exists()) return expo.modules.kulallama.audit.Ledger.tail(ledger, limit)
+    return File(context.filesDir, "kula_gate_ledger.jsonl").takeIf { it.exists() }?.readLines()?.takeLast(limit) ?: emptyList()
   }
 
   private fun batteryUnrestricted(): Boolean {

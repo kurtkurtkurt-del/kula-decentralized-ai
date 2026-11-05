@@ -43,6 +43,10 @@ type Module = {
   stopWorker(): Promise<void>;
   workerStatus(): Promise<WorkerStatus>;
   gateLedger(limit: number): Promise<string[]>;
+  /** beyin's ledger: the newest `limit` lines, oldest first (src/llm/audit.ts parses them). */
+  auditLedger(limit: number): Promise<string[]>;
+  /** Deletes the ledger and its rotated files; the worker starts a new chain. */
+  clearAuditLedger(): Promise<boolean>;
   keepScreenOn(on: boolean): Promise<void>;
   requestBatteryUnrestricted(): Promise<boolean>;
   addListener(event: 'onToken', fn: (e: { id: number; text: string }) => void): EventSubscription;
