@@ -59,6 +59,8 @@ interface DeviceKey {
  */
 class SoftwareKey private constructor(override val alg: String, private val pair: KeyPair) : DeviceKey {
   override val publicKey: ByteArray get() = pair.public.encoded
+  /** The JCA pair itself: the gate's TLS identity (GateIdentity) uses a P-256 device key directly. */
+  val keyPair: KeyPair get() = pair
 
   override fun sign(bytes: ByteArray): ByteArray =
     Signature.getInstance(DeviceKey.jcaNames(alg).first).apply { initSign(pair.private); update(bytes) }.sign()

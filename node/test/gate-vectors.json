@@ -25,5 +25,38 @@
       "hmac_c": "5279d35641c975d3004599475296e058347098772fcc7fefc467668c550140f3",
       "hmac_s": "a67bfde1edf810727d191dfb3f78a4d53fe157903cb8df03f847fddcb66f2df3"
     }
-  ]
+  ],
+  "note_v2": "kula gate v2 (tls, docs/GATE.md): proof_c = HMAC-SHA256(pin, nonce_c|nonce_s|channel|fp_s|fp_c), proof_s = HMAC-SHA256(pin, nonce_s|nonce_c|channel|fp_s|fp_c); fp_* are lowercase hex sha256 of the certificates' der. Shared by Gate.kt (GateTlsTest.kt) and node/src/gate.ts.",
+  "v2": [
+    {
+      "pin": "0123456789abcdef",
+      "nonce_c": "00112233445566778899aabbccddeeff",
+      "nonce_s": "ffeeddccbbaa99887766554433221100",
+      "channel": "rpc",
+      "fp_s": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "fp_c": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "proof_c": "8bee07b2bc42cfaeaa543ea9c52159845ba6e7180cf0007c51bdd4382661ee57",
+      "proof_s": "1d2d060f84814b2e743cb88e147ad28c848a55b9e8d7f86967e430c57ee75bfd"
+    },
+    {
+      "pin": "kula-pin",
+      "nonce_c": "0123456789abcdef0123456789abcdef",
+      "nonce_s": "fedcba9876543210fedcba9876543210",
+      "channel": "api",
+      "fp_s": "043a718774c572bd8a25adbeb1bfcd5c0256ae11cecf9f9c3f925d0e52beaf89",
+      "fp_c": "2e7d2c03a9507ae265ecf5b5356885a53393a2029d241394997265a1a25aefc6",
+      "proof_c": "6c1fa918e34d9e7d6420d7996193444b8ad826e5fc159d056f6d4d94b4695f94",
+      "proof_s": "efe9c7e772eb168aa3e6246dc35bdc1a0f92c8cb32b34dd4e42ef9140c7be78a"
+    }
+  ],
+  "note_cert": "the self-signed certificate both sides write by hand (GateCert.kt, node/src/tls.ts): with this p-256 key (a throwaway test key), cn, serial and dates the TBSCertificate der must hash to tbs_sha256. The signature over it is randomized, so the whole certificate is not a vector.",
+  "cert": {
+    "pkcs8": "308187020100301306072a8648ce3d020106082a8648ce3d030107046d306b0201010420e65a7cca66a485d92afa209711b8ab046394a5bdc898d53a5d965a9b01052e45a144034200041f4631236a791328c3c80d93460a76c75718cd86e1150b8ed8469173823a29d47f2746ee9f1fa677e7be60dd2e6c2218466b61e8b3f0e61ad35b0917a0c0291d",
+    "spki": "3059301306072a8648ce3d020106082a8648ce3d030107034200041f4631236a791328c3c80d93460a76c75718cd86e1150b8ed8469173823a29d47f2746ee9f1fa677e7be60dd2e6c2218466b61e8b3f0e61ad35b0917a0c0291d",
+    "cn": "kula-test-device",
+    "serial": "0102030405060708090a0b0c0d0e0f10",
+    "not_before_ms": 1767225600000,
+    "not_after_ms": 2082758400000,
+    "tbs_sha256": "e3c03ccc10b1f3c97066bf7593bb415895b827260d6dd3305658b7632ae7b0be"
+  }
 }

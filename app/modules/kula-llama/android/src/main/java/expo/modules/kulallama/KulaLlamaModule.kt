@@ -28,6 +28,15 @@ class KulaLlamaModule : Module() {
   private val exec = Executors.newSingleThreadExecutor { Thread(it, "kula-llama").apply { isDaemon = true } }
   private val requestIds = AtomicInteger(1)
   private val tunnels = mutableMapOf<String, Gate.Tunnel>()
+  /** This phone's certificate as a master (protocol v2); the same files the worker process uses, so one identity per phone. */
+  private val identity: GateIdentity by lazy {
+    GateIdentity.loadOrCreate(WorkerService.gateDir(context), expo.modules.kulallama.audit.SoftwareKey.loadOrCreate(WorkerService.deviceKeyFile(context)))
+  }
+  /** `{fp, pin?}` from JS (a v3 peer) → the tls client side; null for a v2 peer (protocol v1 with the secret). */
+  private fun tlsOf(m: Map<String, Any?>?): Gate.TlsClient? {
+    val fp = m?.get("fp") as? String ?: return null
+    return Gate.TlsClient(identity, fp.lowercase(), m["pin"] as? String)
+  }
   private var discovery: Discovery? = null
   private var downloader: ModelDownloader? = null
   private var bound = false
@@ -90,16 +99,17 @@ class KulaLlamaModule : Module() {
 
     // --- model ------------------------------------------------------------------------
     AsyncFunction("loadModel") { path: String, ctx: Int, threads: Int, peers: List<Map<String, Any?>>, localWeight: Double ->
-      // peers: [{host, port, secret, weight}] → one tunnel each, llama connects to 127.0.0.1
+      // peers: [{host, port, secret, weight, fp?, pin?}] → one tunnel each, llama connects to 127.0.0.1
       tunnels.values.forEach { it.stop() }; tunnels.clear()
       val endpoints = ArrayList<String>()
       val weights = ArrayList<Float>()
       for (p in peers) {
         val host = p["host"] as String
         val port = (p["port"] as Number).toInt()
-        val secret = p["secret"] as String
-        Gate.probe(host, port, secret, "rpc")?.let { throw CodedException("peer $host: $it") }
-        val t = Gate.Tunnel(host, port, secret, "rpc")
+        val secret = p["secret"] as? String ?: ""
+        val tls = tlsOf(p)
+        Gate.probe(host, port, secret, "rpc", tls = tls)?.let { throw CodedException("peer $host: $it") }
+        val t = Gate.Tunnel(host, port, secret, "rpc", tls)
         val local = t.start()
         tunnels["$host:$port"] = t
         endpoints.add("127.0.0.1:$local")
@@ -153,12 +163,15 @@ class KulaLlamaModule : Module() {
     Function("stop") { Native.stop() }
 
     // --- peers --------------------------------------------------------------------------
-    AsyncFunction("probePeer") { host: String, port: Int, secret: String, channel: String -> Gate.probe(host, port, secret, channel) }
+    /** `tls` is `{fp, pin?}` for a v3 peer (protocol v2 over tls), null for a v2 peer (the secret). */
+    AsyncFunction("probePeer") { host: String, port: Int, secret: String, channel: String, tls: Map<String, Any?>? -> Gate.probe(host, port, secret, channel, tls = tlsOf(tls)) }
     /** Opens (or reuses) an `api` tunnel to a peer; JS talks HTTP to 127.0.0.1:<port>. */
-    AsyncFunction("apiTunnel") { host: String, port: Int, secret: String ->
+    AsyncFunction("apiTunnel") { host: String, port: Int, secret: String, tls: Map<String, Any?>? ->
       val key = "api:$host:$port"
-      tunnels[key]?.localPort ?: Gate.Tunnel(host, port, secret, "api").let { t -> t.start().also { tunnels[key] = t } }
+      tunnels[key]?.localPort ?: Gate.Tunnel(host, port, secret, "api", tlsOf(tls)).let { t -> t.start().also { tunnels[key] = t } }
     }
+    /** This phone's own certificate fingerprint (what a worker pins once paired). */
+    AsyncFunction("gateFingerprint") { identity.fp }
     AsyncFunction("closeTunnels") { tunnels.values.forEach { it.stop() }; tunnels.clear() }
     AsyncFunction("discover") { on: Boolean ->
       if (on) {
@@ -186,6 +199,9 @@ class KulaLlamaModule : Module() {
         "heldMb" to s.optLong("heldMb"), "ramMb" to s.optLong("ramMb"), "bandwidth" to s.optDouble("bandwidth", 0.0),
         "throttled" to (alive && s.optBoolean("throttled")), "connects" to s.optInt("connects"), "rejects" to s.optInt("rejects"),
         "id" to WorkerService.workerId(context), "batteryUnrestricted" to batteryUnrestricted(),
+        // protocol v2: the worker's certificate and the open pairing code for the v3 qr
+        "fp" to s.optString("fp").ifEmpty { null }?.takeIf { alive }, "pin" to s.optString("pin").ifEmpty { null }?.takeIf { alive && !s.isNull("pin") },
+        "paired" to s.optInt("paired"),
       )
     }
     AsyncFunction("gateLedger") { limit: Int ->

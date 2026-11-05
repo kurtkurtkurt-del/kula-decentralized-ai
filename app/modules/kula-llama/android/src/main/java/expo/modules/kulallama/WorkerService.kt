@@ -42,6 +42,7 @@ class WorkerService : Service() {
   private var wakeLock: PowerManager.WakeLock? = null
   private var wifiLock: WifiManager.WifiLock? = null
   private var gate: Gate.Server? = null
+  private var tls: Gate.TlsServer? = null
   private var api: ApiServer? = null
   private var auditor: Auditor? = null
   @Volatile private var running = false
@@ -67,6 +68,9 @@ class WorkerService : Service() {
     /** The worker process's signing key (PKCS8 + public key, base64) and beyin's ledger. */
     fun deviceKeyFile(context: Context) = File(context.filesDir, "kula_device_key")
     fun ledgerFile(context: Context) = File(File(context.filesDir, "beyin"), "ledger.jsonl")
+    /** Protocol v2: the gate's P-256 key + certificate (shared by both processes) and the masters this worker paired with. */
+    fun gateDir(context: Context) = File(context.filesDir, "gate")
+    fun pairedFile(context: Context) = File(gateDir(context), "paired")
     fun modelsDir(context: Context) = File(context.filesDir, "models")
 
     /** Lasting worker id, in a file so both processes agree. */
@@ -119,7 +123,11 @@ class WorkerService : Service() {
         // beyin/check v0: every gate event goes to the signed ledger; replays and bad clocks are refused
         val key = SoftwareKey.loadOrCreate(deviceKeyFile(this))
         auditor = Auditor(Ledger(ledgerFile(this), key), key)
-        gate = Gate.Server(port, secret, { ch -> if (ch == "rpc") rpcPort else api?.port }, auditor) { ev ->
+        // protocol v2 on the same port: our certificate, the paired masters, a one-time code per qr
+        // (the code is spent by the master that proves it; the status file carries the next one)
+        val identity = GateIdentity.loadOrCreate(gateDir(this), key)
+        tls = Gate.TlsServer(identity, Paired(pairedFile(this)), Gate.newPin()) { tls?.pin = Gate.newPin(); writeStatus("running", peer = gate?.currentPeer, heldMb = residentMb()) }
+        gate = Gate.Server(port, secret, { ch -> if (ch == "rpc") rpcPort else api?.port }, auditor, tls) { ev ->
           when (ev.kind) { "connect" -> connects++; "reject" -> rejects++ }
         }.also { it.start() }
         Log.i(TAG, "worker: $threads threads, $ramMb MB free, %.1f GB/s, gate $port".format(bandwidth))
@@ -178,6 +186,8 @@ class WorkerService : Service() {
       .put("throttled", isThrottled()).put("connects", connects).put("rejects", rejects).put("pid", Process.myPid())
     if (error != null) json.put("error", error)
     if (peer != null) json.put("peer", peer)
+    // what the v3 qr needs: this worker's certificate fingerprint and the open pairing code
+    tls?.let { json.put("fp", it.identity.fp).put("pin", it.pin ?: JSONObject.NULL).put("paired", it.paired.size()) }
     statusFile(this).writeText(json.toString())
   }
 
