@@ -1,6 +1,7 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import * as Brightness from 'expo-brightness';
+import { useLocalSearchParams } from 'expo-router';
 import QRCode from 'react-native-qrcode-svg';
 import * as Clipboard from 'expo-clipboard';
 import Button from '@/components/Button';
@@ -23,7 +24,14 @@ import { colors, fonts, radius } from '@/theme/tokens';
 // the relay's address and a six digit code, so a device behind another nat can come in; the
 // relay only pipes encrypted bytes (docs/RELAY.md). The relay address is remembered in the
 // llm settings and is the default for "add by code" on the peers page.
+// pasaport://share?start=1 (5.11.2026): a computer with the phone on a usb cable opens this
+// screen over adb when it finds nobody sharing (kula-node ui, "on a cable"); start=1 presses
+// start once, as a person would (a permission prompt it needs still shows). Already sharing:
+// nothing changes.
 export default function ShareScreen() {
+  const params = useLocalSearchParams<{ start?: string }>();
+  const autoStart = useRef(params.start === '1');
+  const startRef = useRef<() => Promise<void>>(async () => {});
   const { t, tx, up } = useLang();
   const { width } = useAppSize();
   const mine = useShare();
@@ -43,6 +51,10 @@ export default function ShareScreen() {
       if (!on || !s) return;
       setStatus(s);
       const running = s.state === 'running' || s.state === 'starting';
+      if (autoStart.current) {
+        autoStart.current = false;
+        if (!running) startRef.current().catch(() => {});
+      }
       llama!.keepScreenOn(running).catch(() => {});
       if (running && share()) myPeerQr().then((r) => on && setQr(r.qr)).catch(() => {});
       else setQr(null);
@@ -92,6 +104,8 @@ export default function ShareScreen() {
       setErr(explain(e, tx));
     }
   };
+  // the poll above presses start through this (it was set up before start existed)
+  useEffect(() => { startRef.current = start; });
   const stop = async () => {
     tapSelect();
     await llama!.stopWorker().catch(() => {});

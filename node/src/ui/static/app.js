@@ -105,6 +105,7 @@ const S = {
   status: null,
   peers: [],
   models: [],
+  cable: null,         // phones adb sees on a usb cable: { adb, help, error, devices }
   info: null,          // settings from the server: openai base + token
   editing: -1,
   menuFor: null,
@@ -623,7 +624,8 @@ function renderPeers() {
     const bits = [p.kind, p.where];
     if (p.ram) bits.push(`${(p.ram / 1024).toFixed(1)} GB free`);
     if (p.waitingPair) bits.push('pairs on first contact');
-    bits.push(p.reach ? (p.reach.ok ? `reachable${p.reach.ms ? ` (${p.reach.ms} ms)` : ''}` : `not reachable: ${p.reach.reason}`) : p.last_ok ? `last seen ${new Date(p.last_ok).toLocaleString()}` : 'not checked yet');
+    if (p.cable?.plugged === false) bits.push('unplugged');
+    else bits.push(p.reach ? (p.reach.ok ? `reachable${p.reach.ms ? ` (${p.reach.ms} ms)` : ''}` : `not reachable: ${p.reach.reason}`) : p.last_ok ? `last seen ${new Date(p.last_ok).toLocaleString()}` : 'not checked yet');
     who.append(name, el('span', '', bits.join(' · ')));
     const x = el('button', 'icon x');
     x.type = 'button';
@@ -652,6 +654,142 @@ function renderPeers() {
 }
 
 $('probe').addEventListener('click', async () => { $('probe').textContent = 'checking…'; await refreshPeers(true); $('probe').textContent = 'check again'; });
+
+// ---------- connect: phones on a usb cable
+// adb on this computer sees them; "use" forwards a port to the phone's gate, opens its share
+// screen when nothing answers, and asks for the code only when the phone does not know this
+// computer yet. Looked at every 2 s while the sheet is open. Rows are kept by serial so a code
+// half typed survives the refresh.
+
+const STATE_WORDS = { device: 'ready', unauthorized: 'waiting for "allow usb debugging"', offline: 'offline', unplugged: 'unplugged' };
+const cableRows = new Map();   // serial -> { row, name, line, use, code, input, steps }
+const cableDone = new Set();   // serials whose "paired" the page already acted on
+let cableBusy = false;
+let cablePlugged = '';
+
+async function refreshCable() {
+  if (isGuest() || cableBusy) return;
+  cableBusy = true;
+  try { S.cable = await getJson('cable'); } catch (e) { S.cable = { adb: true, help: null, error: e.message, devices: [] }; } finally { cableBusy = false; }
+  renderCable();
+  // a cable pulled or plugged in: the device rows below say so too
+  const plugged = (S.cable.devices || []).map((d) => `${d.serial}:${d.state}`).join(',');
+  if (plugged !== cablePlugged) { cablePlugged = plugged; if (S.peers.some((p) => p.cable)) refreshPeers(false); }
+}
+
+function cableRow(serial) {
+  let r = cableRows.get(serial);
+  if (r) return r;
+  const row = el('div', 'peer cable');
+  const dot = el('span', 'dot');
+  const who = el('div', 'who');
+  const name = el('b');
+  const line = el('span');
+  who.append(name, line);
+  const use = el('button', 'pill', 'use');
+  use.type = 'button';
+  use.addEventListener('click', () => useCable(serial));
+  const steps = el('ul', 'cable-steps');
+  const code = el('div', 'cable-code');
+  code.hidden = true;
+  const input = el('input');
+  input.placeholder = 'the code on the phone\'s share screen';
+  input.spellcheck = false;
+  input.autocomplete = 'off';
+  input.setAttribute('aria-label', 'the code on the phone\'s share screen');
+  const pair = el('button', 'primary', 'pair');
+  pair.type = 'button';
+  pair.addEventListener('click', () => pairCable(serial));
+  input.addEventListener('keydown', (e) => { if (e.key === 'Enter') pairCable(serial); });
+  code.append(input, pair);
+  row.append(dot, who, use, steps, code);
+  r = { row, dot, name, line, use, steps, code, input, pair };
+  cableRows.set(serial, r);
+  return r;
+}
+
+function renderCable() {
+  const c = S.cable;
+  const box = $('cable-list');
+  const help = $('cable-help');
+  if (!c) return;
+  if (!c.adb) {
+    box.replaceChildren(el('p', 'none', 'adb is not on this computer, so phones on a cable cannot be seen.'));
+    cableRows.clear();
+    help.textContent = c.help || '';
+    $('cable-note').textContent = '';
+    return;
+  }
+  const list = c.devices || [];
+  $('cable-note').textContent = list.length ? '' : 'looking every 2 s';
+  help.textContent = c.error ? `adb: ${c.error}` : list.length ? '' : 'plug the phone into this computer with a usb cable. on the phone, usb debugging must be on (settings → developer options).';
+  for (const [serial] of cableRows) if (!list.some((d) => d.serial === serial)) cableRows.delete(serial);
+  const rows = [];
+  for (const d of list) {
+    const r = cableRow(d.serial);
+    const job = d.job;
+    r.name.textContent = d.name;
+    const bits = [];
+    if (d.model && d.model !== d.name) bits.push(d.model);
+    bits.push(STATE_WORDS[d.state] || d.state);
+    if (d.peer) bits.push(`paired as ${d.peer.name}`);
+    if (d.installed === false) bits.push('kula is not installed');
+    r.line.textContent = bits.join(' · ');
+    r.dot.className = `dot ${d.state === 'device' ? (job?.step === 'error' ? 'no' : job?.busy ? 'busy' : 'ok') : 'no'}`;
+    r.use.disabled = d.state !== 'device' || !!job?.busy || d.installed === false;
+    r.use.textContent = job?.busy ? 'working…' : 'use';
+    // progress lines, then the error or what the state needs
+    const lines = [...(job?.lines || [])].slice(-4);
+    if (job?.error) lines.push(job.error);
+    else if (d.help && !job) lines.push(d.help);
+    r.steps.replaceChildren(...lines.map((t, i) => el('li', job?.error && i === lines.length - 1 ? 'bad' : job?.step === 'paired' && i === lines.length - 1 ? 'ok' : '', t)));
+    r.code.hidden = !job?.needCode;
+    r.pair.disabled = !!job?.busy;
+    if (job?.needCode && !r.code.dataset.shown) { r.code.dataset.shown = '1'; setTimeout(() => r.input.focus(), 0); }
+    if (!job?.needCode) delete r.code.dataset.shown;
+    // a phone just paired (or found again): picked for loading, once
+    if (job?.step === 'paired' && job.peerId && !cableDone.has(d.serial)) {
+      cableDone.add(d.serial);
+      pickPeer(job.peerId);
+    }
+    if (job && job.step !== 'paired') cableDone.delete(d.serial);
+    rows.push(r.row);
+  }
+  box.replaceChildren(...rows);
+  if (!rows.length) box.appendChild(el('p', 'none', 'no phone on a cable.'));
+}
+
+function pickPeer(id) {
+  if (settings.mode === 'here') settings.mode = 'phone';
+  if (settings.mode === 'phone' || !settings.peers.length) settings.peers = [id];
+  else if (!settings.peers.includes(id)) settings.peers.push(id);
+  saveSettings();
+  renderModes();
+  refreshPeers(false);
+}
+
+async function useCable(serial) {
+  const r = cableRows.get(serial);
+  if (r) { r.use.disabled = true; r.use.textContent = 'working…'; }
+  cableDone.delete(serial);
+  try { await postJson('cable/use', { serial }); } catch (e) { toast(e.message); }
+  refreshCable();
+}
+
+async function pairCable(serial) {
+  const r = cableRows.get(serial);
+  if (!r) return;
+  const code = r.input.value.trim();
+  if (!code) { r.input.focus(); return; }
+  r.pair.disabled = true;
+  try {
+    await postJson('cable/pair', { serial, code });
+    r.input.value = '';
+  } catch (e) { toast(e.message); }
+  refreshCable();
+}
+
+setInterval(() => { if ($('connect').open && !document.hidden) refreshCable(); }, 2000);
 
 // ---------- connect: add a device
 
@@ -873,6 +1011,7 @@ async function openConnect() {
   renderPeers();
   renderModels();
   renderLoadState();
+  refreshCable();
   try { S.models = await getJson('models'); } catch {}
   renderModels();
   refreshPeers(S.peers.length > 0);

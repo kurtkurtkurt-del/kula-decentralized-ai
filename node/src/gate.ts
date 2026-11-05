@@ -575,6 +575,47 @@ export async function probe(host: string, port: number, secret: string, channel:
   }
 }
 
+// Is a v2 gate there, and what would it say to us? TLS with our certificate, the hello on
+// the api channel, the server's first line, then hang up before any proof: "paired" (it
+// already trusts this certificate), "pin" (a pairing code is open: the code on the phone's
+// share screen will pair us), or "refused" with its NO reason. `up` is false when the tls
+// never completes: nothing listens there (an adb forward to a phone that is not sharing
+// accepts the tcp connection and closes it at once). `fp` is the certificate it showed;
+// nothing is pinned or learned here, the caller decides.
+export type GatePeek = { up: false; reason: string } | { up: true; fp: string; state: 'paired' | 'pin' | 'refused'; reason?: string };
+export async function peekGate(host: string, port: number, identity: TlsClient['identity'], timeoutMs = 2000): Promise<GatePeek> {
+  let socket: net.Socket | null = null;
+  let s: tls.TLSSocket | null = null;
+  try {
+    socket = await connectRemote(host, port, timeoutMs);
+    const raw = socket;
+    const t = await new Promise<tls.TLSSocket>((resolve, reject) => {
+      const c = tls.connect({ socket: raw, key: identity.keyPem, cert: identity.certPem, rejectUnauthorized: false, minVersion: 'TLSv1.3', checkServerIdentity: () => undefined });
+      const timer = setTimeout(() => { c.destroy(); reject(new Error('tls timeout')); }, timeoutMs);
+      c.once('secureConnect', () => { clearTimeout(timer); resolve(c); });
+      c.once('error', (e) => { clearTimeout(timer); reject(e); });
+      c.once('close', () => { clearTimeout(timer); reject(new Error('closed')); });
+    });
+    s = t;
+    const fp = peerFingerprint(t);
+    if (!fp) return { up: false, reason: 'no certificate' };
+    const reader = new LineReader(t);
+    try {
+      writeLine(t, `KULA2 api ${nonce()} ${Date.now()}`);
+      const first = (await reader.line(timeoutMs)).trim();
+      if (first.startsWith('NO ')) return { up: true, fp, state: 'refused', reason: first.slice(3) };
+      const state = first.split(' ')[1];
+      if (state === 'paired' || state === 'pin') return { up: true, fp, state };
+      return { up: true, fp, state: 'refused', reason: `bad answer: ${first.slice(0, 40)}` };
+    } finally { reader.release(); }
+  } catch (e) {
+    return { up: false, reason: (e as Error).message };
+  } finally {
+    s?.destroy();
+    socket?.destroy();
+  }
+}
+
 // A local door to a remote channel: listens on 127.0.0.1 and pipes every
 // accepted connection through a freshly handshaken connection to the gate.
 export class Tunnel {

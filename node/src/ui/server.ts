@@ -224,6 +224,7 @@ export async function startUi(opts: UiOptions): Promise<UiServer> {
       if (route === 'invite') return json(res, 200, inviteInfo());
       if (route === 'invite.svg') { const u = inviteUrl(); return u && lan ? send(res, 200, qrSvg(u), TYPES['.svg']) : send(res, 404, 'no invite'); }
       if (route === 'peers') return json(res, 200, engine.peers());
+      if (route === 'cable') return json(res, 200, await engine.cable());
       if (route === 'models') return json(res, 200, engine.models());
       if (route === 'settings') return json(res, 200, { openai: { base: openaiBase(), token }, host: hostLabel(), relay: process.env.KULA_RELAY ?? null });
       if (route === 'chats') return json(res, 200, chats.list(query.get('q') ?? undefined));
@@ -246,6 +247,10 @@ export async function startUi(opts: UiOptions): Promise<UiServer> {
         return json(res, 200, await engine.addPeer(body.text, { name: typeof body.name === 'string' ? body.name : undefined, relay: typeof body.relay === 'string' ? body.relay : undefined }));
       } catch (e) { return fail(e); }
     }
+    // phones on a usb cable: "use" starts and returns at once (GET cable shows the steps);
+    // "pair" takes the code from the phone's share screen. The code never comes back.
+    if (route === 'cable/use') { try { return json(res, 200, engine.useCable(body?.serial)); } catch (e) { return fail(e); } }
+    if (route === 'cable/pair') { try { return json(res, 200, await engine.pairCable(body?.serial, body?.code)); } catch (e) { return fail(e); } }
     if (route === 'peers/remove') return engine.removePeer(String(body?.id ?? '')) ? json(res, 200, { ok: true }) : json(res, 404, { error: 'no such device' });
     if (route === 'peers/probe') {
       try { return json(res, 200, await engine.probe(Array.isArray(body?.ids) ? body.ids.map(String) : undefined)); } catch (e) { return fail(e, 500); }

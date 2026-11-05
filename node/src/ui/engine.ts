@@ -13,7 +13,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { openApart, type Cluster, type Message, type ModelRef, type Reply } from '../apart.js';
 import { readPeers, writePeers, parsePeerText, upsertPeer, removePeer, findPeer, probePeers, peersFile, whereIs, type Peer, type PeerProbe } from '../peers.js';
-import { connectRemote, handshake, GateRefused } from '../gate.js';
+import { connectRemote, handshake, peekGate, GateRefused, type GatePeek } from '../gate.js';
+import { Adb, isSerial, stateHelp, NO_ADB_HELP, type CableDevice } from './cable.js';
 import { loadOrCreateIdentity, type GateIdentity } from '../tls.js';
 import { loadOrCreate as loadDeviceKey } from '../audit/key.js';
 import { home, repoRoots } from '../paths.js';
@@ -34,7 +35,22 @@ export interface PeerRow {
   id: string; name: string; kind: string; where: string; far: boolean; tls: boolean; waitingPair: boolean;
   ram: number | null; bw: number | null; gpu: string | null; last_ok: string | null;
   reach: Reach | null; probedAt: number | null;
+  cable: { serial: string; plugged: boolean | null } | null;   // on a usb cable; plugged: null until adb was asked
 }
+
+// A phone on the cable as the connect sheet shows it, and what "use" is doing with it.
+export type CableStep = 'forwarding' | 'looking' | 'waiting' | 'code' | 'pairing' | 'paired' | 'error';
+export interface CableJobView { step: CableStep; lines: string[]; error: string | null; peerId: string | null; needCode: boolean; busy: boolean }
+export interface CableRow {
+  serial: string; name: string; model: string | null;
+  state: string;                      // device, unauthorized, offline, … or unplugged (a paired phone adb no longer sees)
+  help: string | null;                // what to do about that state
+  installed: boolean | null;          // kula on it (null: not asked yet, or adb cannot ask)
+  peer: { id: string; name: string } | null;   // already paired as this peer
+  job: CableJobView | null;
+}
+export interface CableView { adb: boolean; help: string | null; error: string | null; devices: CableRow[] }
+interface CableJob { serial: string; step: CableStep; lines: string[]; error: string | null; peerId: string | null; port: number | null; fp: string | null; busy: boolean; done: Promise<void> | null }
 
 export interface ModelRow {
   id: string;                 // a catalog id, or "local:<file name>"
@@ -78,6 +94,9 @@ export interface EngineOptions {
   // tests: a fake llama-server for 'here'
   startBackend?: (file: string, ctx: number) => Promise<{ port: number; stop(): Promise<void> }>;
   bandwidth?: () => Promise<number>;
+  adb?: Adb;                             // phones on a cable; default: adb found on this computer
+  cableWaitMs?: number;                  // how long "use" waits for a phone to start sharing; 60 s
+  cablePollMs?: number;                  // how often it looks meanwhile; 1 s
 }
 
 // What a model takes in memory, run whole: the file, the kv cache for ctx, some slack.
@@ -93,13 +112,18 @@ export function defaultModelDirs(): string[] {
   return [...new Set(dirs)];
 }
 
-export function peerRow(p: Peer, probe?: Reach | null, probedAt: number | null = null): PeerRow {
+export function peerRow(p: Peer, probe?: Reach | null, probedAt: number | null = null, plugged: boolean | null = null): PeerRow {
   return {
     id: p.id, name: p.name, kind: p.kind, where: whereIs(p), far: !!p.relay, tls: !!p.fp, waitingPair: !p.fp && !!p.pin,
     ram: p.ram ?? null, bw: p.bw ?? null, gpu: p.gpu ?? null, last_ok: p.last_ok ?? null,
     reach: probe ?? null, probedAt,
+    cable: p.cable ? { serial: p.cable.serial, plugged } : null,
   };
 }
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+export const UNPLUGGED = 'unplugged: plug the cable in';
+const NOT_INSTALLED = 'kula is not installed on this phone: install the kula app on it first.';
 
 const HOST_PORT = /^(\[[^\]]+\]|[A-Za-z0-9.-]+):(\d{1,5})$/;
 
@@ -114,6 +138,11 @@ export class Engine {
   private chats = new Set<AbortController>();
   private extraClose: (() => Promise<void>)[] = [];
   private ident: GateIdentity | null;
+  private adbTool: Adb | null = null;
+  private seen: { at: number; list: CableDevice[]; error: string | null } | null = null;
+  private seeing: Promise<CableDevice[]> | null = null;
+  private installedBy = new Map<string, boolean>();
+  private jobs = new Map<string, CableJob>();
   readonly catalog: CatalogEntry[];
 
   constructor(private readonly opts: EngineOptions = {}) {
@@ -142,7 +171,12 @@ export class Engine {
   // ---- peers
 
   peers(): PeerRow[] {
-    return readPeers(this.file()).map((p) => { const x = this.reach.get(p.id); return peerRow(p, x?.r ?? null, x?.at ?? null); });
+    return readPeers(this.file()).map((p) => { const x = this.reach.get(p.id); return peerRow(p, x?.r ?? null, x?.at ?? null, this.plugged(p)); });
+  }
+
+  private plugged(p: Peer): boolean | null {
+    if (!p.cable || !this.seen || this.seen.error) return null;
+    return this.seen.list.some((d) => d.serial === p.cable!.serial && d.state === 'device');
   }
 
   private stamp(stamped: Peer[]) {
@@ -153,8 +187,10 @@ export class Engine {
 
   // The api channel of every peer (or the ones named), 2 s each; a v3 peer pairs here.
   async probe(ids?: string[]): Promise<PeerRow[]> {
-    const all = readPeers(this.file());
-    const wanted = ids?.length ? all.filter((p) => ids.includes(p.id)) : all;
+    let all = readPeers(this.file());
+    const asked = (p: Peer) => !ids?.length || ids.includes(p.id);
+    if (all.some((p) => p.cable && asked(p))) all = await this.refreshCables(all.filter(asked));
+    const wanted = all.filter((p) => asked(p) && !(p.cable && this.reach.get(p.id)?.r.reason === UNPLUGGED));
     if (wanted.length) {
       const results: PeerProbe[] = await probePeers(wanted, this.opts.probeMs ?? 2000, ['api'], undefined, this.identity());
       const at = Date.now();
@@ -191,16 +227,7 @@ export class Engine {
     if (!/^[0-9a-f]{8,64}$/.test(pin)) throw new Error('the code is the 16 letters and digits after "code" on the phone');
     const fpStart = String(input.fp ?? '').replace(/[\s-]/g, '').toLowerCase();
     if (fpStart && !/^[0-9a-f]{4,64}$/.test(fpStart)) throw new Error('the certificate is hex (0-9, a-f)');
-    let fp: string | null = null;
-    const socket = await connectRemote(host, port, 4000).catch((e) => { throw new Error(`cannot reach ${host}:${port}: ${(e as Error).message}`); });
-    try {
-      const h = await handshake(socket, '', 'api', 6000, undefined, { identity: this.identity(), fp: '', pin });
-      fp = h.fp;
-      h.socket.destroy();
-    } catch (e) {
-      throw new Error(e instanceof GateRefused ? `the phone said no: ${e.reason}` : (e as Error).message);
-    } finally { socket.destroy(); }
-    if (!fp) throw new Error('the phone did not show a certificate');
+    const fp = await this.pinPair(host, port, pin);
     if (fpStart && !fp.startsWith(fpStart)) throw new Error('the certificate does not match what the phone shows: not pairing');
     const now = new Date().toISOString();
     const peer: Peer = {
@@ -215,6 +242,22 @@ export class Engine {
     return this.peers().find((p) => p.id === peer.id)!;
   }
 
+  // One handshake with the one-time code: learns the phone's certificate (the code's proof
+  // covers both certificates, so a device in the middle fails it) and the phone keeps ours.
+  private async pinPair(host: string, port: number, pin: string): Promise<string> {
+    let fp: string | null = null;
+    const socket = await connectRemote(host, port, 4000).catch((e) => { throw new Error(`cannot reach ${host}:${port}: ${(e as Error).message}`); });
+    try {
+      const h = await handshake(socket, '', 'api', 6000, undefined, { identity: this.identity(), fp: '', pin });
+      fp = h.fp;
+      h.socket.destroy();
+    } catch (e) {
+      throw new Error(e instanceof GateRefused ? `the phone said no: ${e.reason}` : (e as Error).message);
+    } finally { socket.destroy(); }
+    if (!fp) throw new Error('the phone did not show a certificate');
+    return fp;
+  }
+
   removePeer(id: string): boolean {
     const file = this.file();
     const { list, removed } = removePeer(readPeers(file), id);
@@ -223,6 +266,211 @@ export class Engine {
     this.reach.delete(removed.id);
     this.note(`forgot ${removed.name}`);
     return true;
+  }
+
+  // ---- phones on a usb cable (cable.ts)
+  //
+  // "use" on a phone: an adb forward from a port on 127.0.0.1 to the phone's gate, then a
+  // look at the gate (peekGate). Nothing answers: the share screen is opened with start=1 and
+  // the gate is looked at every second for up to a minute. The gate already trusts this
+  // computer ("paired"): the phone is kept (or found again) at once. It has a code open
+  // ("pin"): the page asks for the code on the phone's share screen and `pairCable` does the
+  // pin proof. The forward's port can change (unplugged, adb restarted), so every connect
+  // makes it again. Nothing here says the code back: job lines are plain progress.
+
+  private adb(): Adb {
+    if (!this.adbTool) this.adbTool = this.opts.adb ?? new Adb();
+    return this.adbTool;
+  }
+
+  // `adb devices -l`, at most every 1.5 s however many ask
+  private async cableDevices(fresh = false): Promise<CableDevice[]> {
+    const adb = this.adb();
+    if (!adb.present) { this.seen = { at: Date.now(), list: [], error: NO_ADB_HELP }; return []; }
+    if (!fresh && this.seen && Date.now() - this.seen.at < 1500) return this.seen.list;
+    if (this.seeing) return this.seeing;
+    this.seeing = adb.devices().then((list) => {
+      this.seen = { at: Date.now(), list, error: null };
+      for (const s of [...this.installedBy.keys()]) if (!list.some((d) => d.serial === s && d.state === 'device')) this.installedBy.delete(s);
+      return list;
+    }, (e) => { this.seen = { at: Date.now(), list: [], error: (e as Error).message }; return []; }).finally(() => { this.seeing = null; });
+    return this.seeing;
+  }
+
+  private jobView(j: CableJob | undefined): CableJobView | null {
+    if (!j) return null;
+    return { step: j.step, lines: j.lines.slice(-8), error: j.error, peerId: j.peerId, needCode: j.step === 'code', busy: j.busy };
+  }
+
+  async cable(): Promise<CableView> {
+    const adb = this.adb();
+    if (!adb.present) return { adb: false, help: NO_ADB_HELP, error: null, devices: [] };
+    const list = await this.cableDevices();
+    const peers = readPeers(this.file());
+    const rows: CableRow[] = [];
+    for (const d of list) {
+      if (d.state === 'device' && !this.installedBy.has(d.serial)) {
+        try { this.installedBy.set(d.serial, await adb.installed(d.serial)); } catch {}
+      }
+      const p = peers.find((x) => x.cable?.serial === d.serial);
+      const installed = this.installedBy.get(d.serial) ?? null;
+      rows.push({
+        serial: d.serial, name: p?.name ?? d.model ?? `phone ${d.serial.slice(-4)}`, model: d.model, state: d.state,
+        help: stateHelp(d.state) ?? (installed === false ? NOT_INSTALLED : null),
+        installed, peer: p ? { id: p.id, name: p.name } : null, job: this.jobView(this.jobs.get(d.serial)),
+      });
+    }
+    for (const p of peers) {
+      if (!p.cable || list.some((d) => d.serial === p.cable!.serial)) continue;
+      rows.push({ serial: p.cable.serial, name: p.name, model: null, state: 'unplugged', help: 'plug the cable in to use it', installed: null, peer: { id: p.id, name: p.name }, job: this.jobView(this.jobs.get(p.cable.serial)) });
+    }
+    return { adb: true, help: null, error: this.seen?.error ?? null, devices: rows };
+  }
+
+  // Starts "use" for a phone on the cable and returns at once; GET cable shows how it goes.
+  useCable(serial: unknown): CableJobView {
+    if (!isSerial(serial)) throw new Error('bad serial');
+    const running = this.jobs.get(serial);
+    if (running?.busy) return this.jobView(running)!;
+    const job: CableJob = { serial, step: 'forwarding', lines: [], error: null, peerId: null, port: null, fp: null, busy: true, done: null };
+    this.jobs.set(serial, job);
+    job.done = this.runCable(job).catch((e) => {
+      job.step = 'error';
+      job.error = (e as Error).message;
+      this.note(`cable ${serial}: ${(e as Error).message}`);
+    }).finally(() => { job.busy = false; });
+    return this.jobView(job)!;
+  }
+
+  // tests: wait for a "use" to settle
+  async cableSettled(serial: string): Promise<CableJobView | null> {
+    await this.jobs.get(serial)?.done;
+    return this.jobView(this.jobs.get(serial));
+  }
+
+  private async runCable(job: CableJob): Promise<void> {
+    const adb = this.adb();
+    const say = (step: CableStep, line?: string) => { job.step = step; if (line) job.lines.push(line); };
+    const here = async () => (await this.cableDevices(true)).find((d) => d.serial === job.serial) ?? null;
+    if (!adb.present) throw new Error(NO_ADB_HELP);
+    const dev = await here();
+    if (!dev) throw new Error('that phone is not on the cable any more');
+    if (dev.state !== 'device') throw new Error(stateHelp(dev.state)!);
+    say('forwarding', 'forwarding a port on this computer to the phone');
+    const { port } = await adb.forward(job.serial);
+    job.port = port;
+    say('looking', `127.0.0.1:${port} reaches the phone's port 50551: looking for kula there`);
+    const look = () => peekGate('127.0.0.1', port, this.identity(), 2000);
+    const ready = (p: GatePeek): boolean => p.up && p.state !== 'refused';
+    const said = (p: GatePeek): string | null => (p.up ? p.reason ?? 'no' : null);
+    let peek: GatePeek = await look();
+    if (!ready(peek)) {
+      if (this.installedBy.get(job.serial) === false) throw new Error(NOT_INSTALLED);
+      say('waiting', said(peek) ? `the phone said ${said(peek)}: opening its share screen` : 'nothing answers yet: opening the share screen on the phone');
+      try { await adb.openShare(job.serial); } catch (e) { job.lines.push(`could not open it (${(e as Error).message}): on the phone open kula → share this phone and press start`); }
+      job.lines.push('waiting for the phone to share');
+      const until = Date.now() + (this.opts.cableWaitMs ?? 60_000);
+      while (Date.now() < until) {
+        await sleep(this.opts.cablePollMs ?? 1000);
+        peek = await look();
+        if (ready(peek)) break;
+        const d = await here();
+        if (!d || d.state !== 'device') throw new Error('the phone went away from the cable');
+      }
+      if (!ready(peek)) {
+        throw new Error(said(peek)
+          ? `the phone said no: ${said(peek)}. on the phone open kula → share this phone, stop and start again, then press use again`
+          : 'the phone did not start sharing within a minute: on the phone open kula → share this phone and press start, then press use again');
+      }
+    }
+    const found = peek as Extract<GatePeek, { up: true }>;
+    job.fp = found.fp;
+    const peers = readPeers(this.file());
+    const mine = peers.find((p) => p.cable?.serial === job.serial) ?? null;
+    if (found.state === 'paired') {
+      // the phone already trusts this computer's certificate. A peer with this certificate
+      // is that phone; with none, the certificate is taken from the cable itself: adb only
+      // forwards to the phone this computer's adb key was allowed on.
+      if (mine?.fp && mine.fp !== found.fp) throw new Error('this phone shows another certificate than the one it paired with: forget it and pair again');
+      const same = mine ?? peers.find((p) => p.fp === found.fp && (p.host === '127.0.0.1' || p.host === 'localhost') && !p.relay && !p.cable) ?? null;
+      const peer = this.keepCable(same, job.serial, port, found.fp, dev.model);
+      this.reach.set(peer.id, { r: { ok: true }, at: Date.now() });
+      job.peerId = peer.id;
+      say('paired', same ? `connected to ${peer.name} over the cable` : `${peer.name} already knew this computer: connected over the cable`);
+      this.note(`${peer.name} on the cable (127.0.0.1:${port})`);
+      return;
+    }
+    say('code', 'the phone is sharing: type the code from its share screen');
+  }
+
+  // A paired phone on the cable kept in the peer book: one that was there updated (its
+  // port), or a new one named after its model.
+  private keepCable(prev: Peer | null, serial: string, port: number, fp: string, model: string | null): Peer {
+    const now = new Date().toISOString();
+    const peer: Peer = prev
+      ? { ...prev, host: '127.0.0.1', port, fp, pin: null, paired_at: prev.paired_at ?? now, cable: { serial }, last_ok: now }
+      : {
+        id: `cable:${serial}`, name: (model ?? `phone ${serial.slice(-4)}`).slice(0, 60), host: '127.0.0.1', port, secret: '', fp, pin: null, paired_at: now,
+        relay: null, kind: 'phone', ram: null, bw: null, gpu: null, vram: null, passport: null, cable: { serial }, added_at: now, last_ok: now,
+      };
+    const file = this.file();
+    writePeers(upsertPeer(readPeers(file), peer).list, file);
+    return peer;
+  }
+
+  // The code from the phone's share screen, for the phone "use" left waiting for it.
+  async pairCable(serial: unknown, code: unknown): Promise<{ peer: PeerRow; job: CableJobView }> {
+    if (!isSerial(serial)) throw new Error('bad serial');
+    const job = this.jobs.get(serial);
+    if (!job || job.step !== 'code' || job.busy) throw new Error('press "use" on that phone first');
+    const pin = String(code ?? '').replace(/[\s-]/g, '').toLowerCase();
+    if (!/^[0-9a-f]{8,64}$/.test(pin)) throw new Error('the code is the 16 letters and digits after "code" on the phone');
+    job.busy = true;
+    job.error = null;
+    job.step = 'pairing';
+    job.lines.push('pairing with the code');
+    try {
+      const dev = (await this.cableDevices(true)).find((d) => d.serial === serial);
+      if (!dev || dev.state !== 'device') throw new Error('the phone went away from the cable');
+      const { port } = await this.adb().forward(serial);
+      const fp = await this.pinPair('127.0.0.1', port, pin);
+      if (job.fp && fp !== job.fp) throw new Error('the phone showed another certificate than a moment ago: not pairing');
+      const mine = readPeers(this.file()).find((p) => p.cable?.serial === serial) ?? null;
+      const peer = this.keepCable(mine, serial, port, fp, dev.model);
+      this.reach.set(peer.id, { r: { ok: true }, at: Date.now() });
+      job.peerId = peer.id;
+      job.step = 'paired';
+      job.lines.push(`paired with ${peer.name} over the cable`);
+      this.note(`paired with ${peer.name} over the cable`);
+      return { peer: this.peers().find((p) => p.id === peer.id)!, job: this.jobView(job)! };
+    } catch (e) {
+      job.step = 'code';
+      job.error = (e as Error).message;
+      throw e;
+    } finally { job.busy = false; }
+  }
+
+  // Before every connect: the forward of each cable peer made again (its port may have
+  // changed) and written down; one adb does not see is marked unplugged.
+  private async refreshCables(list: Peer[]): Promise<Peer[]> {
+    const file = this.file();
+    const cabled = list.filter((p) => p.cable);
+    if (!cabled.length) return readPeers(file);
+    const adb = this.adb();
+    const devs = adb.present ? await this.cableDevices(true) : [];
+    for (const p of cabled) {
+      const d = devs.find((x) => x.serial === p.cable!.serial);
+      if (!adb.present || !d || d.state !== 'device') { this.reach.set(p.id, { r: { ok: false, reason: adb.present ? UNPLUGGED : 'adb is missing on this computer' }, at: Date.now() }); continue; }
+      try {
+        const { port } = await adb.forward(p.cable!.serial);
+        if (port !== p.port || p.host !== '127.0.0.1') {
+          writePeers(readPeers(file).map((x) => (x.id === p.id ? { ...x, host: '127.0.0.1', port } : x)), file);
+          this.log(`${p.name}: the cable's forward is 127.0.0.1:${port} now`);
+        }
+        if (this.reach.get(p.id)?.r.reason === UNPLUGGED) this.reach.delete(p.id);
+      } catch (e) { this.reach.set(p.id, { r: { ok: false, reason: (e as Error).message }, at: Date.now() }); }
+    }
+    return readPeers(file);
   }
 
   // ---- models
@@ -321,6 +569,16 @@ export class Engine {
     if ((mode === 'split' || mode === 'here') && !llama && !this.opts.startBackend) throw new Error(`${mode} needs llama.cpp on this computer: run kula-node setup (or pick "phone")`);
 
     let peers: Peer[] = [];
+    if (mode !== 'here') {
+      // a phone on the cable: its forward made again first (the port may have changed)
+      const asked = this.resolvePeers(req.peers);
+      const use = mode === 'phone' ? asked.slice(0, 1) : asked;
+      if (use.some((p) => p.cable)) {
+        await this.refreshCables(use);
+        const off = use.find((p) => p.cable && this.reach.get(p.id)?.r.reason === UNPLUGGED);
+        if (mode === 'phone' && off) throw new Error(`${off.name} is ${UNPLUGGED}`);
+      }
+    }
     if (mode === 'phone') {
       const list = this.resolvePeers(req.peers);
       if (!list.length) throw new Error('no paired device yet: add one in connect');
@@ -460,7 +718,10 @@ export class Engine {
     return n;
   }
 
-  async close(): Promise<void> { await this.unload(true); }
+  async close(): Promise<void> {
+    await this.unload(true);
+    await this.adbTool?.close().catch(() => {});
+  }
 }
 
 export const hostLabel = (): string => os.hostname().replace(/\.local$/, '');

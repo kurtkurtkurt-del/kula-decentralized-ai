@@ -234,6 +234,15 @@ svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width:
 .peer .who span { display: block; font-size: 12px; color: var(--mute); }
 .peer .x { color: var(--meta); }
 .peer input[type="checkbox"], .peer input[type="radio"] { accent-color: var(--accent); margin: 0; }
+.peer.cable .cable-steps { grid-column: 1 / -1; margin: 0; padding: 0 0 0 20px; list-style: none; font-size: 12.5px; color: var(--mute); display: flex; flex-direction: column; gap: 2px; }
+.peer.cable .cable-steps:empty { display: none; }
+.peer.cable .cable-steps li::before { content: "› "; color: var(--meta); }
+.peer.cable .cable-steps li.bad { color: var(--red); } .peer.cable .cable-steps li.ok { color: var(--sage); }
+.peer.cable .cable-code { grid-column: 1 / -1; display: flex; gap: 8px; align-items: center; }
+.peer.cable .cable-code[hidden] { display: none; }
+.peer.cable .cable-code input { flex: 1; min-width: 0; border: 1px solid var(--line2); background: var(--ground); border-radius: 9px; padding: 8px 10px; color: var(--words); font-family: var(--mono); font-size: 14px; outline: none; }
+.peer.cable .cable-code input:focus { border-color: var(--accent); }
+.peer.cable .pill:disabled { opacity: 0.5; cursor: default; }
 
 .add { margin-top: 12px; }
 .add > summary { cursor: pointer; color: var(--accent); font-size: 14px; list-style: none; display: inline-flex; gap: 6px; align-items: center; }
@@ -330,7 +339,7 @@ svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width:
   .where { padding: 10px 8px; }
   .send, .stop { width: 44px; height: 44px; border-radius: 12px; }
   .composer { border-radius: 22px; padding: 10px 8px 8px 14px; }
-  .composer textarea, .field input:not([type="range"]), .field textarea, .search, .chat-item input, .edit-box textarea { font-size: 16px; }
+  .composer textarea, .field input:not([type="range"]), .field textarea, .search, .chat-item input, .edit-box textarea, .cable-code input { font-size: 16px; }
   .composer-wrap { padding-bottom: calc(8px + env(safe-area-inset-bottom)); }
   .fine { display: none; }
   .chat-item > button.open { padding: 12px 10px; font-size: 15px; }

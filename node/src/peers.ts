@@ -30,6 +30,9 @@ export interface Peer {
   gpu?: string | null;
   vram?: number | null;
   passport?: Record<string, unknown> | null;
+  // on a usb cable: reached through an adb forward to this phone (ui/cable.ts). host is
+  // 127.0.0.1 and port is the forward's local port, made again on every connect.
+  cable?: { serial: string } | null;
   added_at: string;
   last_ok?: string | null;
 }
@@ -164,6 +167,7 @@ export function afterPaired(p: Peer, fp: string | null): Peer {
 
 // "code 123456 via relay.example" for the peer book rows.
 export function whereIs(p: Peer): string {
+  if (p.cable) return 'usb cable';
   if (p.relay) return `relay ${p.relay.code} via ${p.relay.url.replace(/^wss?:\/\//, '')}`;
   return `${p.host}:${p.port}`;
 }
