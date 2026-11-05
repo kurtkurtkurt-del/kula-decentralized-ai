@@ -38,7 +38,7 @@ async function fakeWorker(name: string, secret: string, delayMs: number) {
   const models = fs.mkdtempSync(path.join(os.tmpdir(), `kula-w-${name}-`));
   const llama = await fakeLlamaServer(delayMs);
   const loads: string[] = [];
-  const api = await startApiServer({ models, llama: null, startBackend: async (file, ctx) => { loads.push(`${path.basename(file)}:${ctx}`); return { port: llama.port, stop: async () => {} }; } });
+  const api = await startApiServer({ models, llama: null, allowPrivateUrls: true, startBackend: async (file, ctx) => { loads.push(`${path.basename(file)}:${ctx}`); return { port: llama.port, stop: async () => {} }; } });
   const gate = await startGateServer({ port: 0, host: '127.0.0.1', secret, targets: (ch) => (ch === 'api' ? api.port : null) });
   const peer: Peer = { id: `id-${name}`, name, host: '127.0.0.1', port: gate.port, secret, kind: 'phone', ram: 6000, bw: delayMs < 20 ? 30 : 8, added_at: 't' };
   return {

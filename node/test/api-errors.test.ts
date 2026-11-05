@@ -29,7 +29,7 @@ async function call(base: string, method: string, p: string, body?: string) {
 
 async function withApi(fn: (api: ApiServer, base: string, models: string) => Promise<void>, opts: Partial<Parameters<typeof startApiServer>[0]> = {}) {
   const models = fs.mkdtempSync(path.join(os.tmpdir(), 'kula-err-'));
-  const api = await startApiServer({ models, llama: null, startBackend: async () => { throw new Error('must not start'); }, ...opts });
+  const api = await startApiServer({ models, llama: null, allowPrivateUrls: true, startBackend: async () => { throw new Error('must not start'); }, ...opts });
   try { await fn(api, `http://127.0.0.1:${api.port}`, models); } finally { await api.close(); fs.rmSync(models, { recursive: true, force: true }); }
 }
 
@@ -46,10 +46,10 @@ test('/load: a body that is not json, a body without the fields, a bad name', as
   await withApi(async (_api, base) => {
     assert.deepEqual(await call(base, 'POST', '/load', '{nope').then((r) => [r.status, r.text]), [400, '{"error":"bad json"}']);
     assert.deepEqual(await call(base, 'POST', '/load', '').then((r) => [r.status, r.text]), [400, '{"error":"need url, sha256, size, name"}']);
-    assert.equal((await call(base, 'POST', '/load', JSON.stringify({ url: 'http://x', sha256: 'ab', size: 1 }))).status, 400);
-    assert.equal((await call(base, 'POST', '/load', JSON.stringify({ url: 1, sha256: 'ab', size: 1, name: 'm' }))).status, 400);
+    assert.equal((await call(base, 'POST', '/load', JSON.stringify({ url: 'http://x', sha256: 'ab'.repeat(32), size: 1 }))).status, 400);
+    assert.equal((await call(base, 'POST', '/load', JSON.stringify({ url: 1, sha256: 'ab'.repeat(32), size: 1, name: 'm' }))).status, 400);
     for (const name of ['..', '.', '/', '']) {
-      const r = await call(base, 'POST', '/load', JSON.stringify({ url: 'http://x', sha256: 'ab', size: 1, name }));
+      const r = await call(base, 'POST', '/load', JSON.stringify({ url: 'http://x', sha256: 'ab'.repeat(32), size: 1, name }));
       assert.equal(r.status, 400, name);
       assert.equal(r.text, '{"error":"bad name"}', name);
     }

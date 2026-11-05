@@ -94,11 +94,13 @@ export function startRelayWorker(opts: RelayWorkerOptions): Promise<RelayWorker>
       ws.once('close', () => streams.delete(ws!));
       const r = await ask(ws, { t: 'accept', sid, token }, HANDSHAKE_MS);
       if (r?.t !== 'ready') throw new Error(say(r));
+      // the stream takes the ws's messages from here on: the master's first tls record can
+      // arrive while the gate connect below is still pending, and a plain ws drops it
+      const stream = createWebSocketStream(ws, { allowHalfOpen: false });
+      stream.on('error', () => {});
       local = net.connect({ host: '127.0.0.1', port: opts.gatePort, allowHalfOpen: true });
       await new Promise<void>((res, rej) => { local!.once('connect', res); local!.once('error', rej); });
       local.setNoDelay(true);
-      const stream = createWebSocketStream(ws, { allowHalfOpen: false });
-      stream.on('error', () => {});
       await pipeBoth(stream, local, Buffer.alloc(0));
     } catch (e) {
       log(`relay stream ${sid}: ${(e as Error).message}`);
@@ -181,8 +183,16 @@ export class RelayMaster {
     return d;
   }
 
-  close(): void {
-    this.control.close(1000, 'bye');
+  // resolves once the relay has the close (or after a second): the next master with the
+  // same code is not told "busy" by a session that is only half gone
+  close(): Promise<void> {
+    return new Promise((resolve) => {
+      if (this.control.readyState === WebSocket.CLOSED) return resolve();
+      const t = setTimeout(resolve, 1000);
+      t.unref();
+      this.control.once('close', () => { clearTimeout(t); resolve(); });
+      this.control.close(1000, 'bye');
+    });
   }
 }
 
@@ -205,7 +215,7 @@ export async function probeRelay(relay: RelayRef, channel: Channel, tlsOpts: Tls
     return { ok: false, reason: (e as Error).message };
   } finally {
     d?.destroy();
-    m?.close();
+    await m?.close();
   }
 }
 

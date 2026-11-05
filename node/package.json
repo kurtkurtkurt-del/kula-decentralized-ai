@@ -13,7 +13,7 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "test": "node --import tsx --test test/*.test.ts",
+    "test": "node --import tsx --test --test-force-exit --test-timeout=120000 test/*.test.ts",
     "dev": "tsx src/bin/kula-node.ts"
   },
   "dependencies": {

@@ -20,7 +20,7 @@ import { apiChat, readSse } from '../src/apart.ts';
 import { serveModel } from '../src/modelserve.ts';
 import { openApart } from '../src/apart.ts';
 import { parsePeerText, REMOTE_NO_SPLIT, type Peer } from '../src/peers.ts';
-import { planWithProbe } from '../src/planner.ts';
+import { planWithProbe, simModel } from '../src/planner.ts';
 
 const PIECES = ['Guten', ' Morgen', ' aus', ' Berlin'];
 const SECRET_TEXT = 'the bread is fresh';
@@ -45,7 +45,7 @@ function fakeLlamaServer(): Promise<{ port: number; close: () => void }> {
 async function fakeWorker(pin: string | null, events: GateEvent[] = []) {
   const models = fs.mkdtempSync(path.join(os.tmpdir(), 'kula-relay-w-'));
   const llama = await fakeLlamaServer();
-  const api = await startApiServer({ models, llama: null, startBackend: async () => ({ port: llama.port, stop: async () => {} }) });
+  const api = await startApiServer({ models, llama: null, allowPrivateUrls: true, startBackend: async () => ({ port: llama.port, stop: async () => {} }) });
   const identity = createIdentity('worker-berlin');
   const tls = { identity, paired: new Paired(null), pin, onPinUsed: () => {} };
   const gate = await startGateServer({ port: 0, host: '127.0.0.1', secret: 'unused-v1-secret', targets: (ch) => (ch === 'api' ? api.port : null), tls, onEvent: (e) => events.push(e) });
@@ -233,7 +233,7 @@ test('relay: `chat --mode apart` with a far peer (openApart) works and teaches t
     assert.equal(taught.name, 'berlin');
     assert.ok(taught.last_ok);
     // split: the far peer is skipped before any probe, with the reason the cli prints
-    const plan = await planWithProbe({ modelBytes: 1_000_000, localFreeMb: 8000, localBw: 10, share: true, wanted: [taught], identity: me });
+    const plan = await planWithProbe({ model: simModel({ id: 'tiny', size: 1_000_000, layers: 28, hidden: 2048, vocab: 150000, quant: 'Q4_K_M', kv_mb_per_1k: 112 }), ctx: 2048, localFreeMb: 8000, localBw: 10, share: true, wanted: [taught], identity: me });
     assert.deepEqual(plan.used, []);
     assert.deepEqual(plan.skipped.map((s) => s.why), [REMOTE_NO_SPLIT]);
   } finally {

@@ -423,6 +423,9 @@ export async function startGateServer(opts: GateServerOptions): Promise<GateServ
     socket.on('error', () => {});
     if (inHandshake >= MAX_HANDSHAKES) {
       emit({ type: 'reject', channel: null, peer, at: Date.now(), reason: 'overloaded', v: 1 });
+      // read and drop the hello: closing with unread input sends a reset, and the
+      // client would see "connection reset" instead of the reason (Gate.kt b60c257)
+      socket.resume();
       try { socket.end('NO overloaded\n'); } catch {}
       setTimeout(() => socket.destroy(), 200);
       return;

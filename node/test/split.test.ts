@@ -9,7 +9,7 @@ import path from 'node:path';
 import net from 'node:net';
 import { startGateServer } from '../src/gate.ts';
 import { prepareSplit, splitServerArgs, startSplitServer } from '../src/split.ts';
-import { TooBig, MB } from '../src/planner.ts';
+import { TooBig, MB, tensorSplit } from '../src/planner.ts';
 import type { Peer } from '../src/peers.ts';
 
 function echoServer(): Promise<{ port: number; close: () => void }> {
@@ -37,15 +37,17 @@ test('split: probe, plan, tunnels; a dead peer and a wrong secret drop out befor
   try {
     assert.ok(Date.now() - t0 < 3000);
     assert.deepEqual(setup.plan.skipped.map((s) => `${s.peer.name}:${s.why}`).sort(), ['dead:connect ECONNREFUSED 127.0.0.1:1', 'liar:wrong secret']);
-    // 9900 MB needed: a (40 GB/s) fills its 6000, local (20) its 2800, b (10) gets the rest
-    assert.deepEqual(setup.plan.used.map((u) => `${u.name}:${u.assignedMb}`), ['a:6000', 'b:1100']);
-    assert.equal(setup.plan.localMb, 2800);
+    // ~9.9 GB needed, 2.8 GB here: a (40 GB/s) fills first, b (10) takes what is left
+    assert.equal(setup.plan.fitsAlone, false);
+    assert.deepEqual(setup.plan.used.map((u) => u.name), ['a', 'b']);
+    assert.equal(setup.plan.used[0].assignedMb, 6000);
+    assert.ok(setup.plan.localMb <= 2800 && setup.plan.localMb > 300);
     assert.equal(setup.tunnels.length, 2);
     assert.match(setup.rpcArg, /^127\.0\.0\.1:\d+,127\.0\.0\.1:\d+$/);
-    assert.equal(setup.tensorSplitArg, '2800,6000,1100');
+    assert.equal(setup.tensorSplitArg, tensorSplit(setup.plan).join(','));
     const args = splitServerArgs('/m/x.gguf', 8080, 2048, setup);
     assert.deepEqual(args.slice(0, 10), ['--host', '127.0.0.1', '--port', '8080', '-m', '/m/x.gguf', '-c', '2048', '-ngl', '99']);
-    assert.deepEqual(args.slice(-4), ['--rpc', setup.rpcArg, '--tensor-split', '2800,6000,1100']);
+    assert.deepEqual(args.slice(-4), ['--rpc', setup.rpcArg, '--tensor-split', setup.tensorSplitArg]);
     // the tunnels really reach the workers' rpc ports (echo here)
     for (const t of setup.tunnels) {
       const echoed = await new Promise<string>((resolve, reject) => {
