@@ -12,6 +12,8 @@ import { colors, fonts, radius } from '@/theme/tokens';
 
 // "share this phone": starts the worker (its own process; the gate on the network, ggml's
 // rpc server and the api behind it on 127.0.0.1) and shows the code another device scans.
+// The code is v3 once the worker reports its certificate (tls, a one-time pairing code that
+// changes after each pairing; the poll below picks the new one up), v2 with the secret before.
 // The screen stays on while sharing: Android gives the worker all cores only then.
 export default function ShareScreen() {
   const { t, up } = useLang();
@@ -73,7 +75,7 @@ export default function ShareScreen() {
         {status && state === 'running' ? (
           <>
             <Text style={styles.meta}>{t('share.ram', { mb: status.ramMb, bw: status.bandwidth.toFixed(1) })}{status.heldMb > 50 ? ` · ${t('share.holding', { gb: (status.heldMb / 1024).toFixed(1) })}` : ''}</Text>
-            <Text style={styles.meta}>{t('share.gate', { ok: status.connects, no: status.rejects })}</Text>
+            <Text style={styles.meta}>{t('share.gate', { ok: status.connects, no: status.rejects })}{status.fp ? ` · ${t('share.tls', { n: status.paired ?? 0 })}` : ''}</Text>
           </>
         ) : null}
         {status?.throttled ? <Text style={styles.warn}>{t('share.throttled')}</Text> : null}
@@ -87,6 +89,7 @@ export default function ShareScreen() {
             <QRCode value={qr} size={Math.min(width - 96, 280)} color={colors.paper} backgroundColor={colors.ink} ecl="L" />
           </View>
           <Text style={styles.mono}>{up(`${mine?.name ?? ''} · ${wifi ?? ''}:${mine?.port ?? ''}`)}</Text>
+          {status?.fp ? <Text style={styles.mono}>{up(`${t('share.fp')} ${status.fp.slice(0, 8)} ${status.fp.slice(8, 16)}${status.pin ? ` · ${t('share.pin')} ${status.pin}` : ''}`)}</Text> : null}
           <Text style={styles.hint}>{t('share.screen')}</Text>
         </View>
       ) : null}

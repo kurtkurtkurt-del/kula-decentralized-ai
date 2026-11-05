@@ -38,7 +38,10 @@ export type Peer = {
   name: string;
   host: string;
   port: number;
-  secret: string;
+  secret: string;        // protocol v1 (qr v2); '' for a v3 peer
+  fp?: string | null;    // protocol v2 (qr v3): the worker's certificate fingerprint, pinned from the qr
+  pin?: string | null;   // the one-time pairing code from that qr; cleared once paired
+  paired_at?: string | null;
   kind: 'phone' | 'tablet' | 'pc';
   ram: number | null;    // MB free when it advertised
   bw: number | null;     // GB/s

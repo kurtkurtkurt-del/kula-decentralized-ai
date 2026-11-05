@@ -145,6 +145,41 @@ PR açılmadı. Bu dalı release'e sen alacaksın.
   lint'te yalnız dalın öncesinden gelen `index.tsx` hatası var, bu dalın dosyaları temiz.
 - Apk derlenmedi (cloud); Android tarafı emülatörde denenmeli: paylaş → başka cihazdan bağlan → ayarlar → beyin denetimi.
 
+## 5.11 cloud: kapı v2 — TLS, cihaz sertifikaları (`claude/gate-tls`)
+
+`origin/claude/quirky-einstein-hy2v69` üstüne `release/local-2026-10-20` ve `loving-dijkstra`
+(`node/`) birleştirildi; üstüne beyin protokol v2'nin kapı kısmı yazıldı. Tam tarif `docs/GATE.md`.
+
+- **Aynı port, iki protokol:** sunucu ilk bayta bakar (`0x16` TLS ClientHello → v2, `K` → v1 düz).
+  Eski telefon / `--tls`siz dev-gate / v2 QR aynen çalışır.
+- **v2:** TLS 1.3, iki taraf da öz imzalı P-256 sertifika (elle DER, BouncyCastle yok; Ed25519 cihaz
+  anahtarının yanına ayrı P-256 kapı anahtarı — Conscrypt gerekçesi GATE.md'de). Usta `fp`'yi
+  QR'dan sabitler; işçi ustayı ilk bağlantıdaki tek kullanımlık `pin` kanıtıyla sabitler (`paired`
+  dosyası, iki yönlü TOFU), kod harcanır ve yenisi üretilir. Hello `KULA2 <kanal> <nonce_c> <ts>`;
+  tekrar nonce ve saat denetçi olmasa da reddedilir.
+- **QR v3:** `{"k":"kula-peer","v":3,"id","name","host","port","fp","pin","passport",…}`;
+  `app/src/llm/peers.ts` v2 ve v3 okur, `makePeerQr` fp varsa v3 üretir; `share.tsx` işçi
+  çalışınca v3 gösterir (durum dosyasından `fp`/`pin`), parmak izi ve kodu yazar.
+- **Kotlin:** `GateCert.kt` (DER + `GateIdentity` + `Paired`), `Gate.kt` (TLS sunucu/istemci,
+  `TlsServer`/`TlsClient`, `PinnedTrust`, hostname doğrulaması yok), `WorkerService` kimlik +
+  eşleşme listesi + kod döndürme, `KulaLlamaModule` `probePeer`/`apiTunnel`/`loadModel` `{fp,pin}`
+  alır, `gateFingerprint()`.
+- **TS:** `node/src/tls.ts` (aynı DER), `gate.ts` TLS dalı (Duplex ön-ek ile sniff; `unshift`
+  TLSSocket'ta çalışmıyor), `share --tls`, `probe --fp --pin`; `dev-gate.mjs --tls` (sertifikayı
+  `openssl` ile yapar, `.llama/dev-gate/`).
+- **Vektörler:** `gate-vectors.json` → `v2` (pin kanıtları) ve `cert` (TBS sha256; Kotlin ve TS
+  aynı baytı yazıyor).
+- **Testler:** JVM `GateTlsTest` 7 test (sertifika, disk kimliği, eşleşme→yalnız sertifika,
+  yanlış kod, yanlış parmak izi, yabancı sertifika, tekrar nonce, eski saat, kötü hello'lar,
+  istemci sertifikasız, TLS'siz sunucu, 300 KB boru, aynı portta v1) → audit-jvm 24/24;
+  node `gate-tls.test.ts` 8 test → 32/32; app jest 62/62, tsc temiz. dev-gate `--tls` kula-node
+  istemcisiyle elle denendi (eşleşme, ret nedenleri, kod döndü).
+- **Cihazda denenmedi.** Android derlenmedi (cloud'da SDK yok): `SSLSocketFactory.createSocket(
+  Socket, InputStream, Boolean)` (API 24+), Conscrypt'te `wantClientAuth` + TLS 1.3 istemci
+  sertifikası, Expo'nun `Map<String, Any?>?` argümanı emülatörde doğrulanmalı. `share.tsx`'teki
+  `status.pin` yenilenmesi 2 s'lik durum döngüsüne bağlı. Sonraki: anahtarı Android KeyStore'a
+  (`KeyStoreKey`), `peers.tsx`'te eşleşmiş/kod bekliyor göstergesi, kula-node `--tls`i varsayılan yapmak.
+
 ## nasıl test edilir (emülatör + Mac)
 
 ```bash

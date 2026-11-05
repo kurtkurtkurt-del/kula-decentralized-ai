@@ -9,8 +9,10 @@ export type LoadResult = { loadMs: number; localLayers: number; layers: number; 
 export type DoneEvent = { id: number; tokens: number; ms: number; firstMs: number; tps: number; stopped: boolean; error: string | null };
 export type DownloadEvent = { id: string; got: number; total: number; state: 'running' | 'retrying' | 'checking' | 'done' | 'error' | 'cancelled'; error: string | null };
 export type PeerFound = { serviceName: string; name: string; host: string | null; port: number; id: string | null; ram: number | null; bw: number | null; kind: string; v: string | null };
-export type WorkerStatus = { state: 'stopped' | 'starting' | 'running' | 'error'; error: string | null; peer: string | null; heldMb: number; ramMb: number; bandwidth: number; throttled: boolean; connects: number; rejects: number; id: string; batteryUnrestricted: boolean };
-export type PeerArg = { host: string; port: number; secret: string; weight: number };
+export type WorkerStatus = { state: 'stopped' | 'starting' | 'running' | 'error'; error: string | null; peer: string | null; heldMb: number; ramMb: number; bandwidth: number; throttled: boolean; connects: number; rejects: number; id: string; batteryUnrestricted: boolean; fp?: string | null; pin?: string | null; paired?: number };
+/** `{fp, pin?}` picks protocol v2 (tls, pinned certificate); null means protocol v1 with the secret. */
+export type PeerTls = { fp: string; pin?: string | null } | null;
+export type PeerArg = { host: string; port: number; secret: string; weight: number; fp?: string | null; pin?: string | null };
 export type Message = { role: 'system' | 'user' | 'assistant'; content: string };
 
 type Module = {
@@ -32,8 +34,9 @@ type Module = {
   clearContext(): Promise<void>;
   generate(messages: Message[], maxTokens: number, temperature: number, topP: number, reset: boolean): number;
   stop(): void;
-  probePeer(host: string, port: number, secret: string, channel: 'rpc' | 'api'): Promise<string | null>;
-  apiTunnel(host: string, port: number, secret: string): Promise<number>;
+  probePeer(host: string, port: number, secret: string, channel: 'rpc' | 'api', tls: PeerTls): Promise<string | null>;
+  apiTunnel(host: string, port: number, secret: string, tls: PeerTls): Promise<number>;
+  gateFingerprint(): Promise<string>;
   closeTunnels(): Promise<void>;
   discover(on: boolean): Promise<void>;
   startWorker(port: number, secret: string, name: string): Promise<void>;
