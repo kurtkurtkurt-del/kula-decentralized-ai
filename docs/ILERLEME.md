@@ -4,6 +4,33 @@ Plan: `~/.claude/plans/memoized-kindling-puddle.md` (4.11.2026). Bu dosya her ad
 ne yapıldı, ne doğrulandı, ne kaldı. Döndüğünde önce burayı oku.
 
 ## integrate-all (5.11 sabah, cloud oturumu, dal `claude/integrate-all`)
+## 5.11 cloud: yerel pano (`claude/web-dashboard`)
+
+`origin/claude/node-master` + `origin/claude/integrate-night` merge'i üstüne (ILERLEME çakışması iki taraf da
+tutularak çözüldü). PR yok, release/main'e dokunulmadı.
+
+- `node/src/dashboard/`: `kula-node share` ve `kula-node chat` çalışırken `http://127.0.0.1:50580/<rastgele>/`
+  (adres terminalde; `--dashboard <port>`, `--no-dashboard`). Bağımlılıksız: `static/index.html|app.css|app.js`,
+  SSE ile canlı (`events`: önce snapshot, sonra yamalar). Kartlar: bu bilgisayar (pasaport + ölçülen), kapı
+  (bekliyor / master bağlı · kimden, açık bağlantılar, son ret), kanal trafiği (rpc/api açık, açılış, bayt, ret),
+  model (yüklü, bağlam, tutulan MB, tok; share'de models klasöründen seç-yükle), eşler (secret'siz görünüm,
+  rozetler, iki kanal ulaşılabilirlik, yokla), eşleşme QR'ı (sunucu çizer: `qr.ts` = `passport/qr.js` portu,
+  testte modül modül aynı), defter (son 12 satır + zincir doğrula), sohbet testi (chat modunda küme; share'de
+  yerel api), toplu test (8 istem, cihaz başına tok/s çubukları), günlük.
+- Güvenlik: yalnız 127.0.0.1 bind; 24 hex rastgele yol öneki (`/` oraya yönlendirir, gerisi 404); Host denetimi
+  (dns rebinding); her POST'ta Origin == sayfa origin'i ve `sec-fetch-site` same-origin; CSP `default-src 'none'`;
+  secret hiçbir gövdede yok (state/peers görünümleri düşürür, QR svg olarak gider).
+- `pc/index.html`: panoyla aynı koyu görünüm; Mac komutu pasaportu `~/.kula-node/passport.json`'a da kopyalar;
+  4. adım `passport.json indir` + taşıma komutu. `share` bu dosyayı (yoksa `~/.kula/passport.json`) okur.
+- Testler: `node/test/dashboard.test.ts` 7 test (qr eşdeğerliği, görünüm/pasaport, loopback+önek+host+origin,
+  SSE akışı, batch/probe/verify/load, secret sızıntısı araması, gerçek `share` + kapıdan el sıkışma → sayfada).
+  `npm test` 53/53 geçti; `npm run build` temiz. Playwright ile sayfa ve pc/ çizimi doğrulandı (CSP'yi bozan
+  inline style'lar sınıfa alındı).
+- Belgeler: `docs/NODE.md` (pano bölümü, metinle), `node/README.md` kısa bölüm.
+- Denenmedi: gerçek telefonla eşleşme ve gerçek llama.cpp ile yükleme (cloud'da ikili yok). Sabah: Mac'te
+  `npm test`, `npm run dev -- share`, adresi aç, "yükle" ile bir gguf seç, sohbet kutusunu dene.
+
+## 5.11 cloud: bilgisayardan küme yönetimi (`claude/node-master`)
 
 `origin/claude/integrate-night` (`ec1ba27`) üstüne beş gece dalı sırayla merge commit'iyle alındı, squash yok;
 her dalın commit'leri origin'dekiyle aynı (hepsi `--is-ancestor`). Release ve main'e dokunulmadı; PR açılmadı.

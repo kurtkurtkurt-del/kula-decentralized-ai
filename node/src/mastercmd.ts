@@ -7,13 +7,17 @@ import { discover, findPeer, maskSecret, parsePeerText, peerCode, peersFile, pro
 import { loadOrCreateIdentity } from './tls.js';
 import { loadOrCreate as loadDeviceKey } from './audit/key.js';
 import { home } from './paths.js';
-import { openApart, batchReport, type Cluster, type Message } from './apart.js';
+import { openApart, batchReport, type Cluster, type Message, type Reply } from './apart.js';
 import { prepareSplit, startSplitServer } from './split.js';
 import { TooBig } from './planner.js';
 import { findLlama, sha256File } from './llama.js';
 import { serveModel } from './modelserve.js';
 import { freeRamMB, lanIPv4, measureBandwidth } from './sysinfo.js';
 import { expandHome } from './paths.js';
+import { DashboardState, type DeviceView } from './dashboard/state.js';
+import { startDashboard, BATCH_PROMPTS, type Dashboard } from './dashboard/server.js';
+import { selfView, peerActions, ledgerActions, hostName, DASHBOARD_PORT } from './dashboard/wire.js';
+import { deviceId } from './share.js';
 
 type Flags = Record<string, string | boolean>;
 const stamp = () => new Date().toISOString().slice(11, 19);
@@ -98,16 +102,6 @@ export async function peersCommand(sub: string | undefined, rest: string[], flag
 
 const writePeersSafe = writePeers;
 
-const BATCH_PROMPTS = [
-  'Name three uses of a bicycle pump in one sentence each.',
-  'Explain what a hash function is to a ten year old.',
-  'Write a haiku about a tired laptop.',
-  'What is the capital of Australia, and why is it not Sydney?',
-  'List four vegetables that grow underground.',
-  'Describe the smell of rain in two sentences.',
-  'Give a one line summary of how a fridge keeps things cold.',
-  'Translate "good morning, the bread is fresh" into French.',
-];
 
 export async function chatCommand(flags: Flags): Promise<number> {
   const modelArg = str(flags.model);
@@ -171,7 +165,28 @@ export async function chatCommand(flags: Flags): Promise<number> {
   if (cluster.stamped.length) writePeersSafe(readPeers(peersFileUsed).map((p) => cluster.stamped.find((s) => s.id === p.id) ?? p), peersFileUsed);
   log(`devices: ${cluster.devices.map((d) => d.name).join(', ')}${cluster.skipped.length ? `; skipped: ${cluster.skipped.map((s) => `${s.peer.name} (${s.why})`).join(', ')}` : ''}`);
 
-  const shutdown = async () => { await cluster.close(); for (const c of extraClose) await c().catch(() => {}); };
+  // the local dashboard: the devices, a chat box and the batch button on this very cluster
+  let dashboard: Dashboard | null = null;
+  let ledgerUi: ReturnType<typeof ledgerActions> | null = null;
+  if (flags['no-dashboard'] !== true) {
+    const state = new DashboardState('chat', selfView({ name: hostName(), id: deviceId(), host: lanIPv4(), ram: freeRamMB(), bw, gpu: null, vram: 0 }));
+    const devices = (): DeviceView[] => cluster.devices.map((d) => ({ id: d.id, name: d.name, local: d.local, busy: d.busy, tps: d.tps, done: d.done, bw: d.bw }));
+    state.devices(devices());
+    state.api({ loaded: true, model: path.basename(modelFile), ctx, heldMB: Math.round(size / (1024 * 1024)), running: true });
+    const peersUi = peerActions(state, str(flags.file), probeMs);
+    ledgerUi = ledgerActions(state);
+    const watched = {
+      chat: async (m: Message[], onToken: (t: string) => void, o: { maxTokens?: number; device?: string }) => { state.devices(devices()); try { return await cluster.chat(m, onToken, { ...o, maxTokens: o.maxTokens ?? maxTokens }); } finally { state.devices(devices()); } },
+      batch: async (p: string[], o: { maxTokens?: number; onReply?: (i: number, r: Reply) => void }) => cluster.batch(p, { maxTokens: o.maxTokens ?? maxTokens, onReply: (i, r) => { state.devices(devices()); o.onReply?.(i, r); } }),
+    };
+    try {
+      dashboard = await startDashboard({ port: flags.dashboard !== undefined ? num(flags.dashboard, DASHBOARD_PORT) : DASHBOARD_PORT, state, chat: watched, actions: { probe: peersUi.probe, verify: ledgerUi.verify }, log, batchPrompts: BATCH_PROMPTS });
+      ledgerUi.watch();
+      peersUi.probe().catch(() => {});
+    } catch (e) { log(`dashboard did not start: ${(e as Error).message} (--dashboard <port> or --no-dashboard)`); }
+  }
+
+  const shutdown = async () => { if (dashboard) await dashboard.close(); ledgerUi?.stop(); await cluster.close(); for (const c of extraClose) await c().catch(() => {}); };
   try {
     if (flags.batch !== undefined) {
       const prompts = typeof flags.batch === 'string' ? fs.readFileSync(expandHome(flags.batch), 'utf8').split('\n').filter((l) => l.trim()) : BATCH_PROMPTS;

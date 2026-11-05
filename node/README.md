@@ -106,6 +106,17 @@ While it runs:
 Firewall: allow incoming TCP on the gate port (macOS asks once; on Linux open
 it in ufw/firewalld; on Windows accept the Defender prompt or add a rule).
 
+## The dashboard
+
+While `share` or `chat` runs, a page on this computer only:
+`http://127.0.0.1:50580/<random>/` (the exact address is printed at start;
+`--dashboard <port>`, `--no-dashboard`). It shows this computer's passport,
+the gate (waiting / master connected / from whom), channel counters, the
+loaded model and the memory it takes, the peer book with reachability, the
+last ledger lines with a verify button, the pairing qr, a chat box and an
+8 prompt batch with tok/s per device. Bound to 127.0.0.1, random path prefix,
+same-origin posts, the secret never in a body. Details: `docs/NODE.md`.
+
 ## Running a cluster from this computer
 
 The computer can also be the side that runs the cluster, the role the phone
@@ -340,7 +351,10 @@ tampering, rotation, checks, the gate's clock field, `kula-node ledger`),
 seeing TLS records only, code expiry, one master at a time, rate limits, a
 code-only peer learning the certificate), `setup.test.ts` (`pickAsset` over the recorded release, sidecar, build
 instructions), `api.test.ts` and `conformance.test.ts` (the apart-mode api
-against a fake llama-server, SSE text byte for byte, `/stop`, `NO busy`).
+against a fake llama-server, SSE text byte for byte, `/stop`, `NO busy`),
+`dashboard.test.ts` (loopback only, prefix, host and origin checks, the sse
+stream, chat and batch over a fake cluster, the qr against `passport/qr.js`,
+no secret in any body, `share` with its dashboard and a real handshake).
 npm run dev -- share --no-qr
 ```
 
@@ -354,7 +368,8 @@ scheduler and api client), `src/split.ts` (rpc tunnels and llama-server over
 them), `src/modelserve.ts` (the gguf served to workers), `src/mastercmd.ts`
 (`peers`, `chat`), `src/sysinfo.ts` (lan ip, memory, bandwidth, gpu),
 `src/children.ts` (child processes on free ports), `src/download.ts`
-(resumable downloads), `src/cli.ts`.
+(resumable downloads), `src/dashboard/` (the local page: server, state,
+qr encoder, static files), `src/cli.ts`.
 
 Set `KULA_NODE_VERBOSE=1` to see the child programs' own output, and
 `KULA_NODE_HOME` to move `~/.kula-node` elsewhere.

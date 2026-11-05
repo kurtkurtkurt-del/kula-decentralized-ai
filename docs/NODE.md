@@ -205,3 +205,18 @@ byte for byte against `ApiServer.kt`), `audit.test.ts`, `setup.test.ts` (`pickAs
 recorded release), and on `claude/node-master` also `planner.test.ts`, `peers.test.ts`,
 `apart.test.ts` (two fake workers behind real gates), `split.test.ts` (plan, tunnels, the
 `--rpc`/`--tensor-split` arguments against a fake llama-server).
+
+## the dashboard
+
+While `kula-node share` or `kula-node chat` runs, a single page is served on
+this computer only:
+
+```
+http://127.0.0.1:50580/<random>/
+```
+
+The exact address, with its random part, is printed in the terminal when the
+command starts (`dashboard on http://127.0.0.1:50580/…/ (this computer only)`).
+`--dashboard <port>` moves it, `--no-dashboard` turns it off. It needs no
+build step and no dependency: three static files under
+`node/src/dashboard/static/` and an event stream.

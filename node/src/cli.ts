@@ -24,6 +24,7 @@ usage:
                         v1 is then off unless --secret is given (old phones)
       --relay <wss://…> also register with that relay so a device far away (behind nat) can come in
                         with a six digit code; the qr carries it. implies --tls (docs/RELAY.md)
+      --dashboard <n>   local dashboard port on 127.0.0.1 (default 50580); --no-dashboard turns it off
   kula-node probe <host> <port> <secret>   handshake on both channels, print OK/NO
       --fp <hex> [--pin <code>]   probe over tls (v2) against that certificate fingerprint; secret may be "-"
   kula-node ledger [--verify] [--tail N]   print the signed ledger; --verify checks the chain and signatures
@@ -45,6 +46,11 @@ running a cluster from this computer:
       --keep-local       split: when the model fits here, do not share it anyway
       --probe-ms <n>     how long a worker has to answer before it is dropped (default 2000)
       a peer far away (relay) is used in apart mode only; split mode leaves it out and says so
+      --dashboard <n>    local dashboard port on 127.0.0.1 (default 50580); --no-dashboard turns it off
+
+the dashboard: while share or chat runs, http://127.0.0.1:50580/<random>/ (the exact
+url is printed) shows this computer, the gate, the peers, the ledger, a chat box
+and the pairing qr. it answers on 127.0.0.1 only.
 
 files live in ${home()} (KULA_NODE_HOME overrides)
 `;
@@ -122,6 +128,7 @@ export async function main(argv: string[]): Promise<number> {
       noQr: flags['no-qr'] === true,
       tls: flags.tls === true || typeof flags.relay === 'string',
       relay: typeof flags.relay === 'string' ? flags.relay : undefined,
+      dashboard: flags['no-dashboard'] === true ? false : flags.dashboard !== undefined ? num(flags.dashboard, 50580) : undefined,
     });
     await new Promise<void>((resolve) => {
       const done = () => { stop().finally(resolve); };

@@ -18,6 +18,11 @@ import { loadOrCreate } from './audit/key.js';
 import { Ledger } from './audit/ledger.js';
 import { Auditor } from './audit/auditor.js';
 import { startRelayWorker, type RelayWorker } from './relay.js';
+import { DashboardState } from './dashboard/state.js';
+import { startDashboard, type Dashboard, type ChatSource } from './dashboard/server.js';
+import { selfView, peerActions, ledgerActions, modelsIn, DASHBOARD_PORT } from './dashboard/wire.js';
+import { apiChat, apiLoad, type Device, type Reply, type Message } from './apart.js';
+import { sha256File } from './llama.js';
 
 export interface ShareOptions {
   port: number;
@@ -30,6 +35,7 @@ export interface ShareOptions {
   tls?: boolean;
   // far away masters: connect out to this relay, register, put the code in the qr (docs/RELAY.md). implies tls.
   relay?: string;
+  dashboard?: number | false; // the local dashboard's port on 127.0.0.1; false: none
 }
 
 // The qr the phone scans. v2 carries the shared secret (protocol v1); v3 carries
@@ -69,9 +75,13 @@ export function newSecret(): string {
 }
 
 const stamp = () => new Date().toISOString().slice(11, 19);
-export const log = (s: string) => console.log(`${stamp()}  ${s}`);
+const logSinks = new Set<(s: string) => void>();
+export const log = (s: string) => { console.log(`${stamp()}  ${s}`); for (const f of logSinks) f(`${stamp()}  ${s}`); };
 
-export async function share(opts: ShareOptions): Promise<() => Promise<void>> {
+// What `share` hands back: stop(), with the gate port and the dashboard on it (tests, the cli's log).
+export type ShareHandle = (() => Promise<void>) & { gatePort: number; dashboard: Dashboard | null };
+
+export async function share(opts: ShareOptions): Promise<ShareHandle> {
   const models = expandHome(opts.models);
   fs.mkdirSync(models, { recursive: true });
   const llama = findLlama();
@@ -91,11 +101,17 @@ export async function share(opts: ShareOptions): Promise<() => Promise<void>> {
   const ram = opts.lieRam ?? freeRamMB();
   if (opts.lieRam) log(`advertising a false ram of ${opts.lieRam} MB (--lie-ram)`);
 
+  // the local dashboard sees everything from here on; nothing in it carries the secret
+  const state = new DashboardState('share', selfView({ name, id, host, ram, bw, gpu: gpu.name, vram: gpu.vramMB }));
+  const logSink = (line: string) => state.log(line);
+  logSinks.add(logSink);
+
   // every gate event goes through the auditor into the signed ledger
   const key = loadOrCreate();
   log(`device key ${key.alg} ${key.id}`);
   const auditor = new Auditor({ ledger: new Ledger(path.join(home(), 'ledger.jsonl'), key), log });
   const onEvent = (e: GateEvent) => {
+    state.gate(e);
     if (e.type === 'pair') { auditor.pair(e.peer, { fp: e.fp, channel: e.channel }); log(`paired ${e.peer} (certificate ${e.fp.slice(0, 16)}…)`); }
     else if (e.type === 'open') { auditor.connect(e.peer, e.channel); log(`${e.channel} open from ${e.peer}${e.v === 2 ? ' (tls)' : ''}`); }
     else if (e.type === 'close') { auditor.end(e.peer, e.channel, e.ms, e.bytesIn, e.bytesOut); log(`${e.channel} closed from ${e.peer} after ${e.ms} ms, in ${e.bytesIn} out ${e.bytesOut} bytes`); }
@@ -135,12 +151,22 @@ export async function share(opts: ShareOptions): Promise<() => Promise<void>> {
     }
     if (api) return api.port;
     apiStarting ??= startApiServer({ models, llama, log, onLoad: (name, want, got) => auditor.load('api', name, want, got) }).finally(() => { apiStarting = null; });
-    try { api = await apiStarting; log(`api on 127.0.0.1:${api.port}`); return api.port; } catch (e) { log(`api failed: ${(e as Error).message}`); return null; }
+    try { api = await apiStarting; log(`api on 127.0.0.1:${api.port}`); state.api({ running: true }); return api.port; } catch (e) { log(`api failed: ${(e as Error).message}`); return null; }
   };
 
   // one bad connection or download must not take the worker down
   process.on('uncaughtException', (e) => log(`error: ${e.message}`));
   process.on('unhandledRejection', (e) => log(`error: ${e instanceof Error ? e.message : String(e)}`));
+
+  // the api's state, and how much of memory the loaded file takes, every two seconds
+  const apiTimer = setInterval(() => {
+    if (!api) return;
+    const st = api.status();
+    let heldMB = 0;
+    if (st.loaded && st.model) { try { heldMB = Math.round(fs.statSync(path.join(models, st.model)).size / (1024 * 1024)); } catch {} }
+    state.api({ ...st, heldMB, running: true });
+  }, 2000);
+  apiTimer.unref();
 
   // protocol v2: this computer's certificate, the phones it has paired with, a one-time code per qr
   let tlsServer: TlsServer | undefined;
@@ -180,7 +206,43 @@ export async function share(opts: ShareOptions): Promise<() => Promise<void>> {
       log(`relay: ${(e as Error).message}; sharing on the lan only`);
     }
   }
+  state.setGatePort(gate.port);
   printQr(gate.port);
+
+  // the dashboard: the peer book, the ledger, a chat box against the local api
+  let dashboard: Dashboard | null = null;
+  const peersUi = peerActions(state);
+  const ledgerUi = ledgerActions(state);
+  state.models(modelsIn(models));
+  if (opts.dashboard !== false) {
+    try {
+      dashboard = await startDashboard({
+        port: opts.dashboard ?? DASHBOARD_PORT,
+        state,
+        qrText: () => text,
+        chat: localChatSource(() => targets('api'), models, name),
+        actions: {
+          probe: peersUi.probe,
+          verify: ledgerUi.verify,
+          load: async (file) => {
+            const port = await targets('api');
+            if (!port) throw new Error('the api did not start (is llama.cpp installed? kula-node setup)');
+            const full = path.join(models, path.basename(file));
+            if (!fs.existsSync(full)) throw new Error('no such model in ' + models);
+            const sha256 = await sha256File(full);
+            await apiLoad(port, { url: 'file://' + full, sha256, size: fs.statSync(full).size, name: path.basename(full), ctx: 4096 });
+            state.models(modelsIn(models));
+          },
+        },
+        log,
+      });
+      state.setQr(true);
+      ledgerUi.watch();
+      peersUi.probe().catch(() => {});
+    } catch (e) {
+      log(`dashboard did not start: ${(e as Error).message} (another kula-node? --dashboard <port> or --no-dashboard)`);
+    }
+  }
 
   const bonjour = new Bonjour();
   const service = bonjour.publish({
@@ -195,7 +257,7 @@ export async function share(opts: ShareOptions): Promise<() => Promise<void>> {
   log('waiting for the phone. ctrl-c to stop.');
 
   let stopping = false;
-  const stop = async () => {
+  const stop: ShareHandle = Object.assign(async () => {
     if (stopping) return;
     stopping = true;
     log('stopping');
@@ -206,6 +268,41 @@ export async function share(opts: ShareOptions): Promise<() => Promise<void>> {
     if (api) await api.close();
     if (rpc) await rpc.stop();
     clearInterval(healthTimer);
-  };
+    clearInterval(apiTimer);
+    ledgerUi.stop();
+    logSinks.delete(logSink);
+    if (dashboard) await dashboard.close();
+  }, { gatePort: gate.port, dashboard });
   return stop;
+}
+
+// The dashboard's chat box in share mode talks to this computer's own worker
+// api, one prompt at a time, the same wire a master would use.
+export function localChatSource(apiPort: () => Promise<number | null>, models: string, name: string): ChatSource {
+  const device = async (): Promise<Device> => {
+    const port = await apiPort();
+    if (!port) throw new Error('the api did not start: run kula-node setup, then load a model');
+    const st = await fetch(`http://127.0.0.1:${port}/status`).then((r) => r.json()).catch(() => null) as { loaded?: boolean } | null;
+    if (!st?.loaded) throw new Error('no model loaded here yet: pick one above (' + models + ')');
+    return { id: 'self', name, local: true, apiPort: port, bw: 0, busy: false, tps: null, done: 0, close: async () => {} };
+  };
+  let chain: Promise<unknown> = Promise.resolve();
+  const one = async (messages: Message[], onToken: (t: string) => void, maxTokens: number, reset: boolean): Promise<Reply> => {
+    const dev = await device();
+    const run = chain.then(() => apiChat(dev, messages, onToken, { maxTokens, temperature: 0.7, reset }));
+    chain = run.catch(() => {});
+    return run;
+  };
+  return {
+    chat: (messages, onToken, o) => one(messages, onToken, o.maxTokens ?? 256, false),
+    batch: async (prompts, o) => {
+      const out: Reply[] = [];
+      for (const [i, p] of prompts.entries()) {
+        const r = await one([{ role: 'user', content: p }], () => {}, o.maxTokens ?? 128, true);
+        out.push(r);
+        o.onReply?.(i, r);
+      }
+      return out;
+    },
+  };
 }
