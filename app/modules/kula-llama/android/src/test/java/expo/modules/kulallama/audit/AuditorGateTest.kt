@@ -73,6 +73,38 @@ class AuditorGateTest {
     }
   }
 
+  // a ledger whose directory is a plain file cannot be written: the gate must still answer
+  // (OK for a right secret, NO for a wrong one) and a 300 KB hello line is refused, not buffered
+  @Test fun aBrokenLedgerAndAnEndlessHelloDoNotBreakTheGate() {
+    val echo = ServerSocket(0, 1, InetAddress.getByName("127.0.0.1"))
+    Thread { while (true) { val s = echo.accept(); Thread { runCatching { s.getInputStream().copyTo(s.getOutputStream()) }; s.close() }.start() } }.apply { isDaemon = true }.start()
+    val dir = Files.createTempDirectory("audit").toFile()
+    val key = SoftwareKey.generate()
+    val ledger = Ledger(File(dir, "ledger.jsonl"), key)
+    File(dir, "ledger.jsonl").writeText("")
+    // a broken ledger: a file where its directory should be, from now on
+    val broken = Ledger(File(File(dir, "ledger.jsonl"), "x.jsonl"), key)
+    val auditor = Auditor(broken, key)
+    val secret = Gate.newSecret()
+    val port = ServerSocket(0).use { it.localPort }
+    val server = Gate.Server(port, secret, { ch -> if (ch == "rpc") echo.localPort else null }, auditor)
+    server.start()
+    try {
+      assertTrue(hello(port, secret, "00112233445566778899aabbccddeeff").startsWith("OK "))
+      assertEquals("NO wrong secret", hello(port, "not-the-secret", "ffeeddccbbaa99887766554433221100"))
+      Socket("127.0.0.1", port).use { s ->
+        s.soTimeout = 5000
+        // the gate stops reading at 256 bytes and answers; the rest of our write may hit a closed pipe
+        runCatching { s.getOutputStream().write(ByteArray(300_000) { 'A'.code.toByte() }); s.getOutputStream().flush() }
+        val reply = runCatching { s.getInputStream().bufferedReader(Charsets.US_ASCII).readLine() }.getOrNull()
+        assertEquals("NO bad hello", reply)
+      }
+    } finally {
+      server.stop(); echo.close()
+    }
+    assertEquals(0, ledger.tail(10).size)
+  }
+
   @Test fun theOtherHooksWriteTheirLinesAndReturnVerdicts() {
     val dir = Files.createTempDirectory("audit").toFile()
     val key = SoftwareKey.generate()

@@ -19,6 +19,15 @@ class ChecksTest {
     assertFalse(Checks.replay(ring, "d", "p1").ok)
   }
 
+  @Test fun replayRingForgetsTheOldestPeers() {
+    val ring = ReplayRing(10, maxPeers = 3)
+    for (p in listOf("p1", "p2", "p3", "p4")) ring.seenBefore("n", p)
+    assertEquals(3, ring.peerCount())
+    // p1 was the least recently seen: its nonce is forgotten, p4's is kept
+    assertFalse(ring.seenBefore("n", "p1"))
+    assertTrue(ring.seenBefore("n", "p4"))
+  }
+
   @Test fun clock() {
     val now = 1_700_000_000_000L
     assertTrue(Checks.clock(now + 120_000, now).ok)

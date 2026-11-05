@@ -55,6 +55,8 @@ All in `Checks.kt`, pure functions returning `Verdict(ok, reason?, warn)`.
 | replay | a nonce the same peer used within its last 1 000 (`replay`) | |
 | clock | hello timestamp more than 120 s from our clock (`clock`) | |
 | claim | claimed/measured (either way round) over 4× (`claim`) | over 2× (`ram`, `bandwidth`) |
+
+The worker writes a `claim` line only once it holds at least 256 MB for a master (5.11.2026): before a model is put on it, its RSS is this process alone and the advertised RAM would read as a lie. Measuring the claim against the whole device's memory, not RSS, is still open.
 | model | reported sha differs from the expected one (`model`) | |
 | bounds | more bytes or seconds than the per-connection limits (`bounds`); defaults 64 GB, 12 h | |
 | health | never | `throttled`, `hot` over 42 °C, `battery` under 15 % |

@@ -13,22 +13,28 @@ import { Auditor } from '../src/audit/auditor.ts';
 import { startGateServer, handshake, connectRemote, GateRefused } from '../src/gate.ts';
 
 const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'kula-audit-'));
-const seedKey = () => fromSeed(Buffer.from(vectors.seedHex, 'hex'));
+const seedKey = () => fromSeed(Buffer.from(vectors.key.seed, 'hex'));
 
+// test/audit-vectors.json is a verbatim copy of app/modules/kula-llama/tools/audit-vectors.json:
+// the phone's Ledger.kt (VectorsTest.kt) and this ledger must write the same bytes.
 test('the fixed seed gives the vector key, id and both lines byte for byte', () => {
   const key = seedKey();
-  assert.equal(publicKeyDer(key.publicKey).toString('hex'), vectors.publicKeySpkiDerHex);
-  assert.equal(key.id, vectors.deviceId);
+  assert.equal(publicKeyDer(key.publicKey).toString('hex'), vectors.key.public);
+  assert.equal(key.id, vectors.key.id);
   let prev = GENESIS;
   for (const v of vectors.lines) {
-    assert.equal(prev, v.prev);
-    const made = makeLine(key, v.input.t, v.input.kind as any, v.input.peer, v.input.fields, prev);
+    const { t, kind, peer, ...fields } = v.event as { t: number; kind: string; peer: string } & Record<string, string | number>;
+    const made = makeLine(key, t, kind as any, peer, fields, prev);
     assert.equal(made.line, v.line);
-    assert.equal(made.entry.sig, v.sig);
-    prev = sha256Hex(made.line);
+    assert.equal(sha256Hex(made.line), v.sha256);
+    prev = v.sha256;
   }
-  const pub = createPublicKey({ key: Buffer.from(vectors.publicKeySpkiDerHex, 'hex'), format: 'der', type: 'spki' });
+  const pub = createPublicKey({ key: Buffer.from(vectors.key.public, 'hex'), format: 'der', type: 'spki' });
   assert.equal(verifyLines(vectors.lines.map((v) => v.line), pub).ok, true);
+  // a line with one byte changed inside the signed text, and one with the sig tail broken
+  const bent = vectors.lines[0].line.replace('"peer":"10.0.0.7"', '"peer":"10.0.0.8"');
+  assert.equal(verifyLines([bent], pub).problems.map((p) => p.reason).includes('sig'), true);
+  assert.equal(verifyLines([vectors.lines[0].line.slice(0, -2)], pub).problems.length > 0, true);
 });
 
 test('a ledger on disk chains, verifies, and shows every kind of tampering', () => {
