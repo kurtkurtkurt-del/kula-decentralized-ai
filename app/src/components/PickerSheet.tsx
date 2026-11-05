@@ -1,6 +1,7 @@
 import { Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useLang } from '@/i18n';
+import { tapSelect } from '@/lib/haptics';
 import { colors, fonts, radius } from '@/theme/tokens';
 import { brand } from '@/theme/layout';
 
@@ -18,11 +19,11 @@ type Props = {
 // Bottom sheet list: ink background, paper rule on top, a spot dot on the selected row.
 export default function PickerSheet({ open, title, options, selected, onSelect, onClose, note }: Props) {
   const insets = useSafeAreaInsets();
-  const { up } = useLang();
+  const { t, up } = useLang();
   return (
     <Modal visible={open} transparent animationType="fade" onRequestClose={onClose}>
-      <Pressable style={styles.dim} onPress={onClose} />
-      <View style={[styles.sheet, { paddingBottom: insets.bottom + 24 }]}>
+      <Pressable style={styles.dim} onPress={onClose} accessibilityRole="button" accessibilityLabel={t('word.close')} />
+      <View style={[styles.sheet, { paddingBottom: insets.bottom + 24 }]} accessibilityViewIsModal>
         <Text style={styles.head}>{up(title)}</Text>
         <ScrollView style={styles.list} showsVerticalScrollIndicator={false}>
           {options.map((o) => {
@@ -31,9 +32,13 @@ export default function PickerSheet({ open, title, options, selected, onSelect, 
               <Pressable
                 key={o.id}
                 onPress={() => {
+                  tapSelect();
                   onSelect(o.id);
                   onClose();
                 }}
+                accessibilityRole="radio"
+                accessibilityState={{ selected: on, checked: on }}
+                accessibilityLabel={[o.label, o.extra].filter(Boolean).join(', ')}
                 style={({ pressed }) => [styles.row, pressed && styles.pressed]}
               >
                 <Text style={[styles.label, on && styles.labelOn]}>{o.label}</Text>
@@ -56,7 +61,7 @@ const styles = StyleSheet.create({
   sheet: { backgroundColor: colors.ink, borderWidth: 1, borderBottomWidth: 0, borderColor: colors.ink3, borderTopLeftRadius: radius.lg, borderTopRightRadius: radius.lg, paddingHorizontal: brand.left, paddingTop: 12, maxHeight: '70%' },
   head: { fontFamily: fonts.regular, fontSize: 11, letterSpacing: 1.4, color: colors.mute, marginBottom: 6 },
   list: { flexGrow: 0 },
-  row: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: colors.ink3 },
+  row: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 14, minHeight: 48, borderBottomWidth: 1, borderBottomColor: colors.ink3 },
   pressed: { opacity: 0.6 },
   label: { fontFamily: fonts.medium, fontSize: 22, letterSpacing: -0.4, color: colors.mute },
   labelOn: { color: colors.paper },

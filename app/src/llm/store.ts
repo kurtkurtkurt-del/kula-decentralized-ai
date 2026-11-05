@@ -2,6 +2,8 @@ import { useEffect, useState } from 'react';
 import Storage from 'expo-sqlite/kv-store';
 import { CATALOG, modelUrl, type CatalogModel } from '@/llm/catalog';
 import { llama, type DownloadEvent } from '@/llm/native';
+import { tapDone, tapFail } from '@/lib/haptics';
+import { rate } from '@/llm/progress';
 
 // What this phone keeps about models and peers (kv-store, never sent): the models on disk,
 // the downloads in flight, the chosen model and its settings, and the peers paired by qr.
@@ -23,7 +25,8 @@ export type LocalModel = {
   url: string;
   added_at: string;
 };
-export type Download = { id: string; got: number; total: number; state: DownloadEvent['state']; error: string | null; model: Omit<LocalModel, 'path' | 'added_at'> };
+export type Download = { id: string; got: number; total: number; state: DownloadEvent['state'] | 'paused'; error: string | null; model: Omit<LocalModel, 'path' | 'added_at'>; paused?: boolean; bps: number | null; at: number };
+
 export type Peer = {
   id: string;            // the worker's lasting id
   name: string;
@@ -102,7 +105,7 @@ export async function reconcileModels() {
     const c = CATALOG.find((m) => m.file === file);
     const model = c ? describe(c) : null;
     if (!model || downloads.has(model.id)) continue;
-    downloads.set(model.id, { id: model.id, got: f.size, total: model.size, state: 'error', error: 'interrupted', model });
+    downloads.set(model.id, { id: model.id, got: f.size, total: model.size, state: 'error', error: 'interrupted', model, bps: null, at: Date.now() });
   }
   listeners.forEach((fn) => fn());
 }
@@ -122,6 +125,9 @@ function subscribe() {
   llama.addListener('onDownload', (e) => {
     const d = downloads.get(e.id);
     if (!d) return;
+    const now = Date.now();
+    d.bps = e.state === 'running' ? rate(d.bps, e.got - d.got, now - d.at) : null;
+    d.at = now;
     d.got = e.got;
     d.total = e.total || d.total;
     d.state = e.state;
@@ -129,8 +135,14 @@ function subscribe() {
     if (e.state === 'done') {
       rememberModel({ ...d.model, path: `${modelsDir}/${d.model.file}`, added_at: new Date().toISOString() });
       downloads.delete(e.id);
+      tapDone();
     }
-    if (e.state === 'cancelled') downloads.delete(e.id);
+    if (e.state === 'error') tapFail();
+    // a pause is a cancel that keeps its row: the .part stays, "resume" asks for the rest
+    if (e.state === 'cancelled') {
+      if (d.paused) d.state = 'paused';
+      else downloads.delete(e.id);
+    }
     listeners.forEach((fn) => fn());
   });
 }
@@ -146,7 +158,8 @@ export async function initStore() {
 export async function startDownload(model: Omit<LocalModel, 'path' | 'added_at'>) {
   if (!llama) throw new Error('nonative');
   if (!modelsDir) await initStore();
-  const d: Download = { id: model.id, got: 0, total: model.size, state: 'running', error: null, model };
+  const was = downloads.get(model.id);
+  const d: Download = { id: model.id, got: was?.got ?? 0, total: model.size, state: 'running', error: null, model, paused: false, bps: null, at: Date.now() };
   downloads.set(model.id, d);
   listeners.forEach((fn) => fn());
   await llama.download(model.id, model.url, model.file, model.sha256, model.size);
@@ -155,6 +168,14 @@ export async function cancelDownload(id: string) {
   await llama?.cancelDownload(id);
   const d = downloads.get(id);
   if (d) { d.state = 'cancelled'; downloads.delete(id); listeners.forEach((fn) => fn()); }
+}
+export async function pauseDownload(id: string) {
+  const d = downloads.get(id);
+  if (!d) return;
+  d.paused = true;
+  d.state = 'paused';
+  listeners.forEach((fn) => fn());
+  await llama?.cancelDownload(id);
 }
 export function retryDownload(id: string) {
   const d = downloads.get(id);
@@ -178,6 +199,13 @@ export function rememberPeer(p: Peer) {
 }
 export const forgetPeer = (id: string) => write(PEERS, peers().filter((x) => x.id !== id));
 export const touchPeer = (id: string, patch: Partial<Peer>) => write(PEERS, peers().map((p) => (p.id === id ? { ...p, ...patch } : p)));
+
+// ---- small ux flags (5.11.2026): the first-run ladder ----------------------------------
+const UX = 'ux.flags';
+export type UxFlags = { ran: boolean; stepsDone: boolean };
+export const uxFlags = (): UxFlags => ({ ran: false, stepsDone: false, ...read<Partial<UxFlags>>(UX, {}) });
+export const useUxFlags = () => useStore(uxFlags);
+export const saveUxFlags = (patch: Partial<UxFlags>) => write(UX, { ...uxFlags(), ...patch });
 
 // ---- this phone as a worker ---------------------------------------------------------------
 export type Share = { secret: string; name: string; port: number };
