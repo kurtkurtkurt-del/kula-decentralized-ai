@@ -8,8 +8,8 @@
   --sage: #5b7a55; --gold: #b07d3f; --red: #b4513a;
   --user: #ebe4d8; --code: #2a2219; --code-words: #f0e6d2; --code-head: #3a2f24;
   --shadow: 0 1px 2px rgba(42, 34, 25, 0.06), 0 8px 24px rgba(42, 34, 25, 0.08);
-  --serif: "Iowan Old Style", "Charter", "Source Serif Pro", Georgia, serif;
-  --sans: "Inter Tight", "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, Helvetica, Arial, sans-serif;
+  --serif: "Inter Tight", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; /* 6.11.2026: Inter Tight everywhere, as in the app */
+  --sans: "Inter Tight", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, Helvetica, Arial, sans-serif;
   --mono: ui-monospace, "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace;
   --side-w: 268px; --brain-w: 380px;
   color-scheme: light;
@@ -530,3 +530,11 @@ ul.wiz-steps li::before { content: "› "; color: var(--meta); }
 .brain-head h2 { font-size: 22px; }
 .start-btn { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); font-weight: 550; }
 .start-btn:hover { filter: brightness(1.05); }
+
+/* the brain, final (6.11.2026): the twelve tiles stay where they are, full size; only the
+   feed under them scrolls, in its own box */
+.brain { display: flex; flex-direction: column; overflow: hidden; }
+.btop { position: static; flex: none; height: calc(50vh - 30px); min-height: 330px; margin-top: 0; box-shadow: none; }
+.bfeed-wrap { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 4px 2px 20px 0; border-top: 1px solid var(--line); margin-top: 4px; }
+.bfeed-h { position: sticky; top: 0; background: var(--side); padding: 8px 0 6px; margin: 0 0 2px; z-index: 1; }
+.btile b { font-weight: 500; font-size: 14px; letter-spacing: -0.005em; }

@@ -62,7 +62,7 @@ const hostPort = (h: string, port: number) => `${h.includes(':') ? `[${h}]` : h}
 const GONE_PAGE = (why: string) => `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>kula chat</title></head><body><p>${why.replace(/[&<>"']/g, '')}</p><p>ask whoever runs kula on that computer for a new qr code.</p></body></html>`;
 
 const TYPES: Record<string, string> = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml' };
-export const UI_STATIC = ['index.html', 'app.js', 'app.css', 'markdown.js', 'wizard.js'];
+export const UI_STATIC = ['index.html', 'app.js', 'app.css', 'fonts.css', 'markdown.js', 'wizard.js'];
 // tools/pack.mjs bakes these in: a packed executable has no static folder next to it
 declare const __KULA_UI_STATIC__: Record<string, string> | undefined;
 
@@ -73,7 +73,7 @@ export function uiStaticDir(): string {
 // The page may use the camera (to read the phone's qr) and nothing from anywhere else.
 const PAGE_HEADERS = {
   ...BASE_HEADERS,
-  'content-security-policy': "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; media-src 'self' blob:; connect-src 'self'; form-action 'none'; base-uri 'none'; frame-ancestors 'none'",
+  'content-security-policy': "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; font-src data:; media-src 'self' blob:; connect-src 'self'; form-action 'none'; base-uri 'none'; frame-ancestors 'none'",
   'permissions-policy': 'camera=(self), microphone=(), geolocation=()',
 };
 

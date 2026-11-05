@@ -678,11 +678,7 @@ function renderBrain() {
   grid.replaceChildren(...tiles);
 }
 $('bback').addEventListener('click', () => { brainOpen = null; renderBrain(); });
-$('brain').addEventListener('scroll', () => {
-  const br = $('brain');
-  if (br.scrollTop > 60 && !br.classList.contains('compact')) br.classList.add('compact');
-  else if (br.scrollTop <= 2 && br.classList.contains('compact')) br.classList.remove('compact');
-}, { passive: true });
+// (6.11.2026) the tiles no longer fold: the feed scrolls in its own box
 
 
 // what changed in the engine since the last look, said in the feed
