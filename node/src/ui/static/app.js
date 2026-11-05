@@ -610,39 +610,100 @@ function selectedPeers() {
   return sel.length ? sel : ids;
 }
 
-function renderPeers() {
-  const box = $('peer-list');
-  box.replaceChildren();
-  $('dev-count').textContent = S.peers.length ? String(S.peers.length) : '';
-  if (!S.peers.length) { box.appendChild(el('p', 'none', 'no device yet. add your phone below.')); $('add').open = true; return; }
+function renderPeers() { renderDevices(); }
+
+// ---------- devices: one list (6.11.2026). Every device once, however it is reached: a phone
+// adb sees on a cable and the paired records of it (by cable, by wi-fi) are one row. Active
+// ones first. A cable row is blue, a wi-fi row green, with its sign faint inside the box.
+const VIA_ICON = {
+  cable: ['M7.5 2.5v4M12.5 2.5v4', 'M5.5 6.5h9v3a4.5 4.5 0 0 1-9 0z', 'M10 14v3.5'],
+  wifi: ['M2.5 8a11 11 0 0 1 15 0', 'M5 10.8a7.3 7.3 0 0 1 10 0', 'M7.6 13.5a3.5 3.5 0 0 1 4.8 0', 'M10 16.3v.01'],
+};
+const devKey = (name) => String(name || '').toLowerCase().replace(/samsung|galaxy/g, '').replace(/[^a-z0-9]/g, '');
+
+function deviceGroups() {
+  const groups = [];
+  for (const d of S.cable?.adb === false ? [] : S.cable?.devices || []) groups.push({ key: devKey(d.model || d.name), name: d.name, cable: d, peers: [] });
   for (const p of S.peers) {
-    const row = el('div', 'peer');
-    const pick = el('span', `dot ${p.cable?.plugged === false ? 'no' : p.reach ? (p.reach.ok ? 'ok' : 'no') : ''}`);
-    const who = el('div', 'who');
-    const name = el('b', '', p.name);
-    name.appendChild(viaTag(p));
-    const bits = [p.kind, p.where];
-    if (p.ram) bits.push(`${(p.ram / 1024).toFixed(1)} GB free`);
-    if (p.waitingPair) bits.push('pairs on first contact');
-    if (p.cable?.plugged === false) bits.push('unplugged');
-    else bits.push(p.reach ? (p.reach.ok ? `reachable${p.reach.ms ? ` (${p.reach.ms} ms)` : ''}` : `not reachable: ${p.reach.reason}`) : p.last_ok ? `last seen ${new Date(p.last_ok).toLocaleString()}` : 'not checked yet');
-    who.append(name, el('span', '', bits.join(' · ')));
-    const x = el('button', 'icon x');
-    x.type = 'button';
-    x.setAttribute('aria-label', `forget ${p.name}`);
-    x.title = 'forget';
-    x.appendChild(svg(ICON.x));
-    x.addEventListener('click', async (e) => {
-      e.stopPropagation();
-      if (!confirm(`forget ${p.name}? you would pair it again to use it.`)) return;
-      await postJson('peers/remove', { id: p.id }).catch((err) => toast(err.message));
-      settings.peers = settings.peers.filter((id) => id !== p.id);
-      saveSettings();
-      refreshPeers(false);
-    });
-    row.append(pick, who, x);
-    box.appendChild(row);
+    let g = groups.find((x) => x.cable && (x.cable.peer?.id === p.id || (p.cable && p.cable.serial === x.cable.serial)))
+      ?? groups.find((x) => x.key && x.key === devKey(p.name));
+    if (!g) { g = { key: devKey(p.name), name: p.name, cable: null, peers: [] }; groups.push(g); }
+    g.peers.push(p);
   }
+  for (const g of groups) {
+    const cablePeer = g.peers.find((p) => p.cable) ?? null;
+    const wifiPeer = g.peers.find((p) => !p.cable) ?? null;
+    g.cableOn = !!g.cable && g.cable.state === 'device';
+    g.wifiOn = !!wifiPeer?.reach?.ok;
+    g.active = g.cableOn || g.wifiOn;
+    g.via = g.cableOn ? 'cable' : g.wifiOn ? 'wifi' : g.cable || cablePeer ? 'cable' : 'wifi';
+    g.cablePeer = cablePeer;
+    g.wifiPeer = wifiPeer;
+    if (!g.cable && cablePeer) g.name = cablePeer.name;
+  }
+  return groups.sort((a, b) => Number(b.active) - Number(a.active) || a.name.localeCompare(b.name));
+}
+
+function renderDevices() {
+  const box = $('dev-list');
+  if (!box) return;
+  const groups = deviceGroups();
+  $('dev-count').textContent = groups.length ? String(groups.length) : '';
+  const rows = [];
+  for (const g of groups) {
+    const row = el('div', `dev ${g.via}${g.active ? ' on' : ' off'}`);
+    const mark = svg(VIA_ICON[g.via]);
+    mark.classList.add('dev-mark');
+    const who = el('div', 'who');
+    const name = el('b', '', g.name);
+    who.appendChild(name);
+    const lines = [];
+    if (g.cable || g.cablePeer) {
+      const st = g.cable ? (STATE_WORDS[g.cable.state] || g.cable.state) : 'unplugged';
+      const reach = g.cablePeer?.reach ? (g.cablePeer.reach.ok ? ` · reachable${g.cablePeer.reach.ms ? ` (${g.cablePeer.reach.ms} ms)` : ''}` : '') : '';
+      const paired = g.cablePeer ? '' : g.cable?.installed === false ? ' · kula is not installed' : ' · not paired yet';
+      lines.push(`cable · ${st}${reach}${paired}`);
+    }
+    if (g.wifiPeer) {
+      const r = g.wifiPeer.reach;
+      lines.push(`${g.wifiPeer.far ? 'relay' : 'wi-fi'} · ${g.wifiPeer.where} · ${r ? (r.ok ? `reachable${r.ms ? ` (${r.ms} ms)` : ''}` : 'not reachable') : 'not checked'}`);
+    }
+    const p0 = g.peers[0];
+    const extra = [];
+    if (p0?.ram) extra.push(`${(p0.ram / 1024).toFixed(1)} GB free`);
+    if (g.peers.find((p) => p.holds)) extra.push(`holds ${g.peers.find((p) => p.holds).holds}`);
+    if (g.peers.some((p) => p.waitingPair)) extra.push('pairs on first contact');
+    if (extra.length) lines.push(extra.join(' · '));
+    for (const t of lines) who.appendChild(el('span', '', t));
+    const tools = el('div', 'dev-tools');
+    let cr = null;
+    if (g.cable) {
+      cr = cableRow(g.cable.serial);
+      cr.use.textContent = cr.use.textContent === 'working…' ? 'working…' : g.cablePeer ? 'use again' : 'use';
+      tools.appendChild(cr.use);
+    }
+    if (g.peers.length) {
+      const x = el('button', 'icon x');
+      x.type = 'button';
+      x.setAttribute('aria-label', `forget ${g.name}`);
+      x.title = 'forget';
+      x.appendChild(svg(ICON.x));
+      x.addEventListener('click', async () => {
+        if (!confirm(`forget ${g.name}? you would pair it again to use it.`)) return;
+        for (const p of g.peers) await postJson('peers/remove', { id: p.id }).catch((err) => toast(err.message));
+        const gone = new Set(g.peers.map((p) => p.id));
+        settings.peers = settings.peers.filter((id) => !gone.has(id));
+        saveSettings();
+        refreshPeers(false);
+      });
+      tools.appendChild(x);
+    }
+    row.append(mark, el('span', `dot ${g.active ? 'ok' : 'no'}`), who, tools);
+    if (cr) row.append(cr.steps, cr.code);
+    rows.push(row);
+  }
+  box.replaceChildren(...rows);
+  if (!rows.length) { box.appendChild(el('p', 'none', 'no device yet. plug a phone in, or add one below.')); $('add').open = true; }
 }
 
 // ---------- connect: a refresh (6.11.2026): asks again for the status, probes every device,
@@ -673,7 +734,6 @@ $('devices').addEventListener('click', (e) => { if (e.target === $('devices')) $
 $('devices').addEventListener('close', () => stopScan());
 refreshPeers(false); // the count on the devices button from the start
 
-$('probe').addEventListener('click', async () => { $('probe').textContent = 'checking…'; await refreshPeers(true); $('probe').textContent = 'check again'; });
 
 // ---------- connect: phones on a usb cable
 // adb on this computer sees them; "use" forwards a port to the phone's gate, opens its share
@@ -731,18 +791,16 @@ function cableRow(serial) {
 
 function renderCable() {
   const c = S.cable;
-  const box = $('cable-list');
+  const box = null;
   const help = $('cable-help');
   if (!c) return;
   if (!c.adb) {
-    box.replaceChildren(el('p', 'none', 'adb is not on this computer, so phones on a cable cannot be seen.'));
     cableRows.clear();
-    help.textContent = c.help || '';
-    $('cable-note').textContent = '';
+    help.textContent = `adb is not on this computer, so phones on a cable cannot be seen. ${c.help || ''}`;
+    renderDevices();
     return;
   }
   const list = c.devices || [];
-  $('cable-note').textContent = list.length ? '' : 'looking every 2 s';
   help.textContent = c.error ? `adb: ${c.error}` : list.length ? '' : 'plug the phone into this computer with a usb cable. on the phone, usb debugging must be on (settings → developer options).';
   for (const [serial] of cableRows) if (!list.some((d) => d.serial === serial)) cableRows.delete(serial);
   const rows = [];
@@ -776,8 +834,8 @@ function renderCable() {
     if (job && job.step !== 'paired') cableDone.delete(d.serial);
     rows.push(r.row);
   }
-  box.replaceChildren(...rows);
-  if (!rows.length) box.appendChild(el('p', 'none', 'no phone on a cable.'));
+  void box; void rows;
+  renderDevices();
 }
 
 function pickPeer(id) {

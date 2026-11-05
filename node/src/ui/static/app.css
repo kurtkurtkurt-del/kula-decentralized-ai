@@ -234,15 +234,15 @@ svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width:
 .peer .who span { display: block; font-size: 12px; color: var(--mute); }
 .peer .x { color: var(--meta); }
 .peer input[type="checkbox"], .peer input[type="radio"] { accent-color: var(--accent); margin: 0; }
-.peer.cable .cable-steps { grid-column: 1 / -1; margin: 0; padding: 0 0 0 20px; list-style: none; font-size: 12.5px; color: var(--mute); display: flex; flex-direction: column; gap: 2px; }
+.peer.cable .cable-steps, .dev .cable-steps { grid-column: 1 / -1; margin: 0; padding: 0 0 0 20px; list-style: none; font-size: 12.5px; color: var(--mute); display: flex; flex-direction: column; gap: 2px; }
 .peer.cable .cable-steps:empty { display: none; }
-.peer.cable .cable-steps li::before { content: "› "; color: var(--meta); }
-.peer.cable .cable-steps li.bad { color: var(--red); } .peer.cable .cable-steps li.ok { color: var(--sage); }
-.peer.cable .cable-code { grid-column: 1 / -1; display: flex; gap: 8px; align-items: center; }
-.peer.cable .cable-code[hidden] { display: none; }
-.peer.cable .cable-code input { flex: 1; min-width: 0; border: 1px solid var(--line2); background: var(--ground); border-radius: 9px; padding: 8px 10px; color: var(--words); font-family: var(--mono); font-size: 14px; outline: none; }
+.peer.cable .cable-steps li::before, .dev .cable-steps li::before { content: "› "; color: var(--meta); }
+.dev .cable-steps li.bad, .peer.cable .cable-steps li.bad { color: var(--red); } .dev .cable-steps li.ok, .peer.cable .cable-steps li.ok { color: var(--sage); }
+.dev .cable-code, .peer.cable .cable-code { grid-column: 1 / -1; display: flex; gap: 8px; align-items: center; }
+.dev .cable-code[hidden], .peer.cable .cable-code[hidden] { display: none; }
+.dev .cable-code input, .peer.cable .cable-code input { flex: 1; min-width: 0; border: 1px solid var(--line2); background: var(--ground); border-radius: 9px; padding: 8px 10px; color: var(--words); font-family: var(--mono); font-size: 14px; outline: none; }
 .peer.cable .cable-code input:focus { border-color: var(--accent); }
-.peer.cable .pill:disabled { opacity: 0.5; cursor: default; }
+.dev .pill:disabled, .peer.cable .pill:disabled { opacity: 0.5; cursor: default; }
 
 .add { margin-top: 12px; }
 .add > summary { cursor: pointer; color: var(--accent); font-size: 14px; list-style: none; display: inline-flex; gap: 6px; align-items: center; }
@@ -421,3 +421,22 @@ ul.wiz-steps li::before { content: "› "; color: var(--meta); }
 .devices-btn b { font-weight: 600; color: var(--accent); margin-left: 2px; }
 .devices-btn b:empty { display: none; }
 @media (max-width: 640px) { .pop { margin: 56px auto auto; } .pop::before { display: none; } }
+
+/* devices: one list, every device once (6.11.2026). cable blue, wi-fi green, the sign faint inside. */
+:root { --via-cable: #3d6fb0; --via-wifi: #3f8a5a; }
+.dev-list { display: grid; gap: 8px; }
+.dev { position: relative; overflow: hidden; display: grid; grid-template-columns: 10px 1fr auto; column-gap: 10px; align-items: center; padding: 10px 12px; border-radius: 12px; border: 1px solid transparent; }
+.dev.cable { background: color-mix(in srgb, var(--via-cable) 9%, var(--card)); border-color: color-mix(in srgb, var(--via-cable) 28%, transparent); }
+.dev.wifi { background: color-mix(in srgb, var(--via-wifi) 9%, var(--card)); border-color: color-mix(in srgb, var(--via-wifi) 28%, transparent); }
+.dev.off { filter: saturate(0.35); opacity: 0.72; }
+.dev-mark { position: absolute; right: 64px; top: 50%; width: 54px; height: 54px; transform: translateY(-50%); fill: none; stroke-width: 1.4; stroke-linecap: round; stroke-linejoin: round; opacity: 0.16; pointer-events: none; }
+.dev.cable .dev-mark { stroke: var(--via-cable); }
+.dev.wifi .dev-mark { stroke: var(--via-wifi); }
+.dev .who { position: relative; min-width: 0; }
+.dev .who b { font-weight: 600; display: block; }
+.dev .who span { display: block; font-size: 12px; color: var(--mute); }
+.dev.cable .who span:first-of-type { color: var(--via-cable); }
+.dev.wifi .who span:first-of-type { color: var(--via-wifi); }
+.dev-tools { display: flex; align-items: center; gap: 4px; position: relative; }
+.dev .cable-steps, .dev .cable-code { grid-column: 2 / -1; position: relative; padding-left: 0; margin-top: 6px; }
+.dev .cable-steps:empty { display: none; }
