@@ -3,6 +3,60 @@
 Plan: `~/.claude/plans/memoized-kindling-puddle.md` (4.11.2026). Bu dosya her adımda güncellenir:
 ne yapıldı, ne doğrulandı, ne kaldı. Döndüğünde önce burayı oku.
 
+## belgeler (5.11 cloud oturumu, dal `claude/docs`)
+
+`origin/claude/integrate-night` üstüne yalnız belge; kod değişmedi. Öteki beş dal (`gate-tls`, `node-master`,
+`night-2`, `audit-ui`, `models-library`) okundu ve belgelere dahil edildi; henüz birleştirilmemiş özellikler
+belgede dalının adıyla işaretli (kapı v2, `kula-node peers/chat`, gece planlayıcısı ve rapor, beyin denetimi
+ekranı, parçalı indirme).
+
+### yazılanlar
+- `docs/ARCHITECTURE.md` (en): bileşenler ve dosya rolleri, iki süreç (uygulama, `:worker`) şeması, kapı/tünel
+  şeması, indirme · ayrı · bölünmüş · gece için ayrı mermaid sıra diyagramları, telefon/bilgisayar/depo dosya
+  yerleri tablosu, "neden böyle" (RPC 127.0.0.1, ayrı süreç, Range + sha zorunlu, ayrı mod varsayılan,
+  sürüm sabit, beyin yalnız kontrol eder, saf fonksiyonlar, ölçüm kula'nın değil).
+- `docs/GUIDE.en.md`, `docs/GUIDE.tr.md`: kurulum (apk, demo olarak gir), ölçüm, hangi telefona hangi model
+  tablosu + katalogdaki dokuz modelin ne için olduğu, mod sorusu, sohbet ve toplu test, iki telefonu QR ile
+  birleştirme adım adım, bilgisayar ekleme (kula-node), gece koşulları ve "uygulama açık kalmalı" sınırı, sorun
+  giderme (wi-fi istemci yalıtımı, hotspot, busy/channel closed/wrong secret, pil kısıtlaması: Samsung, Xiaomi,
+  Huawei, OnePlus), SSS (Berlin → relay yok, Tailscale/ZeroTier + yalnız ayrı mod).
+- `docs/GATE.md` (en, gate-tls'teki Türkçe taslağın yerine): v1 ve v2 tek belgede, QR v2/v3, ret nedenleri tablosu,
+  tünel, dev-gate bayrakları, tehdit modeli tablosu, durum (v2 cihazda denenmedi).
+- `docs/AUDIT.md`: defter biçimi ve imzalanan baytlar, olay alanları, anahtar, denetim kuralları ve sayıları,
+  zincir doğrulama (Kotlin, `kula-node ledger --verify`, telefondaki ekran), rozetler, dışa aktarma/temizleme,
+  bilinen boşluklar, testler.
+- `docs/NIGHT.md`: koşullar tablosu, planlayıcı durum makinesi, parça, birim türleri, döngü, rapor alanları,
+  ayarlar ve anahtarları, sınırlar.
+- `docs/NODE.md`: kurulum (platform tablosu), `share/probe/ledger/peers/chat` komutları ve bayrakları, dosyalar,
+  ilk çalıştırma, "yerel ağın ötesi" (relay yok; özel ağ ile ayrı mod).
+- `docs/SERVERS.md`: eski README'nin demo/canlı sunucu bölümü olduğu gibi taşındı.
+- `CONTRIBUTING.md`: ağacın kuralları (android üretilir, llama ağacı script'ten, passport sync, apk yalnız
+  `npm run apk`, RPC 127.0.0.1, vektörler iki tarafta aynı), kurulum, test komutları tablosu, commit üslubu,
+  dallar, belge dili, güvenlik bildirimi.
+- `README.md` kısaltıldı: klasörler, belge tablosu, bir dakikada, kurallar, sunucular, lisans. Eski afterhours
+  notları (1 300 satır) göreli yolları bozulmasın diye kökte `AFTERHOURS.md`'ye taşındı.
+- `app/CREDITS.md`: device-passport, ggml rpc, 4.11'den beri eklenen paketler (expo-camera/clipboard/battery/
+  network/notifications/sharing/sqlite/file-system, react-native-qrcode-svg, bonjour-service MIT,
+  qrcode-terminal Apache-2.0, tsx), TLS'nin platformdan geldiği.
+- `tools-docs-links.mjs` (kök, bağımlılıksız): bütün göreli bağlantılar ve `#` çapaları; `--external` ile dış
+  adresler. Sonuç: 15 dosya, 57 bağlantı, 0 kırık. Dış kontrol: tek markdown dış bağlantı
+  (`kurtkurtkurt-del.github.io/afterhours`, AFTERHOURS.md) bu konteynerden çözümlenemedi (ağ politikası);
+  CREDITS'teki adresler düz metin olduğundan sayılmadı.
+
+### kararlar
+- Teknik belgeler İngilizce (kod ve yorumlar gibi), kılavuz iki dilde, ILERLEME Türkçe. GATE.md bu yüzden
+  İngilizceye çevrilip tamamlandı.
+- Henüz yazılmamış şeyler (relay, KeyStore anahtarı, sunucudan iş, `night_report` canlı rpc) belgede "yok" diye
+  açıkça yazıldı; var gibi anlatılmadı.
+- Başka dallardaki özellikler belgelendi ama birleştirme ya da PR yapılmadı; release/main'e dokunulmadı.
+
+### açık kalanlar
+- Belgeler koda göre yazıldı, cihazda doğrulanmadı: ekran adları i18n anahtarlarından, pil ayarı yolları
+  üreticilerin genel menülerinden. Telefonda bir tur sonra GUIDE'ın 5., 7. ve 8. bölümleri gözden geçirilmeli.
+- `node/README.md` bu dalda integrate-night sürümü; `node-master` birleşince `peers/chat` bölümü kendiliğinden
+  gelir, NODE.md ona göre yazıldı.
+- `docs/shots/` görüntüleri kılavuza bağlanmadı (emülatör görüntüleri; gerçek telefon görüntüsü alınınca).
+
 ## bütünleştirme (5.11 sabaha karşı, cloud oturumu, dal `claude/integrate-night`)
 
 Üç gece dalı `origin/release/local-2026-10-20` (`9a2f91f`) üstüne sırayla merge commit'iyle alındı, squash yok,
