@@ -189,8 +189,10 @@ class KulaLlamaModule : Module() {
       )
     }
     AsyncFunction("gateLedger") { limit: Int ->
-      val f = File(context.filesDir, "kula_gate_ledger.jsonl")
-      if (f.exists()) f.readLines().takeLast(limit) else emptyList()
+      // beyin's signed ledger (one JSON string per line); the old plain file is read while one is still around
+      val ledger = WorkerService.ledgerFile(context)
+      if (ledger.exists()) expo.modules.kulallama.audit.Ledger.tail(ledger, limit)
+      else File(context.filesDir, "kula_gate_ledger.jsonl").takeIf { it.exists() }?.readLines()?.takeLast(limit) ?: emptyList()
     }
     AsyncFunction("keepScreenOn") { on: Boolean ->
       val activity = appContext.currentActivity

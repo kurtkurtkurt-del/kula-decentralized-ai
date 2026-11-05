@@ -1,0 +1,29 @@
+{
+  "note": "kula gate v1: hmac_c = HMAC-SHA256(secret, nonce_c|nonce_s|channel), hmac_s = HMAC-SHA256(secret, nonce_s|nonce_c|channel); both lowercase hex. Shared by Gate.kt (GateTest.kt) and node/src/gate.ts.",
+  "vectors": [
+    {
+      "secret": "abababababababababababababababababababababababababababababababab",
+      "nonce_c": "00112233445566778899aabbccddeeff",
+      "nonce_s": "ffeeddccbbaa99887766554433221100",
+      "channel": "rpc",
+      "hmac_c": "314ea21bc5536041a3b59dd84c46f2d2bc893d87a4845f62f1cf8e9483c67e9c",
+      "hmac_s": "ff012eddfddb9405a0f7f3df7c2b45fc90d1b081841d6f46ae052a2aac599eb6"
+    },
+    {
+      "secret": "kula-test-secret",
+      "nonce_c": "0123456789abcdef0123456789abcdef",
+      "nonce_s": "fedcba9876543210fedcba9876543210",
+      "channel": "api",
+      "hmac_c": "e9f2589b1163c16e2c7d09fdace7d19d6dac4242537264cbf88455cd9011f463",
+      "hmac_s": "39e4f4a291727decb539e4f4d7e7a24e26af61a3fc874f8e183614c44a8b1feb"
+    },
+    {
+      "secret": "7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f",
+      "nonce_c": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "nonce_s": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "channel": "rpc",
+      "hmac_c": "5279d35641c975d3004599475296e058347098772fcc7fefc467668c550140f3",
+      "hmac_s": "a67bfde1edf810727d191dfb3f78a4d53fe157903cb8df03f847fddcb66f2df3"
+    }
+  ]
+}
