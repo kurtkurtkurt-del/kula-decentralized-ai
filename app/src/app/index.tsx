@@ -1,4 +1,3 @@
-import { useEffect } from 'react';
 import { Redirect } from 'expo-router';
 import { StyleSheet, View } from 'react-native';
 import Intro from '@/components/Intro';
@@ -10,10 +9,8 @@ import { useState } from 'react';
 export default function Home() {
   const [done, setDone] = useState(false);
   const { ready, session } = useAuth();
-  useEffect(() => {
-    if (ready && session) setDone(true);
-  }, [ready, session]);
-  if (done) return <Redirect href="/models" />;
+  // derived, not set in an effect: a signed-in user skips the intro the moment the session is known
+  if (done || (ready && session)) return <Redirect href="/models" />;
   return (
     <View style={styles.root}>
       <Intro onDone={() => setDone(true)} />
