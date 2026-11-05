@@ -114,6 +114,18 @@ export function demoRpc(s: DemoState, name: string, a: Row = {}): Answer {
       s.open = null;
       return ok(cardNo);
     }
+    // the morning report (night-2): one json per night, kept under night_reports; a
+    // retry with the same client id does not make a second row
+    case 'night_report': {
+      const list = ((s.night_reports ??= []) as Row[]);
+      const found = list.find((r) => r.client_id === a.p_client_id);
+      if (found) return ok(found.id);
+      const id = uuid(s);
+      list.unshift({ id, client_id: a.p_client_id ?? null, report: a.p_report, created_at: new Date().toISOString() });
+      return ok(id);
+    }
+    case 'night_reports':
+      return ok(((s.night_reports ?? []) as Row[]).slice(0, a.p_limit ?? 30));
     case 'my_cards':
     case 'credits_mine':
       return ok(s[name]);

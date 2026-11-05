@@ -56,6 +56,18 @@ describe('what the user does stays', () => {
     expect(data('my_cards', {}, s)[0].card_no).toBe(no);
     expect(data('contribution_open', {}, s)).toEqual([]);
   });
+  it('a morning report is kept once per client id and listed newest first', () => {
+    const s = freshState();
+    const report = { id: '2026-11-05', slug: 'beyin', units: 12, tokens: 300, seconds: 600, wh: 0.5 };
+    const id = data('night_report', { p_report: report, p_client_id: 'c1' }, s);
+    expect(data('night_report', { p_report: report, p_client_id: 'c1' }, s)).toBe(id); // a retry
+    const id2 = data('night_report', { p_report: { ...report, id: '2026-11-06' }, p_client_id: 'c2' }, s);
+    expect(id2).not.toBe(id);
+    const list = data('night_reports', {}, s);
+    expect(list).toHaveLength(2);
+    expect(list[0]).toMatchObject({ id: id2, report: { id: '2026-11-06' } });
+    expect(list[1].report).toEqual(report);
+  });
   it('a night on a project not kept is refused, as the server does', () => {
     const s = freshState();
     const slug = openSlug(s);
