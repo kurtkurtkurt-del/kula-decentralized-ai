@@ -84,15 +84,18 @@ function toast(text) {
 
 // ---------- settings (this browser only)
 
-const DEFAULTS = { temperature: 0.7, maxTokens: 1024, ctx: 4096, system: '', theme: 'system', mode: 'phone', model: null, peers: [], way: null };
+const DEFAULTS = { temperature: 0.7, maxTokens: 1024, ctx: 4096, system: '', theme: 'kula', mode: 'phone', model: null, peers: [], way: null };
 function readSettings() {
   try { return { ...DEFAULTS, ...JSON.parse(localStorage.getItem('kula.chat.settings') || '{}') }; } catch { return { ...DEFAULTS }; }
 }
 const settings = readSettings();
 function saveSettings() { try { localStorage.setItem('kula.chat.settings', JSON.stringify(settings)); } catch {} }
+// look (6.11.2026): kula is the green rail, white plain white, dark plain black. an older
+// choice (system, light) counts as kula.
 function applyTheme() {
-  if (settings.theme === 'light' || settings.theme === 'dark') document.documentElement.dataset.theme = settings.theme;
-  else delete document.documentElement.dataset.theme;
+  if (!['kula', 'white', 'dark'].includes(settings.theme)) settings.theme = 'kula';
+  if (settings.theme === 'kula') delete document.documentElement.dataset.theme;
+  else document.documentElement.dataset.theme = settings.theme;
 }
 applyTheme();
 
@@ -532,6 +535,7 @@ function updateEmpty() {
 const FEED = [];
 const FEED_MAX = 80;
 function feed(branch, text, opts = {}) {
+  try { cortex?.fire(branch === 'routine' ? 'senses' : branch); } catch {}
   const now = Date.now();
   const last = FEED[0];
   if (!opts.id && last && !last.active && last.branch === branch && last.text === text) { last.n = (last.n || 1) + 1; last.at = now; renderFeed(); return last; }
@@ -634,6 +638,163 @@ const BRANCH_LOOK = {
 };
 const branchColor = (name) => { const b = BRANCHES.find((x) => x.id === name || x.name === name); return b ? BRANCH_LOOK[b.id][0] : 'var(--meta)'; };
 
+
+// ---------- cortex and gauges (6.11.2026, design 7 of the board): the brain seen from above,
+// two hemispheres of neurons, a region for each branch; what the brain does (the feed) fires
+// its region and the firing spreads. Under it the twelve branches as small live gauges.
+var cortex = null; // var: feed() may run before this line is reached
+const PINGS = new Map(); // peer id → the last round-trip times of its probes, ms
+const SHORT = { trust: 'trust', models: 'models', learning: 'learning', review: 'review' };
+const VIA_HEX = { cable: '#3d6fb0', wifi: '#3f8a5a' };
+const LEFT_LOBE = ['senses', 'connections', 'trust', 'memory', 'forecast', 'limits'];
+const RIGHT_LOBE = ['planner', 'executor', 'models', 'learning', 'review', 'advisor'];
+const hexA = (h, a) => { h = String(h || '').trim(); if (h[0] !== '#') return h || 'transparent'; if (h.length === 4) h = '#' + [...h.slice(1)].map((x) => x + x).join(''); const n = parseInt(h.slice(1), 16); return `rgba(${n >> 16},${(n >> 8) & 255},${n & 255},${a})`; };
+const seeded = (a) => () => { a |= 0; a = a + 0x6D2B79F5 | 0; let t = Math.imul(a ^ a >>> 15, 1 | a); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; };
+const sparkSvg = (series) => {
+  const all = series.flatMap((x) => x.v);
+  if (!all.length) return '<span class="bt-stat">no rounds yet</span>';
+  const lo = Math.min(...all) - 3, hi = Math.max(...all) + 3;
+  const line = ({ v, c }) => { const pts = v.map((y, i) => `${(i / Math.max(1, v.length - 1)) * 150},${26 - ((y - lo) / (hi - lo)) * 26}`); const [lx, ly] = pts.at(-1).split(','); return `<polyline points="${pts.join(' ')}" fill="none" stroke="${c}" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round"/><circle cx="${lx}" cy="${ly}" r="2.6" fill="${c}"/>`; };
+  return `<svg viewBox="0 0 150 26" preserveAspectRatio="none" aria-hidden="true">${series.map(line).join('')}</svg>`;
+};
+function gaugeOf(id) {
+  const st = S.status, L = st?.loaded;
+  switch (id) {
+    case 'senses': return sparkSvg(S.peers.filter((p) => PINGS.get(p.id)?.length).slice(0, 3).map((p) => ({ v: PINGS.get(p.id), c: p.cable ? VIA_HEX.cable : VIA_HEX.wifi })));
+    case 'memory': { const n = Math.min(12, (st?.decisions ?? []).length); return n ? `<span class="blocks">${'<i></i>'.repeat(n)}</span>` : '<span class="bt-stat">nothing kept yet</span>'; }
+    case 'connections': {
+      const g = deviceGroups().slice(0, 3);
+      if (!g.length) return '<span class="bt-stat">no device</span>';
+      const ys = g.length === 1 ? [13] : g.length === 2 ? [7, 19] : [5, 13, 21];
+      return `<svg viewBox="0 0 150 26" aria-hidden="true"><circle cx="9" cy="13" r="5.5" fill="none" stroke="var(--accent)" stroke-width="1.5"/>${g.map((d, i) => { const c = VIA_HEX[d.via]; return `<line x1="15" y1="13" x2="58" y2="${ys[i]}" stroke="${d.active ? c : 'var(--line2)'}" stroke-width="1.4" stroke-dasharray="4 3"/><circle cx="63" cy="${ys[i]}" r="4" fill="${d.active ? c : 'none'}" stroke="${c}"/>`; }).join('')}</svg>`;
+    }
+    case 'planner': {
+      if (!L) return st?.loading ? '<span class="bt-stat">planning…</span>' : '<span class="bt-stat">nothing planned</span>';
+      const parts = L.parts?.length ? L.parts : [{ name: L.devices?.[0]?.name ?? 'here', layers: 1, local: true }];
+      const tot = parts.reduce((a, p) => a + (p.layers || 1), 0), blues = ['#3d6fb0', '#6f8fb3', '#4f7397', '#8aa6c8'];
+      return `<span class="layers" title="${parts.map((p) => `${p.name} ${p.layers}`).join(' · ')}">${parts.map((p, i) => `<span data-w="${((p.layers || 1) / tot) * 100}" data-bg="${p.local ? 'var(--accent)' : blues[(i - 1) % blues.length]}"></span>`).join('')}</span>`;
+    }
+    case 'executor': {
+      const d = L?.devices ?? [], busy = d.some((x) => x.busy), tps = Math.max(0, ...d.map((x) => x.tps || 0));
+      return `<span class="big">${busy ? 'answering' : tps ? tps.toFixed(1) : '—'}${!busy && tps ? '<small>tok/s</small>' : ''}</span><span class="gauge"><span data-w="${busy ? 100 : Math.min(100, (tps / 30) * 100)}"></span></span>`;
+    }
+    case 'trust': { const n = S.peers.length, t = S.peers.filter((p) => p.tls).length; return n ? `<span class="shield-count"><span class="ok">✓ ${t}</span><span>of ${n} pinned</span></span>` : '<span class="bt-stat">nothing to check</span>'; }
+    case 'models': return L ? `<span class="big">${L.model.name}<small>${Math.round(L.model.size / 1e6)} MB</small></span>` : `<span class="bt-stat">${(S.models || []).length} in the list</span>`;
+  }
+  return '';
+}
+
+class Cortex {
+  constructor(canvas) {
+    this.cv = canvas; this.ctx = canvas.getContext('2d');
+    this.N = []; this.E = []; this.W = 0; this.H = 0;
+    this.reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
+    this.theme();
+    addEventListener('resize', () => { this.theme(); this.layout(); });
+    matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => this.theme());
+    setInterval(() => this.theme(), 3000);
+    if (!this.reduce) setInterval(() => this.ambient(), 160);
+    const loop = (t) => { if (this.W < 2 || Math.abs(this.cv.getBoundingClientRect().width - this.W) > 1) this.layout(); this.draw(t); requestAnimationFrame(loop); };
+    requestAnimationFrame(loop);
+    canvas.addEventListener('click', (e) => {
+      const r = canvas.getBoundingClientRect(), x = e.clientX - r.left, y = e.clientY - r.top;
+      let best = null, bd = 28;
+      for (const n of this.N) { const d = Math.hypot(n.x - x, n.y - y); if (d < bd) { bd = d; best = n; } }
+      if (best) { this.ignite(best, 1, best.c, 3); openBranch(best.id); }
+    });
+  }
+  theme() { const cs = getComputedStyle(this.cv); this.col = { line: cs.getPropertyValue('--line').trim(), meta: cs.getPropertyValue('--meta').trim(), card: cs.getPropertyValue('--card').trim(), cable: cs.getPropertyValue('--via-cable').trim() || '#3d6fb0' }; }
+  layout() {
+    const r = this.cv.getBoundingClientRect(); this.W = r.width; this.H = r.height; this.dpr = devicePixelRatio || 1;
+    this.cv.width = Math.max(1, this.W * this.dpr); this.cv.height = Math.max(1, this.H * this.dpr);
+    if (this.W < 2) return;
+    const rnd = seeded(11), N = [], per = Math.round(Math.min(64, Math.max(34, (this.W * this.H) / 1400)));
+    this.hemis = [];
+    for (let h = 0; h < 2; h++) {
+      const cx = this.W * (0.5 + (h ? 1 : -1) * 0.236), cy = this.H / 2, rx = this.W * 0.222, ry = this.H * 0.44;
+      this.hemis.push({ cx, cy, rx, ry, h });
+      let k = 0, guard = 0;
+      while (k < per && guard++ < 6000) {
+        const x = rnd() * 2 - 1, y = rnd() * 2 - 1;
+        if (x * x + y * y > 0.84) continue;
+        if (N.some((m) => Math.hypot(m.x - (cx + x * rx), m.y - (cy + y * ry)) < 8.5)) continue;
+        const id = (h ? RIGHT_LOBE : LEFT_LOBE)[Math.min(2, Math.floor((y + 1) / 2 * 3)) * 2 + ((h ? x : -x) > 0 ? 1 : 0)];
+        const b = BRANCHES.find((z) => z.id === id);
+        N.push({ x: cx + x * rx, y: cy + y * ry, h, id, on: !!b?.built, c: BRANCH_LOOK[id][0], act: 0, r: 1.5 + rnd() * 1.7, nb: [] });
+        k++;
+      }
+    }
+    const E = [];
+    for (const a of N) {
+      const near = N.filter((b) => b !== a && b.h === a.h).map((b) => [b, (a.x - b.x) ** 2 + (a.y - b.y) ** 2]).sort((p, q) => p[1] - q[1]).slice(0, 3);
+      for (const [b] of near) if (!E.some((e) => (e.a === b && e.b === a) || (e.a === a && e.b === b))) E.push({ a, b, act: 0 });
+    }
+    const Lh = N.filter((n) => n.h === 0).sort((a, b) => b.x - a.x).slice(0, 9), Rh = N.filter((n) => n.h === 1).sort((a, b) => a.x - b.x).slice(0, 9);
+    for (let i = 0; i < 7; i++) if (Lh[i] && Rh[i]) E.push({ a: Lh[i], b: Rh[i], act: 0, bridge: true });
+    for (const e of E) { e.a.nb.push([e.b, e]); e.b.nb.push([e.a, e]); }
+    this.N = N; this.E = E;
+    this.outlines = this.hemis.map((hm) => { const pts = []; for (let i = 0; i <= 96; i++) { const th = (i / 96) * Math.PI * 2, w = 1 + 0.03 * Math.sin(9 * th + hm.h * 2) + 0.018 * Math.sin(17 * th + 1); pts.push([hm.cx + Math.cos(th) * hm.rx * 1.06 * w, hm.cy + Math.sin(th) * hm.ry * 1.06 * w]); } return pts; });
+  }
+  ignite(n, s, c, hops) {
+    const seen = new Set([n]); let front = [n];
+    for (let d = 0; d <= hops; d++) {
+      const f = front, k = s * (1 - d * 0.17);
+      setTimeout(() => { for (const x of f) { x.act = Math.max(x.act, k); x.fc = c; } }, d * 75);
+      const next = [];
+      for (const x of f) for (const [y, e] of x.nb) {
+        if (seen.has(y) || (!y.on && !e.bridge)) continue;
+        seen.add(y); next.push(y);
+        setTimeout(() => { e.act = Math.max(e.act, k); e.fc = c; }, d * 75 + 35);
+      }
+      front = next.slice(0, 14);
+    }
+  }
+  fire(id) {
+    const pool = this.N.filter((n) => n.id === id);
+    if (!pool.length) return;
+    const n = pool[Math.floor(Math.random() * pool.length)];
+    this.ignite(n, 1, n.c, 4);
+  }
+  ambient() {
+    if (document.hidden || !this.N.length) return;
+    const st = S.status, busy = !!st?.loading || (st?.loaded?.devices ?? []).some((d) => d.busy);
+    const live = this.N.filter((n) => n.on && (busy || Math.random() < 0.55));
+    if (!live.length) return;
+    const n = live[Math.floor(Math.random() * live.length)];
+    this.ignite(n, busy ? 0.6 : 0.34, n.c, busy ? 2 : 1);
+  }
+  draw() {
+    const c = this.ctx, col = this.col;
+    c.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
+    c.clearRect(0, 0, this.W, this.H);
+    if (!this.N.length) return;
+    for (const pts of this.outlines) {
+      c.beginPath(); pts.forEach(([x, y], i) => (i ? c.lineTo(x, y) : c.moveTo(x, y))); c.closePath();
+      c.fillStyle = hexA(col.card, 0.55); c.fill(); c.strokeStyle = col.line; c.lineWidth = 1.2; c.stroke();
+    }
+    c.lineWidth = 0.8; c.strokeStyle = col.line;
+    for (const hm of this.hemis) for (let i = 1; i <= 3; i++) {
+      const y = hm.cy - hm.ry + i * hm.ry * 0.5, sg = hm.h ? -1 : 1;
+      c.beginPath(); c.moveTo(hm.cx - hm.rx * 0.78, y + 4 * sg); c.bezierCurveTo(hm.cx - hm.rx * 0.3, y - 13 * sg, hm.cx + hm.rx * 0.25, y + 13 * sg, hm.cx + hm.rx * 0.8, y - 3 * sg); c.stroke();
+    }
+    for (const e of this.E) {
+      e.act *= 0.93;
+      const on = e.a.on && e.b.on;
+      c.strokeStyle = on ? hexA(e.a.c, e.bridge ? 0.26 : 0.16) : col.line;
+      c.lineWidth = e.bridge ? 1 : 0.7;
+      c.beginPath(); c.moveTo(e.a.x, e.a.y); c.lineTo(e.b.x, e.b.y); c.stroke();
+      if (e.act > 0.05) { c.strokeStyle = hexA(e.fc || e.a.c, Math.min(1, e.act)); c.lineWidth = 1.7; c.beginPath(); c.moveTo(e.a.x, e.a.y); c.lineTo(e.b.x, e.b.y); c.stroke(); }
+    }
+    for (const n of this.N) {
+      n.act *= 0.94;
+      if (n.on && n.act > 0.05) { c.fillStyle = hexA(n.fc || n.c, 0.3 * n.act); c.beginPath(); c.arc(n.x, n.y, n.r + 7 * n.act, 0, 7); c.fill(); }
+      c.beginPath(); c.arc(n.x, n.y, n.r, 0, 7);
+      c.fillStyle = n.on ? hexA(n.c, 0.45 + 0.55 * n.act) : hexA(col.meta, 0.35);
+      c.fill();
+    }
+  }
+}
+
 function openBranch(id) {
   brainOpen = id;
   const br = $('brain');
@@ -671,8 +832,11 @@ function renderBrain() {
     t.setAttribute('role', 'listitem');
     const busy = b.id === 'executor' && (S.status?.loaded?.devices ?? []).some((d) => d.busy) || b.id === 'planner' && !!S.status?.loading;
     const head = el('span', 'bt-head');
-    head.append(el('span', 'bt-n', String(b.n)), el('b', '', b.name));
-    t.append(head, el('span', 'bt-stat', b.built ? b.stat() : 'not built yet'));
+    head.append(el('span', 'bt-n', String(b.n)), el('b', '', SHORT[b.id] ?? b.name));
+    const viz = el('span', 'bt-viz');
+    if (b.built) { viz.innerHTML = gaugeOf(b.id); for (const x of viz.querySelectorAll('[data-w]')) { x.style.width = `${x.dataset.w}%`; if (x.dataset.bg) x.style.background = x.dataset.bg; } } else viz.appendChild(el('span', 'bt-stat', 'not built yet'));
+    t.title = `${b.name}: ${b.built ? b.stat() : 'not built yet'}`;
+    t.append(head, viz);
     if (busy) t.appendChild(el('span', 'dot busy bt-live'));
     t.addEventListener('click', () => openBranch(b.id));
     return t;
@@ -680,6 +844,7 @@ function renderBrain() {
   grid.replaceChildren(...tiles);
 }
 $('bback').addEventListener('click', () => { brainOpen = null; renderBrain(); });
+cortex = new Cortex($('cortex'));
 // (6.11.2026) the tiles no longer fold: the feed scrolls in its own box
 
 
@@ -749,6 +914,7 @@ async function refreshPeers(probe) {
     if (ok.length) feed('trust', `${tls} of ${ok.length} answering links are tls with the pinned certificate`);
   }
   for (const p of S.peers) if (before.size && !before.has(p.id)) feed('connections', `paired with ${p.name} (${p.cable ? 'cable' : p.far ? 'relay' : 'wi-fi'})`);
+  if (probe) for (const p of S.peers) if (p.reach?.ok && p.reach.ms) { const h = PINGS.get(p.id) ?? []; h.push(p.reach.ms); PINGS.set(p.id, h.slice(-16)); }
   const fresh = before.size ? S.peers.filter((p) => !before.has(p.id)).map((p) => p.id) : [];
   if (fresh.length && settings.peers.length && settings.mode !== 'phone') { settings.peers = [...new Set([...settings.peers, ...fresh])]; saveSettings(); }
   renderPeers();
