@@ -548,3 +548,9 @@ ul.wiz-steps li::before { content: "› "; color: var(--meta); }
 .where.nomodel .where-text b { color: var(--accent); }
 .where { max-width: calc(100% - 130px); }
 .devices-btn { white-space: nowrap; }
+
+/* rename (6.11.2026) */
+#dev-list .pen svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
+#dev-list .pen { opacity: 0.55; }
+#dev-list .dev:hover .pen, #dev-list .pen:focus-visible { opacity: 1; }
+#dev-list input.rename { font: inherit; font-weight: 600; width: 100%; border: 1px solid var(--accent); border-radius: 8px; padding: 3px 8px; background: var(--card); color: var(--words); outline: none; }

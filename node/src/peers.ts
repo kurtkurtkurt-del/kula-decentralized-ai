@@ -15,6 +15,7 @@ export type PeerKind = 'phone' | 'tablet' | 'pc';
 export interface Peer {
   id: string;
   name: string;
+  named?: boolean;       // the person gave this name (rename): never replaced by the public name
   host: string;
   port: number;
   secret: string;        // protocol v1 (qr v2); '' for a v3 peer

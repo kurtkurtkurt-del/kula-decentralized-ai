@@ -786,7 +786,7 @@ function activeRoles() {
 
 function deviceGroups() {
   const groups = [];
-  for (const d of S.cable?.adb === false ? [] : S.cable?.devices || []) groups.push({ key: devKey(d.model || d.name), name: d.name, cable: d, peers: [] });
+  for (const d of S.cable?.adb === false ? [] : S.cable?.devices || []) groups.push({ key: devKey(d.name), name: d.name, cable: d, peers: [] });
   for (const p of S.peers) {
     let g = groups.find((x) => x.cable && (x.cable.peer?.id === p.id || (p.cable && p.cable.serial === x.cable.serial)))
       ?? groups.find((x) => x.key && x.key === devKey(p.name));
@@ -810,9 +810,39 @@ function deviceGroups() {
   return groups.sort((a, b) => Number(!!b.role) - Number(!!a.role) || Number(b.active) - Number(a.active) || a.name.localeCompare(b.name));
 }
 
+// rename (6.11.2026): the name becomes a field; enter keeps it, escape leaves it
+let renaming = null;
+function startRename(g, who, nameEl) {
+  renaming = g.peers.map((p) => p.id).join(',');
+  const f = el('input', 'rename');
+  f.id = `rename-${renaming.replace(/[^a-z0-9]/gi, '')}`;
+  f.value = g.name;
+  f.maxLength = 40;
+  f.setAttribute('aria-label', `new name for ${g.name}`);
+  nameEl.replaceWith(f);
+  f.focus();
+  f.select();
+  let done = false;
+  const finish = async (keep) => {
+    if (done) return;
+    done = true;
+    const v = f.value.trim();
+    if (keep && v && v !== g.name) {
+      for (const p of g.peers) await postJson('peers/rename', { id: p.id, name: v }).catch((e) => toast(e.message));
+      feed('connections', `${g.name} is called ${v} now`);
+    }
+    renaming = null;
+    refreshPeers(false);
+    refreshCable();
+  };
+  f.addEventListener('keydown', (e) => { if (e.key === 'Enter') finish(true); if (e.key === 'Escape') finish(false); });
+  f.addEventListener('blur', () => finish(true));
+}
+
 function renderDevices() {
   const box = $('dev-list');
   if (!box) return;
+  if (renaming) return; // a name is being typed: the list waits
   const groups = deviceGroups();
   $('dev-count').textContent = groups.length ? String(groups.length) : '';
   const rows = [];
@@ -845,6 +875,15 @@ function renderDevices() {
     for (const t of lines) who.appendChild(el('span', '', t));
     const tools = el('div', 'dev-tools');
     let cr = null;
+    if (g.peers.length) {
+      const pen = el('button', 'icon pen');
+      pen.type = 'button';
+      pen.title = 'rename';
+      pen.setAttribute('aria-label', `rename ${g.name}`);
+      pen.appendChild(svg(['M12.5 4.5l3 3L8 15H5v-3z', 'M11 6l3 3']));
+      pen.addEventListener('click', () => startRename(g, who, name));
+      tools.appendChild(pen);
+    }
     if (g.cable) {
       cr = cableRow(g.cable.serial);
       cr.use.textContent = cr.use.textContent === 'working…' ? 'working…' : g.cablePeer ? 'use again' : 'use';

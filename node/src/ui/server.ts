@@ -268,6 +268,9 @@ export async function startUi(opts: UiOptions): Promise<UiServer> {
     // "pair" takes the code from the phone's share screen. The code never comes back.
     if (route === 'cable/use') { try { return json(res, 200, engine.useCable(body?.serial)); } catch (e) { return fail(e); } }
     if (route === 'cable/pair') { try { return json(res, 200, await engine.pairCable(body?.serial, body?.code)); } catch (e) { return fail(e); } }
+    if (route === 'peers/rename') {
+      try { return engine.renamePeer(String(body?.id ?? ''), String(body?.name ?? '')) ? json(res, 200, { ok: true }) : json(res, 404, { error: 'no such device' }); } catch (e) { return fail(e, 400); }
+    }
     if (route === 'peers/remove') return engine.removePeer(String(body?.id ?? '')) ? json(res, 200, { ok: true }) : json(res, 404, { error: 'no such device' });
     if (route === 'peers/probe') {
       try { return json(res, 200, await engine.probe(Array.isArray(body?.ids) ? body.ids.map(String) : undefined)); } catch (e) { return fail(e, 500); }

@@ -23,6 +23,7 @@ import { download, sha256Of } from '../download.js';
 import { prepareSplit, startSplitServer } from '../split.js';
 import { TooBig } from '../planner.js';
 import { simModelOf } from '../gguf.js';
+import { publicName } from '../devicenames.js';
 import { freeRamMB, measureBandwidth } from '../sysinfo.js';
 import { UI_CATALOG, modelUrl, type UiModel } from './catalog.js';
 
@@ -125,7 +126,7 @@ export function defaultModelDirs(): string[] {
 
 export function peerRow(p: Peer, probe?: Reach | null, probedAt: number | null = null, plugged: boolean | null = null, holds: string | null = null): PeerRow {
   return {
-    id: p.id, name: p.name, kind: p.kind, where: whereIs(p), far: !!p.relay, tls: !!p.fp, waitingPair: !p.fp && !!p.pin,
+    id: p.id, name: p.named ? p.name : publicName(p.name), kind: p.kind, where: whereIs(p), far: !!p.relay, tls: !!p.fp, waitingPair: !p.fp && !!p.pin,
     ram: p.ram ?? null, bw: p.bw ?? null, gpu: p.gpu ?? null, last_ok: p.last_ok ?? null,
     reach: probe ?? null, probedAt,
     cable: p.cable ? { serial: p.cable.serial, plugged } : null,
@@ -310,6 +311,23 @@ export class Engine {
     return fp;
   }
 
+  // A name the person chose for a device (6.11.2026). Kept as typed (trimmed, at most 40
+  // characters) and marked, so the public model name never replaces it.
+  renamePeer(id: string, name: string): boolean {
+    const clean = String(name ?? '').replace(/[\u0000-\u001f]/g, '').trim().slice(0, 40);
+    if (!clean) throw new Error('give it a name');
+    const file = this.file();
+    const list = readPeers(file);
+    const p = list.find((x) => x.id === id);
+    if (!p) return false;
+    const was = p.named ? p.name : publicName(p.name);
+    p.name = clean;
+    p.named = true;
+    writePeers(list, file);
+    this.note(`renamed ${was} to ${clean}`);
+    return true;
+  }
+
   removePeer(id: string): boolean {
     const file = this.file();
     const { list, removed } = removePeer(readPeers(file), id);
@@ -374,14 +392,14 @@ export class Engine {
       const p = peers.find((x) => x.cable?.serial === d.serial);
       const installed = this.installedBy.get(d.serial) ?? null;
       rows.push({
-        serial: d.serial, name: p?.name ?? d.model ?? `phone ${d.serial.slice(-4)}`, model: d.model, state: d.state,
+        serial: d.serial, name: p ? (p.named ? p.name : publicName(p.name)) : d.model ? publicName(d.model) : `phone ${d.serial.slice(-4)}`, model: d.model, state: d.state,
         help: stateHelp(d.state) ?? (installed === false ? NOT_INSTALLED : null),
-        installed, peer: p ? { id: p.id, name: p.name } : null, job: this.jobView(this.jobs.get(d.serial)),
+        installed, peer: p ? { id: p.id, name: p.named ? p.name : publicName(p.name) } : null, job: this.jobView(this.jobs.get(d.serial)),
       });
     }
     for (const p of peers) {
       if (!p.cable || list.some((d) => d.serial === p.cable!.serial)) continue;
-      rows.push({ serial: p.cable.serial, name: p.name, model: null, state: 'unplugged', help: 'plug the cable in to use it', installed: null, peer: { id: p.id, name: p.name }, job: this.jobView(this.jobs.get(p.cable.serial)) });
+      rows.push({ serial: p.cable.serial, name: p.named ? p.name : publicName(p.name), model: null, state: 'unplugged', help: 'plug the cable in to use it', installed: null, peer: { id: p.id, name: p.named ? p.name : publicName(p.name) }, job: this.jobView(this.jobs.get(p.cable.serial)) });
     }
     return { adb: true, help: null, error: this.seen?.error ?? null, devices: rows };
   }
@@ -469,7 +487,7 @@ export class Engine {
     const peer: Peer = prev
       ? { ...prev, host: '127.0.0.1', port, fp, pin: null, paired_at: prev.paired_at ?? now, cable: { serial }, last_ok: now }
       : {
-        id: `cable:${serial}`, name: (model ?? `phone ${serial.slice(-4)}`).slice(0, 60), host: '127.0.0.1', port, secret: '', fp, pin: null, paired_at: now,
+        id: `cable:${serial}`, name: (model ? publicName(model) : `phone ${serial.slice(-4)}`).slice(0, 60), host: '127.0.0.1', port, secret: '', fp, pin: null, paired_at: now,
         relay: null, kind: 'phone', ram: null, bw: null, gpu: null, vram: null, passport: null, cable: { serial }, added_at: now, last_ok: now,
       };
     const file = this.file();
@@ -708,8 +726,8 @@ export class Engine {
           }
           this.extraClose.push(setup.close);
           const pl = setup.plan;
-          splitParts = [{ id: 'local', name: 'this computer', local: true, mb: pl.localMb, layers: pl.localLayers ?? 0 }, ...pl.used.map((u) => ({ id: u.id, name: u.name, local: false, mb: u.assignedMb, layers: u.layers }))];
-          plan.push(`${modelName} is split: this computer keeps ${pl.localMb} MB of it${pl.used.length ? `, ${pl.used.map((u) => `${u.name} ${u.assignedMb} MB (${u.layers} layers)`).join(', ')}` : ''}.`);
+          splitParts = [{ id: 'local', name: 'this computer', local: true, mb: pl.localMb, layers: pl.localLayers ?? 0 }, ...pl.used.map((u) => ({ id: u.id, name: u.named ? u.name : publicName(u.name), local: false, mb: u.assignedMb, layers: u.layers }))];
+          plan.push(`${modelName} is split: this computer keeps ${pl.localMb} MB of it${pl.used.length ? `, ${pl.used.map((u) => `${u.named ? u.name : publicName(u.name)} ${u.assignedMb} MB (${u.layers} layers)`).join(', ')}` : ''}.`);
           if (!pl.used.length) plan.push('no phone answered on its rpc channel: the model runs here alone.');
           if (pl.fitsAlone) plan.push(`it would fit here alone${pl.aloneFaster ? ' and would be faster that way' : ''}; it is shared because split was asked for.`);
           if (req.all === true) plan.push('every device you picked holds a part, even where fewer would be faster.');

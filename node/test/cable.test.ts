@@ -226,7 +226,7 @@ test('a phone on the cable: use, the share screen opened, the code, paired, load
     assert.equal(view.adb, true);
     assert.equal(view.devices.length, 2);
     const s25 = view.devices.find((d: any) => d.serial === SERIAL);
-    assert.equal(s25.name, 'SM S936B');
+    assert.equal(s25.name, 'Galaxy S25+');
     assert.equal(s25.state, 'device');
     assert.equal(s25.installed, true);
     assert.equal(s25.peer, null);
@@ -261,7 +261,7 @@ test('a phone on the cable: use, the share screen opened, the code, paired, load
     const pr = seen(paired.text);
     assert.equal(pr.job.step, 'paired');
     assert.equal(pr.peer.id, `cable:${SERIAL}`);
-    assert.equal(pr.peer.name, 'SM S936B');
+    assert.equal(pr.peer.name, 'Galaxy S25+');
     assert.equal(pr.peer.where, 'usb cable');
     assert.equal(pr.peer.tls, true);
     assert.equal(pr.peer.cable.serial, SERIAL);
@@ -273,13 +273,13 @@ test('a phone on the cable: use, the share screen opened, the code, paired, load
     assert.equal(book[0].port, fwd.port);
     assert.deepEqual(book[0].cable, { serial: SERIAL });
     view = seen(await get(ui, 'cable'));
-    assert.deepEqual(view.devices.find((d: any) => d.serial === SERIAL).peer, { id: `cable:${SERIAL}`, name: 'SM S936B' });
+    assert.deepEqual(view.devices.find((d: any) => d.serial === SERIAL).peer, { id: `cable:${SERIAL}`, name: 'Galaxy S25+' });
 
     // "load" in phone mode works as for any phone
     const load = await fetch(`${ui.url}api/load`, { method: 'POST', headers: { 'content-type': 'application/json', ...origin(ui.port) }, body: JSON.stringify({ model: 'tiny', mode: 'phone', peers: [`cable:${SERIAL}`] }) });
     const events = (await load.text()).split('\n\n').filter((b) => b.startsWith('data: ')).map((b) => JSON.parse(b.slice(6)));
     assert.equal(events.at(-1).done, true, JSON.stringify(events.at(-1)));
-    assert.equal(events.at(-1).status.loaded.devices[0].name, 'SM S936B');
+    assert.equal(events.at(-1).status.loaded.devices[0].name, 'Galaxy S25+');
     let answer = '';
     await engine.chat([{ role: 'user', content: 'hello' }], (t) => { answer += t; });
     assert.equal(answer, 'hi from the cable');
