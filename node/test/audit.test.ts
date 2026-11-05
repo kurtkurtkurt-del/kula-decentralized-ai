@@ -1,0 +1,209 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import net from 'node:net';
+import { createPublicKey } from 'node:crypto';
+import vectors from './audit-vectors.json' with { type: 'json' };
+import { fromSeed, generate, loadOrCreate, publicKeyDer, signText, verifyText } from '../src/audit/key.ts';
+import { Ledger, GENESIS, makeLine, sha256Hex, verifyChain, verifyLines, chainFiles } from '../src/audit/ledger.ts';
+import { ReplayCheck, clockCheck, claimCheck, modelCheck, boundsCheck, healthWarnings } from '../src/audit/checks.ts';
+import { Auditor } from '../src/audit/auditor.ts';
+import { startGateServer, handshake, connectRemote, GateRefused } from '../src/gate.ts';
+
+const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'kula-audit-'));
+const seedKey = () => fromSeed(Buffer.from(vectors.seedHex, 'hex'));
+
+test('the fixed seed gives the vector key, id and both lines byte for byte', () => {
+  const key = seedKey();
+  assert.equal(publicKeyDer(key.publicKey).toString('hex'), vectors.publicKeySpkiDerHex);
+  assert.equal(key.id, vectors.deviceId);
+  let prev = GENESIS;
+  for (const v of vectors.lines) {
+    assert.equal(prev, v.prev);
+    const made = makeLine(key, v.input.t, v.input.kind as any, v.input.peer, v.input.fields, prev);
+    assert.equal(made.line, v.line);
+    assert.equal(made.entry.sig, v.sig);
+    prev = sha256Hex(made.line);
+  }
+  const pub = createPublicKey({ key: Buffer.from(vectors.publicKeySpkiDerHex, 'hex'), format: 'der', type: 'spki' });
+  assert.equal(verifyLines(vectors.lines.map((v) => v.line), pub).ok, true);
+});
+
+test('a ledger on disk chains, verifies, and shows every kind of tampering', () => {
+  const dir = tmp();
+  const file = path.join(dir, 'ledger.jsonl');
+  let t = 1000;
+  const key = generate();
+  const ledger = new Ledger(file, key, () => (t += 1));
+  ledger.append('pair', 'phone', { name: 'p' });
+  ledger.append('connect', '10.0.0.2', { channel: 'api' });
+  ledger.append('end', '10.0.0.2', { channel: 'api', ms: 5, bytesIn: 1, bytesOut: 2 });
+  // reopening continues the chain from the last line
+  new Ledger(file, key, () => (t += 1)).append('health', 'self', { freeRamMB: 1 });
+  const lines = fs.readFileSync(file, 'utf8').split('\n').filter(Boolean);
+  assert.equal(lines.length, 4);
+  assert.deepEqual(lines.map((l) => JSON.parse(l).kind), ['pair', 'connect', 'end', 'health']);
+  assert.equal(JSON.parse(lines[0]).prev, GENESIS);
+  assert.equal(JSON.parse(lines[3]).prev, sha256Hex(lines[2]));
+  assert.equal(verifyChain(file, key.publicKey).ok, true);
+
+  const edited = [...lines]; edited[1] = edited[1].replace('"channel":"api"', '"channel":"rpc"');
+  assert.deepEqual(verifyLines(edited, key.publicKey).problems, [{ n: 2, reason: 'sig' }, { n: 3, reason: 'prev' }]);
+  const dropped = lines.filter((_, i) => i !== 1);
+  assert.deepEqual(verifyLines(dropped, key.publicKey).problems, [{ n: 2, reason: 'prev' }]);
+  const other = generate();
+  assert.equal(verifyLines(lines, other.publicKey).problems.length, 4);
+  assert.equal(verifyLines(lines, null).ok, true);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('rotation at the size limit links the chains across files', () => {
+  const dir = tmp();
+  const file = path.join(dir, 'ledger.jsonl');
+  const key = generate();
+  let t = 5000;
+  const ledger = new Ledger(file, key, () => (t += 1), 600);
+  for (let i = 0; i < 12; i++) ledger.append('health', 'self', { i });
+  const files = chainFiles(file);
+  assert.ok(files.length >= 3, `expected rotated files, got ${files.length}`);
+  assert.equal(files.at(-1), file);
+  const r = verifyChain(file, key.publicKey);
+  assert.equal(r.ok, true);
+  assert.equal(r.count, 12);
+  // the first line of a new file names the last line of the old one
+  const old = fs.readFileSync(files[0], 'utf8').split('\n').filter(Boolean);
+  const next = fs.readFileSync(files[1], 'utf8').split('\n').filter(Boolean);
+  assert.equal(JSON.parse(next[0]).prev, sha256Hex(old.at(-1)!));
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('the device key is created once, kept as pkcs8 pem, and signs', () => {
+  const dir = tmp();
+  const file = path.join(dir, 'device_key.pem');
+  const a = loadOrCreate(file);
+  const b = loadOrCreate(file);
+  assert.equal(a.id, b.id);
+  assert.match(a.id, /^[0-9a-f]{32}$/);
+  assert.match(fs.readFileSync(file, 'utf8'), /^-----BEGIN PRIVATE KEY-----/);
+  const sig = signText(a, 'hello');
+  assert.equal(verifyText(b.publicKey, 'hello', sig), true);
+  assert.equal(verifyText(b.publicKey, 'hellp', sig), false);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('the checks and their thresholds', () => {
+  const r = new ReplayCheck(3);
+  assert.equal(r.check('a', 'n1'), null);
+  assert.equal(r.check('a', 'n1'), 'replay');
+  assert.equal(r.check('b', 'n1'), null);
+  r.check('a', 'n2'); r.check('a', 'n3'); r.check('a', 'n4');
+  assert.equal(r.check('a', 'n1'), null, 'n1 fell out of the ring of 3');
+
+  assert.equal(clockCheck(1_000_000, 1_000_000 + 120_000), null);
+  assert.equal(clockCheck(1_000_000, 1_000_000 + 120_001), 'clock');
+  assert.equal(clockCheck(1_000_000 + 130_000, 1_000_000), 'clock');
+  assert.equal(clockCheck(NaN, 1), 'clock');
+
+  assert.equal(claimCheck(100, 100).level, 'ok');
+  assert.equal(claimCheck(200, 100).level, 'ok');
+  assert.equal(claimCheck(201, 100).level, 'warn');
+  assert.equal(claimCheck(400, 100).level, 'warn');
+  assert.equal(claimCheck(401, 100).level, 'reject');
+  assert.equal(claimCheck(401, 100).reason, 'claim');
+  assert.equal(claimCheck(5, 0).level, 'ok');
+
+  assert.equal(modelCheck('AB', 'ab'), null);
+  assert.equal(modelCheck('ab', 'ac'), 'model');
+
+  assert.equal(boundsCheck(1e9, 1000), null);
+  assert.equal(boundsCheck(3e9, 1000), 'bounds');
+  assert.equal(boundsCheck(3e9, 500), null, 'short connections are not judged');
+  assert.equal(boundsCheck(-1, 5000), 'bounds');
+
+  assert.deepEqual(healthWarnings({ throttled: false, tempC: 42, batteryPct: 15 }), []);
+  assert.deepEqual(healthWarnings({ throttled: true, tempC: 42.5, batteryPct: 14 }), ['throttled', 'hot 42.5 C', 'battery 14%']);
+});
+
+test('the auditor writes each kind and refuses replayed or skewed hellos', () => {
+  const dir = tmp();
+  const file = path.join(dir, 'ledger.jsonl');
+  const key = generate();
+  const now = 1_700_000_000_000;
+  const a = new Auditor({ ledger: new Ledger(file, key, () => now), now: () => now });
+  assert.equal(a.hello('p', 'n1', null), null);
+  assert.equal(a.hello('p', 'n1', null), 'replay');
+  assert.equal(a.hello('p', 'n2', now - 120_000), null);
+  assert.equal(a.hello('p', 'n3', now + 120_001), 'clock');
+  a.connect('p', 'rpc');
+  a.end('p', 'rpc', 2000, 10, 20);
+  a.end('p', 'rpc', 2000, 10e9, 20);
+  a.load('api', 'm.gguf', 'aa', 'aa');
+  a.load('api', 'm.gguf', 'aa', 'bb');
+  assert.equal(a.claim('self', 'ram', 9000, 2000).level, 'reject');
+  a.health('self', { tempC: 50 });
+  const entries = fs.readFileSync(file, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l));
+  assert.deepEqual(entries.map((e) => e.kind), ['reject', 'reject', 'connect', 'end', 'end', 'load', 'load', 'claim', 'health']);
+  assert.deepEqual(entries.map((e) => e.reason ?? '-'), ['replay', 'clock', '-', '-', 'bounds', '-', 'model', 'claim', '-']);
+  assert.equal(entries[1].claimedMs, now + 120_001);
+  assert.equal(entries[8].warn, 'hot 50 C');
+  assert.equal(verifyChain(file, key.publicKey).ok, true);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('the gate takes a clock as the fourth hello field and lets the auditor refuse', async () => {
+  const dir = tmp();
+  const key = generate();
+  const a = new Auditor({ ledger: new Ledger(path.join(dir, 'ledger.jsonl'), key) });
+  const gate = await startGateServer({ port: 0, host: '127.0.0.1', secret: 's', targets: () => null, admit: (p, n, ms) => a.hello(p, n, ms) });
+  const tryOnce = async (clock?: number) => {
+    const s = await connectRemote('127.0.0.1', gate.port);
+    try { await handshake(s, 's', 'api', 2000, clock); return 'ok'; } catch (e) { return e instanceof GateRefused ? e.reason : (e as Error).message; } finally { s.destroy(); }
+  };
+  // targets() gives null, so a hello that passes the auditor fails later with "channel closed"
+  assert.equal(await tryOnce(), 'channel closed');
+  assert.equal(await tryOnce(Date.now()), 'channel closed');
+  assert.equal(await tryOnce(Date.now() - 300_000), 'clock');
+  // a replayed hello line, byte for byte
+  const s1 = await connectRemote('127.0.0.1', gate.port);
+  const hello = 'KULA1 api ' + 'ab'.repeat(16) + '\n';
+  const first = await new Promise<string>((r) => { s1.once('data', (d) => r(d.toString())); s1.write(hello); });
+  assert.match(first, /^[0-9a-f]{32}\n$/);
+  s1.destroy();
+  const s2 = await connectRemote('127.0.0.1', gate.port);
+  const second = await new Promise<string>((r) => { s2.once('data', (d) => r(d.toString())); s2.write(hello); });
+  assert.equal(second, 'NO replay\n');
+  s2.destroy();
+  // a fourth field that is not a number is a bad hello
+  const s3 = await connectRemote('127.0.0.1', gate.port);
+  const third = await new Promise<string>((r) => { s3.once('data', (d) => r(d.toString())); s3.write('KULA1 api ' + 'cd'.repeat(16) + ' soon\n'); });
+  assert.equal(third, 'NO bad hello\n');
+  s3.destroy();
+  await gate.close();
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('kula-node ledger prints and verifies the ledger under KULA_NODE_HOME', async () => {
+  const dir = tmp();
+  process.env.KULA_NODE_HOME = dir;
+  try {
+    const { ledgerCommand } = await import('../src/ledgercmd.ts');
+    const key = loadOrCreate(path.join(dir, 'device_key.pem'));
+    const ledger = new Ledger(path.join(dir, 'ledger.jsonl'), key);
+    for (let i = 0; i < 5; i++) ledger.append('health', 'self', { i });
+    let out: string[] = [];
+    assert.equal(ledgerCommand({ verify: false, tail: 2 }, (s) => out.push(s)), 0);
+    assert.deepEqual(out.map((l) => JSON.parse(l).i), [3, 4]);
+    out = [];
+    assert.equal(ledgerCommand({ verify: true }, (s) => out.push(s)), 0);
+    assert.match(out.at(-1)!, /^ledger ok: 5 lines/);
+    fs.appendFileSync(path.join(dir, 'ledger.jsonl'), '{"t":1,"kind":"end","peer":"x","prev":"00","sig":"AA=="}\n');
+    out = [];
+    assert.equal(ledgerCommand({ verify: true }, (s) => out.push(s)), 1);
+    assert.ok(out.some((l) => /line 6: bad prev/.test(l)) && out.some((l) => /line 6: bad sig/.test(l)));
+  } finally {
+    delete process.env.KULA_NODE_HOME;
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});

@@ -1,0 +1,34 @@
+{
+  "note": "Two ledger lines made with a fixed Ed25519 seed, so any implementation of the ledger can check it reproduces them exactly. The seed is the 32 ascii bytes of \"Kula node audit vector seed 0000\" (capital K, four zeros). The device id is the first 16 bytes of sha256 over the public key in SPKI DER form.",
+  "seedHex": "4b756c61206e6f646520617564697420766563746f7220736565642030303030",
+  "publicKeySpkiDerHex": "302a300506032b65700321009789148ec6414e72636d115fcff3a3898a2fb316b31c78e7bae8651b4fc79697",
+  "deviceId": "58f258d9fdb43091dc8196cdbcaab2c3",
+  "lines": [
+    {
+      "input": {
+        "t": 1762214400000,
+        "kind": "pair",
+        "peer": "phone-7f3a",
+        "fields": {
+          "name": "kula-phone"
+        }
+      },
+      "prev": "0000000000000000000000000000000000000000000000000000000000000000",
+      "line": "{\"t\":1762214400000,\"kind\":\"pair\",\"peer\":\"phone-7f3a\",\"name\":\"kula-phone\",\"prev\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"sig\":\"WTT1BItKtpqA7UnnDhHRr67ZxeMO25Foz77Jx5+W+A4gjol7eEk4Yv8/vN+ehaPiEK7zbIPqcWpA8t1ZBWeeCw==\"}",
+      "sig": "WTT1BItKtpqA7UnnDhHRr67ZxeMO25Foz77Jx5+W+A4gjol7eEk4Yv8/vN+ehaPiEK7zbIPqcWpA8t1ZBWeeCw=="
+    },
+    {
+      "input": {
+        "t": 1762214401500,
+        "kind": "connect",
+        "peer": "192.168.1.42",
+        "fields": {
+          "channel": "rpc"
+        }
+      },
+      "prev": "2dd79586d990b9e24803f8db3650ecc98bbfd264ffb37b104d5f9a7eee915d94",
+      "line": "{\"t\":1762214401500,\"kind\":\"connect\",\"peer\":\"192.168.1.42\",\"channel\":\"rpc\",\"prev\":\"2dd79586d990b9e24803f8db3650ecc98bbfd264ffb37b104d5f9a7eee915d94\",\"sig\":\"rhl/+NjD8+YY0Keymvkkk9GdG9/rgmTKmAwKwX9BHm43QavKaYhVgK04mn9UTNIPis5452ajqiZqAVcI/ehcBA==\"}",
+      "sig": "rhl/+NjD8+YY0Keymvkkk9GdG9/rgmTKmAwKwX9BHm43QavKaYhVgK04mn9UTNIPis5452ajqiZqAVcI/ehcBA=="
+    }
+  ]
+}
