@@ -23,8 +23,9 @@ import kotlin.concurrent.thread
  *                                      progress lines "data: {...}\n\n" and ends with {done:true}
  *   POST /chat  {messages:[{role,content}], maxTokens?, temperature?}   SSE: {t:"piece"} … {done, tokens, ms}
  *   POST /stop
+ *   GET  /blob?mb=N                    N MB (1..64, default 10) of octets, so a master can time its tunnel
  *
- * The same four routes are what kula-node (Part 2) serves on a computer.
+ * The same routes are what kula-node serves on a computer (node/src/api.ts).
  */
 class ApiServer(private val context: Context, private val modelsDir: File, private val threads: Int) {
   private var listener: ServerSocket? = null
@@ -61,7 +62,8 @@ class ApiServer(private val context: Context, private val modelsDir: File, priva
     val parts = request.split(' ')
     if (parts.size < 2) return
     val method = parts[0]
-    val path = parts[1]
+    val path = parts[1].substringBefore('?')
+    val query = parts[1].substringAfter('?', "")
     var length = 0
     while (true) {
       val h = reader.readLine() ?: break
@@ -73,6 +75,7 @@ class ApiServer(private val context: Context, private val modelsDir: File, priva
     s.soTimeout = 0
     when {
       method == "GET" && path == "/status" -> json(out, 200, status())
+      method == "GET" && path == "/blob" -> blob(out, query)
       method == "POST" && path == "/stop" -> { Native.stop(); json(out, 200, JSONObject().put("ok", true)) }
       method == "POST" && path == "/load" -> load(out, json)
       method == "POST" && path == "/chat" -> chat(out, json)
@@ -163,6 +166,30 @@ class ApiServer(private val context: Context, private val modelsDir: File, priva
     } finally {
       busy.set(false)
     }
+  }
+
+  /** The mb a /blob query asks for (default 10), or null when it is not a whole number in 1..64. */
+  private fun blobMb(query: String): Int? {
+    val raw = query.split('&').firstOrNull { it.startsWith("mb=") }?.substringAfter('=') ?: return 10
+    if (raw.isEmpty()) return 10
+    if (!Regex("^\\d{1,3}$").matches(raw)) return null
+    val mb = raw.toInt()
+    return if (mb in 1..64) mb else null
+  }
+
+  // Streams mb × 1 MB of a repeating 0..255 pattern in 64 KB pieces; nothing is built in memory.
+  private fun blob(out: OutputStream, query: String) {
+    val mb = blobMb(query) ?: return json(out, 400, JSONObject().put("error", "mb must be 1..64"))
+    val total = mb.toLong() * 1024 * 1024
+    out.write("HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: $total\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n".toByteArray())
+    val piece = ByteArray(64 * 1024) { (it and 0xff).toByte() }
+    var sent = 0L
+    while (sent < total) {
+      val n = minOf(piece.size.toLong(), total - sent).toInt()
+      out.write(piece, 0, n)
+      sent += n
+    }
+    out.flush()
   }
 
   private fun sseHead(out: OutputStream) {
