@@ -48,9 +48,11 @@ foreach(target ggml-base ggml ggml-cpu ggml-rpc llama
   endif()
 endforeach()
 
-add_library(kula_llama SHARED src/main/cpp/kula_llama.cpp)
+# the platform-free core is shared with ios/ (cpp/core); this file is the JNI over it
+add_library(kula_llama SHARED src/main/cpp/kula_llama.cpp ../cpp/core/kula_core.cpp)
 target_link_libraries(kula_llama llama ggml c++_shared android log dl)
 target_compile_definitions(kula_llama PRIVATE KULA_BACKEND_DL=1)
 target_include_directories(kula_llama PRIVATE
+  ../cpp/core
   src/main/cpp/llama.cpp/include
   src/main/cpp/llama.cpp/ggml/include)
