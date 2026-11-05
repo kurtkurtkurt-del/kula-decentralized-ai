@@ -27,19 +27,14 @@ import { ggufShape, simModelOf } from './gguf.js';
 import { expandHome, home } from './paths.js';
 import { deviceId } from './share.js';
 import { findPeer, readPeers, type Peer } from './peers.js';
-import { BENCH_VERSION, mbPerS, r1, RUNS, series, TUNNEL_MB, type BenchPeer, type BenchRecord, type Series } from './benchcore.js';
+import { BENCH_PROMPT, BENCH_VERSION, GEN_TOKENS, mbPerS, r1, RUNS, series, TUNNEL_MB, type BenchPeer, type BenchRecord, type Series } from './benchcore.js';
 
 type Log = (s: string) => void;
 export interface Backend { port: number; stop(): Promise<void> }
 /** Starts a llama-server with these args (given the port it should listen on); waits for /health. */
 export type StartServer = (args: (port: number) => string[]) => Promise<Backend>;
 
-export const PROMPT = 'You are timing a language model. Read this passage and answer in one long paragraph. '
-  + 'A cluster of phones on one wi-fi shares a model: each holds a part of the layers, the activations travel '
-  + 'between them for every token, and the slowest link sets the pace. Memory bandwidth decides how fast one '
-  + 'device streams its weights; the network decides how much the hops cost; the gate in front of every device '
-  + 'checks a shared secret before any byte reaches llama.cpp. Explain, step by step, what limits the speed of '
-  + 'such a cluster, which device should hold the output layer, and when running alone beats sharing.';
+export const PROMPT = BENCH_PROMPT;
 
 export interface BenchOptions {
   modelFile: string | null;
@@ -162,7 +157,7 @@ async function gateSeries(probe: NonNullable<BenchOptions['probe']>, p: { host: 
 export async function runBench(opts: BenchOptions): Promise<BenchRecord> {
   const log = opts.log ?? (() => {});
   const runs = opts.runs ?? RUNS;
-  const nGen = opts.genTokens ?? 64;
+  const nGen = opts.genTokens ?? GEN_TOKENS;
   const ctx = opts.ctx ?? 2048;
   const tunnelMb = opts.tunnelMb ?? TUNNEL_MB;
   const probe = opts.probe ?? gateProbe;
@@ -348,7 +343,7 @@ export async function benchCommand(flags: Flags): Promise<number> {
   const stamp = () => new Date().toISOString().slice(11, 19);
   const record = await runBench({
     modelFile, peers, llama: findLlama(),
-    runs: Math.min(16, Math.round(num(flags.runs, RUNS))), genTokens: Math.round(num(flags.tokens, 64)), ctx: Math.round(num(flags.ctx, 2048)),
+    runs: Math.min(16, Math.round(num(flags.runs, RUNS))), genTokens: Math.round(num(flags.tokens, GEN_TOKENS)), ctx: Math.round(num(flags.ctx, 2048)),
     tunnelMb: Math.min(64, Math.round(num(flags['tunnel-mb'], TUNNEL_MB))),
     split: flags['no-split'] === true ? false : undefined, apart: flags['no-apart'] === true ? false : undefined,
     probeMs: num(flags['probe-ms'], 2000),

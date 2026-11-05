@@ -12,6 +12,7 @@ import { useLang } from '@/i18n';
 import { CATALOG, type CatalogModel } from '@/llm/catalog';
 import { useEngine } from '@/llm/engine';
 import { fitOn, fitTogether, type Fit } from '@/llm/fit';
+import { measuredFor } from '@/bench/store';
 import { ggufFiles, hfUrl, kvGuess, paramsOf, quantOf, searchGguf, type HfFile, type HfRepo } from '@/llm/hf';
 import { hasNative, llama } from '@/llm/native';
 import { cancelDownload, describe, forgetModel, initStore, retryDownload, saveSettings, startDownload, useDownloads, useLocalModels, usePeers, useSettings, type Download, type LocalModel } from '@/llm/store';
@@ -59,7 +60,7 @@ export default function ModelsScreen() {
 
   const rows = useMemo(() => {
     const list = CATALOG.map((m) => {
-      const f = fitOn(passport, { size: m.size, kv_mb_per_1k: m.kv_mb_per_1k, ctx: 2048 });
+      const f = fitOn(passport, { size: m.size, kv_mb_per_1k: m.kv_mb_per_1k, ctx: 2048 }, measuredFor('self', { id: m.id }));
       const tog = pool.length > 1 && f.verdict === 'no' ? fitTogether(pool, { size: m.size, kv_mb_per_1k: m.kv_mb_per_1k, ctx: 2048 }) : null;
       return { m, f, tog, rank: f.verdict === 'fits' ? 0 : f.verdict === 'tight' ? 1 : tog && tog.verdict !== 'no' ? 2 : 3 };
     });

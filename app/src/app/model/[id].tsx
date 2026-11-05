@@ -12,7 +12,9 @@ import { catalogById } from '@/llm/catalog';
 import { cancelDownload, describe, downloadOf, startDownload, useDownloads } from '@/llm/store';
 import { load, unload, useEngine } from '@/llm/engine';
 import { defaultCtx, fitOn, fitTogether, haveMb } from '@/llm/fit';
-import { estimateAlone, modelProfile, NETWORKS, planShares, workerFromPeer, type Estimate, type SimDevice, type SplitPlan } from '@/llm/sim';
+import { estimateAlone, modelProfile, NETWORKS, planShares, withMeasured, workerFromPeer, type Estimate, type SimDevice, type SplitPlan } from '@/llm/sim';
+import { modelKey } from '@/llm/cluster';
+import { measuredFor } from '@/bench/store';
 import { localById, saveSettings, useLocalModels, usePeers, useSettings, type LocalModel, type Mode } from '@/llm/store';
 import { colors, fonts, radius } from '@/theme/tokens';
 import { brand } from '@/theme/layout';
@@ -50,7 +52,8 @@ export default function ModelScreen() {
   const ctx = settings.ctx;
 
   const pool: Passport[] = useMemo(() => [...(passport ? [passport] : []), ...linked.map((l) => l.data)], [passport, linked]);
-  const fit = model ? fitOn(passport, { size: model.size, kv_mb_per_1k: model.kv_mb_per_1k, ctx }) : null;
+  const measuredHere = model ? measuredFor('self', modelKey(model)) : null;
+  const fit = model ? fitOn(passport, { size: model.size, kv_mb_per_1k: model.kv_mb_per_1k, ctx }, measuredHere) : null;
   const together = model && pool.length > 1 ? fitTogether(pool, { size: model.size, kv_mb_per_1k: model.kv_mb_per_1k, ctx }) : null;
   const running = !!model && engine.model?.id === model.id && !!engine.load;
   // the same model the planner runs at load time (sim/model.ts), fed from the passport
@@ -59,8 +62,9 @@ export default function ModelScreen() {
     if (!model) return null;
     const sim = modelProfile(model);
     const bw = passport ? Number(passport.mem_bw_read_gbs) || Number(passport.mem_bw_gbs) || 4 : 4;
-    const local: SimDevice = { id: 'me', capMb: Math.max(haveMb(passport), 1), bw, eff: 0.6 };
-    const workers = peers.map(workerFromPeer);
+    const key = modelKey(model);
+    const local: SimDevice = withMeasured({ id: 'me', capMb: Math.max(haveMb(passport), 1), bw, eff: 0.6 }, sim, measuredFor('self', key));
+    const workers = peers.map((p) => withMeasured(workerFromPeer(p), sim, measuredFor(p.id, key)));
     const alone: Estimate = estimateAlone(sim, local);
     const apartTps = [local, ...workers].reduce((a, d) => a + estimateAlone(sim, d).tps, 0);
     let split: SplitPlan | null = null;
@@ -115,7 +119,7 @@ export default function ModelScreen() {
     [t('model.size'), `${gb(model.size)} · ${model.params_b}B · ${model.quant}`],
     [t('models.license'), model.license ?? '—'],
     [t('model.ctx'), `${ctx} · ${t('models.fits').toLowerCase()} ≤ ${fit?.maxCtx || '—'}`],
-    [t('model.speed'), fit?.tps ? `${fit.tps.low}–${fit.tps.high} tok/s` : '—'],
+    [t('model.speed'), fit?.tps ? `${fit.tps.low}–${fit.tps.high} tok/s${fit.measured ? ` · ${t('bench.measured')}` : ''}` : '—'],
   ];
 
   return (

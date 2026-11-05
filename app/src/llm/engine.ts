@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
 import { lastPassport } from '@/data/passport';
 import { native, type LoadResult, type Message } from '@/llm/native';
-import { peerArgs, planSplit, probeAll, splitSummary, type Plan } from '@/llm/cluster';
+import { modelKey, peerArgs, planSplit, probeAll, splitSummary, type Plan } from '@/llm/cluster';
+import { measuredFor } from '@/bench/store';
 import { type LocalModel, type Mode, type Peer, saveSettings } from '@/llm/store';
 import { assign, estimateAlone, pickDevice } from '@/llm/sim/model';
 import { localFromPassport, modelProfile, workerFromPeer } from '@/llm/sim/profiles';
@@ -46,8 +47,9 @@ export function useEngine(): EngineState {
 }
 
 const thisName = () => lastPassport()?.device ?? 'this phone';
-const me = (model: LocalModel, freeMb: number): Device => ({ id: 'me', name: thisName(), local: true, busy: false, tps: estimateAlone(modelProfile(model), localFromPassport(lastPassport(), freeMb)).tps, busyUntil: 0 });
-const ofPeer = (model: LocalModel, p: Peer, apiPort: number): Device => ({ id: p.id, name: p.name, local: false, busy: false, apiPort, peer: p, tps: estimateAlone(modelProfile(model), workerFromPeer(p)).tps, busyUntil: 0 });
+// a bench on this model (bench/store.ts) wins over the estimate until the first reply measures it
+const me = (model: LocalModel, freeMb: number): Device => ({ id: 'me', name: thisName(), local: true, busy: false, tps: measuredFor('self', modelKey(model)) ?? estimateAlone(modelProfile(model), localFromPassport(lastPassport(), freeMb)).tps, busyUntil: 0 });
+const ofPeer = (model: LocalModel, p: Peer, apiPort: number): Device => ({ id: p.id, name: p.name, local: false, busy: false, apiPort, peer: p, tps: measuredFor(p.id, modelKey(model)) ?? estimateAlone(modelProfile(model), workerFromPeer(p)).tps, busyUntil: 0 });
 export const OUT_MS = 5 * 60 * 1000; // a device that dropped a request sits out this long
 
 /** Loads a model in a mode. `share` answers "keep it here or share" when it fits alone. */
