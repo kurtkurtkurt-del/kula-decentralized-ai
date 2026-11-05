@@ -107,6 +107,42 @@ PR açılmadı. Bu dalı release'e sen alacaksın.
 - Güvenlik gözden geçirmesi: RPC sunucusu üç yerde de yalnız 127.0.0.1 (`Native.serve("127.0.0.1:…")`,
   `ggml-rpc-server -H 127.0.0.1`, dev-gate); secret hiçbir log satırında yok (QR/JSON çıktısı tasarım gereği).
 
+## 5.11 cloud: tek dosya dağıtım ve kurulum (`claude/node-pack`)
+
+`origin/claude/node-master` + `origin/claude/integrate-night` (merge, yalnız ILERLEME çakıştı, iki bölüm de tutuldu) üstüne:
+
+- `node/tools/pack.mjs`: esbuild tek cjs bundle (bonjour-service, qrcode-terminal saf JS; native bağımlılık yok, mdns
+  değişmedi) → Node 22 SEA blob (code cache kapalı, blob tüm platformlara ortak) → hedefin node ikilisine postject.
+  Ev sahibi hedef için `process.execPath`; diğerleri nodejs.org'dan aynı sürümle, `SHASUMS256.txt` ile sha256 doğrulanıp
+  indiriliyor. Hedefler: mac-arm64, mac-x64, linux-x64, linux-arm64, win-x64. Mac ikilileri enjeksiyondan sonra
+  `codesign --sign -` ister, bu yüzden Linux'ta üretilen mac ikilisi "unsigned" işaretlenir; CI'da macos-14 yapar.
+  Çıktı `dist/pack/kula-node-<sürüm>-<hedef>` + `SHA256SUMS`. Cloud'da linux-x64 (125 MB, 30 sn), win-x64 ve linux-arm64
+  gerçekten üretildi; linux-x64 `--version`, `--help`, `version --json`, `setup --dry-run --json` çalıştı.
+- Sürüm tek yerden: `node/package.json` → esbuild `__KULA_VERSION__`; kaynak çalışırken package.json okunur
+  (`src/version.ts`). Paketli ikili `.llama/host` aramaz (`isPacked()` → `repoRoots()` boş).
+- `install.sh` (mac/linux, `~/.local/bin`, PATH notu) ve `install.ps1` (Windows, `%LOCALAPPDATA%\kula-node`, kullanıcı
+  PATH'i, güvenlik duvarı notu). İkisi de release'in `SHA256SUMS`'ını çeker; dosya listede yoksa ya da özet uyuşmazsa
+  hiçbir şey kurmadan durur. `KULA_VERSION`, `KULA_BIN_DIR`, `KULA_BASE_URL`.
+- `node/tools/manifests.mjs` → `packaging/homebrew/kula-node.rb`, `packaging/winget/*.yaml`, `packaging/nfpm.yaml`;
+  sürüm package.json'dan, özetler `--sums SHA256SUMS`'tan (yoksa 64 sıfır, taslak). `node/tools/deb.mjs` nfpm'siz
+  `.deb` (tar + ar; `dpkg-deb -I/-c` ile doğrulandı).
+- `.github/workflows/node-pack.yml`: `v*` etiketinde test → matrix (ubuntu: linux-x64, linux-arm64, win-x64;
+  macos-14: mac-arm64, mac-x64) → release işi: SHA256SUMS, iki .deb, manifestler gerçek özetlerle, install betikleri,
+  `softprops/action-gh-release`. Etiket `v<package.json sürümü>` değilse durur. `claude/ci` ile çakışmaz (ayrı dosya).
+- İlk çalıştırma: `kula-node` argümansız terminalde menü (1 setup, 2 share, 3 peers probe/scan, 4 measure=`info`,
+  h, q); boruda help. `setup` indirmeden önce `total download: N MB`, sonra ilerleme çubuğu (`src/progress.ts`,
+  TTY değilse sessiz). Windows'ta `share` kapı açılınca güvenlik duvarı metni + `New-NetFirewallRule` komutu.
+  `--json`: version, info, setup (--check/--dry-run/gerçek), probe, peers list (secret maskeli), peers probe.
+  Yeni komut `kula-node info [--no-bandwidth]`.
+- Testler 46 → 56, hepsi geçti: `pack.test.ts` linux-x64'ü gerçekten üretip çalıştırır (+ .deb + manifest tazeliği),
+  `install.test.ts` sahte HTTP sunucuyla kurar, sha uyuşmazlığı / listede yok / SHA256SUMS yok durumlarında durduğunu
+  doğrular (not: sunucu test sürecinde olduğundan `spawn` async olmalı, `spawnSync` kilitleniyor), `cli.test.ts` json
+  çıktıları, menü, güvenlik duvarı metni, ilerleme çubuğu.
+- `docs/NODE.md`: üç platform için kopyala-yapıştır kurulum, ilk çalıştırma, paketleme anlatımı.
+- Denenmedi: mac ve windows ikilisinin gerçek makinede çalışması (cloud'da yok), workflow'un gerçek etiketle koşması,
+  brew/winget taslaklarının kabulü. İlk etiket atılmadan önce `node/package.json` sürümü ile etiket eşleşmeli.
+  Release olmadan `install.sh` "no release found" der; o zamana kadar `npm run pack` ile elden.
+
 ## durum (son güncelleme 5.11.2026 01:30)
 
 | adım | durum | not |

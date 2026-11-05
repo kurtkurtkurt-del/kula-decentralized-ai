@@ -1,0 +1,125 @@
+# kula-node release: one binary per platform, attached to the GitHub release
+# of a v* tag. Linux and windows binaries are made on ubuntu (postject does
+# not care which os it writes for); the mac ones on a mac, because they must
+# be re-signed after injection. Every runner uses the same node 22 line, so
+# the sea blob matches the binary it is put into.
+#
+# Afterwards one job gathers everything, writes SHA256SUMS, builds the .deb
+# files, renders the brew/winget/nfpm manifests with the real hashes, and
+# uploads the lot. install.sh / install.ps1 read SHA256SUMS from the release.
+
+name: node-pack
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  NODE_VERSION: '22'
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: node/package-lock.json
+      - run: npm ci
+        working-directory: node
+      - run: npm test
+        working-directory: node
+
+  pack:
+    needs: test
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            targets: linux-x64,linux-arm64,win-x64
+          - os: macos-14
+            targets: mac-arm64,mac-x64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: node/package-lock.json
+      - run: npm ci
+        working-directory: node
+      - name: Pack
+        working-directory: node
+        run: node tools/pack.mjs --target ${{ matrix.targets }} --out dist/pack
+      - name: Smoke (host target)
+        working-directory: node
+        shell: bash
+        run: |
+          v=$(node -p "require('./package.json').version")
+          host=$(node --input-type=module -e "import {hostTarget} from './tools/pack.mjs'; console.log(hostTarget())")
+          bin="dist/pack/kula-node-$v-$host"
+          "$bin" --version
+          "$bin" --help | head -3
+          "$bin" version --json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pack-${{ matrix.os }}
+          path: |
+            node/dist/pack/kula-node-*
+            !node/dist/pack/kula-node.cjs
+          if-no-files-found: error
+
+  release:
+    needs: pack
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: pack-*
+          merge-multiple: true
+          path: out
+      - name: Debs, sums, manifests
+        run: |
+          set -eux
+          v=$(node -p "require('./node/package.json').version")
+          tag="${GITHUB_REF_NAME}"
+          if [ "${GITHUB_REF_TYPE}" = tag ] && [ "$tag" != "v$v" ]; then
+            echo "tag $tag does not match node/package.json version $v" >&2; exit 1
+          fi
+          chmod +x out/kula-node-*
+          for b in out/kula-node-*-linux-*; do node node/tools/deb.mjs --bin "$b" --out out; done
+          (cd out && sha256sum kula-node-* kula-node_*.deb > SHA256SUMS && cat SHA256SUMS)
+          node node/tools/manifests.mjs --sums out/SHA256SUMS --out out/packaging
+          cp install.sh install.ps1 out/
+          ls -la out out/packaging
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-files
+          path: out
+      - name: GitHub release
+        if: github.ref_type == 'tag'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            out/kula-node-*
+            out/kula-node_*.deb
+            out/SHA256SUMS
+            out/install.sh
+            out/install.ps1
+            out/packaging/homebrew/kula-node.rb
+            out/packaging/nfpm.yaml
+            out/packaging/winget/*.yaml
+          generate_release_notes: true
+          fail_on_unmatched_files: true
