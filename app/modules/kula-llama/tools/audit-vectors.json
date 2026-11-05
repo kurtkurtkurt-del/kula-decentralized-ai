@@ -1,0 +1,12 @@
+{
+  "note": "beyin/check v0 ledger vectors. Key: Ed25519, seed = bytes 0x01..0x20 (pkcs8 is the standard 16-byte prefix 302e020100300506032b657004220420 followed by the seed). Each line is signed over its text without the trailing ,\"sig\":\"...\"} ; sha256 is over the full line (utf-8, no newline) and is the next line's prev. Fields are written in the order of \"fields\" (t, kind, peer always come first). Shared by Ledger.kt (VectorsTest.kt) and node/.",
+  "key": {"alg": "ed25519", "seed": "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20", "pkcs8": "302e020100300506032b6570042204200102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20", "public": "302a300506032b657003210079b5562e8fe654f94078b112e8a98ba7901f853ae695bed7e0e3910bad049664", "id": "646d6be49d9f0048f94f67749eca3515"},
+  "lines": [
+    {"event": {"t": 1700000000000, "kind": "connect", "peer": "10.0.0.7", "channel": "rpc"}, "fields": ["channel"],
+     "line": "{\"t\":1700000000000,\"kind\":\"connect\",\"peer\":\"10.0.0.7\",\"channel\":\"rpc\",\"prev\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"sig\":\"H1KfHj2h9Z8XoBazj+a8Es43alVBOde++YHZGu1M2aRdCmX9+L0WR+wi4JQYfKuK2vN/6EuItnIBCb7oynyUDg==\"}",
+     "sha256": "faf956eb034f1e236580404771bdea64b54d90f90e347def83d6228a9dd79f39"},
+    {"event": {"t": 1700000042000, "kind": "end", "peer": "10.0.0.7", "channel": "rpc", "bytes": 123456, "seconds": 42}, "fields": ["channel", "bytes", "seconds"],
+     "line": "{\"t\":1700000042000,\"kind\":\"end\",\"peer\":\"10.0.0.7\",\"channel\":\"rpc\",\"bytes\":123456,\"seconds\":42,\"prev\":\"faf956eb034f1e236580404771bdea64b54d90f90e347def83d6228a9dd79f39\",\"sig\":\"X0SR20FKyUQOlnJz6JFIRap2pj/u4pDw2Ap9MWqtyiAv3z4FO/Pq0jiOK4HrgZ3lLeY5m59xvczT4sGvTf+FAA==\"}",
+     "sha256": "8e241dd69474b96f7edbae249b3f7a24b5268df867e2bcd31ffd7aca22ebd6ec"}
+  ]
+}

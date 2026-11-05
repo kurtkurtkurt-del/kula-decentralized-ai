@@ -28,7 +28,9 @@ export function sha256Hex(text: string): string {
 }
 
 // Serialises {t, kind, peer, ...fields, prev} then signs that, and appends sig
-// last. Keys stay in this order and JSON.stringify adds no spaces.
+// last. Keys stay in this order and JSON.stringify adds no spaces. The signed text is
+// the line up to and including the prev value's closing quote, that is without the
+// object's closing brace, the same bytes the phone's Ledger.kt signs (AUDIT.md).
 export function makeLine(key: DeviceKey, t: number, kind: Kind, peer: string, fields: Fields, prev: string): { line: string; entry: Entry } {
   const body: Record<string, unknown> = { t, kind, peer };
   for (const [k, v] of Object.entries(fields)) {
@@ -37,15 +39,17 @@ export function makeLine(key: DeviceKey, t: number, kind: Kind, peer: string, fi
   }
   body.prev = prev;
   const unsigned = JSON.stringify(body);
-  body.sig = signText(key, unsigned);
+  body.sig = signText(key, unsigned.slice(0, -1));
   return { line: JSON.stringify(body), entry: body as Entry };
 }
 
+// The signed part of a line: everything before the trailing ,"sig":"..."}. Taken from
+// the raw text, not re-serialised, so a line another implementation wrote verifies too.
+const SIG_TAIL = /,"sig":"[A-Za-z0-9+/=]*"\}$/;
 export function unsignedOf(line: string): string | null {
-  const obj = JSON.parse(line);
-  if (typeof obj !== 'object' || obj === null || typeof obj.sig !== 'string') return null;
-  const { sig: _sig, ...rest } = obj;
-  return JSON.stringify(rest);
+  const m = SIG_TAIL.exec(line);
+  if (!m) return null;
+  return line.slice(0, m.index);
 }
 
 export interface Problem { n: number; reason: 'json' | 'prev' | 'sig' | 'kind'; }

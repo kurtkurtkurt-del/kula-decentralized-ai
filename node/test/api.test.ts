@@ -80,7 +80,7 @@ test('status, load (download + sha256 + backend start) and chat through the gate
     assert.deepEqual(st, { loaded: false, model: null, sha256: null, tokensUsed: 0, ctx: 0, busy: false });
 
     // chat before a model is loaded
-    assert.equal((await fetch(`${base}/chat`, { method: 'POST', body: '{"messages":[]}' })).status, 400);
+    assert.equal((await fetch(`${base}/chat`, { method: 'POST', body: '{"messages":[]}' })).status, 409);
 
     // a leftover partial download is resumed with a Range request
     fs.writeFileSync(path.join(models, 'tiny.gguf.part'), model.subarray(0, 100_000));
@@ -122,6 +122,42 @@ test('status, load (download + sha256 + backend start) and chat through the gate
     await gate.close();
     await api.close();
     files.close();
+    fake.close();
+    fs.rmSync(models, { recursive: true, force: true });
+  }
+});
+
+test('a client that drops mid-chat frees busy and aborts the upstream request', async () => {
+  const models = fs.mkdtempSync(path.join(os.tmpdir(), 'kula-models-'));
+  const fake = await fakeLlamaServer();
+  const api = await startApiServer({ models, llama: null, startBackend: async () => ({ port: fake.port, stop: async () => {} }) });
+  const base = `http://127.0.0.1:${api.port}`;
+  try {
+    // put a model in place without a download: a zero byte file with its own sha
+    const empty = createHash('sha256').update('').digest('hex');
+    fs.writeFileSync(path.join(models, 'e.gguf'), '');
+    const ev = await sse(`${base}/load`, { url: 'http://127.0.0.1:1/none', sha256: empty, size: 0, name: 'e.gguf' });
+    assert.equal(ev.at(-1).done, true);
+
+    const ac = new AbortController();
+    const res = await fetch(`${base}/chat`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ messages: [{ role: 'user', content: 'hi' }] }), signal: ac.signal });
+    const reader = res.body!.getReader();
+    await reader.read(); // the first token
+    assert.equal((await (await fetch(`${base}/status`)).json()).busy, true);
+    ac.abort();
+    await new Promise((r) => setTimeout(r, 200));
+    assert.equal((await (await fetch(`${base}/status`)).json()).busy, false, 'busy cleared after the client went away');
+    // and the next chat goes through
+    const chat = await sse(`${base}/chat`, { messages: [{ role: 'user', content: 'hi' }] });
+    assert.equal(chat.at(-1).done, true);
+    // unload is refused while a chat runs
+    const ac2 = new AbortController();
+    const res2 = await fetch(`${base}/chat`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ messages: [] }), signal: ac2.signal });
+    await res2.body!.getReader().read();
+    assert.equal((await fetch(`${base}/unload`, { method: 'POST' })).status, 409);
+    ac2.abort();
+  } finally {
+    await api.close();
     fake.close();
     fs.rmSync(models, { recursive: true, force: true });
   }

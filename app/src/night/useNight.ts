@@ -4,7 +4,10 @@ import * as Battery from 'expo-battery';
 import NetInfo from '@react-native-community/netinfo';
 import Storage from 'expo-sqlite/kv-store';
 import { SimulatedWorker, inWindow } from './SimulatedWorker';
+import { LlamaWorker } from './LlamaWorker';
 import type { NightStatus } from './NightWorker';
+import { hasNative } from '@/llm/native';
+import { localModels } from '@/llm/store';
 import { endNight, forgetNight, startNight } from '@/data/contribution';
 import { kept } from '@/data/friends';
 import { lastPassport } from '@/data/passport';
@@ -15,7 +18,22 @@ import { nightWindow } from '@/data/settings';
 // passport) and the app is in the foreground, and ends when they stop being met or the
 // window closes. The card comes with the end (contribution_end). TONIGHT_KEY remembers
 // which project this night is on, so a restart of the app in the night continues it.
-const worker = new SimulatedWorker();
+//
+// Two workers, one active at a time (5.11.2026): the real one when the native module and
+// a local model exist, the simulation otherwise. The choice is made when a night starts,
+// so a model downloaded in the evening counts that same night.
+const sim = new SimulatedWorker();
+const real = new LlamaWorker();
+let worker: SimulatedWorker | LlamaWorker = sim;
+export const canRunForReal = () => hasNative() && localModels().length > 0;
+function pickWorker() {
+  const next = canRunForReal() ? real : sim;
+  if (next !== worker) {
+    worker.reset();
+    worker = next;
+  }
+  return worker;
+}
 const TONIGHT = 'night.project';
 const START = 'night.start';
 let checking = false;
@@ -55,7 +73,7 @@ async function check(force = false) {
       if (!r) return;
       started = { ...r, slug: slug! };
       Storage.setItemSync(START, JSON.stringify(started));
-      worker.start(slug!, p?.est_tps ?? 1);
+      pickWorker().start(slug!, p?.est_tps ?? 1);
     } else if (!ok && s.state === 'running') {
       await finish();
     } else if (!ok && s.state !== 'running') {
@@ -73,7 +91,8 @@ async function finish() {
   if (!st) return;
   started = null;
   Storage.removeItemSync(START);
-  await endNight({ contributionId: st.id, startId: st.jobId, startedAt: st.at, slug: st.slug, tokens: s.tokens, seconds: s.seconds, kwh: s.kwh }).catch(() => {});
+  // units, checked and wrong ride along in the job; the rpc reads only tokens, seconds, kwh
+  await endNight({ contributionId: st.id, startId: st.jobId, startedAt: st.at, slug: st.slug, tokens: s.tokens, seconds: s.seconds, kwh: s.kwh, units: s.units ?? 0, checked: s.checked ?? 0, wrong: s.wrong ?? 0, model: s.model ?? null }).catch(() => {});
   forgetNight();
   worker.reset();
 }
@@ -103,7 +122,9 @@ export function useNight(): NightStatus {
       first.current = false;
       check().catch(() => {});
     }
-    return worker.subscribe(setS);
+    // both workers report; only the active one's word counts
+    const offs = [sim, real].map((w) => w.subscribe((st) => { if (w === worker) setS(st); }));
+    return () => offs.forEach((off) => off());
   }, []);
   return s;
 }
