@@ -3,6 +3,7 @@ import { lastPassport } from '@/data/passport';
 import { native, type LoadResult, type Message } from '@/llm/native';
 import { peerArgs, peerTls, planSplit, probeAll, splitSummary, type Plan } from '@/llm/cluster';
 import { type LocalModel, type Mode, type Peer, saveSettings } from '@/llm/store';
+import { parseSse, SseReader, type SseEvent } from '@/llm/sse';
 
 // The engine: one model loaded at a time, in one of three ways. `alone` and `split` run
 // in this process (split: the layers this phone does not hold sit on tunnelled peers).
@@ -126,32 +127,32 @@ export function chatLocal(messages: Message[], onToken: (t: string) => void, opt
   return p;
 }
 
-/** Streams a reply from a peer over its api tunnel (SSE over fetch; XHR fallback for RN). */
+/** Streams a reply from a peer over its api tunnel (SSE over XHR: RN's fetch does not stream). */
 export function chatRemote(dev: Device, messages: Message[], onToken: (t: string) => void, opts: { maxTokens: number; temperature: number; reset?: boolean }): Promise<Reply> & { stop: () => void } {
   const xhr = new XMLHttpRequest();
   const p = new Promise<Reply>((resolve, reject) => {
     let seen = 0;
     let last: Reply | null = null;
+    const reader = new SseReader();
+    const take = (events: SseEvent[]) => {
+      for (const o of events) {
+        if (typeof o.t === 'string' && o.t) onToken(o.t);
+        if (o.error) reject(new Error(String(o.error)));
+        if (o.done) last = { tokens: Number(o.tokens) || 0, ms: Number(o.ms) || 0, firstMs: Number(o.firstMs) || 0, tps: Number(o.tps) || 0, stopped: false, device: dev.name };
+      }
+    };
     xhr.open('POST', `http://127.0.0.1:${dev.apiPort}/chat`);
     xhr.setRequestHeader('Content-Type', 'application/json');
     xhr.onreadystatechange = () => {
       if (xhr.readyState >= 3) {
-        const text = xhr.responseText.slice(seen);
         // no early return: the last bytes usually arrive in a readyState 3 event, and the
         // readyState 4 that follows must still reach the resolve below
-        const cut = text.lastIndexOf('\n\n');
-        if (cut >= 0) seen += cut + 2;
-        for (const line of cut >= 0 ? text.slice(0, cut).split('\n') : []) {
-          if (!line.startsWith('data: ')) continue;
-          try {
-            const o = JSON.parse(line.slice(6));
-            if (o.t) onToken(o.t);
-            if (o.error) reject(new Error(o.error));
-            if (o.done) last = { tokens: o.tokens, ms: o.ms, firstMs: o.firstMs, tps: o.tps, stopped: false, device: dev.name };
-          } catch {}
-        }
+        const text = xhr.responseText;
+        take(reader.feed(text.slice(seen)));
+        seen = text.length;
       }
       if (xhr.readyState === 4) {
+        take(reader.end());
         if (last) resolve(last);
         else reject(new Error(xhr.status ? `peer http ${xhr.status}` : 'peer gone'));
       }
@@ -184,7 +185,7 @@ export function chat(messages: Message[], onToken: (t: string) => void, opts: { 
 async function apiLoad(port: number, model: LocalModel, ctx: number): Promise<void> {
   const res = await fetch(`http://127.0.0.1:${port}/load`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ url: model.url, sha256: model.sha256, size: model.size, name: model.file, ctx }) });
   const text = await res.text();
-  const lines = text.split('\n').filter((l) => l.startsWith('data: ')).map((l) => JSON.parse(l.slice(6)));
+  const lines = parseSse(text);
   const last = lines[lines.length - 1];
-  if (!last || last.error) throw new Error(last?.error ?? 'peer did not answer');
+  if (!last || last.error) throw new Error(String(last?.error ?? 'peer did not answer'));
 }

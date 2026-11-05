@@ -59,7 +59,7 @@ function json(res: http.ServerResponse, code: number, body: unknown) {
   res.end(text);
 }
 
-class Sse {
+export class Sse {
   constructor(private readonly res: http.ServerResponse) {
     res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache', connection: 'keep-alive', 'x-accel-buffering': 'no' });
     res.flushHeaders();

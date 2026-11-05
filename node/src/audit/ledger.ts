@@ -35,6 +35,9 @@ export function makeLine(key: DeviceKey, t: number, kind: Kind, peer: string, fi
   const body: Record<string, unknown> = { t, kind, peer };
   for (const [k, v] of Object.entries(fields)) {
     if (k === 't' || k === 'kind' || k === 'peer' || k === 'prev' || k === 'sig') continue;
+    // JSON.stringify puts integer-like keys first whatever the insertion order, which would
+    // break the "t, kind, peer first" layout the phone's writer keeps: such a key is skipped
+    if (/^\d+$/.test(k)) continue;
     body[k] = v;
   }
   body.prev = prev;
@@ -64,7 +67,9 @@ export function verifyLines(lines: string[], publicKey: KeyObject | null, prev =
     if (!line) continue;
     n++;
     let obj: any;
-    try { obj = JSON.parse(line); } catch { problems.push({ n, reason: 'json' }); prev = sha256Hex(line); continue; }
+    try { obj = JSON.parse(line); } catch { obj = undefined; }
+    // valid json that is not an object ("null", "[]", "7") is as much a broken line as no json
+    if (!obj || typeof obj !== 'object' || Array.isArray(obj)) { problems.push({ n, reason: 'json' }); prev = sha256Hex(line); continue; }
     if (!KINDS.includes(obj.kind)) problems.push({ n, reason: 'kind' });
     if (obj.prev !== prev) problems.push({ n, reason: 'prev' });
     if (publicKey) {
