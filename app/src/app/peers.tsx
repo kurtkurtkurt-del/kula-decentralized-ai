@@ -3,10 +3,13 @@ import { Modal, Platform, Pressable, StyleSheet, Text, TextInput, View } from 'r
 import { router } from 'expo-router';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import * as Clipboard from 'expo-clipboard';
+import EmptyState from '@/components/EmptyState';
 import StaffPage from '@/components/StaffPage';
 import { linkPassport } from '@/data/passport';
 import { useLang } from '@/i18n';
 import { probeAll } from '@/llm/cluster';
+import { classify, explain } from '@/llm/errors';
+import { tapDone, tapSelect } from '@/lib/haptics';
 import { hasNative, llama, type PeerFound } from '@/llm/native';
 import { isPeerQr, takePeerQr } from '@/llm/peers';
 import { forgetPeer, usePeers, type Peer } from '@/llm/store';
@@ -46,11 +49,15 @@ export default function PeersScreen() {
       }
       const p = takePeerQr(text);
       setErr(null);
+      tapDone();
       setNote(t('peers.added', { name: p.name.toLowerCase() }));
       setScan(false);
       return true;
     } catch (e) {
-      setErr(tx(`peers.err.${(e as Error).message}`, tx(`devices.err.${(e as Error).message}`, t('peers.err.notPeer'))));
+      // the qr codes' own words first (notPeer · self · old), the dictionary for the rest
+      const code = (e as Error).message;
+      const own = tx(`peers.err.${code}`, tx(`devices.err.${code}`, ''));
+      setErr(own || (classify(e).kind === 'unknown' ? t('peers.err.notPeer') : explain(e, tx)));
       return false;
     }
   };
@@ -94,7 +101,7 @@ export default function PeersScreen() {
   return (
     <StaffPage title={t('peers.title')}>
       <Text style={styles.lede}>{t('peers.lede')}</Text>
-      {peers.length === 0 ? <Text style={styles.note}>{t('peers.none')}</Text> : null}
+      {peers.length === 0 ? <EmptyState text={t('empty.peers')} action={camera ? t('empty.peers.go') : undefined} onAction={openScan} testID="empty-peers" /> : null}
       {peers.map((p: Peer) => (
         <View key={p.id} style={styles.row}>
           <View style={styles.rowText}>
@@ -102,22 +109,22 @@ export default function PeersScreen() {
             <Text style={styles.meta}>{[`${p.host}:${p.port}`, p.ram ? `${Math.round(p.ram / 1024 * 10) / 10} gb` : '', p.bw ? `${p.bw} gb/s` : ''].filter(Boolean).join(' · ')}</Text>
             <Text style={[styles.meta, ok[p.id] === true && styles.okText, ok[p.id] === false && styles.offText]}>{ok[p.id] === null ? '…' : ok[p.id] ? t('peers.ok') : ok[p.id] === false ? t('peers.off') : ''}</Text>
           </View>
-          <Pressable onPress={() => forgetPeer(p.id)} hitSlop={10} accessibilityLabel={t('peers.remove')}><Text style={styles.x}>×</Text></Pressable>
+          <Pressable onPress={() => { tapSelect(); forgetPeer(p.id); }} hitSlop={10} accessibilityRole="button" accessibilityLabel={t('a11y.remove', { name: p.name })} style={styles.xHit}><Text style={styles.x}>×</Text></Pressable>
         </View>
       ))}
       <View style={styles.actions}>
-        <Pressable onPress={openScan} style={({ pressed }) => [styles.btn, pressed && styles.pressed]}><Text style={styles.btnText}>{t('peers.scan')}</Text></Pressable>
-        <Pressable onPress={paste} style={({ pressed }) => [styles.btn, pressed && styles.pressed]}><Text style={styles.btnText}>{t('peers.paste')}</Text></Pressable>
-        {peers.length ? <Pressable onPress={check} style={({ pressed }) => [styles.btn, pressed && styles.pressed]}><Text style={styles.btnText}>{t('peers.check')}</Text></Pressable> : null}
-        {hasNative() ? <Pressable onPress={findNearby} style={({ pressed }) => [styles.btn, pressed && styles.pressed]}><Text style={styles.btnText}>{looking ? t('peers.searching') : t('peers.nearby')}</Text></Pressable> : null}
+        <Pressable onPress={openScan} accessibilityRole="button" accessibilityLabel={t('peers.scan')} style={({ pressed }) => [styles.btn, pressed && styles.pressed]}><Text style={styles.btnText}>{t('peers.scan')}</Text></Pressable>
+        <Pressable onPress={paste} accessibilityRole="button" accessibilityLabel={t('peers.paste')} style={({ pressed }) => [styles.btn, pressed && styles.pressed]}><Text style={styles.btnText}>{t('peers.paste')}</Text></Pressable>
+        {peers.length ? <Pressable onPress={check} accessibilityRole="button" accessibilityLabel={t('peers.check')} style={({ pressed }) => [styles.btn, pressed && styles.pressed]}><Text style={styles.btnText}>{t('peers.check')}</Text></Pressable> : null}
+        {hasNative() ? <Pressable onPress={findNearby} accessibilityRole="button" accessibilityLabel={looking ? t('peers.searching') : t('peers.nearby')} style={({ pressed }) => [styles.btn, pressed && styles.pressed]}><Text style={styles.btnText}>{looking ? t('peers.searching') : t('peers.nearby')}</Text></Pressable> : null}
       </View>
       {/* the code as text: a computer's terminal prints it, and some emulators have no camera */}
       <View style={styles.typeRow}>
-        <TextInput value={typed} onChangeText={setTyped} placeholder={t('peers.typeHint')} placeholderTextColor={colors.meta} autoCapitalize="none" autoCorrect={false} style={styles.input} testID="peer-code" />
-        <Pressable onPress={() => { if (take(typed)) setTyped(''); }} style={({ pressed }) => [styles.btn, pressed && styles.pressed]}><Text style={styles.btnText}>{t('peers.add')}</Text></Pressable>
+        <TextInput value={typed} onChangeText={setTyped} placeholder={t('peers.typeHint')} placeholderTextColor={colors.meta} autoCapitalize="none" autoCorrect={false} accessibilityLabel={t('peers.typeHint')} style={styles.input} testID="peer-code" />
+        <Pressable onPress={() => { if (take(typed)) setTyped(''); }} accessibilityRole="button" accessibilityLabel={t('peers.add')} style={({ pressed }) => [styles.btn, pressed && styles.pressed]}><Text style={styles.btnText}>{t('peers.add')}</Text></Pressable>
       </View>
-      {note ? <Text style={styles.okText}>{note}</Text> : null}
-      {err && !scan ? <Text style={styles.offText}>{err}</Text> : null}
+      {note ? <Text style={styles.okText} accessibilityLiveRegion="polite">{note}</Text> : null}
+      {err && !scan ? <Text style={styles.offText} accessibilityRole="alert">{err}</Text> : null}
       {nearby.filter((f) => !known.has(f.id ?? '')).length ? (
         <>
           <Text style={styles.section}>{up(t('peers.found'))}</Text>
@@ -131,7 +138,7 @@ export default function PeersScreen() {
           ))}
         </>
       ) : null}
-      <Pressable onPress={() => router.push('/share')} style={({ pressed }) => [styles.shareLink, pressed && styles.pressed]}><Text style={styles.shareText}>{t('peers.share')} ›</Text></Pressable>
+      <Pressable onPress={() => router.push('/share')} accessibilityRole="button" accessibilityLabel={t('peers.share')} style={({ pressed }) => [styles.shareLink, pressed && styles.pressed]}><Text style={styles.shareText}>{t('peers.share')} ›</Text></Pressable>
 
       <Modal visible={scan} animationType="slide" onRequestClose={() => setScan(false)}>
         <View style={styles.scanRoot}>
@@ -140,7 +147,7 @@ export default function PeersScreen() {
           ) : (
             <View style={styles.center}>
               {camera && perm?.canAskAgain !== false ? (
-                <Pressable onPress={() => ask().catch(() => {})} style={({ pressed }) => [styles.btn, styles.btnLight, pressed && styles.pressed]}><Text style={[styles.btnText, styles.btnTextLight]}>{t('devices.camera')}</Text></Pressable>
+                <Pressable onPress={() => ask().catch(() => {})} accessibilityRole="button" accessibilityLabel={t('devices.camera')} style={({ pressed }) => [styles.btn, styles.btnLight, pressed && styles.pressed]}><Text style={[styles.btnText, styles.btnTextLight]}>{t('devices.camera')}</Text></Pressable>
               ) : (
                 <Text style={styles.hintLight}>{t('devices.cameraOff')}</Text>
               )}
@@ -150,8 +157,8 @@ export default function PeersScreen() {
           <View style={styles.scanBottom}>
             <Text style={styles.hintLight}>{err ?? t('devices.scanHint')}</Text>
             <View style={styles.actions}>
-              <Pressable onPress={paste} style={({ pressed }) => [styles.btn, styles.btnLight, pressed && styles.pressed]}><Text style={[styles.btnText, styles.btnTextLight]}>{t('peers.paste')}</Text></Pressable>
-              <Pressable onPress={() => setScan(false)} style={({ pressed }) => [styles.btn, styles.btnLight, pressed && styles.pressed]}><Text style={[styles.btnText, styles.btnTextLight]}>{t('word.close')}</Text></Pressable>
+              <Pressable onPress={paste} accessibilityRole="button" accessibilityLabel={t('peers.paste')} style={({ pressed }) => [styles.btn, styles.btnLight, pressed && styles.pressed]}><Text style={[styles.btnText, styles.btnTextLight]}>{t('peers.paste')}</Text></Pressable>
+              <Pressable onPress={() => setScan(false)} accessibilityRole="button" accessibilityLabel={t('word.close')} style={({ pressed }) => [styles.btn, styles.btnLight, pressed && styles.pressed]}><Text style={[styles.btnText, styles.btnTextLight]}>{t('word.close')}</Text></Pressable>
             </View>
           </View>
         </View>
@@ -164,22 +171,23 @@ const styles = StyleSheet.create({
   lede: { fontFamily: fonts.regular, fontSize: 14, lineHeight: 20, color: colors.mute },
   note: { fontFamily: fonts.regular, fontSize: 14, color: colors.mute, marginTop: 16 },
   section: { fontFamily: fonts.regular, fontSize: 10, letterSpacing: 1.6, color: colors.spotText, marginTop: 24 },
-  row: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: colors.ink3 },
+  row: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 12, minHeight: 56, borderBottomWidth: 1, borderBottomColor: colors.ink3 },
   rowText: { flex: 1, gap: 2 },
   name: { fontFamily: fonts.semibold, fontSize: 16, color: colors.paper },
-  kind: { fontFamily: fonts.regular, fontSize: 12, color: colors.meta },
+  kind: { fontFamily: fonts.regular, fontSize: 12, color: colors.mute },
   meta: { fontFamily: fonts.regular, fontSize: 12, color: colors.mute },
   okText: { fontFamily: fonts.medium, fontSize: 12.5, color: colors.spotText, marginTop: 8 },
   offText: { fontFamily: fonts.medium, fontSize: 12.5, color: colors.violet, marginTop: 8 },
-  x: { fontFamily: fonts.regular, fontSize: 22, color: colors.meta, paddingHorizontal: 6 },
+  x: { fontFamily: fonts.regular, fontSize: 22, color: colors.mute },
   actions: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginTop: 16 },
-  btn: { paddingHorizontal: 14, height: 38, borderRadius: radius.pill, borderWidth: 1, borderColor: colors.paper, justifyContent: 'center' },
+  btn: { paddingHorizontal: 14, minHeight: 44, borderRadius: radius.pill, borderWidth: 1, borderColor: colors.paper, justifyContent: 'center' },
+  xHit: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center' },
   btnText: { fontFamily: fonts.medium, fontSize: 13, color: colors.paper },
   btnLight: { borderColor: '#fff' },
   btnTextLight: { color: '#fff' },
   typeRow: { flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: 14 },
   input: { flex: 1, height: 44, borderBottomWidth: 1, borderBottomColor: colors.ink3, fontFamily: fonts.regular, fontSize: 13, color: colors.paper },
-  shareLink: { marginTop: 28 },
+  shareLink: { marginTop: 28, minHeight: 44, justifyContent: 'center' },
   shareText: { fontFamily: fonts.medium, fontSize: 14, color: colors.spotText },
   scanRoot: { flex: 1, backgroundColor: '#000' },
   center: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 12 },

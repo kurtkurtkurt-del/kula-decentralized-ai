@@ -1,15 +1,18 @@
 import { useMemo, useState } from 'react';
-import { Linking, Modal, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Linking, Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { router, useLocalSearchParams } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Button from '@/components/Button';
+import DownloadCard from '@/components/DownloadCard';
 import PickerSheet from '@/components/PickerSheet';
 import StaffPage from '@/components/StaffPage';
 import { usePassport, useLinked } from '@/data/passport';
 import type { Passport } from '@/passport/contract';
 import { useLang } from '@/i18n';
 import { catalogById } from '@/llm/catalog';
-import { cancelDownload, describe, downloadOf, startDownload, useDownloads } from '@/llm/store';
+import { explain } from '@/llm/errors';
+import { tapSelect } from '@/lib/haptics';
+import { describe, downloadOf, startDownload, useDownloads } from '@/llm/store';
 import { load, unload, useEngine } from '@/llm/engine';
 import { defaultCtx, fitOn, fitTogether } from '@/llm/fit';
 import { localById, saveSettings, useLocalModels, usePeers, useSettings, type LocalModel, type Mode } from '@/llm/store';
@@ -24,7 +27,7 @@ const CTX = [512, 1024, 2048, 4096, 8192, 16384];
 
 export default function ModelScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
-  const { t, tx, up } = useLang();
+  const { t, tx, up, lang } = useLang();
   const insets = useSafeAreaInsets();
   useLocalModels();
   const settings = useSettings();
@@ -32,7 +35,6 @@ export default function ModelScreen() {
   const linked = useLinked();
   const peers = usePeers();
   const engine = useEngine();
-  const { lang } = useLang();
   useDownloads();
   const wanted = decodeURIComponent(id ?? '');
   const local = localById(wanted);
@@ -46,6 +48,7 @@ export default function ModelScreen() {
   const [ask, setAsk] = useState(false);
   const [shareQ, setShareQ] = useState<Mode | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  const [picked, setPicked] = useState<Mode>(settings.lastMode);
   const ctx = settings.ctx;
 
   const pool: Passport[] = useMemo(() => [...(passport ? [passport] : []), ...linked.map((l) => l.data)], [passport, linked]);
@@ -66,22 +69,38 @@ export default function ModelScreen() {
     if (!onPhone) return;
     setShareQ(null);
     setErr(null);
-    if (mode !== 'alone' && peers.length === 0) return setErr(t('model.err.nopeers'));
+    if (mode !== 'alone' && peers.length === 0) return setErr(t('err.nopeers'));
     try {
       await load(model, mode, ctx, mode === 'alone' ? [] : peers, share);
       router.push('/chat');
     } catch (e) {
-      const code = (e as Error).message;
-      setErr(tx(`model.err.${code}`, code));
+      setErr(explain(e, tx));
     }
   };
   const pick = (mode: Mode) => {
+    tapSelect();
+    setPicked(mode);
+  };
+  const go = () => {
+    const mode = picked;
     // split on a model that fits alone: ask whether to keep it here
     if (mode === 'split' && fit && fit.verdict !== 'no') return setShareQ(mode);
     // choosing split is choosing to share: the planner's live free-RAM figure can say "fits
     // alone" where the passport said no, and must not quietly keep every layer here
     start(mode, mode === 'split');
   };
+  // what each card says (5.11.2026): an estimate, a fit, one line of why, and, when it is
+  // off, the reason
+  const est = (f: { tps?: { low: number; high: number } | null } | null) => (f?.tps ? t('mode.est', { low: f.tps.low, high: f.tps.high }) : t('mode.estUnknown'));
+  const fitWord = (v: 'fits' | 'tight' | 'no' | undefined) => (v === 'fits' ? t('mode.fit.fits') : v === 'tight' ? t('mode.fit.tight') : v === 'no' ? t('mode.fit.no') : '');
+  const splitOff = !peers.length ? t('mode.off.noPeers') : together && together.verdict === 'no' ? t('mode.off.toobig') : null;
+  const apartOff = !peers.length ? t('mode.off.noPeers') : null;
+  const cards: { mode: Mode; title: string; why: string; est: string; fit: string; off: string | null }[] = [
+    { mode: 'alone', title: t('mode.alone'), why: fit?.verdict === 'no' ? t('mode.tryAnyway') : t('mode.alone.why'), est: est(fit), fit: fitWord(fit?.verdict), off: null },
+    { mode: 'apart', title: t('mode.apart'), why: t('mode.apart.why'), est: peers.length ? `${t('mode.devices', { n: peers.length + 1 })} × ${est(fit)}` : est(fit), fit: fitWord(fit?.verdict), off: apartOff },
+    { mode: 'split', title: t('mode.split'), why: t('mode.split.why'), est: together ? `${est(together)} · ${together.shares.map((s) => `${s.name.toLowerCase()} ${(s.mb / 1024).toFixed(1)} gb`).join(' · ')}` : est(null), fit: together ? (together.verdict === 'no' ? t('mode.fit.no') : t('mode.fit.together')) : '', off: splitOff },
+  ];
+  const pickedOff = cards.find((c) => c.mode === picked)?.off ?? null;
 
   const rows: [string, string][] = [
     [t('model.size'), `${gb(model.size)} · ${model.params_b}B · ${model.quant}`],
@@ -106,10 +125,10 @@ export default function ModelScreen() {
           <View key={k} style={styles.row}><Text style={styles.k}>{k}</Text><Text style={styles.v}>{v}</Text></View>
         ))}
         {fit ? <Text style={[styles.fit, fit.verdict === 'no' && styles.fitNo]}>{fit.verdict === 'fits' ? t('models.fits') : fit.verdict === 'tight' ? t('models.tight') : together && together.verdict !== 'no' ? t('models.together') : t('models.no')} · {t('models.needs', { need: fit.needMb, have: fit.haveMb })}</Text> : null}
-        {cat ? <Pressable onPress={() => Linking.openURL(cat.license_url)} hitSlop={8}><Text style={styles.link}>{t('models.license')} ↗</Text></Pressable> : null}
+        {cat ? <Pressable onPress={() => Linking.openURL(cat.license_url)} hitSlop={12} accessibilityRole="link" accessibilityLabel={t('a11y.license')} style={styles.linkHit}><Text style={styles.link}>{t('models.license')} ↗</Text></Pressable> : null}
       </View>
 
-      <Pressable onPress={() => setCtxOpen(true)} style={({ pressed }) => [styles.ctxRow, pressed && styles.pressed]}>
+      <Pressable onPress={() => setCtxOpen(true)} accessibilityRole="button" accessibilityLabel={`${t('model.ctx')}: ${ctx}`} accessibilityHint={t('model.ctxHint')} style={({ pressed }) => [styles.ctxRow, pressed && styles.pressed]}>
         <View style={{ flex: 1 }}>
           <Text style={styles.k}>{t('model.ctx')}</Text>
           <Text style={styles.hint}>{t('model.ctxHint')}</Text>
@@ -118,8 +137,8 @@ export default function ModelScreen() {
       </Pressable>
       <PickerSheet open={ctxOpen} title={t('model.ctx')} options={CTX.filter((c) => c <= Math.max(model.ctx_max, 4096)).map((c) => ({ id: String(c), label: String(c), extra: fit && c <= fit.maxCtx ? t('models.fits') : fit && c > fit.maxCtx ? t('models.no') : '' }))} selected={String(ctx)} onSelect={(v) => saveSettings({ ctx: Number(v) })} onClose={() => setCtxOpen(false)} />
 
-      {engine.loading && engine.model?.id === model.id ? <Text style={styles.loading}>{tx(`model.loading.${engine.loading}`, engine.loading)}</Text> : null}
-      {err ? <Text style={styles.err}>{err}</Text> : null}
+      {engine.loading && engine.model?.id === model.id ? <Text style={styles.loading} accessibilityLiveRegion="polite">{tx(`model.loading.${engine.loading}`, engine.loading)}</Text> : null}
+      {err ? <Text style={styles.err} accessibilityLiveRegion="assertive" accessibilityRole="alert">{err}</Text> : null}
       {running && engine.load ? (
         <View style={styles.card}>
           <Text style={styles.k}>{up(t('model.split'))}</Text>
@@ -132,12 +151,9 @@ export default function ModelScreen() {
       <View style={styles.actions}>
         {!onPhone ? (
           dl ? (
-            <>
-              <Text style={styles.loading}>{dl.state === 'error' ? `${t('models.state.error')}: ${dl.error ?? ''}` : `${t(`models.state.${dl.state === 'cancelled' || dl.state === 'done' ? 'running' : dl.state}`)} · ${gb(dl.got)} / ${gb(dl.total)}`}</Text>
-              <Button label={dl.state === 'error' ? t('models.retry') : t('models.cancel')} onPress={() => (dl.state === 'error' ? startDownload(dl.model) : cancelDownload(dl.id))} kind="line" />
-            </>
+            <DownloadCard d={dl} />
           ) : (
-            <Button label={`${t('models.download')} · ${gb(model.size)}`} onPress={() => startDownload(describe(cat!))} kind="red" />
+            <Button label={`${t('models.download')} · ${gb(model.size)}`} onPress={() => { tapSelect(); startDownload(describe(cat!)).catch((e) => setErr(explain(e, tx))); }} kind="red" />
           )
         ) : running ? (
           <>
@@ -149,39 +165,50 @@ export default function ModelScreen() {
         )}
       </View>
 
-      {/* the mode question, asked every time */}
+      {/* the mode question, asked every time: three cards, the chosen one lit, one start */}
       <Modal visible={ask} transparent animationType="fade" onRequestClose={() => setAsk(false)}>
-        <Pressable style={styles.dim} onPress={() => setAsk(false)} />
-        <View style={[styles.sheet, { paddingBottom: insets.bottom + 24 }]}>
+        <Pressable style={styles.dim} onPress={() => setAsk(false)} accessibilityRole="button" accessibilityLabel={t('a11y.close')} />
+        <View style={[styles.sheet, { paddingBottom: insets.bottom + 24 }]} accessibilityViewIsModal>
           <Text style={styles.head}>{up(t('mode.title'))}</Text>
-          <Option title={t('mode.alone')} why={fit?.verdict === 'no' ? `${t('mode.alone.why')} ${t('mode.tryAnyway')}` : t('mode.alone.why')} meta={fit?.tps ? `${fit.tps.low}–${fit.tps.high} tok/s` : ''} onPress={() => pick('alone')} />
-          <Option title={t('mode.apart')} why={`${t('mode.apart.why')} ${t('mode.beyin')}`} meta={peers.length ? `${peers.length + 1} × ${fit?.tps ? `${fit.tps.low}–${fit.tps.high}` : '?'} tok/s` : t('mode.needPeers')} off={!peers.length} onPress={() => pick('apart')} />
-          <Option title={t('mode.split')} why={t('mode.split.why')} meta={together?.tps ? `${together.tps.low}–${together.tps.high} tok/s · ${together.shares.map((s) => `${s.name.toLowerCase()} ${(s.mb / 1024).toFixed(1)} gb`).join(' · ')}` : peers.length ? '' : t('mode.needPeers')} off={!peers.length || (!!together && together.verdict === 'no')} onPress={() => pick('split')} />
+          <ScrollView style={styles.cards} contentContainerStyle={styles.cardsIn} showsVerticalScrollIndicator={false} accessibilityRole="radiogroup">
+            {cards.map((c) => <ModeCard key={c.mode} {...c} on={picked === c.mode} onPress={() => pick(c.mode)} />)}
+          </ScrollView>
           {!peers.length ? (
-            <Pressable onPress={() => { setAsk(false); router.push('/peers'); }} style={({ pressed }) => [styles.addPeer, pressed && styles.pressed]}>
+            <Pressable onPress={() => { setAsk(false); router.push('/peers'); }} accessibilityRole="button" accessibilityLabel={t('mode.addPeer')} style={({ pressed }) => [styles.addPeer, pressed && styles.pressed]}>
               <Text style={styles.addPeerText}>{t('mode.addPeer')} ›</Text>
             </Pressable>
           ) : null}
+          <View style={styles.sheetActions}>
+            <Button label={`${t('mode.go')} · ${cards.find((c) => c.mode === picked)?.title ?? ''}`} onPress={pickedOff ? undefined : go} kind="red" disabled={!!pickedOff} accessibilityHint={pickedOff ?? undefined} />
+          </View>
         </View>
       </Modal>
       <Modal visible={!!shareQ} transparent animationType="fade" onRequestClose={() => setShareQ(null)}>
         <Pressable style={styles.dim} onPress={() => setShareQ(null)} />
         <View style={[styles.sheet, { paddingBottom: insets.bottom + 24 }]}>
           <Text style={styles.head}>{up(t('mode.share'))}</Text>
-          <Option title={t('mode.keep')} why={t('mode.alone.why')} onPress={() => start('alone')} />
-          <Option title={t('mode.shareAnyway', { n: peers.length })} why={t('mode.split.why')} onPress={() => start('split', true)} />
+          <ModeCard mode="alone" title={t('mode.keep')} why={t('mode.alone.why')} est={est(fit)} fit={fitWord(fit?.verdict)} off={null} on onPress={() => start('alone')} />
+          <ModeCard mode="split" title={t('mode.shareAnyway', { n: peers.length })} why={t('mode.split.why')} est={est(together)} fit={together ? t('mode.fit.together') : ''} off={null} on={false} onPress={() => start('split', true)} />
         </View>
       </Modal>
     </StaffPage>
   );
 }
 
-function Option({ title, why, meta, off, onPress }: { title: string; why: string; meta?: string; off?: boolean; onPress: () => void }) {
+function ModeCard({ title, why, est, fit, off, on, onPress }: { mode: Mode; title: string; why: string; est: string; fit: string; off: string | null; on: boolean; onPress: () => void }) {
+  const { t } = useLang();
+  const label = [title, fit, est, off ?? ''].filter(Boolean).join(', ');
   return (
-    <Pressable onPress={onPress} disabled={off} style={({ pressed }) => [styles.opt, off && styles.off, pressed && styles.pressed]}>
-      <Text style={styles.optTitle}>{title}</Text>
-      <Text style={styles.optWhy}>{why}</Text>
-      {meta ? <Text style={styles.optMeta}>{meta}</Text> : null}
+    <Pressable onPress={onPress} disabled={!!off} accessibilityRole="radio" accessibilityState={{ selected: on, checked: on, disabled: !!off }} accessibilityLabel={label} style={({ pressed }) => [styles.card2, on && styles.card2On, off && styles.off, pressed && styles.pressed]}>
+      <View style={styles.cardTop}>
+        <View style={[styles.radio, on && styles.radioOn]}>{on ? <View style={styles.radioDot} /> : null}</View>
+        <Text style={[styles.optTitle, on && styles.optTitleOn]} numberOfLines={2}>{title}</Text>
+      </View>
+      <View style={styles.cardMeta}>
+        {fit ? <Text style={[styles.pill, fit === t('mode.fit.no') ? styles.pillNo : styles.pillOk]}>{fit}</Text> : null}
+        <Text style={styles.optMeta} numberOfLines={2}>{est}</Text>
+      </View>
+      <Text style={styles.optWhy}>{off ?? why}</Text>
     </Pressable>
   );
 }
@@ -197,9 +224,9 @@ const styles = StyleSheet.create({
   v: { fontFamily: fonts.medium, fontSize: 13, color: colors.paper, flexShrink: 1, textAlign: 'right' },
   fit: { fontFamily: fonts.medium, fontSize: 12.5, color: colors.spotText, marginTop: 6 },
   fitNo: { color: colors.violet },
-  link: { fontFamily: fonts.regular, fontSize: 11, color: colors.meta, marginTop: 4 },
-  ctxRow: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: colors.ink3, marginTop: 8 },
-  hint: { fontFamily: fonts.regular, fontSize: 11.5, color: colors.meta, marginTop: 2 },
+  link: { fontFamily: fonts.regular, fontSize: 11, color: colors.mute, marginTop: 4 },
+  ctxRow: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 14, minHeight: 56, borderBottomWidth: 1, borderBottomColor: colors.ink3, marginTop: 8 },
+  hint: { fontFamily: fonts.regular, fontSize: 11.5, lineHeight: 15, color: colors.mute, marginTop: 2 },
   ctxValue: { fontFamily: fonts.jet, fontSize: 14, color: colors.paper },
   loading: { fontFamily: fonts.medium, fontSize: 13, color: colors.spotText, marginTop: 14 },
   err: { fontFamily: fonts.medium, fontSize: 13, color: colors.violet, marginTop: 14 },
@@ -208,12 +235,26 @@ const styles = StyleSheet.create({
   dim: { flex: 1, backgroundColor: 'rgba(255,255,255,0.6)' },
   sheet: { backgroundColor: colors.ink, borderWidth: 1, borderBottomWidth: 0, borderColor: colors.ink3, borderTopLeftRadius: radius.lg, borderTopRightRadius: radius.lg, paddingHorizontal: brand.left, paddingTop: 12 },
   head: { fontFamily: fonts.regular, fontSize: 11, letterSpacing: 1.4, color: colors.mute, marginBottom: 6 },
-  opt: { paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: colors.ink3, gap: 3 },
-  off: { opacity: 0.4 },
-  optTitle: { fontFamily: fonts.semibold, fontSize: 16, color: colors.paper },
-  optWhy: { fontFamily: fonts.regular, fontSize: 12.5, color: colors.mute, lineHeight: 17 },
-  optMeta: { fontFamily: fonts.jet, fontSize: 11, color: colors.spotText, marginTop: 2 },
-  addPeer: { paddingVertical: 14 },
+  cards: { maxHeight: 420 },
+  cardsIn: { gap: 8, paddingTop: 4 },
+  card2: { padding: 14, borderRadius: radius.md, borderWidth: 1.5, borderColor: colors.ink3, backgroundColor: colors.ink2, gap: 8, minHeight: 44 },
+  card2On: { borderColor: colors.spot, backgroundColor: colors.ink },
+  cardTop: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  radio: { width: 20, height: 20, borderRadius: 10, borderWidth: 1.5, borderColor: colors.mute, alignItems: 'center', justifyContent: 'center' },
+  radioOn: { borderColor: colors.spot },
+  radioDot: { width: 10, height: 10, borderRadius: 5, backgroundColor: colors.spot },
+  cardMeta: { flexDirection: 'row', alignItems: 'center', gap: 8, flexWrap: 'wrap' },
+  pill: { fontFamily: fonts.medium, fontSize: 10.5, letterSpacing: 0.4, color: colors.ink, paddingHorizontal: 8, paddingVertical: 3, borderRadius: radius.pill, overflow: 'hidden' },
+  pillOk: { backgroundColor: colors.green },
+  pillNo: { backgroundColor: colors.mute },
+  off: { opacity: 0.45 },
+  optTitle: { fontFamily: fonts.semibold, fontSize: 16, color: colors.paper, flexShrink: 1 },
+  optTitleOn: { color: colors.paper },
+  optWhy: { fontFamily: fonts.regular, fontSize: 12.5, color: colors.paper2, lineHeight: 17 },
+  optMeta: { fontFamily: fonts.jet, fontSize: 11, lineHeight: 15, color: colors.spotText, flexShrink: 1 },
+  sheetActions: { marginTop: 12 },
+  linkHit: { minHeight: 32, justifyContent: 'center' },
+  addPeer: { paddingVertical: 14, minHeight: 44, justifyContent: 'center' },
   addPeerText: { fontFamily: fonts.medium, fontSize: 14, color: colors.spotText },
   pressed: { opacity: 0.6 },
 });

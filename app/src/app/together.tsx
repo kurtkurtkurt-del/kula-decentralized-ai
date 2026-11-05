@@ -118,7 +118,7 @@ const styles = StyleSheet.create({
   note: { fontFamily: fonts.regular, fontSize: 12, color: colors.meta },
   empty: { fontFamily: fonts.regular, fontSize: 14, lineHeight: 20, color: colors.mute, marginTop: 10 },
   tabs: { flexDirection: 'row', alignSelf: 'flex-start', padding: 3, borderRadius: radius.pill, backgroundColor: colors.ink2, marginTop: 14 },
-  tab: { paddingHorizontal: 14, height: 34, borderRadius: radius.pill, justifyContent: 'center' },
+  tab: { paddingHorizontal: 14, height: 34, borderRadius: radius.pill, justifyContent: 'center', minHeight: 44 },
   tabOn: { backgroundColor: colors.paper },
   tabText: { fontFamily: fonts.medium, fontSize: 13, color: colors.paper },
   tabTextOn: { color: colors.ink },

@@ -3,18 +3,23 @@ import { Alert, Linking, Pressable, StyleSheet, Text, TextInput, View } from 're
 import { StatusBar } from 'expo-status-bar';
 import { router } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import DownloadCard from '@/components/DownloadCard';
+import EmptyState from '@/components/EmptyState';
 import PickerSheet from '@/components/PickerSheet';
 import PullDownScroll from '@/components/PullDownScroll';
+import StepBar from '@/components/StepBar';
 import { useTabBarSpace } from '@/components/TabBar';
 import { usePassport, useLinked } from '@/data/passport';
 import type { Passport } from '@/passport/contract';
 import { useLang } from '@/i18n';
 import { CATALOG, type CatalogModel } from '@/llm/catalog';
 import { useEngine } from '@/llm/engine';
+import { explain } from '@/llm/errors';
 import { fitOn, fitTogether, type Fit } from '@/llm/fit';
 import { ggufFiles, hfUrl, kvGuess, paramsOf, quantOf, searchGguf, type HfFile, type HfRepo } from '@/llm/hf';
 import { hasNative, llama } from '@/llm/native';
-import { cancelDownload, describe, forgetModel, initStore, retryDownload, saveSettings, startDownload, useDownloads, useLocalModels, usePeers, useSettings, type Download, type LocalModel } from '@/llm/store';
+import { describe, forgetModel, initStore, saveSettings, startDownload, useDownloads, useLocalModels, usePeers, useSettings, useUxFlags, type LocalModel } from '@/llm/store';
+import { tapSelect } from '@/lib/haptics';
 import { colors, fonts, radius } from '@/theme/tokens';
 import { brand } from '@/theme/layout';
 
@@ -27,7 +32,7 @@ const gb = (b: number) => `${(b / 1024 ** 3).toFixed(b < 1024 ** 3 ? 2 : 1)} gb`
 export default function ModelsScreen() {
   const insets = useSafeAreaInsets();
   const tabSpace = useTabBarSpace();
-  const { t, up, lang } = useLang();
+  const { t, tx, up, lang } = useLang();
   const passport = usePassport();
   const linked = useLinked();
   const peers = usePeers();
@@ -35,6 +40,7 @@ export default function ModelsScreen() {
   const downloads = useDownloads();
   const settings = useSettings();
   const engine = useEngine();
+  const ux = useUxFlags();
   const [disk, setDisk] = useState<number | null>(null);
   const [arm, setArm] = useState(true);
   const [q, setQ] = useState('');
@@ -93,14 +99,16 @@ export default function ModelsScreen() {
     const params = paramsOf(f.file) || paramsOf(repo.id);
     const id = `hf:${repo.id}/${f.file}`;
     if (disk !== null && f.size / 1048576 > disk - 200) return Alert.alert(t('models.noDisk'));
-    startDownload({ id, name: `${repo.id.split('/')[1] ?? repo.id} ${quantOf(f.file)}`.trim(), file: f.file, size: f.size, sha256: f.sha256, params_b: params, quant: quantOf(f.file), kv_mb_per_1k: kvGuess(params), ctx_max: 8192, license: repo.license, source: 'hf', url: hfUrl(repo.id, f.file) }).catch((e) => Alert.alert(String(e.message)));
+    startDownload({ id, name: `${repo.id.split('/')[1] ?? repo.id} ${quantOf(f.file)}`.trim(), file: f.file, size: f.size, sha256: f.sha256, params_b: params, quant: quantOf(f.file), kv_mb_per_1k: kvGuess(params), ctx_max: 8192, license: repo.license, source: 'hf', url: hfUrl(repo.id, f.file) }).catch((e) => Alert.alert(explain(e, tx)));
   };
   const download = (m: CatalogModel) => {
     if (disk !== null && m.size / 1048576 > disk - 200) return Alert.alert(t('models.noDisk'));
-    startDownload(describe(m)).catch((e) => Alert.alert(String(e.message)));
+    tapSelect();
+    startDownload(describe(m)).catch((e) => Alert.alert(explain(e, tx)));
   };
   const remove = (m: LocalModel) => Alert.alert(t('models.deleteQ', { name: m.name }), '', [{ text: t('models.cancel'), style: 'cancel' }, { text: t('models.delete'), style: 'destructive', onPress: () => forgetModel(m.id) }]);
   const choose = (m: LocalModel) => {
+    tapSelect();
     saveSettings({ modelId: m.id });
     router.push(`/model/${encodeURIComponent(m.id)}`);
   };
@@ -108,6 +116,9 @@ export default function ModelsScreen() {
   const have = (id: string) => local.find((m) => m.id === id) ?? null;
 
   const banner = !hasNative() ? t('models.noNative') : !arm ? t('models.notArm') : !passport ? t('models.noPassport') : null;
+  // the ladder shows until every rung is done (or it is hidden); only where models can run at all
+  const showSteps = hasNative() && arm && !ux.stepsDone;
+  const smallest = rows.find(({ m }) => !have(m.id) && !dl(m.id))?.m ?? null;
 
   return (
     <View style={styles.root}>
@@ -120,8 +131,10 @@ export default function ModelsScreen() {
         showsVerticalScrollIndicator={false}
       >
         <Text style={styles.lede}>{t('models.lede')}</Text>
-        {banner ? (
-          <Pressable onPress={() => (!passport && hasNative() && arm ? router.push('/passport') : null)} style={styles.banner}>
+        {showSteps ? (
+          <StepBar facts={{ passport: !!passport, models: local.length, downloading: downloads.length > 0, ran: ux.ran || !!engine.load, peers: peers.length }} firstModelId={local[0]?.id ?? null} />
+        ) : banner ? (
+          <Pressable onPress={() => (!passport && hasNative() && arm ? router.push('/passport') : null)} accessibilityRole={!passport && hasNative() && arm ? 'button' : 'text'} accessibilityLabel={banner} style={styles.banner}>
             <Text style={styles.bannerText}>{banner}{!passport && hasNative() && arm ? ` · ${t('models.measure')} ›` : ''}</Text>
           </Pressable>
         ) : null}
@@ -129,13 +142,15 @@ export default function ModelsScreen() {
 
         {/* on this phone */}
         <Text style={styles.section}>{up(t('models.onPhone'))}</Text>
-        {local.length === 0 && downloads.length === 0 ? <Text style={styles.note}>{t('models.empty')}</Text> : null}
-        {downloads.map((d) => <DownloadRow key={d.id} d={d} />)}
+        {local.length === 0 && downloads.length === 0 ? (
+          <EmptyState text={t('empty.models')} action={hasNative() && arm && smallest ? t('empty.models.go') : undefined} onAction={() => smallest && download(smallest)} testID="empty-models" />
+        ) : null}
+        {downloads.map((d) => <DownloadCard key={d.id} d={d} />)}
         {local.map((m) => {
           const running = engine.model?.id === m.id && !!engine.load;
           const chosen = settings.modelId === m.id;
           return (
-            <Pressable key={m.id} onPress={() => choose(m)} onLongPress={() => remove(m)} style={({ pressed }) => [styles.row, pressed && styles.pressed]}>
+            <Pressable key={m.id} onPress={() => choose(m)} onLongPress={() => remove(m)} accessibilityRole="button" accessibilityLabel={t('a11y.open', { name: m.name })} accessibilityHint={t('models.delete')} style={({ pressed }) => [styles.row, pressed && styles.pressed]}>
               <View style={styles.rowText}>
                 <Text style={styles.name} numberOfLines={1}>{m.name.toLowerCase()}{running ? <Text style={styles.live}>  ● {t('models.running')}</Text> : chosen ? <Text style={styles.chosen}>  · {t('models.chosen')}</Text> : null}</Text>
                 <Text style={styles.meta}>{[`${m.params_b}B`, m.quant, gb(m.size), m.license].filter(Boolean).join(' · ').toLowerCase()}</Text>
@@ -152,7 +167,7 @@ export default function ModelsScreen() {
           const d = dl(m.id);
           if (got || d) return null;
           return (
-            <Pressable key={m.id} onPress={() => router.push(`/model/${encodeURIComponent(m.id)}`)} style={({ pressed }) => [styles.row, pressed && styles.pressed]}>
+            <Pressable key={m.id} onPress={() => router.push(`/model/${encodeURIComponent(m.id)}`)} accessibilityRole="button" accessibilityLabel={t('a11y.open', { name: m.name })} style={({ pressed }) => [styles.row, pressed && styles.pressed]}>
               <View style={styles.rowText}>
                 <Text style={styles.name} numberOfLines={1}>{m.name.toLowerCase()} <Text style={styles.chosen}>›</Text></Text>
                 <Text style={styles.meta}>{[`${m.params_b}B`, m.quant, gb(m.size), m.license].join(' · ').toLowerCase()}</Text>
@@ -160,11 +175,11 @@ export default function ModelsScreen() {
                 <View style={styles.badges}>
                   <Badge fit={f} together={tog} />
                   {f.tps ? <Text style={styles.tps}>{f.tps.low}–{f.tps.high} tok/s</Text> : null}
-                  <Pressable onPress={() => Linking.openURL(m.license_url)} hitSlop={8}><Text style={styles.link}>{t('models.license')} ↗</Text></Pressable>
+                  <Pressable onPress={() => Linking.openURL(m.license_url)} hitSlop={12} accessibilityRole="link" accessibilityLabel={t('a11y.license')} style={styles.linkHit}><Text style={styles.link}>{t('models.license')} ↗</Text></Pressable>
                 </View>
               </View>
               {hasNative() && arm ? (
-                <Pressable onPress={() => download(m)} style={({ pressed }) => [styles.btn, pressed && styles.pressed]}>
+                <Pressable onPress={() => download(m)} accessibilityRole="button" accessibilityLabel={t('a11y.download', { name: m.name })} style={({ pressed }) => [styles.btn, pressed && styles.pressed]}>
                   <Text style={styles.btnText}>{t('models.download')}</Text>
                 </Pressable>
               ) : null}
@@ -175,13 +190,14 @@ export default function ModelsScreen() {
         {/* hugging face */}
         <Text style={styles.section}>{up(t('models.search'))}</Text>
         <View style={styles.searchRow}>
-          <TextInput value={q} onChangeText={setQ} onSubmitEditing={search} placeholder={t('models.searchHint')} placeholderTextColor={colors.meta} returnKeyType="search" autoCapitalize="none" autoCorrect={false} style={styles.input} />
-          <Pressable onPress={search} style={({ pressed }) => [styles.btn, pressed && styles.pressed]}><Text style={styles.btnText}>{busy ? '…' : t('models.search').split(' ')[0]}</Text></Pressable>
+          <TextInput value={q} onChangeText={setQ} onSubmitEditing={search} placeholder={t('models.searchHint')} placeholderTextColor={colors.meta} returnKeyType="search" autoCapitalize="none" autoCorrect={false} accessibilityLabel={t('models.search')} style={styles.input} />
+          <Pressable onPress={search} accessibilityRole="button" accessibilityLabel={t('models.search')} accessibilityState={{ busy }} style={({ pressed }) => [styles.btn, pressed && styles.pressed]}><Text style={styles.btnText}>{busy ? '…' : t('models.search').split(' ')[0]}</Text></Pressable>
         </View>
-        {busy && repos === null ? <Text style={styles.note}>{t('models.searching')}</Text> : null}
+        {busy && repos === null ? <Text style={styles.note} accessibilityLiveRegion="polite">{t('models.searching')}</Text> : null}
+        {repos === null && !busy ? <Text style={styles.note}>{t('empty.search')}</Text> : null}
         {repos && repos.length === 0 ? <Text style={styles.note}>{t('models.noResults')}</Text> : null}
         {(repos ?? []).map((r) => (
-          <Pressable key={r.id} onPress={() => openRepo(r)} style={({ pressed }) => [styles.row, pressed && styles.pressed]}>
+          <Pressable key={r.id} onPress={() => openRepo(r)} accessibilityRole="button" accessibilityLabel={t('a11y.open', { name: r.id })} style={({ pressed }) => [styles.row, pressed && styles.pressed]}>
             <View style={styles.rowText}>
               <Text style={styles.name} numberOfLines={1}>{r.id.toLowerCase()}</Text>
               <Text style={styles.meta}>{[`${(r.downloads / 1000).toFixed(r.downloads > 1e5 ? 0 : 1)}k ↓`, r.license ?? t('models.licenseUnknown'), r.gated ? t('models.gated') : ''].filter(Boolean).join(' · ').toLowerCase()}</Text>
@@ -217,41 +233,23 @@ function Badge({ fit, together }: { fit: Fit; together: (Fit & { shares: unknown
   );
 }
 
-function DownloadRow({ d }: { d: Download }) {
-  const { t } = useLang();
-  const pct = d.total > 0 ? Math.min(100, Math.round((d.got / d.total) * 100)) : 0;
-  const failed = d.state === 'error';
-  return (
-    <View style={styles.row}>
-      <View style={styles.rowText}>
-        <Text style={styles.name} numberOfLines={1}>{d.model.name.toLowerCase()}</Text>
-        <Text style={styles.meta}>{failed ? `${t('models.state.error')}: ${d.error ?? ''}` : `${t(`models.state.${d.state === 'cancelled' || d.state === 'done' ? 'running' : d.state}`)} · ${gb(d.got)} / ${gb(d.total)}`}</Text>
-        <View style={styles.bar}><View style={[styles.barIn, { width: `${pct}%` }]} /></View>
-      </View>
-      <Pressable onPress={() => (failed ? retryDownload(d.id) : cancelDownload(d.id))} style={({ pressed }) => [styles.btn, pressed && styles.pressed]}>
-        <Text style={styles.btnText}>{failed ? t('models.retry') : t('models.cancel')}</Text>
-      </Pressable>
-    </View>
-  );
-}
-
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: colors.ink },
   band: { position: 'absolute', top: 0, left: 0, right: 0, height: brand.top + 44, backgroundColor: colors.ink, zIndex: 2 },
   title: { position: 'absolute', top: brand.top - 8, left: brand.left, fontFamily: fonts.semibold, fontSize: 30, lineHeight: 32, letterSpacing: -0.9, color: colors.paper },
   body: { paddingTop: brand.top + 48, paddingHorizontal: brand.left },
-  lede: { fontFamily: fonts.regular, fontSize: 14, lineHeight: 20, color: colors.mute },
+  lede: { fontFamily: fonts.regular, fontSize: 14, lineHeight: 20, color: colors.paper2 },
   banner: { marginTop: 12, padding: 12, borderRadius: radius.md, backgroundColor: colors.ink2 },
   bannerText: { fontFamily: fonts.medium, fontSize: 13, color: colors.paper },
-  small: { fontFamily: fonts.regular, fontSize: 10, letterSpacing: 1.4, color: colors.meta, marginTop: 10 },
+  small: { fontFamily: fonts.regular, fontSize: 10, letterSpacing: 1.4, color: colors.mute, marginTop: 10 },
   section: { fontFamily: fonts.regular, fontSize: 10, letterSpacing: 1.6, color: colors.spotText, marginTop: 28, marginBottom: 4 },
-  note: { fontFamily: fonts.regular, fontSize: 14, color: colors.mute, marginTop: 10 },
-  row: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: colors.ink3 },
+  note: { fontFamily: fonts.regular, fontSize: 14, lineHeight: 20, color: colors.mute, marginTop: 10 },
+  row: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 12, minHeight: 56, borderBottomWidth: 1, borderBottomColor: colors.ink3 },
   rowText: { flex: 1, gap: 3 },
   name: { fontFamily: fonts.semibold, fontSize: 16, color: colors.paper },
   live: { fontFamily: fonts.medium, fontSize: 12, color: colors.spotText },
   chosen: { fontFamily: fonts.regular, fontSize: 12, color: colors.meta },
-  meta: { fontFamily: fonts.regular, fontSize: 12, color: colors.mute },
+  meta: { fontFamily: fonts.regular, fontSize: 12, lineHeight: 16, color: colors.mute },
   blurb: { fontFamily: fonts.regular, fontSize: 12.5, color: colors.paper2, marginTop: 2 },
   badges: { flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: 6, flexWrap: 'wrap' },
   badge: { paddingHorizontal: 8, height: 20, borderRadius: radius.pill, justifyContent: 'center' },
@@ -260,12 +258,11 @@ const styles = StyleSheet.create({
   badgeNo: { backgroundColor: colors.ink3 },
   badgeText: { fontFamily: fonts.medium, fontSize: 10.5, color: colors.ink, letterSpacing: 0.4 },
   tps: { fontFamily: fonts.jet, fontSize: 11, color: colors.spotText },
-  link: { fontFamily: fonts.regular, fontSize: 11, color: colors.meta },
+  link: { fontFamily: fonts.regular, fontSize: 11, color: colors.mute },
   action: { fontFamily: fonts.medium, fontSize: 13, color: colors.spotText },
-  btn: { paddingHorizontal: 14, height: 36, borderRadius: radius.pill, borderWidth: 1, borderColor: colors.paper, justifyContent: 'center' },
+  btn: { paddingHorizontal: 14, minHeight: 44, borderRadius: radius.pill, borderWidth: 1, borderColor: colors.paper, justifyContent: 'center' },
+  linkHit: { minHeight: 32, justifyContent: 'center' },
   btnText: { fontFamily: fonts.medium, fontSize: 13, color: colors.paper },
-  bar: { height: 3, backgroundColor: colors.ink3, borderRadius: 2, marginTop: 6, overflow: 'hidden' },
-  barIn: { height: 3, backgroundColor: colors.spot },
   searchRow: { flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: 6 },
   input: { flex: 1, height: 44, borderBottomWidth: 1, borderBottomColor: colors.ink3, fontFamily: fonts.regular, fontSize: 15, color: colors.paper },
   pressed: { opacity: 0.6 },
