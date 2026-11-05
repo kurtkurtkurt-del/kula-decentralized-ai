@@ -33,6 +33,7 @@ export interface UiOptions {
   engine: Engine;
   store?: ChatStore;
   token?: string;          // the /v1 bearer token; default: ~/.kula-node/ui-token
+  prefix?: string;         // the page's path prefix; default: a fresh random one (kula-node ui passes ~/.kula-node/ui-prefix)
   log?: (s: string) => void;
   staticDir?: string;
   lan?: boolean;               // start with invites on
@@ -94,6 +95,20 @@ export function loadOrCreateToken(rotate = false): string {
   return t;
 }
 
+// The page's path prefix: kept in ~/.kula-node/ui-prefix (600) so the address stays the same
+// across restarts and can be bookmarked; --new-prefix makes a new one.
+export const PREFIX_RE = /^[0-9a-f]{24}$/;
+export function loadOrCreatePrefix(rotate = false): string {
+  const file = path.join(home(), 'ui-prefix');
+  if (!rotate) {
+    try { const t = fs.readFileSync(file, 'utf8').trim(); if (PREFIX_RE.test(t)) return t; } catch {}
+  }
+  const t = randomBytes(12).toString('hex');
+  fs.writeFileSync(file, t + '\n', { mode: 0o600 });
+  try { fs.chmodSync(file, 0o600); } catch {}
+  return t;
+}
+
 const sameSecret = (a: string, b: string) => { const x = Buffer.from(a), y = Buffer.from(b); return x.length === y.length && timingSafeEqual(x, y); };
 
 // OpenAI messages to kula's: text parts joined; developer counts as system, tool as user.
@@ -114,7 +129,8 @@ export async function startUi(opts: UiOptions): Promise<UiServer> {
   const engine = opts.engine;
   const store = opts.store ?? new ChatStore();
   const token = opts.token ?? loadOrCreateToken();
-  const prefix = randomBytes(12).toString('hex');
+  if (opts.prefix !== undefined && !PREFIX_RE.test(opts.prefix)) throw new Error('the prefix must be 24 hex characters');
+  const prefix = opts.prefix ?? randomBytes(12).toString('hex');
   const dir = opts.staticDir ?? uiStaticDir();
   const baked = !opts.staticDir && typeof __KULA_UI_STATIC__ === 'object' ? __KULA_UI_STATIC__ : null;
   const files = new Map<string, Buffer>();
@@ -324,6 +340,8 @@ export async function startUi(opts: UiOptions): Promise<UiServer> {
     if (p === '/' && req.method === 'GET') return send(res, 302, '', 'text/plain', { location: `/${prefix}/` });
     if (!p.startsWith(`/${prefix}/`)) return send(res, 404, 'not found');
     const route = p.slice(prefix.length + 2) || 'index.html';
+    // "is kula's page here?": for a second kula-node ui and the mac launcher; nothing secret
+    if (route === 'health' && req.method === 'GET') return json(res, 200, { kula: 'ui' });
     if (route.startsWith('api/')) return api(req, res, route.slice(4), url.searchParams, who);
     if ((req.method === 'GET' || req.method === 'HEAD') && files.has(route)) return send(res, 200, files.get(route)!, TYPES[path.extname(route)]);
     return send(res, 404, 'not found');

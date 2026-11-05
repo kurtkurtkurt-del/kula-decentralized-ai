@@ -260,6 +260,7 @@ read them: [BENCH.md](BENCH.md).
 | `~/.kula-node/ledger.jsonl` | the signed ledger |
 | `~/.kula-node/chats/` | the chat page's conversations (600; guests' under `guests/<session>/`) |
 | `~/.kula-node/ui-token` | the chat page's `/v1` bearer token (600) |
+| `~/.kula-node/ui-prefix`, `ui.pid`, `ui.log` | the chat page's address prefix (600), the running page's pid, the mac app's log |
 
 ## a typical first run (phone as master)
 
@@ -337,8 +338,12 @@ the phone does the work, the computer only carries the words.
 
 1. **Phone:** kula → **share this phone**. It shows a qr code, its address
    (`192.168.1.20:50551`) and a one-time code under it.
-2. **Computer:** `kula-node ui` (from the repo: `cd node && npm run dev -- ui`). The page opens
-   at `http://127.0.0.1:50590/<random>/`; `--port` moves it, `--no-open` keeps the browser shut.
+2. **Computer:** `kula-node ui` (from the repo: `cd node && npm run dev -- ui`), or one click on
+   **kula** once it is installed (below). The page opens at `http://127.0.0.1:50590/<random>/`;
+   the `<random>` part is kept in `~/.kula-node/ui-prefix` (600), so the address is the same
+   after every restart and can be bookmarked (`--new-prefix` makes a new one). `--port` moves
+   it, `--no-open` keeps the browser shut. A second `kula-node ui` while one runs opens that one
+   and exits; `kula-node ui --stop` stops it.
 3. **connect → add a device.** Either *type it* (the address and the 16-character code; the
    first 16 of the certificate too, to be sure), or *paste a code* (the qr text, a base64url
    code, `host:port:secret`, or a six digit relay code with its relay), or *scan the qr* with
@@ -363,6 +368,46 @@ the phone does the work, the computer only carries the words.
 Conversations are JSON files in `~/.kula-node/chats/` (600, in a 700 folder); the title is the
 first message until renamed. The catalog copy is regenerated with `npx tsx tools/ui-catalog.ts`
 (in `node/`); `test/ui.test.ts` fails while it is behind the app's.
+
+### open it with one click
+
+**macOS:**
+
+```bash
+cd node && npm ci && npm run dev -- ui --install-mac           # kula.app
+cd node && npm ci && npm run dev -- ui --install-mac --login   # kula.app, and the page from login on
+```
+
+- `~/Applications/kula.app`: a small app with kula's icon (made from `app/assets/icon.png` with
+  `sips` and `iconutil`). Clicking it opens the page when it is up; otherwise it starts
+  `kula-node ui --no-open` in the background (low priority), waits until the page answers (at
+  most 15 s), opens it in the default browser and is gone. Find it with Spotlight ("kula"); to
+  keep it in the Dock, drag it from `~/Applications` onto the Dock.
+- It runs this repo's build: the installer runs `npm run build` once and bakes in the absolute
+  paths of `node` and `node/dist/bin/kula-node.js` (an app started from Finder does not get the
+  shell's PATH). When `node/dist-bin/kula-node-mac-<arch>` exists (`npm run pack:bin`) it runs
+  that single binary instead. After pulling new code, run `--install-mac` again.
+- `--login` adds a LaunchAgent, `~/Library/LaunchAgents/app.kula.ui.plist`: starts the page at
+  login with `Nice 5` and `ProcessType Background`, restarts it only after a crash (a clean stop
+  stays stopped). The app then asks it to start instead of starting its own.
+- Output goes to `~/.kula-node/ui.log` (600; one old copy kept past 5 MB). When stdout is not a
+  terminal, the `/v1` token and invite links are not printed (the token is in
+  `~/.kula-node/ui-token`, the invite on the page).
+- `kula-node ui --stop` stops the running page; `kula-node ui --uninstall-mac` removes the app
+  and the LaunchAgent (`launchctl bootout`).
+
+How the app tells the page is up: `GET http://127.0.0.1:50590/` redirects to the page, and
+`<page>/health` answers `{"kula":"ui"}`, nothing else. The page still answers on 127.0.0.1
+only, with every check above.
+
+**Linux** (not built in yet): a `~/.local/share/applications/kula.desktop` with
+`Exec=kula-node ui` (it opens the running page or starts one), `Icon=` pointing at a copy of
+`app/assets/icon.png`, `Terminal=false`; for login, the same file in `~/.config/autostart/`
+with `Exec=kula-node ui --no-open`.
+
+**Windows** (not built in yet): a Start-menu shortcut
+(`%APPDATA%\Microsoft\Windows\Start Menu\Programs\kula.lnk`) to `kula-node.exe ui`, window
+"minimized"; for login, a shortcut to `kula-node.exe ui --no-open` in `shell:startup`.
 
 ### the openai-compatible endpoint
 
@@ -415,7 +460,9 @@ phone, tablet or laptop on that network scans it and is in the chat, nothing ins
 ### security notes
 
 - Bound to 127.0.0.1 (plus the lan address only in invite mode); a foreign `Host` header is
-  refused (dns rebinding), every page route is under a random prefix, a POST needs the page's
+  refused (dns rebinding), every page route is under a random prefix (kept across restarts in
+  `~/.kula-node/ui-prefix`; `/` redirects to it for anyone on this computer, so it guards against
+  other web pages, not against programs here), a POST needs the page's
   own `Origin`. The page has a strict content security policy and loads nothing from anywhere.
 - Peer secrets and pairing codes never reach the page: devices go out without them.
 - The `/v1` token is the one secret the owner's page is given (to show it in settings).

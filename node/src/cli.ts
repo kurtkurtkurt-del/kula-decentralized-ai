@@ -63,7 +63,13 @@ running a cluster from this computer:
       --no-apart  --no-split  --json (print the record)  --out <dir>
 
 the chat page (a model on your phone, the chat on this computer):
-  kula-node ui [--port <n>] [--no-open] [--new-token] [--lan]   http://127.0.0.1:50590/<random>/
+  kula-node ui [--port <n>] [--no-open] [--new-token] [--new-prefix] [--lan]   http://127.0.0.1:50590/<random>/
+      the <random> part is kept in ~/.kula-node/ui-prefix, so the address stays the same
+      (bookmark it); --new-prefix makes a new one. a second \`kula-node ui\` while one runs
+      opens that one. --stop stops it.
+      --install-mac [--login]   ~/Applications/kula.app: one click starts the page (in the
+                        background, if it is not up) and opens it; --login also starts it at
+                        login (a LaunchAgent). --uninstall-mac removes both.
       on the phone: share this phone; on the page: connect, add the phone, pick a model, chat.
       also an openai-compatible endpoint at http://127.0.0.1:50590/v1 (bearer token printed
       at start, kept in ~/.kula-node/ui-token; --new-token makes a new one). chats are kept
@@ -81,7 +87,7 @@ files live in ${home()} (KULA_NODE_HOME overrides)
 `;
 
 // flags that never take a value, so `--json host` does not swallow the host
-const BOOLEAN = new Set(['json', 'help', 'check', 'dry-run', 'no-qr', 'no-dashboard', 'verify', 'no-local', 'keep-local', 'code', 'tls', 'no-apart', 'no-split', 'no-bandwidth', 'no-open', 'new-token', 'lan']);
+const BOOLEAN = new Set(['json', 'help', 'check', 'dry-run', 'no-qr', 'no-dashboard', 'verify', 'no-local', 'keep-local', 'code', 'tls', 'no-apart', 'no-split', 'no-bandwidth', 'no-open', 'new-token', 'lan', 'new-prefix', 'stop', 'install-mac', 'uninstall-mac', 'login']);
 
 export function parse(argv: string[]): { cmd: string; flags: Record<string, string | boolean>; rest: string[] } {
   const [cmd = 'help', ...tail] = argv;
