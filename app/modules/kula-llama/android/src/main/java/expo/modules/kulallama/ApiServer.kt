@@ -4,9 +4,7 @@ import android.content.Context
 import android.util.Log
 import org.json.JSONArray
 import org.json.JSONObject
-import java.io.BufferedReader
 import java.io.File
-import java.io.InputStreamReader
 import java.io.OutputStream
 import java.net.InetAddress
 import java.net.ServerSocket
@@ -21,6 +19,8 @@ import kotlin.concurrent.thread
  *   GET  /status                       {loaded, model, sha256, tokensUsed, ctx, busy}
  *   POST /load  {url, sha256, size, name, ctx?}   downloads when missing, then loads; streams
  *                                      progress lines "data: {...}\n\n" and ends with {done:true}
+ *                                      name is reduced to a file name under models/, url must be
+ *                                      public http(s), sha256 is needed to download (Guard.kt)
  *   POST /chat  {messages:[{role,content}], maxTokens?, temperature?}   SSE: {t:"piece"} … {done, tokens, ms}
  *   POST /stop
  *
@@ -55,21 +55,27 @@ class ApiServer(private val context: Context, private val modelsDir: File, priva
 
   private fun handle(s: Socket) {
     s.soTimeout = 30_000
-    val reader = BufferedReader(InputStreamReader(s.getInputStream(), Charsets.UTF_8))
+    // bounded by hand (HttpLimits): a request line or header of any length, more than 64
+    // headers, or a body over 1 MiB ends the connection instead of growing a buffer
+    val inp = java.io.BufferedInputStream(s.getInputStream())
     val out = s.getOutputStream()
-    val request = reader.readLine() ?: return
+    val request = try { HttpLimits.readLine(inp) ?: return } catch (e: IllegalStateException) { return json(out, 431, JSONObject().put("error", e.message)) }
     val parts = request.split(' ')
     if (parts.size < 2) return
     val method = parts[0]
-    val path = parts[1]
+    val path = parts[1].substringBefore('?')
     var length = 0
-    while (true) {
-      val h = reader.readLine() ?: break
-      if (h.isEmpty()) break
-      if (h.startsWith("Content-Length:", true)) length = h.substringAfter(':').trim().toInt()
-    }
-    val body = if (length > 0) { val buf = CharArray(length); var n = 0; while (n < length) { val r = reader.read(buf, n, length - n); if (r < 0) break; n += r }; String(buf, 0, n) } else ""
-    val json = if (body.isNotBlank()) JSONObject(body) else JSONObject()
+    var headers = 0
+    try {
+      while (true) {
+        val h = HttpLimits.readLine(inp) ?: break
+        if (h.isEmpty()) break
+        if (++headers > HttpLimits.MAX_HEADERS) throw IllegalStateException("too many headers")
+        if (h.startsWith("Content-Length:", true)) length = HttpLimits.contentLength(h.substringAfter(':'))
+      }
+    } catch (e: IllegalStateException) { return json(out, if (e.message == "body too large") 413 else 431, JSONObject().put("error", e.message)) }
+    val body = if (length > 0) { val buf = ByteArray(length); var n = 0; while (n < length) { val r = inp.read(buf, n, length - n); if (r < 0) break; n += r }; String(buf, 0, n, Charsets.UTF_8) } else ""
+    val json = try { if (body.isNotBlank()) JSONObject(body) else JSONObject() } catch (e: Exception) { return json(out, 400, JSONObject().put("error", "bad json")) }
     s.soTimeout = 0
     when {
       method == "GET" && path == "/status" -> json(out, 200, status())
@@ -90,17 +96,24 @@ class ApiServer(private val context: Context, private val modelsDir: File, priva
     .put("threads", threads)
 
   private fun load(out: OutputStream, req: JSONObject) {
+    // what the master asked for, checked before busy is taken: a bad request is a 400, not a stream
+    val url = req.optString("url")
+    val sha = req.optString("sha256").ifEmpty { null }?.lowercase()
+    val size = req.optLong("size", 0)
+    val name = try { ModelName.safe(req.optString("name").ifEmpty { url.substringAfterLast('/') }) } catch (e: IllegalArgumentException) { return json(out, 400, JSONObject().put("error", "bad name")) }
+    UrlPolicy.sha256Problem(sha)?.let { return json(out, 400, JSONObject().put("error", it)) }
+    if (size < 0) return json(out, 400, JSONObject().put("error", "need size (bytes)"))
+    val ctx = req.optInt("ctx", 2048).coerceIn(256, 1 shl 20)
+    val dest = File(modelsDir, name)
+    if (!dest.exists()) {
+      if (url.isEmpty()) return json(out, 400, JSONObject().put("error", "model missing and no url"))
+      UrlPolicy.problem(url)?.let { return json(out, 400, JSONObject().put("error", it)) }
+      if (sha == null) return json(out, 400, JSONObject().put("error", "sha256 is needed to download"))
+    }
     if (!busy.compareAndSet(false, true)) return json(out, 409, JSONObject().put("error", "busy"))
     try {
       sseHead(out)
-      val url = req.optString("url")
-      val sha = req.optString("sha256").ifEmpty { null }
-      val size = req.optLong("size", 0)
-      val name = req.optString("name").ifEmpty { url.substringAfterLast('/') }
-      val ctx = req.optInt("ctx", 2048)
-      val dest = File(modelsDir, name)
       if (!dest.exists()) {
-        if (url.isEmpty()) return sse(out, JSONObject().put("error", "model missing and no url"))
         var failed: String? = null
         val done = java.util.concurrent.CountDownLatch(1)
         val dl = ModelDownloader { _, got, total, state, error ->

@@ -57,6 +57,10 @@ object Gate {
   const val VERSION2 = "KULA2"
   const val DEFAULT_PORT = 50551
   const val HANDSHAKE_MS = 5000
+  /** Connections allowed to sit in a handshake at once; the next is told "NO overloaded" and dropped. */
+  const val MAX_HANDSHAKES = 32
+  /** A pairing code lives this long after it was made; then "NO pin expired" and a fresh one. */
+  const val PIN_TTL_MS = 10 * 60_000L
   private val random = SecureRandom()
   private val NONCE = Regex("[0-9a-f]{32}")
 
@@ -88,9 +92,12 @@ object Gate {
   data class Event(val kind: String, val peer: String, val channel: String?, val why: String? = null, val fp: String? = null, val v: Int = 1)
 
   /** The worker's side of v2: its identity, the clients it already trusts, and the current pairing code (null: none open). */
-  class TlsServer(val identity: GateIdentity, val paired: Paired, pin: String?, private val onPinUsed: () -> Unit = {}) {
+  class TlsServer(val identity: GateIdentity, val paired: Paired, pin: String?, private val onPinUsed: () -> Unit = {}, pinExpiresAt: Long? = null) {
     @Volatile var pin: String? = pin
-    internal fun spend() { pin = null; onPinUsed() }
+    /** When [pin] stops working (unix ms); null: no expiry (tests). The owner sets both together. */
+    @Volatile var pinExpiresAt: Long? = pinExpiresAt
+    internal fun spend() { pin = null; pinExpiresAt = null; onPinUsed() }
+    internal fun expired(now: Long): Boolean = pin != null && (pinExpiresAt?.let { now > it } ?: false)
   }
 
   /** The master's side of v2: its identity, the worker's pinned fingerprint from the qr and, until paired, the pairing code. */
@@ -100,7 +107,8 @@ object Gate {
 
   class Server(
     private val port: Int,
-    private val secret: String,
+    /** the v1 secret; null turns v1 off (a plain hello is told "NO no v1") */
+    private val secret: String?,
     /** channel -> local port to pipe to (rpc: ggml's server, api: ApiServer). null = closed */
     private val targets: (String) -> Int?,
     private val auditor: Auditor? = null,
@@ -109,10 +117,10 @@ object Gate {
   ) {
     @Volatile private var running = false
     private var listener: ServerSocket? = null
-    private val connected = java.util.concurrent.atomic.AtomicInteger(0)
+    private val slot = RpcSlot()
+    private val inHandshake = java.util.concurrent.atomic.AtomicInteger(0)
     private val ring = ReplayRing()
-    @Volatile var currentPeer: String? = null
-      private set
+    val currentPeer: String? get() = slot.peer
 
     fun start() {
       if (running) return
@@ -134,6 +142,23 @@ object Gate {
 
     private fun handle(raw: Socket) {
       val peer = (raw.inetAddress?.hostAddress ?: "?")
+      // a flood of half-open connections must not pin a thread and 5 s each: past the cap
+      // the answer is immediate and the socket is gone
+      if (inHandshake.incrementAndGet() > MAX_HANDSHAKES) {
+        inHandshake.decrementAndGet()
+        onEvent(Event("reject", peer, null, "overloaded"))
+        runCatching { raw.getOutputStream().write("NO overloaded\n".toByteArray()); raw.getOutputStream().flush() }
+        runCatching { raw.close() }
+        return
+      }
+      var counted = true
+      val done = { if (counted) { counted = false; inHandshake.decrementAndGet() } }
+      try {
+        handle(raw, peer, done)
+      } finally { done() }
+    }
+
+    private fun handle(raw: Socket, peer: String, handshakeDone: () -> Unit) {
       try {
         raw.soTimeout = HANDSHAKE_MS
         raw.tcpNoDelay = true
@@ -142,17 +167,18 @@ object Gate {
         if (first < 0) return refuse(raw, raw.getOutputStream(), peer, null, "no hello")
         if (first == 0x16) {
           val t = tls ?: return refuse(raw, raw.getOutputStream(), peer, null, "no tls")
-          return handleTls(raw, peer, t, ByteArrayInputStream(byteArrayOf(first.toByte())))
+          return handleTls(raw, peer, t, ByteArrayInputStream(byteArrayOf(first.toByte())), handshakeDone)
         }
-        handlePlain(raw, peer, SequenceInputStream(ByteArrayInputStream(byteArrayOf(first.toByte())), raw.getInputStream()))
+        handlePlain(raw, peer, SequenceInputStream(ByteArrayInputStream(byteArrayOf(first.toByte())), raw.getInputStream()), handshakeDone)
       } catch (e: Exception) {
         Log.w(TAG, "gate connection from $peer: ${e.message}")
         runCatching { raw.close() }
       }
     }
 
-    private fun handlePlain(s: Socket, peer: String, inp: InputStream) {
+    private fun handlePlain(s: Socket, peer: String, inp: InputStream, handshakeDone: () -> Unit) {
       val out = s.getOutputStream()
+      val secret = secret ?: return refuse(s, out, peer, null, "no v1")
       val hello = readLine(inp)
       val p = hello.trim().split(' ')
       if ((p.size != 3 && p.size != 4) || p[0] != VERSION) return refuse(s, out, peer, null, "bad hello")
@@ -169,10 +195,10 @@ object Gate {
       val proof = readLine(inp).trim()
       if (proof.isEmpty()) return refuse(s, out, peer, channel, "no proof")
       if (!constantEquals(proof, hmac(secret, nonceC, nonceS, channel))) return refuse(s, out, peer, channel, "wrong secret")
-      admit(s, inp, out, peer, channel, "OK ${hmac(secret, nonceS, nonceC, channel)}", 1, null)
+      admit(s, inp, out, peer, channel, "OK ${hmac(secret, nonceS, nonceC, channel)}", 1, null, handshakeDone)
     }
 
-    private fun handleTls(raw: Socket, peer: String, t: TlsServer, consumed: InputStream) {
+    private fun handleTls(raw: Socket, peer: String, t: TlsServer, consumed: InputStream, handshakeDone: () -> Unit) {
       val ctx = SSLContext.getInstance("TLS")
       ctx.init(t.identity.keyManagers(), arrayOf(AnyClientTrust), null)
       val ssl = ctx.socketFactory.createSocket(raw, consumed, true) as SSLSocket
@@ -203,6 +229,11 @@ object Gate {
       if (!verdict.ok) return refuse2(channel, verdict.reason ?: "audit")
       if (fpC == null) return refuse2(channel, "no client cert")
       val paired = t.paired.contains(fpC)
+      if (!paired && t.expired(System.currentTimeMillis())) {
+        // spent by time: the next qr shows a new code
+        t.spend()
+        return refuse2(channel, "pin expired")
+      }
       val pin = t.pin
       if (!paired && pin == null) return refuse2(channel, "not paired")
       val nonceS = randomHex(16)
@@ -224,23 +255,27 @@ object Gate {
         audit { it.onPair(peer, linkedMapOf("fp" to fpC, "channel" to channel)) }
         reply = "OK ${pinProofServer(code, nonceC, nonceS, channel, fpS, fpC)}"
       }
-      admit(ssl, inp, out, peer, channel, reply, 2, fpC)
+      admit(ssl, inp, out, peer, channel, reply, 2, fpC, handshakeDone)
     }
 
     /** The proof passed: find the target, say OK and pipe until either side closes. */
-    private fun admit(s: Socket, inp: InputStream, out: OutputStream, peer: String, channel: String, okLine: String, v: Int, fp: String?) {
+    private fun admit(s: Socket, inp: InputStream, out: OutputStream, peer: String, channel: String, okLine: String, v: Int, fp: String?, handshakeDone: () -> Unit) {
       val target = targets(channel) ?: return refuse(s, out, peer, channel, "channel closed", fp, v)
-      // one master at a time on the rpc channel
-      if (channel == "rpc" && currentPeer != null && currentPeer != peer) return refuse(s, out, peer, channel, "busy", fp, v)
-      val local = try { Socket("127.0.0.1", target) } catch (e: Exception) { return refuse(s, out, peer, channel, "target down", fp, v) }
+      // one master at a time on the rpc channel: the slot is taken under a lock before the
+      // local connect, so two addresses arriving together cannot both get it
+      if (channel == "rpc" && !slot.take(peer)) return refuse(s, out, peer, channel, "busy", fp, v)
+      val local = try { Socket("127.0.0.1", target) } catch (e: Exception) {
+        if (channel == "rpc") slot.release()
+        return refuse(s, out, peer, channel, "target down", fp, v)
+      }
       out.write("$okLine\n".toByteArray()); out.flush()
       s.soTimeout = 0
+      handshakeDone()
       onEvent(Event("connect", peer, channel, null, fp, v))
       audit { it.onConnect(peer, channel) }
       val started = System.currentTimeMillis()
-      if (channel == "rpc") { currentPeer = peer; connected.incrementAndGet() }
       val bytes = pipe(s, inp, local, ByteArray(0))
-      if (channel == "rpc" && connected.decrementAndGet() == 0) currentPeer = null
+      if (channel == "rpc") slot.release()
       onEvent(Event("end", peer, channel, null, fp, v))
       audit { it.onEnd(peer, channel, bytes, (System.currentTimeMillis() - started) / 1000) }
     }
@@ -248,11 +283,11 @@ object Gate {
     private fun refuse(s: Socket, out: OutputStream, peer: String, channel: String?, why: String, fp: String? = null, v: Int = 1) {
       Log.w(TAG, "refused $peer ($channel, v$v): $why")
       onEvent(Event("reject", peer, channel, why, fp, v))
-      // the answer first, then the record: a ledger that cannot be written must not leave
-      // the client hanging without its NO
+      // the record before the answer, so the ledger keeps the order the client saw; audit()
+      // swallows a ledger that cannot be written, so the NO always goes out
+      audit { it.onReject(peer, channel, why) }
       runCatching { out.write("NO $why\n".toByteArray()); out.flush() }
       runCatching { s.close() }
-      audit { it.onReject(peer, channel, why) }
     }
 
     /** Runs an auditor hook; a failure (disk full, directory gone) is logged and never breaks the connection. */

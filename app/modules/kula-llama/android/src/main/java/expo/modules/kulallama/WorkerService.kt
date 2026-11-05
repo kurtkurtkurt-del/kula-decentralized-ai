@@ -126,7 +126,11 @@ class WorkerService : Service() {
         // protocol v2 on the same port: our certificate, the paired masters, a one-time code per qr
         // (the code is spent by the master that proves it; the status file carries the next one)
         val identity = GateIdentity.loadOrCreate(gateDir(this), key)
-        tls = Gate.TlsServer(identity, Paired(pairedFile(this)), Gate.newPin()) { tls?.pin = Gate.newPin(); writeStatus("running", peer = gate?.currentPeer, heldMb = residentMb()) }
+        // a code lives PIN_TTL_MS: spent by the master that proves it or by time, a new one follows
+        tls = Gate.TlsServer(identity, Paired(pairedFile(this)), Gate.newPin(), {
+          tls?.let { it.pin = Gate.newPin(); it.pinExpiresAt = System.currentTimeMillis() + Gate.PIN_TTL_MS }
+          writeStatus("running", peer = gate?.currentPeer, heldMb = residentMb())
+        }, System.currentTimeMillis() + Gate.PIN_TTL_MS)
         gate = Gate.Server(port, secret, { ch -> if (ch == "rpc") rpcPort else api?.port }, auditor, tls) { ev ->
           when (ev.kind) { "connect" -> connects++; "reject" -> rejects++ }
         }.also { it.start() }

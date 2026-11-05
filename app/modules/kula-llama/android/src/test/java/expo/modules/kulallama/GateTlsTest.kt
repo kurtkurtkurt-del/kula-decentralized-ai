@@ -103,7 +103,7 @@ class GateTlsTest {
     val pairedFile = File(java.nio.file.Files.createTempDirectory("kula-gate").toFile(), "paired")
     val pin = Gate.newPin()
     var pinUsed = 0
-    val tls = Gate.TlsServer(server, Paired(pairedFile), pin) { pinUsed++ }
+    val tls = Gate.TlsServer(server, Paired(pairedFile), pin, { pinUsed++ })
     val events = mutableListOf<Gate.Event>()
     val gate = Gate.Server(port, "v1-secret", { ch -> if (ch == "rpc") echo.localPort else null }, null, tls) { events.add(it) }
     gate.start()
