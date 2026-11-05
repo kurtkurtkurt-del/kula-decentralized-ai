@@ -8,10 +8,11 @@ import { coops } from './parts/coops';
 import { server } from './parts/server';
 import { models } from './parts/models';
 import { audit } from './parts/audit';
+import { ux } from './parts/ux';
 
 // Every string in one table. When a key appears in two parts the later wins,
 // so each part uses its own prefix (home.* · flow.* · project.* …).
-export const dict = { ...common, ...home, ...tabs, ...pages, ...staff, ...tips, ...coops, ...server, ...models, ...audit } as const;
+export const dict = { ...common, ...home, ...tabs, ...pages, ...staff, ...tips, ...coops, ...server, ...models, ...audit, ...ux } as const;
 
 export type Key = keyof typeof dict;
 type Roots<K> = K extends `${infer Base}.other` ? Base : never;

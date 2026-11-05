@@ -208,6 +208,25 @@ Birleştirilmedi, PR yok. Ayrıntı: `docs/PLANNER.md`.
 - Testler: app 90/90 (yeni: sim 18, engine-apart 4), node 35/35; tsc ikisinde temiz; lint: aynı 1 eski hata.
 - Kalmış: telefonda ölçüm listesi PLANNER.md sonunda (telefon `eff`, gerçek wi-fi yükleme, bölünmüş tok/s);
   mod sayfasına ağ seçimi (5/2.4 GHz) eklenebilir; `node/` tarafındaki `mastercmd` bu dalda yok (node-master'da).
+## ux cilası (5.11 gündüz, cloud oturumu, dal `claude/ux-polish`, taban `claude/integrate-night`)
+
+Kullanıcı uyurken, soru sormadan. Üç commit; tsc temiz, lint'te yalnız eski `index.tsx:14` hatası, 80 test (12 yeni).
+
+| madde | ne yapıldı | nerede |
+|---|---|---|
+| ilk açılış akışı | modeller sekmesinin üstünde adım çubuğu **ölç → indir → çalıştır → birleştir**: bulunduğun adım vurgulu, bir cümle neden, bir düğme sonrakine; her basamağa dokunulabilir. passport yoksa "bu telefonu ölç". dört adım da bitince (ya da "gizle") bir daha gelmez (kv `ux.flags`: `ran`, `stepsDone`; `ran`ı engine `load` başarınca yazar) | `components/StepBar.tsx`, `llm/steps.ts` (saf), `llm/store.ts` |
+| hata sözlüğü | `classify()` ham metni bir türe indirir (ağ yok · disk dolu · sha tutmadı · eşe ulaşılamıyor · meşgul · sığmadı · yanlış secret · hf kilitli · 404 · 5xx · yarım kaldı · eş yok · native yok · model yok), `explain()` tr/en/de tek cümle; bilinmeyen türde kısa ham ipucu parantezde. modeller / model / sohbet / eşler / paylaş ekranlarında `(e as Error).message` kalmadı (eş qr kodlarının kendi `peers.err.*` sözleri korundu) | `llm/errors.ts`, `i18n/parts/ux.ts` (`err.*`) |
+| boş durumlar | modeller ("en küçüğünü indir"), eşler ("kod tara"), sohbet (model yoksa "birini başlat"; varsa hangi modelin nerede cevap vereceği), hf araması için ipucu. tek cümle + tek düğme | `components/EmptyState.tsx` |
+| indirme kartı | durum sözle, hız (mb/sn, store'da yumuşatılmış), kalan süre ("4 dk kaldı"/"az kaldı"), **duraklat / devam** (duraklatma = satırı tutan iptal; `.part` kalır, devam Range ile sürer), "arka planda sürer; uygulama kapanırsa kaldığı yerden devam eder" notu, ilerleme çubuğuna a11y değeri. model sayfasında da aynı kart | `components/DownloadCard.tsx`, `llm/progress.ts` (saf), `store.ts` `pauseDownload` |
+| mod sheet'i | üç seçenek kart: tahmin (~tok/s), sığma rozeti, bir satır açıklama; devre dışıysa açıklama yerine **neden** ("bağlı cihaz gerekir" / "bütün cihazlara bile sığmıyor"); seçilen vurgulu (radyo), en altta tek "başlat · …" düğmesi; son seçilen mod hatırlanır | `app/model/[id].tsx` `ModeCard` |
+| sohbet | yukarı kaydırınca "↓ en alta" düğmesi (akış seni aşağı çekmez), cevaba uzun bas → kopyala ("kopyalandı"), son cevapta "↻ yeniden üret" (kv cache sıfırlanır), tok/s satırı okunur (büyük sayı + kelimeler, 2 satıra sığar), üretim sırasında araç satırı yerine **belirgin durdur çubuğu** | `app/chat.tsx` |
+| erişilebilirlik | bu ekranlardaki bütün Pressable'larda `accessibilityRole`/`Label` (gerekince `State`, `Hint`, `LiveRegion`), dokunma alanı ≥44 (btn'ler `minHeight: 44`, × düğmeleri 44×44, satırlar `minHeight: 56`), açık gri `meta` metinler okunur `mute`'a çekildi (kontrast), sabit yükseklikler kaldırıldı + `lineHeight` (dinamik yazı). Button bileşeni `disabled` ve a11y aldı | ilgili ekranlar, `Button.tsx`, `PickerSheet.tsx` |
+| küçükler | haptics: seçimde (mod, picker, indir, çalıştır, eş ekle/sil) `selection`, indirme bitince `success`, hata `error`; QR gösterilirken parlaklık 1.0, kod gidince / sayfa kapanınca eski değer (`expo-brightness`, izin gerekmez) | `lib/haptics.ts`, `app/share.tsx` |
+
+Notlar:
+- `expo-haptics ~57.0.3`, `expo-brightness ~57.0.2` — `npx expo install` proxy yüzünden sürüm listesine ulaşamadı, `bundledNativeModules.json`daki sürümlerle `npm install` yapıldı. **Native modül: yeni dev build gerekir** (Expo Go'da zaten çalışmıyordu).
+- Emülatörde/telefonda bakılmadı (cloud oturumu). Denenecekler: adım çubuğu passport yokken; indirmede duraklat → devam (Range'in `.part`tan sürdüğü); sohbette uzun cevapta "en alta"; QR'da parlaklık ve geri dönüş.
+- `claude/models-library` ve `claude/audit-ui` aynı ekranlara dokunuyor; birleştirirken `models.tsx`, `model/[id].tsx`, `chat.tsx` çakışabilir.
 
 ## bütünleştirme (5.11 sabaha karşı, cloud oturumu, dal `claude/integrate-night`)
 

@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { lastPassport } from '@/data/passport';
 import { native, type LoadResult, type Message } from '@/llm/native';
 import { peerArgs, peerTls, planSplit, probeAll, splitSummary, type Plan } from '@/llm/cluster';
-import { type LocalModel, type Mode, type Peer, registerEngine, saveSettings } from '@/llm/store';
+import { type LocalModel, type Mode, type Peer, registerEngine, saveSettings, saveUxFlags } from '@/llm/store';
 import { assign, estimateAlone, pickDevice } from '@/llm/sim/model';
 import { localFromPassport, modelProfile, workerFromPeer } from '@/llm/sim/profiles';
 
@@ -92,6 +92,7 @@ export async function load(model: LocalModel, mode: Mode, ctx: number, peers: Pe
       set({ load: res, split: [{ name: thisName(), gb: Math.round(model.size / 1024 ** 3 * 10) / 10 }], devices: [me(model, info.ramFreeMb)], loading: null });
     }
     saveSettings({ modelId: model.id, ctx, lastMode: mode });
+    saveUxFlags({ ran: true }); // the ladder's third rung, for good
   } catch (e) {
     set({ loading: null, error: (e as Error).message, model: null, load: null });
     await llama.unload().catch(() => {});

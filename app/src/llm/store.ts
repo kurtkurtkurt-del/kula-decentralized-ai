@@ -3,6 +3,8 @@ import Storage from 'expo-sqlite/kv-store';
 import { CATALOG, modelUrl, type CatalogModel } from '@/llm/catalog';
 import { llama, type DownloadEvent } from '@/llm/native';
 import { factsFromMeta } from '@/llm/fit';
+import { tapDone, tapFail } from '@/lib/haptics';
+import { rate } from '@/llm/progress';
 
 // What this phone keeps about models and peers (kv-store, never sent): the models on disk,
 // the downloads in flight, the chosen model and its settings, and the peers paired by qr.
@@ -32,7 +34,8 @@ export type LocalModel = {
   added_at: string;
 };
 export type ModelDraft = Omit<LocalModel, 'path' | 'added_at'>;
-export type Download = { id: string; got: number; total: number; state: DownloadEvent['state']; error: string | null; model: ModelDraft; part: number; parts: number };
+export type Download = { id: string; got: number; total: number; state: DownloadEvent['state'] | 'paused'; error: string | null; model: ModelDraft; part: number; parts: number; paused?: boolean; bps: number | null; at: number };
+
 export type Peer = {
   id: string;            // the worker's lasting id
   name: string;
@@ -137,7 +140,7 @@ export async function reconcileModels() {
     const c = CATALOG.find((m) => m.file === file);
     const model = c ? describe(c) : null;
     if (!model || downloads.has(model.id)) continue;
-    downloads.set(model.id, { id: model.id, got: f.size, total: model.size, state: 'error', error: 'interrupted', model, part: 0, parts: 1 });
+    downloads.set(model.id, { id: model.id, got: f.size, total: model.size, state: 'error', error: 'interrupted', model, part: 0, parts: 1, bps: null, at: Date.now() });
   }
   listeners.forEach((fn) => fn());
 }
@@ -190,9 +193,13 @@ function subscribe() {
   llama.addListener('onDownload', (e) => {
     const d = downloads.get(modelIdOf(e.id));
     if (!d) return;
+    const now = Date.now();
     const parts = partsOf(d.model);
     const before = parts.slice(0, d.part).reduce((a, p) => a + p.size, 0);
-    d.got = before + e.got;
+    const got = before + e.got;
+    d.bps = e.state === 'running' ? rate(d.bps, got - d.got, now - d.at) : null;
+    d.at = now;
+    d.got = got;
     d.state = e.state;
     d.error = e.error;
     if (e.state === 'done') {
@@ -203,9 +210,15 @@ function subscribe() {
       } else {
         rememberModel({ ...d.model, path: partPath(d.model.file), added_at: new Date().toISOString() });
         downloads.delete(d.id);
+        tapDone();
       }
     }
-    if (e.state === 'cancelled') downloads.delete(d.id);
+    if (e.state === 'error') tapFail();
+    // a pause is a cancel that keeps its row: the .part stays, "resume" asks for the rest
+    if (e.state === 'cancelled') {
+      if (d.paused) d.state = 'paused';
+      else downloads.delete(d.id);
+    }
     listeners.forEach((fn) => fn());
   });
 }
@@ -228,8 +241,9 @@ export async function startDownload(model: ModelDraft, fromPart = 0) {
   if (!llama) throw new Error('nonative');
   if (!modelsDir) await initStore();
   const parts = partsOf(model);
+  const was = downloads.get(model.id);
   const got = parts.slice(0, fromPart).reduce((a, p) => a + p.size, 0);
-  const d: Download = { id: model.id, got, total: model.size, state: 'running', error: null, model, part: fromPart, parts: parts.length };
+  const d: Download = { id: model.id, got: Math.max(got, was?.got ?? 0), total: model.size, state: 'running', error: null, model, part: fromPart, parts: parts.length, paused: false, bps: null, at: Date.now() };
   downloads.set(model.id, d);
   listeners.forEach((fn) => fn());
   await startPart(d);
@@ -238,6 +252,14 @@ export async function cancelDownload(id: string) {
   const d = downloads.get(id);
   await llama?.cancelDownload(d ? nativeId(id, d.part, d.parts) : id);
   if (d) { d.state = 'cancelled'; downloads.delete(id); listeners.forEach((fn) => fn()); }
+}
+export async function pauseDownload(id: string) {
+  const d = downloads.get(id);
+  if (!d) return;
+  d.paused = true;
+  d.state = 'paused';
+  listeners.forEach((fn) => fn());
+  await llama?.cancelDownload(nativeId(id, d.part, d.parts));
 }
 export function retryDownload(id: string) {
   const d = downloads.get(id);
@@ -261,6 +283,13 @@ export function rememberPeer(p: Peer) {
 }
 export const forgetPeer = (id: string) => write(PEERS, peers().filter((x) => x.id !== id));
 export const touchPeer = (id: string, patch: Partial<Peer>) => write(PEERS, peers().map((p) => (p.id === id ? { ...p, ...patch } : p)));
+
+// ---- small ux flags (5.11.2026): the first-run ladder ----------------------------------
+const UX = 'ux.flags';
+export type UxFlags = { ran: boolean; stepsDone: boolean };
+export const uxFlags = (): UxFlags => ({ ran: false, stepsDone: false, ...read<Partial<UxFlags>>(UX, {}) });
+export const useUxFlags = () => useStore(uxFlags);
+export const saveUxFlags = (patch: Partial<UxFlags>) => write(UX, { ...uxFlags(), ...patch });
 
 // ---- this phone as a worker ---------------------------------------------------------------
 export type Share = { secret: string; name: string; port: number };
