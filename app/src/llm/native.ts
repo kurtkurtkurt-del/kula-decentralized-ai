@@ -9,9 +9,15 @@ export type LoadResult = { loadMs: number; localLayers: number; layers: number; 
 export type DoneEvent = { id: number; tokens: number; ms: number; firstMs: number; tps: number; stopped: boolean; error: string | null };
 export type DownloadEvent = { id: string; got: number; total: number; state: 'running' | 'retrying' | 'checking' | 'done' | 'error' | 'cancelled'; error: string | null };
 export type PeerFound = { serviceName: string; name: string; host: string | null; port: number; id: string | null; ram: number | null; bw: number | null; kind: string; v: string | null };
-export type WorkerStatus = { state: 'stopped' | 'starting' | 'running' | 'error'; error: string | null; peer: string | null; heldMb: number; ramMb: number; bandwidth: number; throttled: boolean; connects: number; rejects: number; id: string; batteryUnrestricted: boolean; fp?: string | null; pin?: string | null; paired?: number };
-/** `{fp, pin?}` picks protocol v2 (tls, pinned certificate); null means protocol v1 with the secret. */
+export type WorkerStatus = { state: 'stopped' | 'starting' | 'running' | 'error'; error: string | null; peer: string | null; heldMb: number; ramMb: number; bandwidth: number; throttled: boolean; connects: number; rejects: number; id: string; batteryUnrestricted: boolean; fp?: string | null; pin?: string | null; paired?: number; relay?: { url: string; code: string } | null; relayError?: string | null };
+/**
+ * `{fp, pin?}` picks protocol v2 (tls, pinned certificate); null means protocol v1 with the secret.
+ * An empty fp means "learn it": a peer added by a relay code alone shows its certificate on
+ * the first connection and the pin proof, which covers both certificates, vouches for it.
+ */
 export type PeerTls = { fp: string; pin?: string | null } | null;
+/** A peer far away: the relay to go through and the worker's code there. */
+export type PeerRelay = { url: string; code: string } | null;
 export type PeerArg = { host: string; port: number; secret: string; weight: number; fp?: string | null; pin?: string | null };
 export type Message = { role: 'system' | 'user' | 'assistant'; content: string };
 
@@ -34,12 +40,14 @@ type Module = {
   clearContext(): Promise<void>;
   generate(messages: Message[], maxTokens: number, temperature: number, topP: number, reset: boolean): number;
   stop(): void;
-  probePeer(host: string, port: number, secret: string, channel: 'rpc' | 'api', tls: PeerTls): Promise<string | null>;
-  apiTunnel(host: string, port: number, secret: string, tls: PeerTls): Promise<number>;
+  /** null when the peer answered; otherwise the gate's reason. With `relay` the probe goes through the relay (api only), and the learned fingerprint comes back as "ok <fp>". */
+  probePeer(host: string, port: number, secret: string, channel: 'rpc' | 'api', tls: PeerTls, relay?: PeerRelay): Promise<string | null>;
+  apiTunnel(host: string, port: number, secret: string, tls: PeerTls, relay?: PeerRelay): Promise<number>;
   gateFingerprint(): Promise<string>;
   closeTunnels(): Promise<void>;
   discover(on: boolean): Promise<void>;
-  startWorker(port: number, secret: string, name: string): Promise<void>;
+  /** `relay`: also register with that relay (wss://…) so a device far away can come in by code; implies protocol v2. */
+  startWorker(port: number, secret: string, name: string, relay?: string | null): Promise<void>;
   stopWorker(): Promise<void>;
   workerStatus(): Promise<WorkerStatus>;
   gateLedger(limit: number): Promise<string[]>;

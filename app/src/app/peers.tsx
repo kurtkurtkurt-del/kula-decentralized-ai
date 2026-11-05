@@ -8,14 +8,16 @@ import { linkPassport } from '@/data/passport';
 import { useLang } from '@/i18n';
 import { probeAll } from '@/llm/cluster';
 import { hasNative, llama, type PeerFound } from '@/llm/native';
-import { isPeerQr, takePeerQr } from '@/llm/peers';
-import { forgetPeer, usePeers, type Peer } from '@/llm/store';
+import { isPeerQr, isRelayCode, isRemote, parseRelayCode, takePeerQr } from '@/llm/peers';
+import { forgetPeer, rememberPeer, usePeers, type Peer } from '@/llm/store';
 import { colors, fonts, radius } from '@/theme/tokens';
 
 // "connected devices": the peers this phone may use (paired by scanning the code the other
 // device shows in "share this phone" or kula-node), a reachability check per peer, and
 // "find nearby" (NSD), which lists shared devices on this wi-fi that still need their code
-// scanned (the code carries the secret; the network never does).
+// scanned (the code carries the secret; the network never does). "add by code" (5.11.2026):
+// a relay code read out over the phone, six digits and the pairing code, for a device far
+// away; it is reached through the relay from the settings and takes part in apart mode only.
 export default function PeersScreen() {
   const { t, tx, up } = useLang();
   const peers = usePeers();
@@ -37,6 +39,14 @@ export default function PeersScreen() {
 
   const take = (text: string) => {
     try {
+      if (isRelayCode(text)) {
+        const p = parseRelayCode(text);
+        rememberPeer(p);
+        setErr(null);
+        setNote(t('peers.added', { name: p.name }));
+        setScan(false);
+        return true;
+      }
       if (!isPeerQr(text)) {
         // an old passport-only code: still link the passport, say what it is
         linkPassport(text);
@@ -68,7 +78,9 @@ export default function PeersScreen() {
   const paste = async () => take((await Clipboard.getStringAsync().catch(() => '')) ?? '');
   const check = useCallback(async () => {
     setOk(Object.fromEntries(peers.map((p) => [p.id, null])));
-    const r = await probeAll(peers, 'rpc');
+    // a peer far away has only the api channel (through the relay); the lan ones are asked on rpc
+    const [near, far] = await Promise.all([probeAll(peers.filter((p) => !isRemote(p)), 'rpc'), probeAll(peers.filter(isRemote), 'api')]);
+    const r = { ok: [...near.ok, ...far.ok], bad: [...near.bad, ...far.bad] };
     setOk({ ...Object.fromEntries(r.ok.map((p) => [p.id, true])), ...Object.fromEntries(r.bad.map((b) => [b.peer.id, false])) });
   }, [peers]);
   useEffect(() => {
@@ -99,7 +111,7 @@ export default function PeersScreen() {
         <View key={p.id} style={styles.row}>
           <View style={styles.rowText}>
             <Text style={styles.name} numberOfLines={1}>{p.name.toLowerCase()}<Text style={styles.kind}>  · {t(`peers.kind.${p.kind}`)}</Text></Text>
-            <Text style={styles.meta}>{[`${p.host}:${p.port}`, p.ram ? `${Math.round(p.ram / 1024 * 10) / 10} gb` : '', p.bw ? `${p.bw} gb/s` : ''].filter(Boolean).join(' · ')}</Text>
+            <Text style={styles.meta}>{[isRemote(p) ? `${t('peers.far')} ${p.relay!.code}` : `${p.host}:${p.port}`, p.ram ? `${Math.round(p.ram / 1024 * 10) / 10} gb` : '', p.bw ? `${p.bw} gb/s` : ''].filter(Boolean).join(' · ')}</Text>
             <Text style={[styles.meta, ok[p.id] === true && styles.okText, ok[p.id] === false && styles.offText]}>{ok[p.id] === null ? '…' : ok[p.id] ? t('peers.ok') : ok[p.id] === false ? t('peers.off') : ''}</Text>
           </View>
           <Pressable onPress={() => forgetPeer(p.id)} hitSlop={10} accessibilityLabel={t('peers.remove')}><Text style={styles.x}>×</Text></Pressable>
@@ -111,11 +123,14 @@ export default function PeersScreen() {
         {peers.length ? <Pressable onPress={check} style={({ pressed }) => [styles.btn, pressed && styles.pressed]}><Text style={styles.btnText}>{t('peers.check')}</Text></Pressable> : null}
         {hasNative() ? <Pressable onPress={findNearby} style={({ pressed }) => [styles.btn, pressed && styles.pressed]}><Text style={styles.btnText}>{looking ? t('peers.searching') : t('peers.nearby')}</Text></Pressable> : null}
       </View>
-      {/* the code as text: a computer's terminal prints it, and some emulators have no camera */}
+      {/* the code as text: a computer's terminal prints it, some emulators have no camera, and a
+          relay code ("123456 0123…") is read out over the phone */}
+      <Text style={styles.section}>{up(t('peers.byCode'))}</Text>
       <View style={styles.typeRow}>
-        <TextInput value={typed} onChangeText={setTyped} placeholder={t('peers.typeHint')} placeholderTextColor={colors.meta} autoCapitalize="none" autoCorrect={false} style={styles.input} testID="peer-code" />
+        <TextInput value={typed} onChangeText={setTyped} placeholder={t('peers.codeHint')} placeholderTextColor={colors.meta} autoCapitalize="none" autoCorrect={false} style={styles.input} testID="peer-code" />
         <Pressable onPress={() => { if (take(typed)) setTyped(''); }} style={({ pressed }) => [styles.btn, pressed && styles.pressed]}><Text style={styles.btnText}>{t('peers.add')}</Text></Pressable>
       </View>
+      <Text style={styles.hint}>{t('peers.typeHint')}</Text>
       {note ? <Text style={styles.okText}>{note}</Text> : null}
       {err && !scan ? <Text style={styles.offText}>{err}</Text> : null}
       {nearby.filter((f) => !known.has(f.id ?? '')).length ? (
@@ -177,7 +192,8 @@ const styles = StyleSheet.create({
   btnText: { fontFamily: fonts.medium, fontSize: 13, color: colors.paper },
   btnLight: { borderColor: '#fff' },
   btnTextLight: { color: '#fff' },
-  typeRow: { flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: 14 },
+  typeRow: { flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: 8 },
+  hint: { fontFamily: fonts.regular, fontSize: 12, color: colors.mute, marginTop: 6 },
   input: { flex: 1, height: 44, borderBottomWidth: 1, borderBottomColor: colors.ink3, fontFamily: fonts.regular, fontSize: 13, color: colors.paper },
   shareLink: { marginTop: 28 },
   shareText: { fontFamily: fonts.medium, fontSize: 14, color: colors.spotText },

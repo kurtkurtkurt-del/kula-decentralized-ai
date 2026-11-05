@@ -33,6 +33,9 @@ export type Peer = {
   fp?: string | null;    // protocol v2 (qr v3): the worker's certificate fingerprint, pinned from the qr
   pin?: string | null;   // the one-time pairing code from that qr; cleared once paired
   paired_at?: string | null;
+  // far away, behind nat: reached through this relay with this code (docs/RELAY.md). only the
+  // api channel crosses a relay, so such a peer takes part in apart mode and never in split
+  relay?: { url: string; code: string } | null;
   kind: 'phone' | 'tablet' | 'pc';
   ram: number | null;    // MB free when it advertised
   bw: number | null;     // GB/s
@@ -41,7 +44,7 @@ export type Peer = {
   last_ok?: string | null;
 };
 export type Mode = 'alone' | 'apart' | 'split';
-export type Settings = { modelId: string | null; ctx: number; temperature: number; maxTokens: number; lastMode: Mode };
+export type Settings = { modelId: string | null; ctx: number; temperature: number; maxTokens: number; lastMode: Mode; relayUrl: string };
 
 const MODELS = 'llm.models';
 const PEERS = 'llm.peers';
@@ -168,7 +171,8 @@ export function retryDownload(id: string) {
 }
 
 // ---- settings --------------------------------------------------------------------------
-const DEFAULTS: Settings = { modelId: null, ctx: 2048, temperature: 0.7, maxTokens: 512, lastMode: 'alone' };
+// relayUrl: the relay "share far away" registers with and "add by code" reaches; empty until set (docs/RELAY.md)
+const DEFAULTS: Settings = { modelId: null, ctx: 2048, temperature: 0.7, maxTokens: 512, lastMode: 'alone', relayUrl: '' };
 export const settings = () => ({ ...DEFAULTS, ...read<Partial<Settings>>(SETTINGS, {}) });
 export const useSettings = () => useStore(settings);
 export const saveSettings = (patch: Partial<Settings>) => write(SETTINGS, { ...settings(), ...patch });
@@ -183,7 +187,7 @@ export const forgetPeer = (id: string) => write(PEERS, peers().filter((x) => x.i
 export const touchPeer = (id: string, patch: Partial<Peer>) => write(PEERS, peers().map((p) => (p.id === id ? { ...p, ...patch } : p)));
 
 // ---- this phone as a worker ---------------------------------------------------------------
-export type Share = { secret: string; name: string; port: number };
+export type Share = { secret: string; name: string; port: number; relay?: string | null };
 export const share = () => read<Share | null>(SHARE, null);
 export const saveShare = (s: Share | null) => write(SHARE, s);
 export const useShare = () => useStore(share);

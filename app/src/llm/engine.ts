@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { lastPassport } from '@/data/passport';
 import { native, type LoadResult, type Message } from '@/llm/native';
-import { peerArgs, peerTls, planSplit, probeAll, splitSummary, type Plan } from '@/llm/cluster';
+import { peerArgs, peerRelay, peerTls, planSplit, probeAll, splitSummary, type Plan } from '@/llm/cluster';
 import { type LocalModel, type Mode, type Peer, saveSettings } from '@/llm/store';
 
 // The engine: one model loaded at a time, in one of three ways. `alone` and `split` run
@@ -70,7 +70,7 @@ export async function load(model: LocalModel, mode: Mode, ctx: number, peers: Pe
       // every peer loads the same file (its own download when missing), in parallel
       await Promise.all(ok.map(async (p) => {
         try {
-          const port = await llama.apiTunnel(p.host, p.port, p.secret, peerTls(p));
+          const port = await llama.apiTunnel(p.host, p.port, p.secret, peerTls(p), peerRelay(p));
           set({ loading: `loading on ${p.name}` });
           await apiLoad(port, model, ctx);
           devices.push({ id: p.id, name: p.name, local: false, busy: false, apiPort: port, peer: p });

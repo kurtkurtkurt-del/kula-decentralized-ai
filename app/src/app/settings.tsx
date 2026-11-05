@@ -17,6 +17,8 @@ import { serverText } from '@/lib/serverText';
 import { useRefreshOnFocus } from '@/hooks/useRefresh';
 import { useLang } from '@/i18n';
 import { DEMO } from '@/lib/supabase';
+import { saveSettings as saveLlmSettings, useSettings as useLlmSettings } from '@/llm/store';
+import { relayUrlOf } from '@/llm/peers';
 import { colors, fonts } from '@/theme/tokens';
 
 const HOURS = Array.from({ length: 48 }, (_, i) => `${String(Math.floor(i / 2)).padStart(2, '0')}:${i % 2 ? '30' : '00'}`);
@@ -30,6 +32,9 @@ export default function SettingsScreen() {
   const profile = useProfile(tick);
   const { cities } = useCities();
   const [picking, setPicking] = useState<'from' | 'to' | 'city' | null>(null);
+  // the relay "share far away" and "add by code" use (docs/RELAY.md); kept on this phone only
+  const llm = useLlmSettings();
+  const [relay, setRelay] = useState<string | null>(null);
   const [editing, setEditing] = useState(false);
   const [name, setName] = useState('');
   const [handle, setHandle] = useState('');
@@ -114,6 +119,8 @@ export default function SettingsScreen() {
         <Row label={t('settings.server')} hint={DEMO ? t('settings.server.demo') : undefined} right={<Value text={DEMO ? 'demo' : 'live'} />} />
         <Row label={t('settings.version')} right={<Value text={Constants.expoConfig?.version ?? '0'} />} />
       </Panel>
+      <Field label={t('settings.relay')} value={relay ?? llm.relayUrl} onChangeText={setRelay} onBlur={() => { if (relay !== null) { saveLlmSettings({ relayUrl: relay.trim() ? relayUrlOf(relay) : '' }); setRelay(null); } }} placeholder="wss://relay.example" autoCapitalize="none" autoCorrect={false} keyboardType="url" />
+      <Text style={styles.hint}>{t('settings.relay.hint')}</Text>
 
       <Section title={t('settings.account')} />
       <Panel>

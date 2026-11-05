@@ -31,6 +31,9 @@ export default function ModelScreen() {
   const passport = usePassport();
   const linked = useLinked();
   const peers = usePeers();
+  // peers far away (relay) take part in apart mode only
+  const nearPeers = peers.filter((p) => !p.relay);
+  const farPeers = peers.length - nearPeers.length;
   const engine = useEngine();
   const { lang } = useLang();
   useDownloads();
@@ -155,8 +158,9 @@ export default function ModelScreen() {
         <View style={[styles.sheet, { paddingBottom: insets.bottom + 24 }]}>
           <Text style={styles.head}>{up(t('mode.title'))}</Text>
           <Option title={t('mode.alone')} why={fit?.verdict === 'no' ? `${t('mode.alone.why')} ${t('mode.tryAnyway')}` : t('mode.alone.why')} meta={fit?.tps ? `${fit.tps.low}–${fit.tps.high} tok/s` : ''} onPress={() => pick('alone')} />
-          <Option title={t('mode.apart')} why={`${t('mode.apart.why')} ${t('mode.beyin')}`} meta={peers.length ? `${peers.length + 1} × ${fit?.tps ? `${fit.tps.low}–${fit.tps.high}` : '?'} tok/s` : t('mode.needPeers')} off={!peers.length} onPress={() => pick('apart')} />
-          <Option title={t('mode.split')} why={t('mode.split.why')} meta={together?.tps ? `${together.tps.low}–${together.tps.high} tok/s · ${together.shares.map((s) => `${s.name.toLowerCase()} ${(s.mb / 1024).toFixed(1)} gb`).join(' · ')}` : peers.length ? '' : t('mode.needPeers')} off={!peers.length || (!!together && together.verdict === 'no')} onPress={() => pick('split')} />
+          <Option title={t('mode.apart')} why={`${t('mode.apart.why')} ${t('mode.beyin')}`} meta={peers.length ? `${peers.length + 1} × ${fit?.tps ? `${fit.tps.low}–${fit.tps.high}` : '?'} tok/s${farPeers ? ` · ${t('mode.apart.remote', { n: farPeers })}` : ''}` : t('mode.needPeers')} off={!peers.length} onPress={() => pick('apart')} />
+          {/* a peer far away (relay) never splits: every token would cross the internet; the row says so */}
+          <Option title={t('mode.split')} why={`${t('mode.split.why')}${farPeers ? ` ${t('mode.split.remote', { n: farPeers })}.` : ''}`} meta={together?.tps ? `${together.tps.low}–${together.tps.high} tok/s · ${together.shares.map((s) => `${s.name.toLowerCase()} ${(s.mb / 1024).toFixed(1)} gb`).join(' · ')}` : nearPeers.length ? '' : t('mode.needPeers')} off={!nearPeers.length || (!!together && together.verdict === 'no')} onPress={() => pick('split')} />
           {!peers.length ? (
             <Pressable onPress={() => { setAsk(false); router.push('/peers'); }} style={({ pressed }) => [styles.addPeer, pressed && styles.pressed]}>
               <Text style={styles.addPeerText}>{t('mode.addPeer')} ›</Text>

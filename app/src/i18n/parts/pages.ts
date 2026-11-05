@@ -182,6 +182,8 @@ export const pages = {
   'settings.server': { en: 'server', de: 'server', tr: 'sunucu' },
   'settings.server.demo': { en: 'example data on this phone: invented people and nights, nothing is sent anywhere', de: 'beispieldaten auf diesem handy: erfundene leute und nächte, nichts wird gesendet', tr: 'bu telefonda örnek veri: uydurma kişiler ve geceler, hiçbir yere bir şey gönderilmez' },
   'settings.version': { en: 'version', de: 'version', tr: 'sürüm' },
+  'settings.relay': { en: 'relay for devices far away', de: 'relais für geräte weit weg', tr: 'uzaktaki cihazlar için aktarıcı' },
+  'settings.relay.hint': { en: '"share far away" registers there and "add by code" reaches through it. the relay carries only encrypted bytes; leave empty to stay on wi-fi only.', de: '"weit weg teilen" meldet sich dort an, "per code hinzufügen" geht darüber. das relais trägt nur verschlüsselte bytes; leer lassen heißt nur wlan.', tr: '"uzaktan paylaş" oraya kaydolur, "kod ile ekle" oradan geçer. aktarıcı yalnız şifreli bayt taşır; boş bırakırsan yalnız wi-fi.' },
   'notify.title': { en: 'notifications', de: 'benachrichtigungen', tr: 'bildirimler' },
   'notify.allow': { en: 'allow notifications', de: 'benachrichtigungen erlauben', tr: 'bildirimlere izin ver' },
   'notify.allow.hint': { en: 'kula may tell you when friends do something', de: 'kula sagt dir, wenn freunde etwas tun', tr: 'arkadaşların bir şey yaptığında kula decentralized ai haber verir' },
