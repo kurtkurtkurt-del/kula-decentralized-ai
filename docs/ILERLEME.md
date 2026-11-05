@@ -109,3 +109,11 @@ Hepsi emülatörde (`kula35`) + Mac'te `tools/dev-gate.mjs` ile denendi; commit'
   yanlış klasörden çalıştığı için düştü (package.json yok), ikinci deneme `app/` içinden.
 - Expo'nun typed routes dosyası (`.expo/types/router.d.ts`) `expo start` ile üretilir; ben elle güncelledim ki tsc
   geçsin; bir sonraki `expo start` zaten yeniden yazar.
+
+## 5.11 03:33 (uyandırma)
+
+- Token yenilendi; Opus 5.5 high ile yeni oturum açmayı denedim, uygulama otomatik bir uyandırmadan oturum
+  başlatmayı reddetti (yalnız kullanıcının kendi mesajıyla açılabiliyor). **Opus 5.5 ile oturum sabah elle
+  açılmalı.** Önerilen brief: ILERLEME'yi oku → dört cloud dalını gözden geçir (birleştirme yok) → emülatör + dev-gate
+  ile bir küme turu daha → gerekiyorsa `app/` içinde `npm run apk` → en üste "sabah özeti".
+- Bu oturumda başka iş yapılmadı; ağaç temiz, HEAD `1873df7` + bu not.
