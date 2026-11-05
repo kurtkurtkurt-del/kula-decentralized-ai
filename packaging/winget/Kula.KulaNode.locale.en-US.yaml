@@ -1,0 +1,19 @@
+# winget manifest (draft), rendered by node/tools/release-files.mjs
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.defaultLocale.1.6.0.schema.json
+
+PackageIdentifier: Kula.KulaNode
+PackageVersion: 0.1.0
+PackageLocale: en-US
+Publisher: kula
+PackageName: kula-node
+License: MIT
+ShortDescription: make this computer a worker in a kula phone cluster
+Description: |-
+  kula-node turns this computer into a worker for a kula phone cluster: it gets
+  llama.cpp, opens a gate the phone pairs with by qr code, and can run a cluster
+  of phones and computers from here. After installing: kula-node setup, then kula-node share.
+  Windows defender firewall asks about kula-node on the first share: allow private networks only.
+PackageUrl: https://github.com/kurtkurtkurt-del/kula-decentralized-ai
+Moniker: kula-node
+ManifestType: defaultLocale
+ManifestVersion: 1.6.0
