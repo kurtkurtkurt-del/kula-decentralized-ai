@@ -7,10 +7,11 @@ import { tips } from './parts/tips';
 import { coops } from './parts/coops';
 import { server } from './parts/server';
 import { models } from './parts/models';
+import { ux } from './parts/ux';
 
 // Every string in one table. When a key appears in two parts the later wins,
 // so each part uses its own prefix (home.* · flow.* · project.* …).
-export const dict = { ...common, ...home, ...tabs, ...pages, ...staff, ...tips, ...coops, ...server, ...models } as const;
+export const dict = { ...common, ...home, ...tabs, ...pages, ...staff, ...tips, ...coops, ...server, ...models, ...ux } as const;
 
 export type Key = keyof typeof dict;
 type Roots<K> = K extends `${infer Base}.other` ? Base : never;
