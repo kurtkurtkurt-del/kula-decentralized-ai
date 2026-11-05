@@ -11,37 +11,39 @@
      3. this page draws it as a qr code; the app reads it with passport → connect and adds the
         computer, with every field, to "together". Nothing leaves this page: no server. -->
 <style>
-  :root { --ground: #ffffff; --beige: #f0e6d2; --line: #e8dfcb; --words: #1f1a14; --mute: #7a6a58; --sage: #5b6b56; --red: #c86a51; }
+  /* the same look as the kula-node dashboard (node/src/dashboard/static/app.css): dark, the app's palette */
+  :root { --ground: #1f1a14; --card: #2a2219; --line: rgba(240,230,210,0.10); --line2: rgba(240,230,210,0.18); --words: #f0e6d2; --mute: #a08e78; --meta: #7a6a58; --sage: #5b6b56; --sage2: #8fa08a; --red: #c86a51; --gold: #d4a373; --mono: ui-monospace, "JetBrains Mono", Menlo, Consolas, monospace; }
   * { box-sizing: border-box; }
-  body { margin: 0; background: var(--ground); color: var(--words); font: 16px/1.5 -apple-system, "Inter", Helvetica, Arial, sans-serif; }
-  main { max-width: 680px; margin: 0 auto; padding: 40px 20px 80px; }
-  h1 { font-size: 34px; letter-spacing: -0.03em; margin: 0 0 6px; }
-  .lede { color: var(--mute); margin: 0 0 32px; }
-  .step { border: 1px solid var(--line); border-radius: 16px; padding: 20px; margin-bottom: 18px; }
-  .step h2 { font-size: 13px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--mute); margin: 0 0 12px; font-weight: 500; }
-  .step h2 b { color: var(--sage); }
-  pre { background: var(--beige); border-radius: 10px; padding: 14px; margin: 0; overflow-x: auto; font: 13px/1.5 ui-monospace, Menlo, monospace; white-space: pre-wrap; word-break: break-all; }
-  button { font: inherit; font-weight: 600; border: 0; border-radius: 999px; padding: 10px 20px; background: var(--sage); color: #fff; cursor: pointer; }
-  button.line { background: transparent; color: var(--words); border: 1.5px solid var(--words); }
+  body { margin: 0; background: var(--ground); color: var(--words); font: 15px/1.5 "Inter Tight", "Inter", -apple-system, system-ui, Helvetica, Arial, sans-serif; -webkit-font-smoothing: antialiased; }
+  main { max-width: 720px; margin: 0 auto; padding: 36px 20px 80px; }
+  h1 { font-size: 30px; letter-spacing: -0.03em; margin: 0 0 6px; font-weight: 600; }
+  .lede { color: var(--mute); margin: 0 0 28px; }
+  .step { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 18px 20px; margin-bottom: 16px; }
+  .step h2 { font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--mute); margin: 0 0 12px; font-weight: 500; }
+  .step h2 b { color: var(--sage2); }
+  pre { background: var(--ground); border: 1px solid var(--line); border-radius: 9px; padding: 12px; margin: 0; overflow-x: auto; font: 12px/1.5 var(--mono); white-space: pre-wrap; word-break: break-all; color: var(--words); }
+  code { font: 12px var(--mono); color: var(--words); }
+  button { font: inherit; font-size: 13px; font-weight: 600; border: 0; border-radius: 999px; padding: 8px 16px; background: var(--sage); color: #fff; cursor: pointer; }
+  button.line { background: transparent; color: var(--words); border: 1px solid var(--line2); font-weight: 500; }
   .row { display: flex; gap: 10px; align-items: center; margin-top: 12px; flex-wrap: wrap; }
-  .hint { color: var(--mute); font-size: 14px; }
-  textarea { width: 100%; min-height: 140px; border: 1px solid var(--line); border-radius: 10px; padding: 12px; font: 12px/1.4 ui-monospace, Menlo, monospace; resize: vertical; }
-  .err { color: var(--red); font-size: 14px; margin-top: 8px; }
+  .hint { color: var(--mute); font-size: 13px; }
+  textarea { width: 100%; min-height: 140px; background: var(--ground); color: var(--words); border: 1px solid var(--line2); border-radius: 9px; padding: 12px; font: 12px/1.4 var(--mono); resize: vertical; }
+  .err { color: var(--red); font-size: 13px; margin-top: 8px; }
   .result { display: grid; grid-template-columns: 1fr; gap: 18px; }
   /* large enough to read off a screen: about 7 px per module at version 24 */
-  .qr { background: #fff; border: 1px solid var(--line); border-radius: 12px; padding: 12px; max-width: 460px; width: 100%; margin: 0 auto; }
+  .qr { background: #fff; border-radius: 12px; padding: 12px; max-width: 460px; width: 100%; margin: 0 auto; }
   .qr svg { display: block; width: 100%; height: auto; }
-  dl { margin: 0; display: grid; grid-template-columns: auto 1fr; gap: 6px 14px; font-size: 14px; }
+  dl { margin: 0; display: grid; grid-template-columns: auto 1fr; gap: 4px 14px; font-size: 13px; }
   dt { color: var(--mute); }
-  dd { margin: 0; font-family: ui-monospace, Menlo, monospace; }
-  .big { font-size: 28px; font-weight: 700; letter-spacing: -0.02em; margin: 0 0 8px; }
+  dd { margin: 0; font-family: var(--mono); font-size: 12px; }
+  .big { font-size: 24px; font-weight: 600; letter-spacing: -0.02em; margin: 0 0 8px; }
   [hidden] { display: none !important; }
 </style>
 </head>
 <body>
 <main>
   <h1>bilgisayarını bağla.</h1>
-  <p class="lede">bilgisayarının pasaportunu çıkar, telefonundaki kula'ya okut; birlikte ne yaptıklarını gör. hiçbir şey bir sunucuya gitmez.</p>
+  <p class="lede">bilgisayarının pasaportunu çıkar, telefonundaki kula'ya okut; birlikte ne yaptıklarını gör. hiçbir şey bir sunucuya gitmez. pasaport <code>~/.kula-node/passport.json</code>'a da yazılır: <code>kula-node share</code> panosu onu oradan okur.</p>
 
   <section class="step">
     <h2><b>1</b> · Terminal'e yapıştır (Mac)</h2>
@@ -50,7 +52,7 @@
       <button id="copy">komutu kopyala</button>
       <span class="hint" id="copied"></span>
     </div>
-    <p class="hint">Terminal: ⌘ + boşluk → "Terminal" → yapıştır → enter. yaklaşık 20 saniye sürer, bilgisayarı ölçer ve sonucu panoya kopyalar. ilk sefer komut satırı araçlarını isteyebilir; istemezsen daha kaba bir ölçüm yapar.</p>
+    <p class="hint">Terminal: ⌘ + boşluk → "Terminal" → yapıştır → enter. yaklaşık 20 saniye sürer, bilgisayarı ölçer, sonucu panoya kopyalar ve kula-node için <code>~/.kula-node/passport.json</code>'a kaydeder. ilk sefer komut satırı araçlarını isteyebilir; istemezsen daha kaba bir ölçüm yapar.</p>
   </section>
 
   <section class="step">
@@ -71,12 +73,24 @@
       </div>
     </div>
   </section>
+
+  <section class="step" id="save" hidden>
+    <h2><b>4</b> · kula-node için kaydet</h2>
+    <p class="hint">bu bilgisayarı işçi yapacaksan (<code>kula-node share</code>) pano pasaportu <code>~/.kula-node/passport.json</code>'dan okur. 1. adımdaki komut Mac'te zaten yazdı; başka bir bilgisayardaysan ya da elle yapıştırdıysan dosyayı indir ve yerine koy:</p>
+    <div class="row">
+      <button id="dl" class="line">passport.json indir</button>
+      <button id="copymv" class="line">taşıma komutunu kopyala</button>
+      <span class="hint" id="saved"></span>
+    </div>
+    <pre id="mv" style="margin-top:12px"></pre>
+    <p class="hint" style="margin-top:10px">sonra: <code>kula-node share</code> → terminaldeki <code>http://127.0.0.1:50580/…/</code> adresini aç; "bu bilgisayar" kartında pasaport görünür.</p>
+  </section>
 </main>
 <script src="../passport/qr.js"></script>
 <script>
 (function () {
   // 1 · the command: the Mac script from this same site, then the passport to the clipboard
-  var cmd = "curl -fsSL " + location.origin + "/passport/mac.sh | bash && pbcopy < ~/.kula/passport.json && echo 'kopyalandı: sayfaya yapıştır'";
+  var cmd = "curl -fsSL " + location.origin + "/passport/mac.sh | bash && mkdir -p ~/.kula-node && cp ~/.kula/passport.json ~/.kula-node/passport.json && pbcopy < ~/.kula/passport.json && echo 'kopyalandı: sayfaya yapıştır'";
   document.getElementById("cmd").textContent = cmd;
   document.getElementById("copy").onclick = function () {
     navigator.clipboard.writeText(cmd).then(function () { document.getElementById("copied").textContent = "kopyalandı"; });
@@ -115,9 +129,28 @@
     ];
     document.getElementById("facts").innerHTML = rows.map(function (r) { return "<dt>" + r[0] + "</dt><dd>" + String(r[1] === undefined ? "—" : r[1]).replace(/</g, "&lt;") + "</dd>"; }).join("");
     document.getElementById("out").hidden = false;
+    document.getElementById("save").hidden = false;
+    lastText = text;
     document.getElementById("out").scrollIntoView({ behavior: "smooth" });
   }
   document.getElementById("make").onclick = make;
+
+  // 4 · the same json as a file kula-node reads (~/.kula-node/passport.json)
+  var lastText = "";
+  var mvCmd = "mkdir -p ~/.kula-node && mv ~/Downloads/passport.json ~/.kula-node/passport.json";
+  document.getElementById("mv").textContent = mvCmd;
+  document.getElementById("dl").onclick = function () {
+    if (!lastText) return;
+    var a = document.createElement("a");
+    a.href = URL.createObjectURL(new Blob([lastText + "\n"], { type: "application/json" }));
+    a.download = "passport.json";
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(function () { URL.revokeObjectURL(a.href); }, 1000);
+    document.getElementById("saved").textContent = "indirildi: Downloads/passport.json";
+  };
+  document.getElementById("copymv").onclick = function () {
+    navigator.clipboard.writeText(mvCmd).then(function () { document.getElementById("saved").textContent = "komut kopyalandı"; });
+  };
   document.getElementById("json").addEventListener("paste", function () { setTimeout(make, 0); });
 })();
 </script>
