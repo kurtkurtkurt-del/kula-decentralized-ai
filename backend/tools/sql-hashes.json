@@ -15,5 +15,6 @@
   "14_safety.sql": "0c72f26de1a1598042b3c869795a3676aac50b1e447f6254aaf5b7cdaf21f5db",
   "15_health.sql": "b8b7a43cc149385a7f4ddd9bfd28059ba00292919a3e7fcf5dfe9344d87e0a51",
   "16_devices.sql": "a51bcb721c6957399458fc0af33c4bb23daf54d3523e75024a85b3d2137a8796",
-  "17_passport_drops.sql": "44bba64d446668f1e83827e1f3cf9c599b197f9cac3269c7f83ee1cb2a1a0bc6"
+  "17_passport_drops.sql": "44bba64d446668f1e83827e1f3cf9c599b197f9cac3269c7f83ee1cb2a1a0bc6",
+  "18_night.sql": "fcfc131f06f3653cfce7ebfaa0e25b5a72362cb2029b3bc92a11837d5268d600"
 }
