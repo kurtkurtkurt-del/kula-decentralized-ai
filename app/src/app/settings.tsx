@@ -113,6 +113,7 @@ export default function SettingsScreen() {
         <Row label={t('settings.web')} hint={t('settings.web.hint')} onPress={() => Linking.openURL(SITE)} right={<Value text="" more />} />
         <Row label={t('settings.server')} hint={DEMO ? t('settings.server.demo') : undefined} right={<Value text={DEMO ? 'demo' : 'live'} />} />
         <Row label={t('settings.version')} right={<Value text={Constants.expoConfig?.version ?? '0'} />} />
+        <Row label={t('settings.bench')} hint={t('settings.bench.hint')} onPress={() => router.push('/bench')} right={<Value text="" more />} />
       </Panel>
 
       <Section title={t('settings.account')} />
