@@ -135,10 +135,11 @@ export function chatRemote(dev: Device, messages: Message[], onToken: (t: string
     xhr.onreadystatechange = () => {
       if (xhr.readyState >= 3) {
         const text = xhr.responseText.slice(seen);
+        // no early return: the last bytes usually arrive in a readyState 3 event, and the
+        // readyState 4 that follows must still reach the resolve below
         const cut = text.lastIndexOf('\n\n');
-        if (cut < 0) return;
-        seen += cut + 2;
-        for (const line of text.slice(0, cut).split('\n')) {
+        if (cut >= 0) seen += cut + 2;
+        for (const line of cut >= 0 ? text.slice(0, cut).split('\n') : []) {
           if (!line.startsWith('data: ')) continue;
           try {
             const o = JSON.parse(line.slice(6));
