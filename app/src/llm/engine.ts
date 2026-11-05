@@ -5,6 +5,7 @@ import { peerArgs, peerRelay, peerTls, planSplit, probeAll, splitSummary, type P
 import { type LocalModel, type Mode, type Peer, registerEngine, saveSettings, saveUxFlags } from '@/llm/store';
 import { assign, estimateAlone, pickDevice } from '@/llm/sim/model';
 import { localFromPassport, modelProfile, workerFromPeer } from '@/llm/sim/profiles';
+import { note, planEntries } from '@/llm/brainlog';
 
 // The engine: one model loaded at a time, in one of three ways. `alone` and `split` run
 // in this process (split: the layers this phone does not hold sit on tunnelled peers).
@@ -53,6 +54,7 @@ export const OUT_MS = 5 * 60 * 1000; // a device that dropped a request sits out
 /** Loads a model in a mode. `share` answers "keep it here or share" when it fits alone. */
 export async function load(model: LocalModel, mode: Mode, ctx: number, peers: Peer[], share = false): Promise<void> {
   const llama = native();
+  const t0 = Date.now();
   set({ loading: 'preparing', error: null, model, mode, plan: null, load: null, split: [], devices: [] });
   try {
     const info = await llama.info();
@@ -93,7 +95,17 @@ export async function load(model: LocalModel, mode: Mode, ctx: number, peers: Pe
     }
     saveSettings({ modelId: model.id, ctx, lastMode: mode });
     saveUxFlags({ ran: true }); // the ladder's third rung, for good
+    // the brain tab: what was planned and why, then that it stands
+    note([
+      ...planEntries(Date.now(), model.name, mode, state.plan, state.devices, thisName()),
+      { at: Date.now(), kind: 'load', key: 'brain.load.done', vars: { model: model.name, mode, s: Math.round((Date.now() - t0) / 100) / 10 }, tone: 'ok' },
+    ]);
   } catch (e) {
+    const why = (e as Error).message;
+    note([
+      ...(state.plan ? planEntries(Date.now(), model.name, mode, state.plan, [], thisName()) : []),
+      { at: Date.now(), kind: 'error', key: why === 'toobig' ? 'brain.load.toobig' : why === 'local' ? 'brain.load.local' : 'brain.load.failed', vars: { model: model.name }, detail: why === 'toobig' || why === 'local' ? undefined : why, tone: 'bad' },
+    ]);
     set({ loading: null, error: (e as Error).message, model: null, load: null });
     await llama.unload().catch(() => {});
     throw e;
@@ -212,6 +224,9 @@ export function chat(messages: Message[], onToken: (t: string) => void, opts: { 
   const first = pick(null);
   if (!first) throw new Error('nomodel');
   let current = first;
+  // the brain tab: which device the dispatcher chose, when it had a choice (the night names
+  // its device itself and says so in its own lines)
+  if (!opts.device && state.devices.length > 1) note({ at: now(), kind: 'dispatch', key: 'brain.dispatch', vars: { device: first.name.toLowerCase(), tps: Math.round(first.tps * 10) / 10, n: state.devices.filter((d) => !d.out).length }, tone: 'info' });
   let run = start(current);
   const measured = (r: Reply) => {
     if (r.tps > 0) current.tps = Math.round(r.tps * 10) / 10;
@@ -224,6 +239,7 @@ export function chat(messages: Message[], onToken: (t: string) => void, opts: { 
     current.busyUntil = now() + OUT_MS;
     emit();
     const next = pick(current.id);
+    note({ at: now(), kind: 'retry', key: next ? 'brain.retry' : 'brain.retry.none', vars: { from: current.name.toLowerCase(), to: next?.name.toLowerCase() ?? '', min: Math.round(OUT_MS / 60000) }, detail: e.message, tone: 'warn' });
     if (!next) throw e;
     current = next;
     run = start(current);

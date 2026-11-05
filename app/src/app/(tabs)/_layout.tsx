@@ -5,8 +5,8 @@ import { Screen } from 'react-native-screens';
 import Animated, { Easing, useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
 import { TabBarFrame, TabItem } from '@/components/TabBar';
 
-// The main app: five tabs in an edge-to-edge bottom bar. models · messages · connect · network · passport.
-// (models took the swipe deck's place on 4.11.2026.)
+// The main app: five tabs in an edge-to-edge bottom bar. models · messages · the brain ·
+// connect · passport. The brain (beyin at work on this phone) sits in the middle (5.11.2026).
 export default function TabsLayout() {
   return (
     <Tabs>
@@ -19,11 +19,11 @@ export default function TabsLayout() {
           <TabTrigger name="messages" href="/messages" asChild>
             <TabItem icon="chat" />
           </TabTrigger>
+          <TabTrigger name="brain" href="/brain" asChild>
+            <TabItem icon="brain" />
+          </TabTrigger>
           <TabTrigger name="people" href="/people" asChild>
             <TabItem icon="people" />
-          </TabTrigger>
-          <TabTrigger name="network" href="/network" asChild>
-            <TabItem icon="network" />
           </TabTrigger>
           <TabTrigger name="passport" href="/passport" asChild>
             <TabItem icon="passport" />
