@@ -14,14 +14,15 @@ import { colors, fonts, radius } from '@/theme/tokens';
 export default function JoinCoopScreen() {
   const { c } = useLocalSearchParams<{ c?: string }>();
   const { t } = useLang();
-  const { session, isAnonymous } = useAuth();
+  const { ensureSession } = useAuth();
   const [code, setCode] = useState(c ?? '');
   const [peek, setPeek] = useState<Peek | null>(null);
   const [said, setSaid] = useState<string | null>(null);
   const look = (v = code) => coopPeek(v.trim().toUpperCase()).then((p) => { setPeek(p); setSaid(p ? null : t('err.code')); }, (e) => setSaid(why(e)));
   useEffect(() => { if (c) look(c); }, [c]); // eslint-disable-line react-hooks/exhaustive-deps
-  const join = () => {
-    if (!session || isAnonymous) return router.push('/signup');
+  // a guest joins like anyone (5.11.2026: no sign-up in the way)
+  const join = async () => {
+    if (!(await ensureSession())) return setSaid(t('auth.error.network'));
     coopJoin(code.trim().toUpperCase()).then((id) => { invalidate('coops'); router.replace({ pathname: '/coops/[id]', params: { id } }); }, (e) => setSaid(why(e)));
   };
   return (
@@ -34,7 +35,7 @@ export default function JoinCoopScreen() {
           <Text style={styles.name}>{peek.name.toLowerCase()}</Text>
           <Text style={styles.meta}>{t('coops.members', { n: peek.members })} · {t('coops.join.about')}</Text>
           {peek.mine ? <Text style={styles.meta}>{t('coops.join.mine')}</Text> : !peek.open ? <Text style={styles.meta}>{t('coops.join.closed')}</Text> : (
-            <View style={styles.gap}><Button label={session && !isAnonymous ? t('coops.join.come') : t('coops.join.account')} onPress={join} /></View>
+            <View style={styles.gap}><Button label={t('coops.join.come')} onPress={join} /></View>
           )}
         </View>
       ) : null}

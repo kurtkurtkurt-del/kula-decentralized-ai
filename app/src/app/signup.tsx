@@ -5,7 +5,6 @@ import { KeyboardAvoidingView, Pressable, StyleSheet, Text, View } from 'react-n
 import { StatusBar } from 'expo-status-bar';
 import { router, useLocalSearchParams } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import Storage from 'expo-sqlite/kv-store';
 import BackButton, { EdgeBack } from '@/components/BackButton';
 import Button from '@/components/Button';
 import Input from '@/components/Input';
@@ -15,7 +14,6 @@ import { appleAvailable, signInWithApple } from '@/auth/apple';
 import * as AppleAuthentication from 'expo-apple-authentication';
 import GoogleMark from '@/components/GoogleMark';
 import { useT } from '@/i18n';
-import { supabase } from '@/lib/supabase';
 import { colors, fonts, radius } from '@/theme/tokens';
 import { brand } from '@/theme/layout';
 
@@ -28,15 +26,15 @@ export default function SignUpScreen() {
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<string | null>(null);
   const { signUp, signIn, signInAsGuest, resetPassword } = useAuth();
-  // "sign in" on the home screen passes ?mode=in; "sign up" passes nothing.
+  // the settings pass ?mode=up (make an account) or ?mode=in (sign in); nothing: the demo door.
   const params = useLocalSearchParams<{ mode?: string }>();
   const [mode, setMode] = useState<'up' | 'in'>(params.mode === 'in' ? 'in' : 'up');
   // 5.11.2026: the app is tried without a password. The account form opens only on request.
-  const [withAccount, setWithAccount] = useState(params.mode === 'in');
+  const [withAccount, setWithAccount] = useState(params.mode === 'in' || params.mode === 'up');
 
   // Creates the account (or signs in if it exists) and enters the app.
-  // Empty fields start an anonymous, device-bound user: browsing is free and swipes are
-  // still recorded; adding an email later upgrades the same user to an account.
+  // Empty fields start an anonymous, device-bound user; adding an email later upgrades the
+  // same user to an account.
   const enter = async () => {
     if (busy) return;
     const guest = !email.trim() && !password;
@@ -49,7 +47,7 @@ export default function SignUpScreen() {
           ? await signIn(email.trim(), password)
           : await signUp(email.trim(), password, undefined);
       if (guest) {
-        // Anonymous sign-in disabled in the dashboard: enter anyway, swipes are not recorded.
+        // Anonymous sign-in and the demo account both failed: enter anyway, nothing is kept.
         router.replace('/models');
         return;
       }
@@ -57,9 +55,6 @@ export default function SignUpScreen() {
         setNote(err);
         return;
       }
-      // No handle yet means registration is unfinished: do that step first.
-      const { data } = await supabase.rpc('profile_me');
-      const row = Array.isArray(data) ? data[0] : data;
       router.replace('/models');
     } catch (e) {
       setNote(authMessage(String((e as Error).message ?? e)).toLowerCase());
@@ -84,8 +79,6 @@ export default function SignUpScreen() {
     try {
       const inside = await signInWith();
       if (!inside) return; // window closed
-      const { data } = await supabase.rpc('profile_me');
-      const row = Array.isArray(data) ? data[0] : data;
       router.replace('/models');
     } catch (e) {
       setNote(authMessage(String((e as Error).message ?? e)).toLowerCase());

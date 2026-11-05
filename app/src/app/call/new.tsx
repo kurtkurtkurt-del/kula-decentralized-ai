@@ -25,7 +25,7 @@ const nightAfter = (days: number) => {
 export default function NewCallScreen() {
   const { slug: given } = useLocalSearchParams<{ slug?: string }>();
   const { t } = useLang();
-  const { session, isAnonymous } = useAuth();
+  const { ensureSession } = useAuth();
   const [mine, setMine] = useState<Project[]>([]);
   const [slug, setSlug] = useState<string | null>(given ?? null);
   const [night, setNight] = useState(tonight());
@@ -38,9 +38,9 @@ export default function NewCallScreen() {
   useEffect(() => { kept().then(setMine, () => {}); callAudience().then(setAudience, () => {}); }, []);
   const project = mine.find((p) => p.slug === slug);
   const reached = audience ? [audience.wave1, audience.wave1 + audience.wave2, audience.wave1 + audience.wave2 + audience.wave3][reach - 1] : null;
-  const go = () => {
-    if (!session || isAnonymous) return router.push('/signup');
+  const go = async () => {
     if (!slug) return setSaid(t('call.pick'));
+    if (!(await ensureSession())) return setSaid(t('auth.error.network'));
     setSending(true);
     callCreate(slug, night, reach, note.trim() || null).then((id) => { invalidate('calls'); router.replace({ pathname: '/call/[id]', params: { id } }); }, (e) => { setSaid(serverText(e)); setSending(false); });
   };
@@ -60,7 +60,7 @@ export default function NewCallScreen() {
         <Text style={styles.reach}>{reached !== null ? (reached ? t('call.wave.reached', { n: reached }) : t('call.emptyWave')) : ''}</Text>
       </View>
       <Field label={t('call.note')} value={note} onChangeText={setNote} placeholder={t('call.note.placeholder')} maxLength={140} />
-      <View style={styles.gap}><Button label={sending ? t('call.sending') : session && !isAnonymous ? t('call.createIt') : t('call.signIn')} onPress={go} /></View>
+      <View style={styles.gap}><Button label={sending ? t('call.sending') : t('call.createIt')} onPress={go} /></View>
       <Said text={said} bad />
       <PickerSheet open={picking === 'project'} title={t('call.pick')} options={mine.map((p) => ({ id: p.slug, label: p.title, extra: p.model }))} selected={slug} onSelect={(id) => { setSlug(id); setPicking(null); }} onClose={() => setPicking(null)} note={!mine.length ? t('connect.emptyMine') : undefined} />
       <PickerSheet open={picking === 'night'} title={t('call.when')} options={nights.map((n) => ({ id: n, label: dayLabel(n) }))} selected={night} onSelect={(id) => { setNight(id); setPicking(null); }} onClose={() => setPicking(null)} />

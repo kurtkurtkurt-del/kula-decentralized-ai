@@ -4,7 +4,6 @@ import { StatusBar } from 'expo-status-bar';
 import { router } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import PullDownScroll from '@/components/PullDownScroll';
-import Button from '@/components/Button';
 import Avatar from '@/components/Avatar';
 import { useTabBarSpace } from '@/components/TabBar';
 import { useAuth } from '@/auth/AuthContext';
@@ -30,7 +29,7 @@ export default function ConnectScreen() {
   const tick = useRefreshOnFocus('coops', 'friendsKept', 'kept', 'calls', 'live');
   const [coops, setCoops] = useState<CoopRow[]>([]);
   const [calls, setCalls] = useState<CallInvite[]>([]);
-  const [theirs, setTheirs] = useState<FriendKept[] | null>(null);
+  const [theirsRead, setTheirs] = useState<FriendKept[] | null>(null);
   const [mine, setMine] = useState<Project[]>([]);
   const [live, setLive] = useState<LiveFriend[]>([]);
   const uid = session?.user.id;
@@ -43,6 +42,8 @@ export default function ConnectScreen() {
     friendsLive().then(setLive, () => {});
   }, [uid]);
   useEffect(load, [load, tick]);
+  // a guest counts as signed in; with no session at all the page is the same, only empty
+  const theirs = uid ? theirsRead : [];
 
   const grouped = Object.values(
     (theirs ?? []).reduce<Record<string, FriendKept & { friends: string[] }>>((acc, k) => {
@@ -63,13 +64,7 @@ export default function ConnectScreen() {
         contentContainerStyle={[styles.body, { paddingBottom: tabSpace + insets.bottom + 28 }]}
         showsVerticalScrollIndicator={false}
       >
-        {!session ? (
-          <View style={styles.empty}>
-            <Text style={styles.note}>{t('connect.emptyMineGuest')}</Text>
-            <View style={styles.cta}><Button label={t('word.signup')} onPress={() => router.push('/signup')} /></View>
-          </View>
-        ) : (
-          <>
+        <>
             <View style={styles.headRow}>
               <Text style={styles.section}>{up(t('coops.title'))}</Text>
               <Pressable onPress={() => router.push('/coops/join')} hitSlop={8}><Text style={styles.link}>{t('coops.join')}</Text></Pressable>
@@ -91,7 +86,7 @@ export default function ConnectScreen() {
 
             {calls.length ? (
               <>
-                <Text style={[styles.section, styles.sectionTop]}>{up(t('flow.calls'))}</Text>
+                <Text style={[styles.section, styles.sectionTop]}>{up(t('connect.calls'))}</Text>
                 {calls.map((c) => (
                   <Pressable key={c.id} onPress={() => router.push({ pathname: '/call/[id]', params: { id: c.id } })} style={({ pressed }) => [styles.call, pressed && styles.pressed]}>
                     <View style={styles.callDot} />
@@ -106,7 +101,7 @@ export default function ConnectScreen() {
             ) : null}
 
             <Text style={[styles.section, styles.sectionTop]}>{up(t('connect.withPeople'))}</Text>
-            {theirs === null ? <Text style={styles.note}>{t('flow.loading')}</Text> : null}
+            {theirs === null ? <Text style={styles.note}>{t('word.loading')}</Text> : null}
             {theirs && !theirs.length ? <Text style={styles.note}>{t('connect.emptyNoFriends')}</Text> : null}
             {grouped.map((g) => {
               const out = live.find((l) => l.slug === g.slug);
@@ -128,7 +123,7 @@ export default function ConnectScreen() {
               );
             })}
 
-            <Text style={[styles.section, styles.sectionTop]}>{up(t('deck.yours'))}</Text>
+            <Text style={[styles.section, styles.sectionTop]}>{up(t('connect.yours'))}</Text>
             {!mine.length ? <Text style={styles.note}>{t('connect.emptyMine')}</Text> : null}
             <View style={styles.chips}>
               {mine.map((p) => (
@@ -137,8 +132,7 @@ export default function ConnectScreen() {
                 </Pressable>
               ))}
             </View>
-          </>
-        )}
+        </>
       </PullDownScroll>
     </View>
   );
@@ -149,8 +143,6 @@ const styles = StyleSheet.create({
   band: { position: 'absolute', top: 0, left: 0, right: 0, height: brand.top + 44, backgroundColor: colors.ink, zIndex: 2 },
   title: { position: 'absolute', top: brand.top - 8, left: brand.left, fontFamily: fonts.semibold, fontSize: 30, lineHeight: 32, letterSpacing: -0.9, color: colors.paper },
   body: { paddingTop: brand.top + 48, paddingHorizontal: brand.left },
-  empty: { marginTop: 36 },
-  cta: { marginTop: 20 },
   note: { fontFamily: fonts.regular, fontSize: 14, lineHeight: 20, color: colors.mute, marginTop: 10 },
   headRow: { flexDirection: 'row', alignItems: 'baseline', justifyContent: 'space-between', marginTop: 10 },
   section: { fontFamily: fonts.regular, fontSize: 11, letterSpacing: 1.4, color: colors.mute, marginTop: 10 },
