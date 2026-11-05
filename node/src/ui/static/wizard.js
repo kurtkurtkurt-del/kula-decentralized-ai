@@ -95,7 +95,8 @@ export function next(w, ev) {
   const to = (step, more = {}) => ({ ...w, error: null, ...more, step });
   switch (ev.type) {
     case 'back': { const b = back(w); return b ? to(b) : w; }
-    case 'another': return { ...initial(w.way), returning: false };
+    // one more device (6.11.2026): back to the first question; a phone already used on a cable is skipped
+    case 'another': return { ...initial(w.way), returning: false, used: w.serial && !w.used.includes(w.serial) ? [...w.used, w.serial] : w.used };
     case 'way':
       return { ...initial(ev.way), way: ev.way, step: ev.way === 'cable' ? 'cable-plug' : 'wifi-share' };
     case 'cable': {

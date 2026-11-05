@@ -430,6 +430,7 @@ async function answer() {
   renderThread(true);
   const t0 = performance.now();
   let first = 0, pieces = 0;
+  const said = feed('executor', `question sent to ${MODE_WORD[S.status?.loaded?.mode] ? `the ${MODE_WORD[S.status.loaded.mode]} model` : 'the model'}, waiting for the first word…`, { active: true });
   try {
     await postSse('chat', { messages: history, maxTokens: settings.maxTokens, temperature: settings.temperature }, (ev) => {
       if (typeof ev.t === 'string') { if (!first) first = performance.now() - t0; pieces++; m.content += ev.t; paintLive(); }
@@ -442,6 +443,7 @@ async function answer() {
       m.meta = { ...m.meta, stopped: true, tokens: m.meta.tokens ?? pieces, firstMs: m.meta.firstMs ?? Math.round(first), device: m.meta.device ?? S.status?.loaded?.devices?.[0]?.name, tps: m.meta.tps ?? (pieces ? Math.round((pieces / Math.max(1, ms - first)) * 10000) / 10 : 0) };
     } else m.meta = { error: e.message };
   } finally {
+    feedDone(said, m.meta.error ? `the answer failed: ${m.meta.error}` : `${m.meta.stopped ? 'stopped' : 'answered'}${m.meta.device ? ` on ${m.meta.device}` : ''}${m.meta.tokens ? ` · ${m.meta.tokens} tokens` : ''}${m.meta.tps ? ` · ${m.meta.tps} tok/s` : ''}`);
     S.streaming = null;
     setBusy(false);
     renderThread();
@@ -520,6 +522,39 @@ function updateEmpty() {
   }
 }
 
+
+// ---------- the brain, now (6.11.2026): what the brain is doing this moment, as it does it.
+// Every line comes from real work on this page or on this computer's engine: a look at the
+// devices, the usb cables, a load, an answer, a decision the engine wrote down. A line still
+// running ends in "…" and is rewritten when it is done; the same line twice counts up.
+const FEED = [];
+const FEED_MAX = 80;
+function feed(branch, text, opts = {}) {
+  const now = Date.now();
+  const last = FEED[0];
+  if (!opts.id && last && !last.active && last.branch === branch && last.text === text) { last.n = (last.n || 1) + 1; last.at = now; renderFeed(); return last; }
+  const line = { id: opts.id || null, branch, text, at: opts.at || now, active: !!opts.active, n: 1 };
+  FEED.unshift(line);
+  FEED.length = Math.min(FEED.length, FEED_MAX);
+  renderFeed();
+  return line;
+}
+function feedDone(line, text) { if (!line) return; line.active = false; if (text) line.text = text; line.at = Date.now(); renderFeed(); }
+function renderFeed() {
+  const ol = $('bfeed');
+  if (!ol) return;
+  const items = FEED.map((l) => {
+    const li = el('li', `bf ${l.active ? 'active' : ''} b-${l.branch.replace(/[^a-z]/g, '')}`);
+    const chip = el('span', 'bf-b', l.branch);
+    try { chip.style.setProperty('--c', branchColor(l.branch)); } catch {}
+    li.append(el('time', '', clock(l.at)), chip, el('span', 'bf-t', `${l.text}${l.active ? '' : ''}${l.n > 1 ? ` ×${l.n}` : ''}`));
+    return li;
+  });
+  ol.replaceChildren(...items);
+  if (!items.length) ol.appendChild(el('li', 'none', 'quiet. nothing running.'));
+  $('bfeed-pulse').className = `bfeed-pulse${FEED.some((l) => l.active) ? ' on' : ''}`;
+}
+
 // ---------- the brain (6.11.2026): the twelve branches of the brain map, two by six. A built
 // branch is lit and shows, live, what it does on this computer; one not built yet is dark,
 // says what it will do and stays a promise. A tap opens the branch's page; "all twelve" goes back.
@@ -578,16 +613,42 @@ const BRANCHES = [
   { n: 12, id: 'advisor', name: 'advisor', built: false, what: 'will suggest: which model, which devices, which night, before you ask.' },
 ];
 
+// a colour and a sign for each branch (from kula's palette: terracotta, sage, gold, clay, and
+// the dusty blue of a cable), drawn faint inside its tile like the devices bubble does
+const BRANCH_LOOK = {
+  senses: ['#5b7a55', ['M2 10s3-5.5 8-5.5S18 10 18 10s-3 5.5-8 5.5S2 10 2 10z', 'M10 12.3a2.3 2.3 0 1 0 0-4.6 2.3 2.3 0 0 0 0 4.6z']],
+  memory: ['#8a5a6e', ['M4 4.5h12v11H4z', 'M4 8h12M4 11.5h12']],
+  forecast: ['#b07d3f', ['M3 16.5h14', 'M4 13l4-4 3 2.5 5-6', 'M13.5 5.5H16V8']],
+  learning: ['#4a7f7a', ['M15.5 9a5.5 5.5 0 0 0-10-2.5', 'M4.5 4v3h3', 'M4.5 11a5.5 5.5 0 0 0 10 2.5', 'M15.5 16v-3h-3']],
+  connections: ['#4f7397', ['M5.5 7.5a2.5 2.5 0 1 1 0 5 2.5 2.5 0 0 1 0-5z', 'M14.5 7.5a2.5 2.5 0 1 1 0 5 2.5 2.5 0 0 1 0-5z', 'M8 10h4']],
+  planner: ['#c86a51', ['M3.5 4.5h5v5h-5zM11.5 4.5h5v5h-5zM7.5 11.5h5v5h-5z', 'M6 9.5v2h1.5M14 9.5v2h-1.5']],
+  executor: ['#9b5b3a', ['M11 2.5 4.5 11H10l-1 6.5L15.5 9H10z']],
+  trust: ['#6b7a3c', ['M10 2.5 16 5v4.5c0 4-2.6 6.6-6 8-3.4-1.4-6-4-6-8V5z', 'M7.3 10l2 2 3.5-4']],
+  limits: ['#b4513a', ['M10 3a1.8 1.8 0 0 1 1.8 1.8v6.8a3.5 3.5 0 1 1-3.6 0V4.8A1.8 1.8 0 0 1 10 3z', 'M10 9v5']],
+  models: ['#8b6a4a', ['M6 6h8v8H6z', 'M8.5 3.5v2.5M11.5 3.5v2.5M8.5 14v2.5M11.5 14v2.5M3.5 8.5h2.5M3.5 11.5h2.5M14 8.5h2.5M14 11.5h2.5']],
+  review: ['#5f6b7a', ['M8.5 3.5a5 5 0 1 1 0 10 5 5 0 0 1 0-10z', 'M12.2 12.2 16.5 16.5']],
+  advisor: ['#a08445', ['M10 2.8a4.7 4.7 0 0 0-2.8 8.5c.6.5.9 1.1.9 1.8v.6h3.8v-.6c0-.7.3-1.3.9-1.8A4.7 4.7 0 0 0 10 2.8z', 'M8.2 16h3.6M8.8 17.8h2.4']],
+};
+const branchColor = (name) => { const b = BRANCHES.find((x) => x.id === name || x.name === name); return b ? BRANCH_LOOK[b.id][0] : 'var(--meta)'; };
+
+function openBranch(id) {
+  brainOpen = id;
+  const br = $('brain');
+  if (br.classList.contains('compact')) { br.classList.remove('compact'); br.scrollTo({ top: 0, behavior: 'smooth' }); }
+  renderBrain();
+}
+
 function renderBrain() {
   const grid = $('bgrid');
   if (!grid) return;
   const built = BRANCHES.filter((b) => b.built).length;
   $('brain-sub').textContent = `${built} of 12 built`;
-  if (!S.models?.length && !renderBrain.asked) { renderBrain.asked = true; getJson('models').then((m) => { S.models = m; renderBrain(); }).catch(() => {}); }
+  if (!S.models?.length && !renderBrain.asked) { renderBrain.asked = true; getJson('models').then((m) => { S.models = m; feed('models', `${m.length} models in the list; a file is checked by sha256 before it runs`); renderBrain(); }).catch(() => {}); }
   const open = BRANCHES.find((b) => b.id === brainOpen) ?? null;
   grid.hidden = !!open;
   $('bdetail').hidden = !open;
   if (open) {
+    $('bdetail').style.setProperty('--c', BRANCH_LOOK[open.id][0]);
     $('bd-n').textContent = String(open.n);
     $('bd-title').textContent = open.name;
     $('bd-state').textContent = open.built ? 'live' : 'not built yet';
@@ -599,19 +660,51 @@ function renderBrain() {
   const tiles = BRANCHES.map((b) => {
     const t = el('button', `btile ${b.built ? 'on' : 'off'}`);
     t.type = 'button';
+    t.style.setProperty('--c', BRANCH_LOOK[b.id][0]);
+    const mark = svg(BRANCH_LOOK[b.id][1]);
+    mark.classList.add('bt-mark');
+    t.appendChild(mark);
+    t.title = b.name;
     t.setAttribute('role', 'listitem');
     const busy = b.id === 'executor' && (S.status?.loaded?.devices ?? []).some((d) => d.busy) || b.id === 'planner' && !!S.status?.loading;
     t.append(el('span', 'bt-n', String(b.n)), el('b', '', b.name), el('span', 'bt-stat', b.built ? b.stat() : 'not built yet'));
     if (busy) t.appendChild(el('span', 'dot busy bt-live'));
-    t.addEventListener('click', () => { brainOpen = b.id; renderBrain(); });
+    t.addEventListener('click', () => openBranch(b.id));
     return t;
   });
   grid.replaceChildren(...tiles);
 }
 $('bback').addEventListener('click', () => { brainOpen = null; renderBrain(); });
+$('brain').addEventListener('scroll', () => {
+  const br = $('brain');
+  if (br.scrollTop > 60 && !br.classList.contains('compact')) br.classList.add('compact');
+  else if (br.scrollTop <= 2 && br.classList.contains('compact')) br.classList.remove('compact');
+}, { passive: true });
 
+
+// what changed in the engine since the last look, said in the feed
+function brainWatch(was, st) {
+  if (!st) return;
+  for (const d of st.decisions ?? []) if (d.at > seenDecision) { seenDecision = d.at; if (was) feed('memory', `noted: ${d.text}`, { at: d.at }); }
+  if (st.loading && !loadLine) loadLine = feed('planner', `loading ${st.loading.model} (${MODE_WORD[st.loading.mode] || st.loading.mode})…`, { active: true });
+  if (st.loading && loadLine && st.loading.line) { loadLine.text = `loading ${st.loading.model}: ${st.loading.line}…`; renderFeed(); }
+  if (!st.loading && loadLine) { feedDone(loadLine, st.loaded ? `${st.loaded.model.name} is loaded, ${MODE_WORD[st.loaded.mode] || st.loaded.mode}, on ${st.loaded.devices.length} device${st.loaded.devices.length === 1 ? '' : 's'}` : 'the load stopped'); loadLine = null; }
+  if (was?.loaded && !st.loaded) feed('planner', `${was.loaded.model.name} unloaded`);
+  const busy = (st.loaded?.devices ?? []).filter((d) => d.busy);
+  if (busy.length && !answerLine) answerLine = feed('executor', `answering on ${busy.map((d) => d.name).join(', ')}…`, { active: true });
+  if (!busy.length && answerLine) {
+    const d = (st.loaded?.devices ?? []).find((x) => answerLine.text.includes(x.name));
+    feedDone(answerLine, `answered${d?.tps ? ` at ${d.tps} tok/s` : ''} on ${d?.name ?? 'the device'}`); answerLine = null;
+  }
+}
+
+let seenDecision = 0;
+let loadLine = null;
+let answerLine = null;
 async function refreshStatus() {
+  const was = S.status;
   try { S.status = await getJson('status'); } catch { return; }
+  brainWatch(was, S.status);
   whereText();
   updateEmpty();
   if ($('app').classList.contains('brain-open')) renderBrain();
@@ -624,6 +717,7 @@ function setSide(open) {
   $('app').classList.toggle('side-hidden', !open);
 }
 function setBrain(open) {
+  if (!open && matchMedia('(min-width: 861px)').matches) open = true; // wide: always open
   $('app').classList.toggle('brain-open', open);
   $('brain-toggle').setAttribute('aria-pressed', String(open));
   try { localStorage.setItem('kula.chat.brain', open ? '1' : '0'); } catch {}
@@ -645,7 +739,16 @@ $('open-connect').addEventListener('click', openConnect);
 async function refreshPeers(probe) {
   if (isGuest()) return;
   const before = new Set(S.peers.map((p) => p.id));
-  try { S.peers = probe ? await postJson('peers/probe') : await getJson('peers'); } catch (e) { toast(e.message); }
+  const look = probe && S.peers.length ? feed('senses', `checking ${S.peers.length} link${S.peers.length === 1 ? '' : 's'} to the devices…`, { active: true }) : null;
+  try { S.peers = probe ? await postJson('peers/probe') : await getJson('peers'); } catch (e) { toast(e.message); feedDone(look, `could not check: ${e.message}`); }
+  if (look?.active) {
+    const ok = S.peers.filter((p) => p.reach?.ok);
+    const best = ok.filter((p) => p.reach.ms).sort((a, b) => a.reach.ms - b.reach.ms)[0];
+    feedDone(look, `${ok.length} of ${S.peers.length} answer${best ? `, fastest ${best.name} in ${best.reach.ms} ms` : ''}`);
+    const tls = S.peers.filter((p) => p.tls && p.reach?.ok).length;
+    if (ok.length) feed('trust', `${tls} of ${ok.length} answering links are tls with the pinned certificate`);
+  }
+  for (const p of S.peers) if (before.size && !before.has(p.id)) feed('connections', `paired with ${p.name} (${p.cable ? 'cable' : p.far ? 'relay' : 'wi-fi'})`);
   const fresh = before.size ? S.peers.filter((p) => !before.has(p.id)).map((p) => p.id) : [];
   if (fresh.length && settings.peers.length && settings.mode !== 'phone') { settings.peers = [...new Set([...settings.peers, ...fresh])]; saveSettings(); }
   renderPeers();
@@ -805,7 +908,12 @@ async function refreshCable() {
   wizCable();
   // a cable pulled or plugged in: the device rows below say so too
   const plugged = (S.cable.devices || []).map((d) => `${d.serial}:${d.state}`).join(',');
-  if (plugged !== cablePlugged) { cablePlugged = plugged; if (S.peers.some((p) => p.cable)) refreshPeers(false); }
+  if (plugged !== cablePlugged) {
+    const old = new Map((cablePlugged || '').split(',').filter(Boolean).map((x) => x.split(':')));
+    const now = new Map((S.cable.devices || []).map((d) => [d.serial, d]));
+    for (const [serial, d] of now) if (old.get(serial) !== d.state) feed('connections', d.state === 'device' ? `${d.name} is on a usb cable, ready` : `${d.name} on the cable: ${STATE_WORDS[d.state] || d.state}`);
+    for (const [serial] of old) if (!now.has(serial) && cablePlugged !== null) feed('connections', `a cable was pulled (${serial.slice(0, 6)}…)`);
+    cablePlugged = plugged; if (S.peers.some((p) => p.cable)) refreshPeers(false); }
 }
 
 function cableRow(serial) {
@@ -1283,7 +1391,7 @@ const VIEWS = {
     const name = S.peers.find((x) => x.id === W.peerId)?.name ?? 'your phone';
     return [q(`connected ✓ ${name}`),
       para(W.way === 'cable' ? 'over the usb cable. keep it plugged in while you chat.' : 'over this network. the phone keeps this computer for next time.'),
-      row(btn('next: pick a model', 'primary big', () => go({ type: 'continue' })))];
+      row(btn('next: pick a model', 'primary big', () => go({ type: 'continue' })), btn('+ add one more', 'pill big', () => go({ type: 'another' })))];
   },
 
   'wifi-share': () => [
@@ -1731,7 +1839,10 @@ for (const b of document.querySelectorAll('#set-theme button')) b.addEventListen
 // ---------- start
 
 if (matchMedia('(max-width: 860px)').matches) setSide(false);
-try { if (localStorage.getItem('kula.chat.brain') !== '0' && !matchMedia('(max-width: 860px)').matches) setBrain(true); } catch { setBrain(true); }
+// the brain is always open on a wide screen (6.11.2026); on a narrow one it is a drawer
+const WIDE = matchMedia('(min-width: 861px)');
+if (WIDE.matches) setBrain(true);
+WIDE.addEventListener('change', () => setBrain(WIDE.matches));
 const fromHash = location.hash.slice(1);
 newChat();
 // who is this: the owner at 127.0.0.1, or a guest who came in with an invite
@@ -1750,4 +1861,5 @@ document.addEventListener('visibilitychange', () => { if (!document.hidden) refr
 updateSend();
 
 // the senses look again every 15 s while the brain shows (a probe of every device)
-setInterval(() => { if (!document.hidden && $('app').classList.contains('brain-open') && !isGuest()) refreshPeers(true); }, 15000);
+setInterval(() => { if (!document.hidden && $('app').classList.contains('brain-open') && !isGuest() && S.peers.length) { feed('routine', 'the 15 s round: senses look at every device'); refreshPeers(true); } }, 15000);
+setInterval(() => { if (!document.hidden && $('app').classList.contains('brain-open') && !isGuest()) refreshCable(); }, 4000);
