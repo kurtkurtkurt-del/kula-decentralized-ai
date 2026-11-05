@@ -44,6 +44,8 @@ type Module = {
   workerStatus(): Promise<WorkerStatus>;
   gateLedger(limit: number): Promise<string[]>;
   keepScreenOn(on: boolean): Promise<void>;
+  /** FLAG_SECURE: the window cannot be screenshotted or recorded while a qr with a code is shown. */
+  secureScreen(on: boolean): Promise<void>;
   requestBatteryUnrestricted(): Promise<boolean>;
   addListener(event: 'onToken', fn: (e: { id: number; text: string }) => void): EventSubscription;
   addListener(event: 'onDone', fn: (e: DoneEvent) => void): EventSubscription;

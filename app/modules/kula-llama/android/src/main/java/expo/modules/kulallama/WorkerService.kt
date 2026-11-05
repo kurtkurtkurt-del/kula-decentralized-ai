@@ -157,6 +157,8 @@ class WorkerService : Service() {
       var lastAudit = 0L
       var lastWarn = ""
       while (running) {
+        // a pairing code nobody used in PIN_TTL_MS is replaced here, so the qr on screen never shows a dead one
+        tls?.let { if (it.expired(System.currentTimeMillis())) it.spend() }
         val peer = gate?.currentPeer ?: Native.workerPeer()
         val held = residentMb()
         writeStatus("running", peer = peer, heldMb = held)

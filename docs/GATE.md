@@ -121,6 +121,9 @@ S → C   OK <proof_s>     pin:    HMAC-SHA256(pin, "nonce_s|nonce_c|kanal|fp_s|
 | `channel closed` | kanalın yerel hedefi yok (model yüklü değil vb.) |
 | `busy` | `rpc` kanalında başka bir eş bağlı |
 | `target down` | 127.0.0.1'deki hedef bağlantıyı almadı |
+| `overloaded` | aynı anda 32'den fazla bağlantı el sıkışmada (hello beklenmeden, anında) |
+| `no v1` | sunucunun v1 gizli anahtarı yok (`kula-node share --tls`, `--secret` verilmedikçe); düz hello reddedilir |
+| `pin expired` | eşleşme kodu 10 dakikadan eski; o anda yenisi üretilir, bir sonraki QR onu taşır |
 
 İstemci tarafı hataları: `fingerprint mismatch` (sunucu sertifikası QR'dakinden farklı; hello'ya
 hiç gidilmez), `tls …` (el sıkışma hatası), `server proof wrong`.
