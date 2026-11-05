@@ -65,7 +65,10 @@
     "passport:sync": "node tools/passport-core.mjs sync",
     "passport:check": "node tools/passport-core.mjs check",
     "release:check": "node tools/release-env.mjs",
-    "apk": "node tools/apk.mjs"
+    "apk": "node tools/apk.mjs",
+    "i18n": "jest src/__tests__/i18n.test.ts --verbose",
+    "coverage": "jest --coverage --collectCoverageFrom=src/llm/**/*.ts --collectCoverageFrom=src/night/**/*.ts --coverageReporters=text",
+    "gate": "npx tsc --noEmit && npx expo lint && jest && npm run i18n"
   },
   "private": true,
   "devDependencies": {
