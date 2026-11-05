@@ -597,3 +597,29 @@ ul.wiz-steps li::before { content: "› "; color: var(--meta); }
 .bt-viz .marks i { width: 14px; height: 14px; border-radius: 50%; border: 1.5px solid var(--line2); position: relative; }
 .bt-viz .marks i.ok { border-color: var(--sage); background: color-mix(in srgb, var(--sage) 16%, transparent); }
 .bt-viz .marks i.ok::after { content: ''; position: absolute; left: 4px; top: 1.5px; width: 3.5px; height: 6.5px; border: solid var(--sage); border-width: 0 1.5px 1.5px 0; transform: rotate(45deg); }
+
+/* night projects (6.11.2026) */
+.plan-btn { display: inline-flex; align-items: center; gap: 6px; }
+.plan-btn svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+.pj-when { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.pj-select { width: 100%; font: inherit; padding: 9px 10px; border: 1px solid var(--line2); border-radius: 10px; background: var(--card); color: var(--words); }
+.proj-banner { max-width: 760px; margin: 14px auto 0; padding: 12px 14px; border-radius: 14px; border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent); background: color-mix(in srgb, var(--accent) 7%, var(--card)); display: grid; gap: 4px; position: sticky; top: 8px; z-index: 2; }
+.proj-banner.done { border-color: color-mix(in srgb, var(--sage) 40%, transparent); background: color-mix(in srgb, var(--sage) 8%, var(--card)); }
+.proj-banner.failed, .proj-banner.missed { border-color: color-mix(in srgb, var(--red) 40%, transparent); background: color-mix(in srgb, var(--red) 6%, var(--card)); }
+.proj-banner.cancelled { border-color: var(--line2); background: var(--card); }
+.pb-head { display: flex; align-items: center; gap: 8px; }
+.pb-head b { font-weight: 600; }
+.pb-moon { width: 14px; height: 14px; border-radius: 50%; box-shadow: inset -4px -2px 0 0 var(--accent); transform: rotate(-20deg); flex: none; }
+.pb-state { font: 500 11px var(--mono); padding: 1px 8px; border-radius: 999px; background: var(--accent-soft); color: var(--accent); }
+.proj-banner.running .pb-state { animation: pulse 1.4s ease-in-out infinite; }
+.pb-cancel { margin-left: auto; font-size: 12.5px; }
+.pb-sub { font-size: 13px; color: var(--mute); }
+.pb-bar { height: 4px; border-radius: 3px; background: color-mix(in srgb, var(--accent) 15%, transparent); overflow: hidden; margin-top: 4px; }
+.pb-bar span { display: block; height: 100%; background: var(--accent); transition: width .5s ease; }
+.composer.locked { opacity: 0.6; }
+.composer.locked textarea { cursor: not-allowed; }
+.chat-item .open.proj { display: flex; align-items: center; gap: 7px; }
+.moon { width: 10px; height: 10px; border-radius: 50%; box-shadow: inset -3px -1.5px 0 0 var(--accent); transform: rotate(-20deg); flex: none; }
+.moon.running { animation: pulse 1.4s ease-in-out infinite; }
+.moon.done { box-shadow: inset -3px -1.5px 0 0 var(--sage); }
+@media (max-width: 560px) { .pj-when { grid-template-columns: 1fr; } .plan-btn { font-size: 0; gap: 0; padding: 7px 9px; } .plan-btn svg { width: 16px; height: 16px; } }

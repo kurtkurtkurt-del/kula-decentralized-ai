@@ -43,6 +43,10 @@
         <span class="where-text" id="where-text">no model yet</span>
       </button>
       <div class="top-right">
+        <button type="button" class="pill owner-only plan-btn" id="open-project" title="plan a night project: it runs on your devices while you sleep">
+          <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M14.5 12.6A6 6 0 1 1 8.4 4.5a4.8 4.8 0 0 0 6.1 8.1z"/></svg>
+          plan a project
+        </button>
         <button type="button" class="pill owner-only devices-btn" id="open-devices" title="add and see devices">devices <b id="dev-count"></b></button>
         <button type="button" class="icon owner-only" id="open-invite" aria-label="invite a device on this wi-fi" title="invite a device">
           <svg viewBox="0 0 20 20" aria-hidden="true"><rect x="3.5" y="3.5" width="5" height="5" rx="1"/><rect x="11.5" y="3.5" width="5" height="5" rx="1"/><rect x="3.5" y="11.5" width="5" height="5" rx="1"/><path d="M11.5 11.5h2v2M16.5 11.5v5h-5M13.5 16.5v-1"/></svg>
@@ -54,6 +58,7 @@
     </header>
 
     <section class="thread" id="thread" aria-live="polite">
+      <div class="proj-banner" id="proj-banner" hidden></div>
       <div class="thread-inner" id="messages"></div>
       <div class="empty" id="empty">
         <h1 id="hello">what's on your mind?</h1>
@@ -228,6 +233,49 @@
       <div class="row end"><button type="button" class="ghost" id="invite-new">new invite</button></div>
     </section>
     <p class="msg" id="invite-msg" role="status"></p>
+  </div>
+</dialog>
+
+<!-- a night project (6.11.2026): what, when, which model, how, on which devices -->
+<dialog class="sheet narrow" id="project" aria-labelledby="project-title">
+  <form method="dialog" class="sheet-head">
+    <h2 id="project-title">plan a project</h2>
+    <button class="icon" value="close" aria-label="close">
+      <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M5.5 5.5l9 9M14.5 5.5l-9 9"/></svg>
+    </button>
+  </form>
+  <div class="sheet-body">
+    <p class="hint">it gets its own chat. until its time comes the chat only waits; then your devices work on it for the hours you give, and the morning report lands in that chat.</p>
+    <section class="block">
+      <label class="field"><span>what is it</span><input id="pj-title" maxlength="80" placeholder="a study plan for the exam"></label>
+      <label class="field"><span>what should it do</span><textarea id="pj-request" rows="5" maxlength="4000" placeholder="read my notes below and make a two-week plan, with a short summary of each topic and ten questions per topic…"></textarea></label>
+      <div class="pj-when">
+        <label class="field"><span>from</span><input type="datetime-local" id="pj-start"></label>
+        <label class="field"><span>until</span><input type="datetime-local" id="pj-end"></label>
+      </div>
+      <p class="hint" id="pj-hours"></p>
+    </section>
+    <section class="block">
+      <h3>the model</h3>
+      <select id="pj-model" class="pj-select" aria-label="model"></select>
+    </section>
+    <section class="block">
+      <h3>how it runs</h3>
+      <div class="seg" id="pj-mode" role="radiogroup" aria-label="how it runs">
+        <button type="button" role="radio" data-mode="apart">apart</button>
+        <button type="button" role="radio" data-mode="split">split</button>
+        <button type="button" role="radio" data-mode="phone">on the phone</button>
+        <button type="button" role="radio" data-mode="here">here</button>
+      </div>
+      <p class="hint" id="pj-mode-note"></p>
+    </section>
+    <section class="block" id="pj-devices-block">
+      <h3>on which devices</h3>
+      <div class="pick-list" id="pj-devices"></div>
+    </section>
+    <p class="hint warn">keep this Mac on power with the lid open: kula keeps it from sleeping until the project ends. phones stay on their cables (or on this wi-fi) with kula installed.</p>
+    <p class="msg" id="pj-msg" role="status"></p>
+    <div class="row end"><button type="button" class="primary big" id="pj-go">plan it</button></div>
   </div>
 </dialog>
 

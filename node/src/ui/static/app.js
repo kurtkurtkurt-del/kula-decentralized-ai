@@ -168,6 +168,8 @@ function renderChatList() {
     }
     const open = el('button', 'open', c.title);
     open.type = 'button';
+    const pj = projectOf(c.id);
+    if (pj) { open.classList.add('proj'); open.prepend(el('span', `moon ${pj.state}`)); }
     open.title = c.title;
     open.addEventListener('click', () => openChat(c.id));
     const more = el('button', 'more');
@@ -210,6 +212,7 @@ async function openChat(id) {
     history.replaceState(null, '', `#${c.id}`);
     renderThread(true);
     renderChatList();
+    renderProjectBanner();
     if (matchMedia('(max-width: 860px)').matches) setSide(false);
   } catch (e) { toast(e.message); }
 }
@@ -222,6 +225,7 @@ function newChat() {
   history.replaceState(null, '', location.pathname);
   renderThread(true);
   renderChatList();
+  renderProjectBanner();
   $('input').focus();
 }
 
@@ -235,6 +239,140 @@ async function saveChat() {
     loadChats();
   } catch (e) { toast(`not saved: ${e.message}`); }
 }
+
+
+// ---------- night projects (6.11.2026): planned here, run by kula-node while you sleep. the
+// project's chat stays closed for new messages until it has run; the parts and the morning
+// report arrive in it. the page asks again every few seconds while one is open.
+S.projects = [];
+const projectOf = (chatId) => S.projects.find((p) => p.chatId === chatId) ?? null;
+const PJ_MODE_NOTE = { apart: 'every device runs its own copy; the parts go to whichever is free.', split: 'one model across the devices you tick: bigger models fit, each word crosses the cables.', phone: 'one phone runs it; this Mac only carries the words.', here: 'only this Mac; no phone needed.' };
+let pjMode = 'apart';
+const pjPicked = new Set();
+async function loadProjects() {
+  if (isGuest()) return;
+  try { S.projects = await getJson('projects'); } catch { return; }
+  renderChatList();
+  renderProjectBanner();
+}
+const two = (n) => String(n).padStart(2, '0');
+const localInput = (ms) => { const d = new Date(ms); return `${d.getFullYear()}-${two(d.getMonth() + 1)}-${two(d.getDate())}T${two(d.getHours())}:${two(d.getMinutes())}`; };
+const whenWords = (ms) => { const d = new Date(ms), now = new Date(); const day = d.toDateString() === now.toDateString() ? 'today' : new Date(now.getTime() + 86400000).toDateString() === d.toDateString() ? 'tomorrow' : d.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' }).toLowerCase(); return `${day} ${two(d.getHours())}:${two(d.getMinutes())}`; };
+function pjHours() {
+  const a = new Date($('pj-start').value).getTime(), b = new Date($('pj-end').value).getTime();
+  $('pj-hours').textContent = Number.isFinite(a) && Number.isFinite(b) && b > a ? `${((b - a) / 3600000).toFixed(1).replace(/\.0$/, '')} hours, from ${whenWords(a)} until ${whenWords(b)}` : '';
+}
+function renderPjDevices() {
+  const box = $('pj-devices');
+  box.replaceChildren();
+  $('pj-devices-block').hidden = pjMode === 'here';
+  const list = S.peers.filter((p) => !(pjMode === 'split' && p.far));
+  if (!list.length) { box.appendChild(el('p', 'none', 'no device yet: add one under devices (top right).')); return; }
+  for (const p of list) {
+    const l = el('label', `pick${pjPicked.has(p.id) ? ' on' : ''}`);
+    const c = el('input');
+    c.type = pjMode === 'phone' ? 'radio' : 'checkbox';
+    c.name = 'pj-dev';
+    c.checked = pjPicked.has(p.id);
+    c.addEventListener('change', () => { if (pjMode === 'phone') pjPicked.clear(); c.checked ? pjPicked.add(p.id) : pjPicked.delete(p.id); renderPjDevices(); });
+    l.append(c, el('b', '', p.name), viaTag(p), el('span', 'sub', p.reach ? (p.reach.ok ? `reachable now${p.ram ? ` · ${(p.ram / 1024).toFixed(1)} GB free` : ''}` : 'not reachable now: kula tries again at the start') : 'not checked yet'));
+    box.appendChild(l);
+  }
+}
+function setPjMode(m) {
+  pjMode = m;
+  for (const b of document.querySelectorAll('#pj-mode button')) b.setAttribute('aria-checked', String(b.dataset.mode === m));
+  $('pj-mode-note').textContent = PJ_MODE_NOTE[m];
+  if (m === 'phone' && pjPicked.size > 1) { const first = [...pjPicked][0]; pjPicked.clear(); pjPicked.add(first); }
+  renderPjDevices();
+}
+async function openProject() {
+  if (isGuest()) return;
+  const d = $('project');
+  $('pj-msg').textContent = '';
+  $('pj-msg').className = 'msg';
+  // tonight 01:00 until 06:00 (tomorrow's when it is already past one)
+  const t = new Date(); t.setHours(1, 0, 0, 0); if (t.getTime() < Date.now() + 10 * 60000) t.setDate(t.getDate() + 1);
+  if (!$('pj-start').value) { $('pj-start').value = localInput(t.getTime()); $('pj-end').value = localInput(t.getTime() + 5 * 3600000); }
+  pjHours();
+  try { if (!S.models.length) S.models = await getJson('models'); } catch {}
+  const sel = $('pj-model');
+  sel.replaceChildren(...S.models.map((m) => { const o = el('option', '', `${m.name}${m.size ? ` · ${(m.size / 1e9).toFixed(2)} GB` : ''}`); o.value = m.id; return o; }));
+  const loadedId = S.status?.loaded?.model?.id;
+  sel.value = loadedId && S.models.some((m) => m.id === loadedId) ? loadedId : settings.model && S.models.some((m) => m.id === settings.model) ? settings.model : (S.models[0]?.id ?? '');
+  if (!pjPicked.size) for (const p of S.peers) if (p.reach?.ok && !p.far) pjPicked.add(p.id);
+  setPjMode(pjMode);
+  d.showModal();
+  refreshPeers(true).then(() => renderPjDevices());
+  setTimeout(() => $('pj-title').focus(), 0);
+}
+$('open-project').addEventListener('click', openProject);
+for (const b of document.querySelectorAll('#pj-mode button')) b.addEventListener('click', () => setPjMode(b.dataset.mode));
+$('pj-start').addEventListener('input', pjHours);
+$('pj-end').addEventListener('input', pjHours);
+$('pj-go').addEventListener('click', async () => {
+  const body = {
+    title: $('pj-title').value.trim(), request: $('pj-request').value.trim(),
+    start: new Date($('pj-start').value).getTime(), end: new Date($('pj-end').value).getTime(),
+    model: $('pj-model').value, mode: pjMode, peers: pjMode === 'here' ? [] : [...pjPicked], ctx: settings.ctx,
+  };
+  const btn = $('pj-go');
+  btn.disabled = true;
+  try {
+    const p = await postJson('projects/new', body);
+    feed('planner', `night project planned: ${p.title}, ${whenWords(p.start)} until ${whenWords(p.end)}`);
+    $('project').close();
+    $('pj-title').value = ''; $('pj-request').value = '';
+    await loadProjects();
+    await loadChats();
+    openChat(p.chatId);
+  } catch (e) { $('pj-msg').textContent = e.message; $('pj-msg').className = 'msg bad'; }
+  finally { btn.disabled = false; }
+});
+
+// the open chat when it belongs to a project: a band on top, the composer closed until it has run
+function renderProjectBanner() {
+  const b = $('proj-banner');
+  const p = S.chat ? projectOf(S.chat.id) : null;
+  const locked = !!p && (p.state === 'waiting' || p.state === 'running');
+  input.disabled = locked;
+  input.placeholder = locked ? (p.state === 'waiting' ? `this chat belongs to a night project: it opens after ${whenWords(p.end)}` : 'the night project is working: read along, the report comes here') : 'message kula';
+  $('composer').classList.toggle('locked', locked);
+  updateSend();
+  if (!p) { b.hidden = true; return; }
+  b.hidden = false;
+  b.className = `proj-banner ${p.state}`;
+  const peers = p.peers.map((id) => S.peers.find((x) => x.id === id)?.name ?? id);
+  const model = S.models.find((m) => m.id === p.model)?.name ?? p.model;
+  const head = el('div', 'pb-head');
+  head.append(el('span', 'pb-moon'), el('b', '', p.title), el('span', 'pb-state', { waiting: 'waiting', running: 'working', done: 'done', failed: 'stopped', cancelled: 'cancelled', missed: 'missed' }[p.state] || p.state));
+  const line = p.state === 'waiting' ? `starts ${whenWords(p.start)} · until ${whenWords(p.end)}`
+    : p.state === 'running' ? `${p.line || 'working'}${p.parts ? ` · ${p.done || 0} of ${p.parts} parts` : ''} · until ${whenWords(p.end)}`
+    : p.state === 'done' ? `finished ${whenWords(p.endedAt || p.end)} · the morning report is below`
+    : p.state === 'failed' ? `stopped: ${p.error || 'see below'}` : p.state === 'missed' ? 'the Mac was asleep at the time' : 'cancelled';
+  const sub = el('div', 'pb-sub', `${line} · ${model} · ${p.mode}${peers.length ? ` · ${peers.join(', ')}` : ''}`);
+  b.replaceChildren(head, sub);
+  if (p.state === 'running' && p.parts) { const bar = el('div', 'pb-bar'); const f = el('span'); f.style.width = `${Math.round(((p.done || 0) / p.parts) * 100)}%`; bar.appendChild(f); b.appendChild(bar); }
+  if (locked) {
+    const x = el('button', 'link pb-cancel', p.state === 'waiting' ? 'cancel the project' : 'stop it');
+    x.type = 'button';
+    x.addEventListener('click', async () => { try { await postJson('projects/cancel', { id: p.id }); await loadProjects(); } catch (e) { toast(e.message); } });
+    head.appendChild(x);
+  }
+}
+// while a project waits or works: its list, and its chat when open, asked again
+setInterval(async () => {
+  if (document.hidden || isGuest() || !S.projects.some((p) => p.state === 'waiting' || p.state === 'running')) return;
+  const before = S.chat ? projectOf(S.chat.id) : null;
+  await loadProjects();
+  const p = S.chat ? projectOf(S.chat.id) : null;
+  if (p && !S.streaming) {
+    try {
+      const c = await getJson(`chats/${p.chatId}`);
+      if (S.chat?.id === p.chatId && (c.messages.length !== S.chat.messages.length || before?.state !== p.state)) { S.chat.messages = c.messages; renderThread(true); }
+    } catch {}
+  }
+}, 8000);
 
 // ---------- the thread
 
@@ -465,7 +603,7 @@ function setBusy(on) {
 
 const input = $('input');
 function grow(t) { t.style.height = 'auto'; t.style.height = `${Math.min(t.scrollHeight, window.innerHeight * 0.4)}px`; }
-function updateSend() { $('send').disabled = !input.value.trim() || !!S.streaming; }
+function updateSend() { $('send').disabled = !input.value.trim() || !!S.streaming || input.disabled; }
 input.addEventListener('input', () => { grow(input); updateSend(); });
 input.addEventListener('keydown', (e) => {
   if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); $('composer').requestSubmit(); }
@@ -474,6 +612,8 @@ $('composer').addEventListener('submit', (e) => {
   e.preventDefault();
   const text = input.value.trim();
   if (!text || S.streaming) return;
+  const pj = S.chat ? projectOf(S.chat.id) : null;
+  if (pj && (pj.state === 'waiting' || pj.state === 'running')) return toast('this chat opens after the night project has run');
   input.value = '';
   grow(input);
   updateSend();
@@ -989,6 +1129,7 @@ $('open-devices').addEventListener('click', openDevices);
 $('devices').addEventListener('click', (e) => { if (e.target === $('devices')) $('devices').close(); }); // a click on the backdrop
 $('devices').addEventListener('close', () => stopScan());
 refreshPeers(false); // the count on the devices button from the start
+loadProjects();
 
 
 // ---------- connect: phones on a usb cable

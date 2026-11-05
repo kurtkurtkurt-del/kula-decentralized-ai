@@ -10,6 +10,8 @@ import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
 import qrcode from 'qrcode-terminal';
 import { Engine } from './engine.js';
+import { ChatStore } from './store.js';
+import { ProjectRunner } from './projects.js';
 import { startUi, loadOrCreateToken, loadOrCreatePrefix, UI_PORT, PREFIX_RE } from './server.js';
 import { installMac, uninstallMac, macPaths, type Run } from './macapp.js';
 import { home, packageRoot } from '../paths.js';
@@ -163,7 +165,10 @@ export async function uiCommand(flags: Flags, deps: UiDeps = {}): Promise<number
   const token = loadOrCreateToken(flags['new-token'] === true);
   let ui;
   try {
-    ui = await startUi({ port, engine, token, prefix, log, onInvite: printInvite });
+    const store = new ChatStore();
+    const projects = new ProjectRunner(engine, store, undefined, { log });
+    ui = await startUi({ port, engine, store, token, prefix, log, onInvite: printInvite, projects });
+    projects.start();
   } catch (e) {
     await engine.close();
     if ((e as NodeJS.ErrnoException).code === 'EADDRINUSE') {
