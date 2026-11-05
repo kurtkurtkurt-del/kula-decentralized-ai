@@ -18,6 +18,7 @@ usage:
       --secret <hex>    cluster secret (default: a fresh one each run)
       --lie-ram <MB>    advertise a false amount of free ram (for audit tests)
       --no-qr           print the json payload only
+      --dashboard <n>   local dashboard port on 127.0.0.1 (default 50580); --no-dashboard turns it off
   kula-node probe <host> <port> <secret>   handshake on both channels, print OK/NO
   kula-node ledger [--verify] [--tail N]   print the signed ledger; --verify checks the chain and signatures
 
@@ -36,6 +37,11 @@ running a cluster from this computer:
       --model-url <url>  apart: let workers fetch the model from there instead of from this computer
       --keep-local       split: when the model fits here, do not share it anyway
       --probe-ms <n>     how long a worker has to answer before it is dropped (default 2000)
+      --dashboard <n>    local dashboard port on 127.0.0.1 (default 50580); --no-dashboard turns it off
+
+the dashboard: while share or chat runs, http://127.0.0.1:50580/<random>/ (the exact
+url is printed) shows this computer, the gate, the peers, the ledger, a chat box
+and the pairing qr. it answers on 127.0.0.1 only.
 
 files live in ${home()} (KULA_NODE_HOME overrides)
 `;
@@ -106,6 +112,7 @@ export async function main(argv: string[]): Promise<number> {
       secret: secret?.toLowerCase(),
       lieRam: flags['lie-ram'] !== undefined ? num(flags['lie-ram'], 0) : undefined,
       noQr: flags['no-qr'] === true,
+      dashboard: flags['no-dashboard'] === true ? false : flags.dashboard !== undefined ? num(flags.dashboard, 50580) : undefined,
     });
     await new Promise<void>((resolve) => {
       const done = () => { stop().finally(resolve); };
