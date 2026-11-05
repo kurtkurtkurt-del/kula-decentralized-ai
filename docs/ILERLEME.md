@@ -88,6 +88,26 @@ PR açılmadı. Bu dalı release'e sen alacaksın.
 - Güvenlik gözden geçirmesi: RPC sunucusu üç yerde de yalnız 127.0.0.1 (`Native.serve("127.0.0.1:…")`,
   `ggml-rpc-server -H 127.0.0.1`, dev-gate); secret hiçbir log satırında yok (QR/JSON çıktısı tasarım gereği).
 
+## 5.11 cloud: bilgisayardan küme yönetimi (`claude/node-master`)
+
+`origin/claude/loving-dijkstra-ku8d4t` + `release/local-2026-10-20` üstüne, yalnız `node/` içinde:
+
+- `kula-node peers add|list|rm|probe|scan`: eşler `~/.kula-node/peers.json`'da (600). `add` QR json v2, base64url kod
+  (`list --code`) veya `host:port:secret` alır. `probe` iki kanalda TCP+el sıkışma (2 sn), `scan` `_kula._tcp`
+  (bonjour-service). Secret ekrana yazılmaz.
+- `kula-node chat --model <gguf> --mode apart|split [--peer …] [--batch] [--prompt]`:
+  - ayrı: yerel llama-server + her eşin `api` kanalına tünel → `/load`, `/chat` SSE; istem en hızlı boş cihaza
+    (önce bant genişliği, sonra ölçülen tok/s). Eşler modeli bu bilgisayardan çeker (rastgele yollu HTTP, Range var;
+    `--model-url` ile dış adres). `--batch` 8 istemi dağıtır, cihaz başına tok/s yazar.
+  - bölünmüş: `src/planner.ts` = `app/src/llm/cluster.ts`'nin kopyası (çıktı katmanı yerelde, 0.7/0.75/1.1); eş başına
+    `rpc` tüneli, `llama-server --rpc 127.0.0.1:p1,… --tensor-split yerel,p1,…`.
+  - Yüklemeden önce 2 sn probe; cevap vermeyen eş sebebiyle düşer, `ggml_backend_rpc_add_server` abort etmez.
+- İkili yoksa: split "run kula-node setup" der ve durur; apart yerel cihazı düşürüp eşlerle devam eder.
+- Testler (42, hepsi geçti; llama ikilisi yok, sahte süreçler): planlayıcı birimleri, eş defteri + yanlış secret reddi,
+  ayrı mod uçtan uca (iki sahte işçi gerçek kapı arkasında, 8 istem, tok/s), split planı + tüneller + sahte llama-server.
+- Gerçek cihazla denenmedi (cloud'da telefon/ikili yok). Sabah: Mac'te `npm test`, sonra emülatör "telefonu paylaş" QR'ı ile
+  `peers add` → `peers probe` → `chat --mode apart --batch`.
+
 ## durum (son güncelleme 5.11.2026 01:30)
 
 | adım | durum | not |

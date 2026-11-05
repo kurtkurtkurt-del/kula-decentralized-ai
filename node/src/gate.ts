@@ -299,7 +299,8 @@ export async function startGateServer(opts: GateServerOptions): Promise<GateServ
     };
     let hello: string;
     try { hello = await reader.line(HANDSHAKE_MS); } catch { return refuse('no hello'); }
-    const parts = hello.split(' ');
+    // the phone ends its lines in \r\n
+    const parts = hello.trim().split(' ');
     if ((parts.length !== 3 && parts.length !== 4) || parts[0] !== 'KULA1') return refuse('bad hello');
     if (!CHANNELS.includes(parts[1] as Channel)) return refuse('bad channel');
     channel = parts[1] as Channel;
@@ -318,7 +319,7 @@ export async function startGateServer(opts: GateServerOptions): Promise<GateServ
     writeLine(socket, nonceS);
     let proof: string;
     try { proof = await reader.line(HANDSHAKE_MS); } catch { return refuse('no proof'); }
-    if (!sameHex(proof, clientProof(opts.secret, nonceC, nonceS, channel))) return refuse('wrong secret');
+    if (!sameHex(proof.trim(), clientProof(opts.secret, nonceC, nonceS, channel))) return refuse('wrong secret');
     socket.setTimeout(0);
     await admitted(socket, peer, channel, `OK ${serverProof(opts.secret, nonceC, nonceS, channel)}`, reader.release(), 1, undefined, refuse);
   };
@@ -348,7 +349,7 @@ export async function startGateServer(opts: GateServerOptions): Promise<GateServ
     };
     let hello: string;
     try { hello = await reader.line(HANDSHAKE_MS); } catch { return refuse('no hello'); }
-    const parts = hello.split(' ');
+    const parts = hello.trim().split(' ');
     if (parts.length !== 4 || parts[0] !== 'KULA2') return refuse('bad hello');
     if (!CHANNELS.includes(parts[1] as Channel)) return refuse('bad channel');
     channel = parts[1] as Channel;
@@ -366,6 +367,7 @@ export async function startGateServer(opts: GateServerOptions): Promise<GateServ
     writeLine(socket, `${nonceS} ${paired ? 'paired' : 'pin'}`);
     let proof: string;
     try { proof = await reader.line(HANDSHAKE_MS); } catch { return refuse('no proof'); }
+    proof = proof.trim();
     const fpS = t.identity.fp;
     let okLine: string;
     if (paired) {
