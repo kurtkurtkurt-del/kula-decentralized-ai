@@ -185,6 +185,36 @@ Without llama.cpp on this computer `split` says so and stops; `apart` drops the
 local device with the same hint and carries on with the peers (`--no-local`
 skips the attempt). `--bw <GB/s>` skips the bandwidth measurement.
 
+### Bench
+
+```
+kula-node bench [--model ~/models/qwen3-0.6b-q8.gguf] [--peer id,id…] [--runs 3] [--tokens 64] [--mb 10]
+```
+
+The repeatable measurements the planner is calibrated with, in this order,
+every one skipped with a reason when it cannot run here:
+
+- **memory bandwidth**: the copy benchmark the worker advertises (`--bw <GB/s>`
+  skips it);
+- **local**: `llama-server` with the model, then `/completion` with one fixed
+  prompt, a warm-up and three counted runs; prompt evaluation tok/s and
+  generation tok/s apart (medians), the time to the first token, the load time;
+- **per peer**: the gate round trip on the api channel (three handshakes), the
+  api tunnel speed (`GET /blob?mb=10`, 10 MB of nothing, from the worker's api),
+  and apart mode on that peer: `/load` timed, then three `/chat` runs of 64
+  tokens (tok/s and first token as the worker reports them). The model is
+  served to the peers as in `chat` (or from `--model-url`);
+- **split**: the planner over the peers that answered, the rpc tunnels,
+  `llama-server --rpc …` timed until `/health`, then the same three
+  `/completion` runs: tok/s, ms per token, time to the first token. Without
+  llama.cpp on this computer this step is skipped with the `setup` hint.
+
+The result is written as `kula-bench/1` json (`tools/bench-schema.json`,
+fields and units in `docs/BENCH.md`) to `~/.kula-node/bench/<date>.json`
+(mode 600) and printed as a table; `--json` prints the json instead, `--out
+<file>` chooses the file. `--no-local`, `--no-apart`, `--no-split` leave a
+step out. The phone's bench screen (settings → bench) writes the same json.
+
 ## Checking a worker
 
 From any machine on the network:
@@ -194,6 +224,9 @@ kula-node probe <host> <port> <secret>
 ```
 
 does the handshake on both channels and prints `OK` or the gate's `NO <reason>`.
+
+`GET /blob?mb=N` (1..64, default 10) on the api channel returns N MB of
+octets so a master can time its tunnel; the phone's worker answers it too.
 
 To call the api channel by hand, open a tunnel from a Node script
 (`new Tunnel(host, port, secret, 'api').listen()` from `src/gate.ts`) and curl

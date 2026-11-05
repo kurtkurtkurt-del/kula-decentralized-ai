@@ -1,10 +1,11 @@
-// The command line: setup, share, probe.
+// The command line: setup, share, probe, peers, chat, bench.
 import { probe, type Channel } from './gate.js';
 import { setup, TAG } from './llama.js';
 import { share } from './share.js';
 import { home } from './paths.js';
 import { ledgerCommand } from './ledgercmd.js';
 import { peersCommand, chatCommand } from './mastercmd.js';
+import { benchCommand } from './bench.js';
 
 const HELP = `kula-node: make this computer a worker in a kula cluster
 
@@ -36,6 +37,13 @@ running a cluster from this computer:
       --model-url <url>  apart: let workers fetch the model from there instead of from this computer
       --keep-local       split: when the model fits here, do not share it anyway
       --probe-ms <n>     how long a worker has to answer before it is dropped (default 2000)
+  kula-node bench [--model <file.gguf>] [--peer <id>…] [options]
+      measures, in this order: memory bandwidth; local prompt and generation tok/s (llama-server
+      /completion, 3 runs, median); per peer the gate round trip, the api tunnel speed (10 MB) and
+      apart-mode tok/s; split-mode load time and token latency. what cannot run is skipped and said.
+      writes kula-bench/1 json (tools/bench-schema.json) to ~/.kula-node/bench/<date>.json
+      --runs <n> (3)  --tokens <n> (64)  --ctx <n> (2048)  --mb <n> (10)  --bw <gb/s> (skip measuring it)
+      --no-local | --no-apart | --no-split   --model-url <url>   --out <file>   --json (print the json)
 
 files live in ${home()} (KULA_NODE_HOME overrides)
 `;
@@ -78,6 +86,7 @@ export async function main(argv: string[]): Promise<number> {
 
   if (cmd === 'peers') return peersCommand(rest[0], rest.slice(1), flags);
   if (cmd === 'chat') return chatCommand(flags);
+  if (cmd === 'bench') return benchCommand(flags);
 
   if (cmd === 'ledger') {
     return ledgerCommand({ verify: flags.verify === true, tail: flags.tail !== undefined ? num(flags.tail, 20) : undefined });

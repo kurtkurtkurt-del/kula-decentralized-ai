@@ -1,5 +1,5 @@
 // The api channel: the same tiny http api a phone offers in "apart" mode.
-// GET /status, POST /load, POST /chat, POST /stop. Streams are server sent
+// GET /status, POST /load, POST /chat, POST /stop, GET /blob. Streams are server sent
 // events, one JSON object per `data:` line. Behind it runs llama-server.
 import http from 'node:http';
 import fs from 'node:fs';
@@ -66,6 +66,18 @@ class Sse {
   }
   send(obj: unknown) { this.res.write(`data: ${JSON.stringify(obj)}\n\n`); }
   end(obj?: unknown) { if (obj !== undefined) this.send(obj); this.res.end(); }
+}
+
+const BLOB_PIECE = Buffer.alloc(64 * 1024).map((_, i) => i & 0xff);
+
+/** The mb a /blob url asks for (default 10), or null when it is not a whole number in 1..64. */
+export function blobMb(url: string): number | null {
+  const q = url.split('?')[1] ?? '';
+  const raw = new URLSearchParams(q).get('mb');
+  if (raw === null || raw === '') return 10;
+  if (!/^\d{1,3}$/.test(raw)) return null;
+  const mb = Number(raw);
+  return mb >= 1 && mb <= 64 ? mb : null;
 }
 
 function safeName(name: string): string {
@@ -229,10 +241,31 @@ export async function startApiServer(opts: ApiOptions): Promise<ApiServer> {
     }
   }
 
+  // GET /blob?mb=N: N megabytes of bytes nobody needs, so a master can time its tunnel to
+  // this worker (kula-node bench, the app's bench screen). 1..64; the body is a repeating
+  // pattern, streamed in 64 KB pieces, never built in memory at once.
+  function blob(req: http.IncomingMessage, res: http.ServerResponse) {
+    const mb = blobMb(req.url ?? '/');
+    if (mb === null) return json(res, 400, { error: 'mb must be 1..64' });
+    const total = mb * 1024 * 1024;
+    res.writeHead(200, { 'content-type': 'application/octet-stream', 'content-length': total, 'cache-control': 'no-store' });
+    let sent = 0;
+    const write = () => {
+      while (sent < total) {
+        const n = Math.min(BLOB_PIECE.length, total - sent);
+        sent += n;
+        if (!res.write(n === BLOB_PIECE.length ? BLOB_PIECE : BLOB_PIECE.subarray(0, n))) { res.once('drain', write); return; }
+      }
+      res.end();
+    };
+    write();
+  }
+
   const server = http.createServer(async (req, res) => {
     const url = (req.url ?? '/').split('?')[0];
     try {
       if (req.method === 'GET' && url === '/status') return json(res, 200, state);
+      if (req.method === 'GET' && url === '/blob') return blob(req, res);
       if (req.method === 'POST' && url === '/load') return handleLoad(await readJson(req), res);
       if (req.method === 'POST' && url === '/chat') return handleChat(await readJson(req), res);
       if (req.method === 'POST' && url === '/stop') { current?.abort(); return json(res, 200, { ok: true, wasBusy: state.busy }); }

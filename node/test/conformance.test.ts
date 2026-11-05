@@ -9,7 +9,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { createHash, randomBytes } from 'node:crypto';
-import { startApiServer } from '../src/api.ts';
+import { startApiServer, blobMb } from '../src/api.ts';
 import { startGateServer, handshake, GateRefused } from '../src/gate.ts';
 
 type Srv = { port: number; close: () => void };
@@ -162,5 +162,33 @@ test('the gate answers NO busy to a second rpc peer and OK to the same ip again'
     for (const s of [a, a2, b, b2]) s.destroy();
     await gate.close();
     echo.close();
+  }
+});
+
+test('GET /blob?mb=N streams exactly N MB of octets; out of range is a 400', async () => {
+  const models = fs.mkdtempSync(path.join(os.tmpdir(), 'kula-conf-'));
+  const api = await startApiServer({ models, llama: null, startBackend: async () => { throw new Error('must not start'); } });
+  const base = `http://127.0.0.1:${api.port}`;
+  try {
+    const res = await fetch(`${base}/blob?mb=2`);
+    assert.equal(res.status, 200);
+    assert.equal(res.headers.get('content-type'), 'application/octet-stream');
+    assert.equal(res.headers.get('content-length'), String(2 * 1024 * 1024));
+    const body = Buffer.from(await res.arrayBuffer());
+    assert.equal(body.length, 2 * 1024 * 1024);
+    assert.equal(body[0], 0); assert.equal(body[255], 255); assert.equal(body[256], 0);
+    // no mb: 10
+    assert.equal((await fetch(`${base}/blob`)).headers.get('content-length'), String(10 * 1024 * 1024));
+    for (const q of ['0', '65', 'x', '1.5', '-1']) {
+      const r = await fetch(`${base}/blob?mb=${q}`);
+      assert.equal(r.status, 400, q);
+      assert.equal(await r.text(), '{"error":"mb must be 1..64"}');
+    }
+    assert.equal((await fetch(`${base}/blob`, { method: 'POST' })).status, 404);
+    // a tunnel to the gate must not change any of it: the gate pipes bytes
+    assert.deepEqual(['/blob', '/blob?mb=1', '/blob?mb=64', '/blob?mb=0', '/blob?mb=100', '/blob?mb='].map(blobMb), [10, 1, 64, null, null, 10]);
+  } finally {
+    await api.close();
+    fs.rmSync(models, { recursive: true, force: true });
   }
 });
