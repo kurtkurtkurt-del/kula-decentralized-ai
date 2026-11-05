@@ -1,28 +1,28 @@
-/* pasaport — a backup of the content.
+/* kula — a backup of the content.
    What needs backing up is what cannot be made again: the projects, their abouts and
    their samples (entered by hand in the panel). The daily backup Supabase takes is a
    separate thing; this is your own copy, independent of the project. Taken with the
    public key, so it never carries a person.
 
-     node tools/backup.mjs                       (the address in config.js)
+     node tools/backup.mjs                       (the address in web/config.js)
      node tools/backup.mjs http://localhost:4350 (against another address)
 
-   Output: backend/backup/pasaport-YYYY-MM-DD.json  */
+   Output: backend/backup/kula-YYYY-MM-DD.json  */
 
 import { readFile, writeFile, mkdir } from "node:fs/promises";
 
 async function readConfig() {
-  const text = await readFile(new URL("../../config.js", import.meta.url), "utf8");
+  const text = await readFile(new URL("../../web/config.js", import.meta.url), "utf8");
   const box = {};
   new Function("window", text)(box);
-  return box.PP_CONFIG || {};
+  return box.KULA_CONFIG || {};
 }
 
 const config = await readConfig();
 const address = (process.argv[2] || config.url || "").replace(/\/$/, "");
 const key = process.argv[3] || config.anonKey || "local";
 if (!address) {
-  console.error("No address. Fill in config.js, or pass the address as an argument.");
+  console.error("No address. Fill in web/config.js, or pass the address as an argument.");
   process.exit(1);
 }
 
@@ -47,7 +47,7 @@ const backup = {
 const day = new Date().toISOString().slice(0, 10);
 const folder = new URL("../backup/", import.meta.url);
 await mkdir(folder, { recursive: true });
-const file = new URL("pasaport-" + day + ".json", folder);
+const file = new URL("kula-" + day + ".json", folder);
 await writeFile(file, JSON.stringify(backup, null, 2));
 console.log("backup taken: " + file.pathname);
 for (const [name, list] of Object.entries(backup)) if (Array.isArray(list)) console.log(`  ${name.padEnd(10)} ${list.length}`);

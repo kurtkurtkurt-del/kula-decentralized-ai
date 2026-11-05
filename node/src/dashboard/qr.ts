@@ -1,4 +1,4 @@
-// A qr code by hand, the server side twin of passport/qr.js (same algorithm,
+// A qr code by hand, the server side twin of web/passport/qr.js (same algorithm,
 // same output): byte mode, level M, the smallest version that fits, the mask
 // with the lowest penalty. The dashboard draws the pairing code from this so
 // the secret never travels to the page as text; the browser only gets an svg.

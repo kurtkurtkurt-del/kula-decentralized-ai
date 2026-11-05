@@ -1,4 +1,4 @@
-/* pasaport — every numbered SQL file carries the hash of its own text.
+/* kula — every numbered SQL file carries the hash of its own text.
      node tools/stamp-sql.mjs           rewrite the stamp lines, write tools/sql-hashes.json
      node tools/stamp-sql.mjs --check   fail when a file is unstamped or stale (the gate runs this)
    The hash is sha256 of the file with its stamp block in the bare one-argument form, so the

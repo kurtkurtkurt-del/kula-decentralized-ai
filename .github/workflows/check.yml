@@ -211,7 +211,7 @@ jobs:
             echo "| app (tsc, lint, jest, passport) | $R_APP |"
             echo "| kula-node (node 20, 22) | $R_NODE |"
             echo "| audit-jvm (kotlin) | $R_JVM |"
-            echo "| gate (backend, app, site) | $R_GATE |"
+            echo "| gate (backend, app, mac script, docs links) | $R_GATE |"
           } >> "$GITHUB_STEP_SUMMARY"
           for r in "$R_APP" "$R_NODE" "$R_JVM" "$R_GATE"; do
             [ "$r" = success ] || { echo "a job did not succeed: $r"; exit 1; }

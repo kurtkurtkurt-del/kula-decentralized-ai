@@ -353,7 +353,7 @@ code-only peer learning the certificate), `setup.test.ts` (`pickAsset` over the 
 instructions), `api.test.ts` and `conformance.test.ts` (the apart-mode api
 against a fake llama-server, SSE text byte for byte, `/stop`, `NO busy`),
 `dashboard.test.ts` (loopback only, prefix, host and origin checks, the sse
-stream, chat and batch over a fake cluster, the qr against `passport/qr.js`,
+stream, chat and batch over a fake cluster, the qr against `web/passport/qr.js`,
 no secret in any body, `share` with its dashboard and a real handshake).
 npm run dev -- share --no-qr
 ```

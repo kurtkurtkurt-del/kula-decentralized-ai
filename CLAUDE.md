@@ -12,7 +12,7 @@
 - Servers: development = the Mac's local server (`app/.env.development.local`), a release apk =
   kula's own Supabase project (`app/.env.production`). Never afterhours' project, never an
   `app/.env.local` (Expo loads it into release builds too). Release apks only via `npm run apk`,
-  which runs `npm run release:check` first. README: "A live server".
+  which runs `npm run release:check` first. Setting up the live project: `docs/SERVERS.md`.
 - `app/modules/kula-llama` carries llama.cpp **b11157** (PrivateLM's release; the cluster speaks RPC
   proto 7 only between equal versions). The tree under `android/src/main/cpp/llama.cpp` is fetched and
   patched by `tools/llama-src.mjs`, never edited by hand; change the tag or `tools/patches/` there.

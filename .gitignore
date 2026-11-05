@@ -1,11 +1,16 @@
 .DS_Store
-backend/node_modules/
+node_modules/
 backend/backup/
 
 # the gate's proof (backend/tools/gate.mjs), per machine
 .qa/
 dist/
 
-# build caches left from when the Kotlin app lived here (it moved to ../device-passport)
-native/passport-measure-android/
+# llama.cpp archives, host builds, models and the dev gate's files (llama-src.mjs, dev-gate.mjs)
 .llama/
+
+# never in git: local env files (Expo loads .env.local into release builds, see CLAUDE.md)
+# and signing keys (the apk keystore lives outside the repo, CI reads it from a secret)
+.env*.local
+*.keystore
+*.jks

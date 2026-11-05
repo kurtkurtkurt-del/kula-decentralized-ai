@@ -1,4 +1,4 @@
-// afterhours — apple-revoke (Supabase Edge Function)
+// kula — apple-revoke (Supabase Edge Function)
 //
 // App Store 5.1.1(v): when an account made with Sign in with Apple is deleted, the
 // app revokes its Apple tokens. The app gets a fresh authorization code from Apple
@@ -9,7 +9,7 @@
 //   APPLE_TEAM_ID      the 10-character team id
 //   APPLE_KEY_ID       the id of a key with "Sign in with Apple" enabled
 //   APPLE_PRIVATE_KEY  the .p8 file's contents, BEGIN/END lines included
-//   APPLE_CLIENT_ID    the bundle id: app.afterhours.ios
+//   APPLE_CLIENT_ID    the bundle id: app.pasaport.ios
 //
 // Only a signed-in caller gets through (verify_jwt, the default).
 

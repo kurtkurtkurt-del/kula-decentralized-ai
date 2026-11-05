@@ -161,7 +161,8 @@ The computer can also run the cluster itself, with the phones as workers:
 
 ## 7. the night
 
-Keep a project in the projects tab. The passport card has a **work tonight** switch and
+Keep a project on its page (the network tab lists projects per city; friends' kept projects
+are on the people tab). The passport card has a **work tonight** switch and
 shows the state: waiting and why, running with the counters, or last night's line.
 
 A night starts when all of these hold: the switch is on, a project is kept, the phone was

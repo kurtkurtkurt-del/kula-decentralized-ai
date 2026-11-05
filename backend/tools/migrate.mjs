@@ -1,4 +1,4 @@
-/* afterhours — apply the numbered SQL files the live database has not run yet.
+/* kula — apply the numbered SQL files the live database has not run yet.
 
    Until 12.10.2026 every file was pasted into the Supabase SQL editor by hand, and
    a project could sit a file behind while everything looked fine (the panel said

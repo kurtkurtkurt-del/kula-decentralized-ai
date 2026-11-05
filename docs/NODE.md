@@ -65,7 +65,7 @@ and no fingerprint.
 | `--name` | the name the phone shows (default: hostname) |
 | `--models` | where models asked for by a master are kept (default `~/.kula-node/models`) |
 | `--secret` | reuse a v1 secret instead of a fresh one per run (visible in `ps`; a known gap) |
-| `--tls` | protocol v2: TLS between device certificates, a v3 QR with a one-time code (branch `claude/gate-tls`) |
+| `--tls` | protocol v2: TLS between device certificates, a v3 QR with a one-time code ([GATE.md](GATE.md)) |
 | `--lie-ram` | advertise a false amount of free memory, to make the auditor's claim check fire |
 | `--no-qr` | JSON only |
 
@@ -95,7 +95,7 @@ kula-node ledger --verify       # walk the chain and check every signature with 
 
 Format and rules: [AUDIT.md](AUDIT.md).
 
-### running a cluster from the computer (branch `claude/node-master`)
+### running a cluster from the computer
 
 The computer takes the phone's role: it keeps a peer book of workers (phones that "share
 this phone", other computers running `share`) and talks to them through the same gate.
@@ -181,8 +181,8 @@ that port is reachable; what does not cross a network boundary is discovery (mDN
 assumption, in split mode, of a few milliseconds per hop.
 
 - **Same wi-fi:** everything on this page.
-- **A friend's computer in another city:** not in v0. There is no kula relay yet. What works
-  now is a private network of your own, such as Tailscale, ZeroTier or a WireGuard tunnel:
+- **A friend's computer in another city:** through the relay, below, or through a private
+  network of your own, such as Tailscale, ZeroTier or a WireGuard tunnel:
   both devices join it, the worker runs `share` as usual, and the master adds it by its
   address on that network (`kula-node peers add <ip>:50551:<secret>`, or paste the QR JSON
   with the `host` changed; on the phone the QR's `host` must be the private-network address).
@@ -190,9 +190,12 @@ assumption, in split mode, of a few milliseconds per hop.
   Do not use **split** mode over a distance: every token crosses the link several times and
   the model runs at the speed of the slowest hop. With v1 the `api` channel is plain text,
   so a private network is also what keeps the prompts private; v2 (`--tls`) encrypts them.
-- **A kula relay** (a server that forwards gate connections between two NATed devices,
-  with the same handshake end to end) is the natural next step and would need no change to
-  the protocol: the gate only sees a TCP stream. It is not written.
+- **The kula relay** (`node/relay/`, since 5.11.2026) forwards gate connections between two
+  NATed devices without seeing inside them: the worker runs `kula-node share --relay wss://…`
+  (which forces `--tls`), the master adds it by a six-digit code and the pin
+  (`kula-node peers add "123456 <pin>" --relay …`). Apart mode only; split mode leaves far
+  peers out. Where a public relay is hosted is not decided yet. The protocol, limits and
+  deployment are in [RELAY.md](RELAY.md).
 
 ## tests
 
@@ -202,7 +205,7 @@ cd node && npm test      # node --test, localhost only, never fetches llama.cpp
 
 `gate.test.ts`, `gate-tls.test.ts`, `api.test.ts`, `conformance.test.ts` (the SSE shapes
 byte for byte against `ApiServer.kt`), `audit.test.ts`, `setup.test.ts` (`pickAsset` over a
-recorded release), and on `claude/node-master` also `planner.test.ts`, `peers.test.ts`,
+recorded release), `planner.test.ts`, `peers.test.ts`,
 `apart.test.ts` (two fake workers behind real gates), `split.test.ts` (plan, tunnels, the
 `--rpc`/`--tensor-split` arguments against a fake llama-server).
 

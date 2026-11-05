@@ -95,7 +95,7 @@ kula-node's `share --lie-ram <MB>` exists to make this rule fire on purpose.
 - Computer: `kula-node ledger --verify` walks the file(s), rotated ones first, checks every
   `prev` and every signature with this computer's key, exits 1 and names the line and what
   is wrong (`prev`, `sig`, `json`, `kind`).
-- Phone: settings → app → **beyin audit** (`app/src/app/audit.tsx`, branch `claude/audit-ui`)
+- Phone: settings → app → **beyin audit** (`app/src/app/audit.tsx`)
   shows the last 200 lines, newest first, filter chips by kind, counts of refusals, warnings
   and lines, and the chain check: "chain intact", "chain intact in this window" when the
   window starts mid-file, or a red box naming the broken line. The phone checks the

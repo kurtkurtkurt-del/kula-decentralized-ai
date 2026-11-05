@@ -1,20 +1,17 @@
-# afterhours — ask the live site every morning whether it is still there.
+# kula — ask kula's live Supabase project every morning whether it is still well.
 #
-# It needs no secret: the key in config.js is the public one, protected by
-# the row-level rules and not by being hidden. The check reads it the same
-# way the site does.
+# It needs no secret: the key in web/config.js is the public one, protected by
+# the row-level rules and not by being hidden.
 #
-# What makes this worth having is not uptime — GitHub Pages does not fall
-# over. It is the quieter kind of wrong: a database whose content vanished,
-# a project that is a SQL file behind, past events still on the deck.
+# What makes this worth having is not uptime. It is the quieter kind of wrong:
+# a database whose content vanished, or a project that is a SQL file behind.
 # health.mjs exits non-zero for those, and a failed run sends the email.
 
 name: health
 
 on:
   schedule:
-    # 06:20 UTC daily. Late enough that the 05:30 job which drops past
-    # events has already run, so what it reports is the settled state.
+    # 06:20 UTC daily, after the scheduled jobs inside the database have run.
     - cron: "20 6 * * *"
   workflow_dispatch:
 

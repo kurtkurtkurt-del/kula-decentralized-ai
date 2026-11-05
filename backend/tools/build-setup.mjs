@@ -1,4 +1,4 @@
-/* pasaport — joins the numbered SQL files into one pasteable file.
+/* kula — joins the numbered SQL files into one pasteable file.
    Instead of opening each file in the Supabase panel one by one, one press of Run is enough.
 
      node tools/build-setup.mjs                                        */
