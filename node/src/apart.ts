@@ -142,6 +142,7 @@ export interface ApartOptions {
   log?: Log;
   startBackend?: (file: string, ctx: number) => Promise<{ port: number; stop(): Promise<void> }>;
   probe?: typeof probePeers;
+  measuredTps?: Record<string, number | null | undefined>; // by device id ('local' for this computer), from kula-node bench
 }
 
 export interface Cluster {
@@ -196,6 +197,8 @@ export async function openApart(opts: ApartOptions): Promise<Cluster> {
   const ready = devices.filter((_, i) => ok[i]);
   for (const [i, dev] of devices.entries()) if (!ok[i]) { await dev.close().catch(() => {}); if (!dev.local) skipped.push({ peer: opts.peers.find((p) => p.id === dev.id)!, why: 'load failed' }); }
   if (!ready.length) throw new Error('no device loaded the model');
+  // a measured speed (kula-node bench) orders the devices before their first reply does
+  for (const d of ready) d.tps = d.tps ?? opts.measuredTps?.[d.id] ?? null;
 
   // the scheduler: a queue of waiters; the fastest free device (by measured
   // tok/s once known, by advertised bandwidth before) takes the next prompt

@@ -5,6 +5,7 @@ import { share } from './share.js';
 import { home } from './paths.js';
 import { ledgerCommand } from './ledgercmd.js';
 import { peersCommand, chatCommand } from './mastercmd.js';
+import { benchCommand } from './bench.js';
 
 const HELP = `kula-node: make this computer a worker in a kula cluster
 
@@ -36,6 +37,11 @@ running a cluster from this computer:
       --model-url <url>  apart: let workers fetch the model from there instead of from this computer
       --keep-local       split: when the model fits here, do not share it anyway
       --probe-ms <n>     how long a worker has to answer before it is dropped (default 2000)
+  kula-node bench [--model <file.gguf>] [--peer id…] [options]   measure, save to ~/.kula-node/bench/<date>.json
+      local prompt and generation tok/s (3 runs, median), memory bandwidth, gate round trip,
+      tunnel speed (10 MB), each peer's tok/s in apart mode, split load time and token time
+      --runs <n> (3)  --tokens <n> (64)  --ctx <n> (2048)  --tunnel-mb <n> (10, at most 64)
+      --no-apart  --no-split  --json (print the record)  --out <dir>
 
 files live in ${home()} (KULA_NODE_HOME overrides)
 `;
@@ -78,6 +84,7 @@ export async function main(argv: string[]): Promise<number> {
 
   if (cmd === 'peers') return peersCommand(rest[0], rest.slice(1), flags);
   if (cmd === 'chat') return chatCommand(flags);
+  if (cmd === 'bench') return benchCommand(flags);
 
   if (cmd === 'ledger') {
     return ledgerCommand({ verify: flags.verify === true, tail: flags.tail !== undefined ? num(flags.tail, 20) : undefined });

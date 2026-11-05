@@ -28,6 +28,8 @@ export interface SplitOptions {
   localBw: number;
   localEff?: number;
   net?: SimNet;
+  localTps?: number | null;
+  peerTps?: Record<string, number | null | undefined>;
   peers: Peer[];
   share?: boolean;
   probeMs?: number;
@@ -38,7 +40,7 @@ export interface SplitOptions {
 // Plans and opens the tunnels. Throws TooBig when even together it does not fit.
 export async function prepareSplit(opts: SplitOptions): Promise<SplitSetup> {
   const log = opts.log ?? (() => {});
-  const plan = await planWithProbe({ model: opts.model, ctx: opts.ctx, localFreeMb: opts.localFreeMb, localBw: opts.localBw, localEff: opts.localEff, net: opts.net, wanted: opts.peers, share: opts.share ?? true, timeoutMs: opts.probeMs ?? 2000, probe: opts.probe });
+  const plan = await planWithProbe({ model: opts.model, ctx: opts.ctx, localFreeMb: opts.localFreeMb, localBw: opts.localBw, localEff: opts.localEff, net: opts.net, localTps: opts.localTps, peerTps: opts.peerTps, wanted: opts.peers, share: opts.share ?? true, timeoutMs: opts.probeMs ?? 2000, probe: opts.probe });
   for (const s of plan.skipped) log(`${s.peer.name}: skipped, ${s.why}`);
   const tunnels: SplitSetup['tunnels'] = [];
   for (const u of plan.used) {
