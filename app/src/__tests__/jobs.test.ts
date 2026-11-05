@@ -60,7 +60,7 @@ describe('DemoJobs', () => {
     expect(storedResults()).toHaveLength(1);
   });
   it('has a system line per kind and uses the whole bundled list by default', async () => {
-    expect(Object.keys(SYSTEM).sort()).toEqual(['classify', 'summarise', 'translate']);
+    expect(Object.keys(SYSTEM).sort()).toEqual(['classify', 'project', 'summarise', 'translate']);
     expect(new DemoJobs().left()).toBe(DEMO_UNITS.length);
   });
 });

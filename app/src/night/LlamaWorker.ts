@@ -19,7 +19,9 @@ import { PEER_WATTS, WATTS, type NightDevice, type NightStatus, type NightWorker
 const OUT_MS = 5 * 60_000;
 const IDLE_MS = 1000; // how long a device with nothing to do waits before looking again
 
-type Options = { source?: (key?: string) => JobSource; now?: () => number; outMs?: number; idleMs?: number };
+// source gets the night's key and its slug (OWN_SLUG: a night for the person's own projects
+// only, 5.11.2026); prefer names the model a project asked for; ctx the context it wants.
+type Options = { source?: (key?: string, slug?: string) => JobSource; now?: () => number; outMs?: number; idleMs?: number; prefer?: () => string | null; ctx?: () => number | null };
 
 const fresh = (): NightStatus => ({ state: 'idle', slug: null, startedAt: null, tokens: 0, seconds: 0, kwh: 0, tps: 0, real: true, units: 0, checked: 0, wrong: 0, devices: [] });
 
@@ -34,13 +36,13 @@ export class LlamaWorker implements NightWorker {
   private night: Promise<void> = Promise.resolve(); // the current begin(): load, loops, end
   private readonly opt: Required<Options>;
   constructor(opt: Options = {}) {
-    this.opt = { source: () => new DemoJobs(), now: () => Date.now(), outMs: OUT_MS, idleMs: IDLE_MS, ...opt };
+    this.opt = { source: () => new DemoJobs(), now: () => Date.now(), outMs: OUT_MS, idleMs: IDLE_MS, prefer: () => null, ctx: () => null, ...opt };
   }
 
   start(slug: string, tps: number, key?: string) {
     this.stop();
     const run = ++this.run;
-    this.source = this.opt.source(key);
+    this.source = this.opt.source(key, slug);
     this.drained = false;
     this.outUntil.clear();
     this.s = { ...fresh(), state: 'running', slug, startedAt: this.opt.now(), tps };
@@ -93,9 +95,9 @@ export class LlamaWorker implements NightWorker {
   private async begin(run: number) {
     llama?.keepScreenOn(true).catch(() => {});
     try {
-      const model = pickModel();
+      const model = pickModel(this.opt.prefer());
       if (!model) throw new Error('nomodel');
-      await loadApartOrAlone(model);
+      await loadApartOrAlone(model, this.opt.ctx());
       if (!this.alive(run)) {
         // stop() came while the model was loading: its unload ran too early, so once more
         void unload().catch(() => {});
@@ -143,11 +145,20 @@ export class LlamaWorker implements NightWorker {
   private async work(run: number, dev: string, unit: Unit) {
     let text = '';
     try {
-      const p = chat([{ role: 'system', content: SYSTEM[unit.type] }, { role: 'user', content: unit.prompt }], (t) => { text += t; }, { maxTokens: unit.maxTokens, temperature: 0, reset: true, device: dev });
+      const messages = unit.messages ?? [{ role: 'system', content: SYSTEM[unit.type] }, { role: 'user', content: unit.prompt }];
+      const p = chat(messages, (t) => { text += t; }, { maxTokens: fitBudget(unit.maxTokens, messages, engine().load?.ctx ?? 0), temperature: unit.temperature ?? 0, reset: true, device: dev });
       this.inFlight.set(dev, p);
       const r = await p;
       this.inFlight.delete(dev);
       if (!this.alive(run)) return; // stopped under it: not counted, the pile is done with
+      if (unit.own) {
+        // the person's own project: its source logs the step; the card counts only the network's work
+        await this.source!.done(unit, { text, device: r.device, tokens: r.tokens, ms: r.ms }).catch(() => {});
+        this.s = { ...this.s, ownUnits: (this.s.ownUnits ?? 0) + 1, ownTokens: (this.s.ownTokens ?? 0) + r.tokens };
+        this.measure();
+        this.tell();
+        return;
+      }
       const ok = unit.expected ? checkAnswer(unit.expected, text) : undefined;
       const name = (this.s.devices ?? []).find((d) => d.id === dev)?.name.toLowerCase() ?? dev;
       // the brain tab: the unit on its device's running line; a wrong known answer on its own
@@ -181,8 +192,11 @@ export class LlamaWorker implements NightWorker {
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
-/** The chosen model, else the largest local one the passport says fits, else the largest. */
-export function pickModel(): LocalModel | null {
+/** The model a project asked for, else the chosen model, else the largest local one the
+ * passport says fits, else the largest. */
+export function pickModel(prefer?: string | null): LocalModel | null {
+  const asked = prefer ? localById(prefer) : null;
+  if (asked) return asked;
   const chosen = settings().modelId ? localById(settings().modelId!) : null;
   if (chosen) return chosen;
   const all = [...localModels()].sort((a, b) => b.size - a.size);
@@ -191,8 +205,20 @@ export function pickModel(): LocalModel | null {
   return all.find((m) => fitOn(p, { size: m.size, kv_mb_per_1k: m.kv_mb_per_1k, ctx }).verdict !== 'no') ?? all[0] ?? null;
 }
 
-async function loadApartOrAlone(model: LocalModel) {
-  const ctx = Math.min(settings().ctx, defaultCtx(fitOn(lastPassport(), { size: model.size, kv_mb_per_1k: model.kv_mb_per_1k, ctx: settings().ctx })));
+/** A unit's token budget within the loaded context: what the prompt leaves, less a margin
+ * (a project's long steps on a small context); unchanged when the context is not known. */
+export function fitBudget(maxTokens: number, messages: { content: string }[], ctx: number): number {
+  if (!ctx) return maxTokens;
+  const prompt = Math.ceil(messages.reduce((a, m) => a + m.content.length, 0) / 3.5) + 32;
+  return Math.max(64, Math.min(maxTokens, ctx - prompt));
+}
+
+// want: a larger context for the person's projects (long drafts and critiques), up to what fits
+async function loadApartOrAlone(model: LocalModel, want?: number | null) {
+  const fit = fitOn(lastPassport(), { size: model.size, kv_mb_per_1k: model.kv_mb_per_1k, ctx: settings().ctx });
+  // without a passport what fits is not known: the setting stays
+  const cap = lastPassport() ? Math.max(512, fit.maxCtx || 512) : settings().ctx;
+  const ctx = want ? Math.min(Math.max(want, settings().ctx), cap) : Math.min(settings().ctx, defaultCtx(fit));
   const ps = peers();
   if (ps.length) {
     try {

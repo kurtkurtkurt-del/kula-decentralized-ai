@@ -26,6 +26,15 @@ import { addSegment, buildReport, clearSegments, saveReport, segmentOf, segments
 // whose screen is locked by hand pauses the loop with the app; when the app is opened
 // again, the night continues from the pile. The sticky notification says that the night
 // is running (notify.ts).
+//
+// The person's own projects (5.11.2026, src/tasks): in a network night their steps go first
+// on the pile (useNight.ts FirstOf). Outside it, when one of them is due in its own hours
+// and the global rules hold (verdict.own), the planner opens an own night: slug OWN_SLUG,
+// only the projects as work, nothing to the server, no card, no report, and it does not mark
+// the network's night as done. It ends when the projects due have run (the pile is dry) or
+// their conditions break; the projects keep their finished steps and go on from there.
+export const OWN_SLUG = 'your-projects';
+export const OWN_REST_MS = 10 * 60_000;
 export type Phase = 'idle' | 'waiting' | 'running' | 'paused' | 'done';
 export type Open = { id: string | null; jobId: string; at: number; slug: string; key: string };
 export type Store = { get(k: string): string | null; set(k: string, v: string): void; del(k: string): void };
@@ -51,6 +60,8 @@ export type Deps = {
   sendReport: (r: NightReport) => Promise<boolean>;
   notify: { show(r: { slug: string; units: number }): Promise<void> | void; hide(): Promise<void> | void };
   onReport?: (r: NightReport) => void;
+  // the model is busy with something the person started (a project's "run now"): no night begins
+  hold?: () => boolean;
 };
 const START = 'night.start';
 const DONE = 'night.done';
@@ -62,6 +73,7 @@ export class Scheduler {
   private active: Worker | null = null;
   private off: (() => void) | null = null;
   private listeners = new Set<() => void>();
+  private ownRest = 0;
   constructor(private d: Deps) {}
 
   state(): { phase: Phase; open: Open | null; night: NightStatus | null } {
@@ -121,12 +133,20 @@ export class Scheduler {
     if (open) {
       // the worker ran the pile dry on its own: the night is over
       const drained = !!w && this.phase === 'running' && w.status().state === 'done';
+      if (open.slug === OWN_SLUG) {
+        if (drained || !v.own) return this.finishOwn();
+        if (!running) return this.resume(open);
+        return;
+      }
       if (v.flags.window || open.key !== key || drained) return this.finish(open);
       if (v.ok && !running) return this.resume(open);
       if (!v.ok && running) return this.pause(open, v);
       if (!v.ok) return this.wait(v.reason, 'paused');
       return;
     }
+    if (this.d.hold?.()) return this.wait(null, 'waiting');
+    const network = !!slug && v.ok && this.doneKey() !== key;
+    if (!network && v.own && this.d.now() >= this.ownRest) return this.beginOwn(key);
     if (!slug) return this.wait('noproject', 'waiting');
     if (!v.ok) return this.wait(v.reason, 'waiting');
     if (this.doneKey() === key) return this.wait('done', 'done');
@@ -163,6 +183,23 @@ export class Scheduler {
     this.setOpen({ ...r, slug, key });
     this.d.store.del(DONE);
     this.go(slug, key);
+  }
+  private beginOwn(key: string) {
+    this.setOpen({ id: null, jobId: 'own', at: this.d.now(), slug: OWN_SLUG, key });
+    this.go(OWN_SLUG, key);
+  }
+  // an own night leaves no segment, card or report: the projects keep their own record
+  private finishOwn() {
+    const w = this.active;
+    // an own night that got nothing done (no model loaded, a step failing) rests a while
+    // instead of starting again at every look
+    if ((w?.status().ownUnits ?? 0) === 0) this.ownRest = this.d.now() + OWN_REST_MS;
+    if (w && w.status().state === 'running') w.stop();
+    w?.reset();
+    void this.d.notify.hide();
+    this.setOpen(null);
+    this.set('waiting');
+    this.again = true; // look again at once: a network night may be due
   }
   private resume(open: Open) {
     this.go(open.slug, open.key);

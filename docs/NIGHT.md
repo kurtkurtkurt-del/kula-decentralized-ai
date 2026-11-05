@@ -129,6 +129,30 @@ before; `units`, `checked` and `wrong` ride along and the server does not read t
 | wi-fi only | the profile | profile | as before |
 | the project | the projects tab, "tonight" | `night.project` | the first kept project |
 
+## the person's own projects (5.11.2026)
+
+The projects tab (`app/src/tasks/`, screens `(tabs)/projects.tsx`, `task/new.tsx`,
+`task/[id].tsx`) holds the person's own night work: a title, what they want, photos (kept
+small in the app's document folder; the model does not see them yet), the answer's form and
+length, and a calibration: its own hours (the night window by default), which nights (every,
+weekdays, once), how carefully (quick: one pass; careful: draft → critique → final; very:
+two critique rounds), the model (the best that fits by default), only on charge. Before
+saving, `tasks/estimate.ts` says how much fits tonight from the model's tok/s (the bench's
+when measured, else the passport's estimate). Everything is in the kv-store (`tasks.list`)
+and files; nothing goes to a server.
+
+At night, `tasks/jobs.ts` (ProjectJobs) hands the projects' steps to the real worker as
+units (`own: true`, their own messages and budgets), one step per project at a time, only
+while a project is due (`tasks/schedule.ts isDue`: its hours, its nights, not done in this
+night, the plug). In the network's night they go first on the pile (`FirstOf`); outside it,
+the scheduler opens an **own night** (slug `your-projects`) when a project is due and the
+global rules hold (plug, battery threshold, heat, passport; not wi-fi, not "work tonight"):
+no contribution start or end, no card, no report, the network's night not marked done. Every
+step is written to the project as it finishes, so a run cut by the plug or the window goes
+on from the next step. The brain log gets a line per step; a local notification says when an
+answer is ready; the morning report lists the projects that came in. "Run now" runs the same
+steps while the app is open and holds the night back meanwhile.
+
 ## limits, plainly
 
 - **The night runs while the app is open.** Android's background task API (`expo-background-task`,

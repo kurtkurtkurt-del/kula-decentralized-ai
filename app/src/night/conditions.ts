@@ -30,10 +30,16 @@ export type Facts = {
   wanted: boolean; // "work tonight" is on
   hasProject: boolean;
   hasPassport: boolean;
+  // a project of the person's own is due now, in its own hours (tasks/schedule.ts isDue)
+  projectWindow?: boolean;
 };
 export type Flags = { off: boolean; noproject: boolean; nopassport: boolean; window: boolean; charge: boolean; battery: boolean; hot: boolean; wifi: boolean };
 export type Reason = keyof Flags;
-export type Verdict = { ok: boolean; flags: Flags; reason: Reason | null };
+// own (5.11.2026): the person's own projects may run now. Their own hours stand in for the
+// night window, they need no kept network project and no wi-fi (nothing leaves the phone),
+// and the global rules still hold: the plug, the battery threshold, the heat, the passport.
+// "work tonight" switched off is about the network's night; a project has its own switch.
+export type Verdict = { ok: boolean; flags: Flags; reason: Reason | null; own: boolean };
 const ORDER: Reason[] = ['off', 'noproject', 'nopassport', 'window', 'charge', 'battery', 'hot', 'wifi'];
 
 // Android's PowerManager thermal status: 0 none, 1 light, 2 moderate, 3 severe and up.
@@ -59,7 +65,8 @@ export function evaluate(f: Facts, r: NightRules): Verdict {
     wifi: r.wifiOnly && f.net !== 'wifi',
   };
   const reason = ORDER.find((k) => flags[k]) ?? null;
-  return { ok: reason === null, flags, reason };
+  const own = !!f.projectWindow && !flags.nopassport && !flags.charge && !flags.battery && !flags.hot;
+  return { ok: reason === null, flags, reason, own };
 }
 
 // "work tonight": on unless the person switched it off; the switch lives on the phone.
@@ -77,33 +84,36 @@ const netKind = (s: { type?: Network.NetworkStateType; isConnected?: boolean } |
 
 /** The facts of this moment, from the phone. hasProject is given by the caller (it is
  * a server read); the rest is local. Every reader fails soft: unknown, not wrong. */
-export async function readFacts(hasProject: boolean, now = new Date()): Promise<Facts> {
+export type OwnDue = (now: Date, charging: boolean) => boolean;
+export async function readFacts(hasProject: boolean, now = new Date(), ownDue?: OwnDue): Promise<Facts> {
   const [state, level, net] = await Promise.all([
     Battery.getBatteryStateAsync().catch(() => Battery.BatteryState.UNKNOWN),
     Battery.getBatteryLevelAsync().catch(() => -1),
     Network.getNetworkStateAsync().catch(() => null),
   ]);
   const p = lastPassport();
+  const charging = state === Battery.BatteryState.CHARGING || state === Battery.BatteryState.FULL;
   return {
     now,
-    charging: state === Battery.BatteryState.CHARGING || state === Battery.BatteryState.FULL,
+    charging,
     net: netKind(net),
     batteryPct: level >= 0 && level <= 1 ? Math.round(level * 100) : null,
     hot: passportHot(p),
     wanted: wantTonight(),
     hasProject,
     hasPassport: !!p,
+    projectWindow: ownDue ? ownDue(now, charging) : false,
   };
 }
-export async function readVerdict(hasProject: boolean, now = new Date()): Promise<Verdict> {
-  return evaluate(await readFacts(hasProject, now), nightRules());
+export async function readVerdict(hasProject: boolean, now = new Date(), ownDue?: OwnDue): Promise<Verdict> {
+  return evaluate(await readFacts(hasProject, now, ownDue), nightRules());
 }
 
 /** Listens to the plug, the level and the network; re-reads on each change, on return to
  * the foreground and every `everyMs` (the clock moves into or out of the window). */
-export function watchConditions(hasProject: () => boolean, onChange: (v: Verdict) => void, everyMs = 30_000): () => void {
+export function watchConditions(hasProject: () => boolean, onChange: (v: Verdict) => void, everyMs = 30_000, ownDue?: OwnDue): () => void {
   let live = true;
-  const read = () => readVerdict(hasProject()).then((v) => live && onChange(v)).catch(() => {});
+  const read = () => readVerdict(hasProject(), new Date(), ownDue).then((v) => live && onChange(v)).catch(() => {});
   read();
   const timer = setInterval(read, everyMs);
   const subs: { remove(): void }[] = [];
