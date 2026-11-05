@@ -39,7 +39,8 @@ describe('fitOn', () => {
   });
   it('is tight between 85 % and 100 % of what the device has', () => {
     const have = haveMb(phone()); // 2150
-    const exactly = (mb: number) => fitOn(phone(), { size: 0, kv_mb_per_1k: 0, ctx: 512 }).haveMb && fitOn(phone(), { size: (mb - OVERHEAD_MB) * MB / 1.05, kv_mb_per_1k: 0, ctx: 512 });
+    // a model whose need lands exactly on mb (no kv, the 5 % folded into the size)
+    const exactly = (mb: number) => fitOn(phone(), { size: ((mb - OVERHEAD_MB) * MB) / 1.05, kv_mb_per_1k: 0, ctx: 512 });
     expect(exactly(have * 0.8).verdict).toBe('fits');
     expect(exactly(have * 0.9).verdict).toBe('tight');
     expect(exactly(have * 1.01).verdict).toBe('no');

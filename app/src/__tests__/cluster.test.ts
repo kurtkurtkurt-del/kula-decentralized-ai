@@ -52,7 +52,9 @@ beforeEach(() => {
   mockGate.listeners.clear();
   mockStore.clear();
 });
-afterEach(() => jest.useRealTimers());
+afterEach(() => {
+  jest.useRealTimers();
+});
 
 // planSplit waits up to 4 s of discovery for each dead peer: run the clock along with it
 const plan = async (...args: Parameters<typeof planSplit>) => {

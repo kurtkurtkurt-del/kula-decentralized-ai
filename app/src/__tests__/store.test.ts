@@ -2,6 +2,8 @@
 // manual delete, a download the app was killed in (its .part), and the download events.
 /* eslint-disable import/first -- jest.mock calls are hoisted above the imports anyway */
 import { beforeEach, describe, expect, it, jest } from '@jest/globals';
+import { act, create } from 'react-test-renderer';
+import { createElement } from 'react';
 
 const mockStore = new Map<string, string>();
 jest.mock('expo-sqlite/kv-store', () => ({
@@ -35,7 +37,7 @@ const mockDisk = {
 jest.mock('@/llm/native', () => ({ get llama() { return mockDisk; }, native: () => mockDisk, hasNative: () => true, GATE_PORT: 50551 }));
 
 import { CATALOG } from '@/llm/catalog';
-import { cancelDownload, describe as describeModel, downloadOf, forgetModel, initStore, localById, localModels, reconcileModels, rememberModel, retryDownload, saveSettings, settings, startDownload, type LocalModel } from '@/llm/store';
+import { cancelDownload, describe as describeModel, downloadOf, forgetModel, initStore, localById, localModels, reconcileModels, rememberModel, retryDownload, saveSettings, saveShare, settings, startDownload, useDownloads, useLocalModels, usePeers, useSettings, useShare, type LocalModel } from '@/llm/store';
 
 const cat = CATALOG[0];
 const local = (over: Partial<LocalModel> = {}): LocalModel => ({ ...describeModel(cat), path: `/data/models/${cat.file}`, added_at: '2026-11-05T00:00:00Z', ...over });
@@ -143,5 +145,31 @@ describe('forgetModel', () => {
     expect(mockDisk.deleted).toEqual([]);
     expect(localModels()).toHaveLength(1);
     expect(settings().modelId).toBe('other');
+  });
+});
+
+describe('the hooks', () => {
+  // a screen that reads every store hook; each render is noted outside the component
+  const seen: unknown[][] = [];
+  const note = (row: unknown[]) => { seen.push(row); };
+  function Screen({ onRender }: { onRender: (row: unknown[]) => void }) {
+    onRender([useLocalModels().length, useDownloads().length, useSettings().ctx, usePeers().length, useShare()?.name ?? null]);
+    return null;
+  }
+  it('re-render on every write and let go on unmount', async () => {
+    seen.length = 0;
+    let r!: ReturnType<typeof create>;
+    await act(async () => { r = create(createElement(Screen, { onRender: note })); });
+    expect(seen.at(-1)).toEqual([0, 0, 2048, 0, null]);
+    await act(async () => { rememberModel(local()); });
+    expect(seen.at(-1)).toEqual([1, 0, 2048, 0, null]);
+    await act(async () => { saveSettings({ ctx: 1024 }); saveShare({ secret: 'x', name: 'mine', port: 1 }); });
+    expect(seen.at(-1)).toEqual([1, 0, 1024, 0, 'mine']);
+    await act(async () => { await startDownload(describeModel(CATALOG[1])); });
+    expect(seen.at(-1)).toEqual([1, 1, 1024, 0, 'mine']);
+    const n = seen.length;
+    await act(async () => { r.unmount(); });
+    await act(async () => { rememberModel(local({ id: 'later' })); });
+    expect(seen.length).toBe(n);
   });
 });

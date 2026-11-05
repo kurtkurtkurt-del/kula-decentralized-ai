@@ -96,7 +96,6 @@ describe('the code and the dictionary', () => {
       [...counted].some(([r]) => k === `${r}.one` || k === `${r}.other`) ||
       [...prefixes].some(([p]) => k.startsWith(p));
     const unused = keys.filter((k) => !asked(k));
-    // eslint-disable-next-line no-console
     console.log(`i18n: ${keys.length} keys, ${literal.size} asked for by name, ${prefixes.size} prefixes; ${unused.length} not asked for:\n  ${unused.join('\n  ')}`);
     expect(unused.length).toBeLessThan(keys.length / 3); // a ceiling, so a dictionary nobody reads is noticed
   });

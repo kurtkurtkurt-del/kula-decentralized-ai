@@ -5,6 +5,8 @@
 // and load() in its three modes against a fake native module.
 /* eslint-disable import/first -- jest.mock calls are hoisted above the imports anyway */
 import { afterEach, beforeEach, describe, expect, it, jest } from '@jest/globals';
+import { act, create } from 'react-test-renderer';
+import { createElement } from 'react';
 
 const mockStore = new Map<string, string>();
 jest.mock('expo-sqlite/kv-store', () => ({
@@ -37,7 +39,7 @@ const mockNative = {
 };
 jest.mock('@/llm/native', () => ({ get llama() { return mockNative; }, native: () => mockNative, hasNative: () => true, GATE_PORT: 50551 }));
 
-import { chat, chatRemote, engine, load, unload, type Device } from '@/llm/engine';
+import { chat, chatRemote, engine, load, unload, useEngine, type Device, type EngineState } from '@/llm/engine';
 import { settings, type LocalModel, type Peer } from '@/llm/store';
 
 // ---- the fake xhr -------------------------------------------------------------------------
@@ -235,5 +237,23 @@ describe('load', () => {
     await expect(load(huge, 'split', 1024, [])).rejects.toThrow('toobig');
     expect(engine()).toMatchObject({ error: 'toobig', model: null, loading: null });
     expect(mockNative.unloads).toBe(1);
+  });
+});
+
+describe('useEngine', () => {
+  it('follows the engine through a load and an unload, and stops after unmount', async () => {
+    const seen: (string | null)[] = [];
+    const note = (s: EngineState) => { seen.push(s.model?.id ?? null); };
+    function Screen({ onRender }: { onRender: (s: EngineState) => void }) { onRender(useEngine()); return null; }
+    let r!: ReturnType<typeof create>;
+    await act(async () => { r = create(createElement(Screen, { onRender: note })); });
+    await act(async () => { await load(model, 'alone', 1024, []); });
+    expect(seen.at(-1)).toBe('m');
+    await act(async () => { await unload(); });
+    expect(seen.at(-1)).toBeNull();
+    const n = seen.length;
+    await act(async () => { r.unmount(); });
+    await act(async () => { await load(model, 'alone', 1024, []); });
+    expect(seen.length).toBe(n);
   });
 });
