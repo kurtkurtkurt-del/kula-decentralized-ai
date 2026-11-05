@@ -100,8 +100,11 @@ object Gate {
     internal fun expired(now: Long): Boolean = pin != null && (pinExpiresAt?.let { now > it } ?: false)
   }
 
-  /** The master's side of v2: its identity, the worker's pinned fingerprint from the qr and, until paired, the pairing code. */
+  /** The master's side of v2: its identity, the worker's pinned fingerprint from the qr ("" to learn it, see [PinnedTrust]) and, until paired, the pairing code. */
   class TlsClient(val identity: GateIdentity, val fp: String, val pin: String? = null)
+
+  /** The worker's certificate fingerprint behind a v2 socket [handshake] returned; null for v1. */
+  fun peerFp(s: Socket): String? = (s as? SSLSocket)?.let { runCatching { GateCert.fingerprint(it.session.peerCertificates[0]) }.getOrNull() }
 
   // --- server (worker side) ------------------------------------------------------------
 
@@ -305,11 +308,17 @@ object Gate {
     override fun getAcceptedIssuers(): Array<X509Certificate> = emptyArray()
   }
 
-  /** The client's view of the server: exactly the certificate whose fingerprint the qr gave. */
+  /**
+   * The client's view of the server: exactly the certificate whose fingerprint the qr gave. An
+   * empty [fp] means "learn it" (a peer added by a relay code alone): any certificate passes
+   * here and the pin proof, which covers both fingerprints, decides afterwards; the caller
+   * pins what [handshake] reports from then on.
+   */
   class PinnedTrust(private val fp: String) : X509TrustManager {
     override fun checkClientTrusted(chain: Array<X509Certificate>, authType: String) {}
     override fun checkServerTrusted(chain: Array<X509Certificate>, authType: String) {
-      if (chain.isEmpty() || !constantEquals(GateCert.fingerprint(chain[0]), fp)) throw CertificateException(FP_MISMATCH)
+      if (chain.isEmpty()) throw CertificateException(FP_MISMATCH)
+      if (fp.isNotEmpty() && !constantEquals(GateCert.fingerprint(chain[0]), fp)) throw CertificateException(FP_MISMATCH)
     }
     override fun getAcceptedIssuers(): Array<X509Certificate> = emptyArray()
   }
@@ -344,6 +353,8 @@ object Gate {
     val ssl = wrapClient(s, tls)
     val out = ssl.getOutputStream()
     val inp = ssl.getInputStream()
+    // the fingerprint the proofs cover: the pinned one, or the one just seen when learning
+    val fpS = if (tls.fp.isNotEmpty()) tls.fp else (peerFp(ssl) ?: throw IllegalStateException("gate: $FP_MISMATCH"))
     val nonceC = randomHex(16)
     out.write("$VERSION2 $channel $nonceC ${System.currentTimeMillis()}\n".toByteArray()); out.flush()
     val first = readLine(inp)
@@ -355,11 +366,13 @@ object Gate {
     val pairing = f[1] == "pin"
     val pin = tls.pin
     if (pairing && pin == null) throw IllegalStateException("gate: NO not paired")
-    val proof = if (pairing) pinProofClient(pin!!, nonceC, nonceS, channel, tls.fp, fpC) else "-"
+    // a learned certificate with nothing to prove it: refuse before trusting it
+    if (!pairing && tls.fp.isEmpty()) throw IllegalStateException("gate: NO not paired")
+    val proof = if (pairing) pinProofClient(pin!!, nonceC, nonceS, channel, fpS, fpC) else "-"
     out.write("$proof\n".toByteArray()); out.flush()
     val reply = readLine(inp)
     if (!reply.startsWith("OK ")) throw IllegalStateException("gate: ${reply.ifEmpty { "closed" }}")
-    if (pairing && !constantEquals(reply.substring(3).trim(), pinProofServer(pin!!, nonceC, nonceS, channel, tls.fp, fpC))) throw IllegalStateException("gate: server proof wrong")
+    if (pairing && !constantEquals(reply.substring(3).trim(), pinProofServer(pin!!, nonceC, nonceS, channel, fpS, fpC))) throw IllegalStateException("gate: server proof wrong")
     ssl.soTimeout = 0
     return ssl
   }
@@ -369,7 +382,7 @@ object Gate {
     val ctx = SSLContext.getInstance("TLS")
     ctx.init(tls.identity.keyManagers(), arrayOf(PinnedTrust(tls.fp)), null)
     val host = s.inetAddress?.hostAddress ?: "kula"
-    val ssl = ctx.socketFactory.createSocket(s, host, s.port, true) as SSLSocket
+    val ssl = ctx.socketFactory.createSocket(s, host, if (s.port > 0) s.port else DEFAULT_PORT, true) as SSLSocket
     ssl.useClientMode = true
     ssl.enabledProtocols = arrayOf("TLSv1.3")
     try { ssl.startHandshake() } catch (e: Exception) {
@@ -392,10 +405,25 @@ object Gate {
     return sb.toString()
   }
 
-  /** A 2 s TCP + handshake probe: can this peer be used right now? null when yes, else why not. */
-  fun probe(host: String, port: Int, secret: String, channel: String = "rpc", timeoutMs: Int = 2000, tls: TlsClient? = null): String? =
+  /**
+   * A 2 s TCP + handshake probe: can this peer be used right now? null when yes, else why not.
+   * With [relay] the probe goes through the relay (api channel only; split needs the lan) and
+   * a learned certificate comes back as "ok <fp>" so the caller can pin it.
+   */
+  fun probe(host: String, port: Int, secret: String, channel: String = "rpc", timeoutMs: Int = 2000, tls: TlsClient? = null, relay: Relay.Ref? = null): String? =
     try {
-      Socket().use { s ->
+      if (relay != null) {
+        if (channel != "api") return "remote: split mode needs the lan"
+        val t = tls ?: return "a relayed peer needs tls"
+        val m = Relay.Master.connect(relay.url, relay.code, timeoutMs.toLong().coerceAtLeast(8000))
+        try {
+          val s = m.open()
+          val done = handshake(s, secret, channel, t)
+          val fp = peerFp(done)
+          done.close()
+          if (t.fp.isEmpty() && fp != null) "ok $fp" else null
+        } finally { m.close() }
+      } else Socket().use { s ->
         s.connect(InetSocketAddress(host, port), timeoutMs)
         handshake(s, secret, channel, tls).close()
         null
@@ -406,10 +434,18 @@ object Gate {
    * Local tunnel: llama.cpp connects to 127.0.0.1:<returned port>; each connection is
    * handshaken to the peer's gate and piped. One tunnel per peer; stop() closes it.
    */
-  class Tunnel(private val host: String, private val port: Int, private val secret: String, private val channel: String = "rpc", private val tls: TlsClient? = null) {
+  class Tunnel(private val host: String, private val port: Int, private val secret: String, private val channel: String = "rpc", private var tls: TlsClient? = null, private val relay: Relay.Ref? = null, private val onFp: (String) -> Unit = {}) {
     private var listener: ServerSocket? = null
     @Volatile private var running = false
+    private var master: Relay.Master? = null
     val localPort: Int get() = listener?.localPort ?: 0
+
+    /** The road to the gate: a tcp connection on the lan, or a relayed stream. */
+    private fun road(): Socket {
+      val r = relay ?: return Socket().also { it.connect(InetSocketAddress(host, port), 4000) }
+      val m = master?.takeIf { !it.gone } ?: Relay.Master.connect(r.url, r.code).also { master = it }
+      return m.open()
+    }
 
     fun start(): Int {
       listener = ServerSocket(0, 8, InetAddress.getByName("127.0.0.1"))
@@ -419,9 +455,10 @@ object Gate {
           val local = try { listener!!.accept() } catch (e: Exception) { break }
           thread(isDaemon = true) {
             try {
-              val raw = Socket()
-              raw.connect(InetSocketAddress(host, port), 4000)
+              val raw = road()
               val remote = handshake(raw, secret, channel, tls)
+              // a learned certificate is pinned for every later connection, and the pin is spent
+              peerFp(remote)?.let { fp -> val t = tls; if (t != null && (t.fp.isEmpty() || t.pin != null)) { tls = TlsClient(t.identity, fp, null); onFp(fp) } }
               pipe(local, local.getInputStream(), remote, ByteArray(0))
             } catch (e: Exception) {
               Log.w(TAG, "tunnel to $host:$port: ${e.message}")
@@ -436,6 +473,7 @@ object Gate {
     fun stop() {
       running = false
       runCatching { listener?.close() }
+      master?.close()
     }
   }
 

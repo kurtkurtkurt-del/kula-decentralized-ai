@@ -22,12 +22,15 @@ usage:
       --no-qr           print the json payload only
       --tls             protocol v2: tls between device certificates, qr v3 with a one-time code;
                         v1 is then off unless --secret is given (old phones)
+      --relay <wss://…> also register with that relay so a device far away (behind nat) can come in
+                        with a six digit code; the qr carries it. implies --tls (docs/RELAY.md)
   kula-node probe <host> <port> <secret>   handshake on both channels, print OK/NO
       --fp <hex> [--pin <code>]   probe over tls (v2) against that certificate fingerprint; secret may be "-"
   kula-node ledger [--verify] [--tail N]   print the signed ledger; --verify checks the chain and signatures
 
 running a cluster from this computer:
   kula-node peers add <qr json | code | host:port:secret>   remember a worker (~/.kula-node/peers.json, mode 600)
+  kula-node peers add <6 digits> [pin] --relay <wss://…>    a worker far away, by its relay code (and pairing code); $KULA_RELAY is the default relay
   kula-node peers list [--code]      the peer book; --code prints each peer as a pasteable code
   kula-node peers rm <id | name>     forget a worker
   kula-node peers probe [id…]        tcp + handshake on both channels, 2 s each (--timeout <ms>)
@@ -41,6 +44,7 @@ running a cluster from this computer:
       --model-url <url>  apart: let workers fetch the model from there instead of from this computer
       --keep-local       split: when the model fits here, do not share it anyway
       --probe-ms <n>     how long a worker has to answer before it is dropped (default 2000)
+      a peer far away (relay) is used in apart mode only; split mode leaves it out and says so
 
 files live in ${home()} (KULA_NODE_HOME overrides)
 `;
@@ -116,7 +120,8 @@ export async function main(argv: string[]): Promise<number> {
       secret: secret?.toLowerCase(),
       lieRam: flags['lie-ram'] !== undefined ? num(flags['lie-ram'], 0) : undefined,
       noQr: flags['no-qr'] === true,
-      tls: flags.tls === true,
+      tls: flags.tls === true || typeof flags.relay === 'string',
+      relay: typeof flags.relay === 'string' ? flags.relay : undefined,
     });
     await new Promise<void>((resolve) => {
       const done = () => { stop().finally(resolve); };

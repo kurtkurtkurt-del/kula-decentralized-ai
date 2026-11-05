@@ -7,7 +7,8 @@
 import { Tunnel } from './gate.js';
 import { planWithProbe, simModel, tensorSplit, type Plan, type ProbeFn } from './planner.js';
 import type { SimModel } from './sim.js';
-import type { Peer } from './peers.js';
+import { peerTls, type Peer } from './peers.js';
+import type { GateIdentity } from './tls.js';
 import { freePort, startChild, type Child } from './children.js';
 import type { LlamaBinaries } from './llama.js';
 
@@ -32,17 +33,18 @@ export interface SplitOptions {
   probeMs?: number;
   probe?: ProbeFn;
   log?: Log;
+  identity?: GateIdentity;
 }
 
 // Plans and opens the tunnels. Throws TooBig when even together it does not fit.
 export async function prepareSplit(opts: SplitOptions): Promise<SplitSetup> {
   const log = opts.log ?? (() => {});
   const model = opts.model ?? simModel({ id: 'model', size: opts.modelBytes, layers: 28, hidden: 2048, vocab: 150000, quant: 'Q4_K_M', kv_mb_per_1k: 112 });
-  const plan = await planWithProbe({ model, ctx: opts.ctx ?? 2048, localFreeMb: opts.localFreeMb, localBw: opts.localBw, wanted: opts.peers, share: opts.share ?? true, timeoutMs: opts.probeMs ?? 2000, probe: opts.probe });
+  const plan = await planWithProbe({ model, ctx: opts.ctx ?? 2048, localFreeMb: opts.localFreeMb, localBw: opts.localBw, wanted: opts.peers, share: opts.share ?? true, timeoutMs: opts.probeMs ?? 2000, probe: opts.probe, identity: opts.identity });
   for (const s of plan.skipped) log(`${s.peer.name}: skipped, ${s.why}`);
   const tunnels: SplitSetup['tunnels'] = [];
   for (const u of plan.used) {
-    const t = new Tunnel(u.host, u.port, u.secret, 'rpc');
+    const t = new Tunnel(u.host, u.port, u.secret, 'rpc', opts.identity ? peerTls(u, opts.identity) : null);
     const port = await t.listen();
     tunnels.push({ peer: u, port, close: () => t.close() });
     log(`${u.name}: rpc tunnel 127.0.0.1:${port}, ${u.assignedMb} MB`);

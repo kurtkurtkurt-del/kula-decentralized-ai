@@ -20,10 +20,10 @@ jest.mock('@/lib/offline', () => ({ newId: () => Math.random().toString(36).slic
 
 import { CATALOG } from '@/llm/catalog';
 import { fitOn, fitTogether, needMb, haveMb } from '@/llm/fit';
-import { probeAll } from '@/llm/cluster';
-import { isPeerQr, makePeerQr, parsePeerQr, takePeerQr } from '@/llm/peers';
-import { peerTls } from '@/llm/cluster';
-import { peers } from '@/llm/store';
+import { probeAll, REMOTE_NO_SPLIT } from '@/llm/cluster';
+import { isPeerQr, isRelayCode, isRemote, learnPeer, makePeerQr, parsePeerQr, parseRelayCode, takePeerQr } from '@/llm/peers';
+import { peerRelay, peerTls } from '@/llm/cluster';
+import { peers, rememberPeer, saveSettings } from '@/llm/store';
 import type { Passport } from '@/passport/contract';
 
 const phone = (over: Partial<Passport> = {}): Passport => ({
@@ -138,5 +138,57 @@ describe('the peer qr', () => {
     expect(v2.secret).toBe('cd'.repeat(32));
     expect('fp' in v2).toBe(false);
     for (const q of [v2, v3]) expect(() => parsePeerQr(JSON.stringify(q))).not.toThrow();
+  });
+});
+
+// peers far away (docs/RELAY.md): v3 with a relay, a code typed by hand, and the planner
+describe('a peer far away', () => {
+  const fp = 'cd'.repeat(32);
+  const far = { k: 'kula-peer', v: 3, id: 'w-far', name: 'berlin', host: '10.9.9.9', port: 50551, fp, pin: 'feedfacefeedface', relay: { url: 'https://relay.example/ws', code: '123456' }, kind: 'phone' };
+  it('reads a v3 code with a relay, even without a lan address, and never a relayed v2', () => {
+    expect(isPeerQr(JSON.stringify(far))).toBe(true);
+    const p = parsePeerQr(JSON.stringify(far));
+    expect(p.relay).toEqual({ url: 'wss://relay.example/ws', code: '123456' });
+    expect(isRemote(p)).toBe(true);
+    expect(peerTls(p)).toEqual({ fp, pin: 'feedfacefeedface' });
+    expect(peerRelay(p)).toEqual({ url: 'wss://relay.example/ws', code: '123456' });
+    const noAddress = parsePeerQr(JSON.stringify({ ...far, host: undefined, port: undefined }));
+    expect(noAddress.host).toBe('');
+    expect(noAddress.relay?.code).toBe('123456');
+    expect(() => parsePeerQr(JSON.stringify({ k: 'kula-peer', v: 2, id: 'x', host: 'h', port: 1, secret: 'ab'.repeat(32), relay: far.relay }))).toThrow('notPeer');
+    expect(parsePeerQr(JSON.stringify({ ...far, relay: { url: 'wss://r', code: '12' } })).relay).toBeNull();
+    // the qr this phone makes carries its relay only in v3
+    const base = { id: 'me', name: 'phone', host: '10.0.0.2', port: 50551, kind: 'phone' as const, ram: 3000, bw: 14, passport: null, relay: { url: 'wss://r.example', code: '654321' } };
+    expect(JSON.parse(makePeerQr({ ...base, fp, pin: 'deadbeefdeadbeef' })).relay).toEqual(base.relay);
+    expect('relay' in JSON.parse(makePeerQr({ ...base, secret: 'cd'.repeat(32) }))).toBe(false);
+  });
+  it('takes a relay code typed by hand once the relay is set, learns the certificate later', () => {
+    expect(isRelayCode('123456')).toBe(true);
+    expect(isRelayCode('123456 0123456789ABCDEF')).toBe(true);
+    expect(isRelayCode('12345')).toBe(false);
+    expect(() => parseRelayCode('123456', '')).toThrow('noRelay');
+    const p = parseRelayCode('123456 0123456789ABCDEF', 'https://relay.example');
+    expect(p.relay).toEqual({ url: 'wss://relay.example', code: '123456' });
+    expect(p.fp).toBe('');
+    expect(p.pin).toBe('0123456789abcdef');
+    expect(peerTls(p)).toEqual({ fp: '', pin: '0123456789abcdef' });
+    expect(parseRelayCode('123456', 'wss://relay.example').pin).toBeNull();
+    saveSettings({ relayUrl: 'wss://from.settings' });
+    expect(parseRelayCode('222222').relay?.url).toBe('wss://from.settings');
+    rememberPeer(p);
+    learnPeer(p, fp);
+    const kept = peers().find((x) => x.id === 'relay:123456')!;
+    expect(kept.fp).toBe(fp);
+    expect(kept.pin).toBeNull();
+    expect(kept.paired_at).toBeTruthy();
+  });
+  it('is left out of a split before any probe, with its own reason, and is probed for apart', async () => {
+    const p = parsePeerQr(JSON.stringify(far));
+    const near = { id: 'n', name: 'x', host: '10.0.0.9', port: 50551, secret: 'a'.repeat(64), kind: 'phone' as const, ram: 3000, bw: 10, added_at: '' };
+    const r = await probeAll([p, near], 'rpc');
+    expect(r.ok).toEqual([]);
+    expect(r.bad.map((b) => [b.peer.id, b.why])).toEqual([['w-far', REMOTE_NO_SPLIT], ['n', 'nonative']]);
+    const a = await probeAll([p], 'api');
+    expect(a.bad[0].why).toBe('nonative');
   });
 });

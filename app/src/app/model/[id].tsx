@@ -36,6 +36,9 @@ export default function ModelScreen() {
   const passport = usePassport();
   const linked = useLinked();
   const peers = usePeers();
+  // peers far away (relay) take part in apart mode only
+  const nearPeers = peers.filter((p) => !p.relay);
+  const farPeers = peers.length - nearPeers.length;
   const engine = useEngine();
   useDownloads();
   const wanted = decodeURIComponent(id ?? '');
@@ -138,8 +141,8 @@ export default function ModelScreen() {
   const splitEst = splitMeta || estWord(together);
   const cards: { mode: Mode; title: string; why: string; est: string; fit: string; off: string | null }[] = [
     { mode: 'alone', title: t('mode.alone'), why: fit?.verdict === 'no' ? t('mode.tryAnyway') : t('mode.alone.why'), est: aloneEst, fit: fitWord(fit?.verdict), off: null },
-    { mode: 'apart', title: t('mode.apart'), why: `${t('mode.apart.why')} ${t('mode.beyin')}`, est: apartEst, fit: fitWord(fit?.verdict), off: apartOff },
-    { mode: 'split', title: t('mode.split'), why: t('mode.split.why'), est: splitEst, fit: together ? (together.verdict === 'no' ? t('mode.fit.no') : t('mode.fit.together')) : '', off: splitOff ?? (peers.length && est && !est.split ? (est.splitErr ? tx(`model.err.${est.splitErr}`, est.splitErr) : t('mode.off.toobig')) : null) },
+    { mode: 'apart', title: t('mode.apart'), why: `${t('mode.apart.why')} ${t('mode.beyin')}`, est: `${apartEst}${farPeers ? ` · ${t('mode.apart.remote', { n: farPeers })}` : ''}`, fit: fitWord(fit?.verdict), off: apartOff },
+    { mode: 'split', title: t('mode.split'), why: `${t('mode.split.why')}${farPeers ? ` ${t('mode.split.remote', { n: farPeers })}.` : ''}`, est: splitEst, fit: together ? (together.verdict === 'no' ? t('mode.fit.no') : t('mode.fit.together')) : '', off: splitOff ?? (peers.length && est && !est.split ? (est.splitErr ? tx(`model.err.${est.splitErr}`, est.splitErr) : t('mode.off.toobig')) : null) },
   ];
   const pickedOff = cards.find((c) => c.mode === picked)?.off ?? null;
 

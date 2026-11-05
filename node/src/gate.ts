@@ -44,7 +44,11 @@ export interface TlsServer {
 }
 
 // The master's side of v2: its identity, the worker's fingerprint from the qr
-// and, until paired, the pairing code.
+// and, until paired, the pairing code. An empty fp means "learn it": the peer was
+// added by a relay code alone, so the first connection takes whatever certificate
+// the worker shows and the pin proof, which covers both fingerprints, decides whether
+// that certificate really is the worker's (a relay in the middle fails it). The
+// caller pins the learned fp (handshake returns it) for every later connection.
 export interface TlsClient {
   identity: GateIdentity;
   fp: string;
@@ -313,6 +317,7 @@ export async function startGateServer(opts: GateServerOptions): Promise<GateServ
     const secret = opts.secret;
     let hello: string;
     try { hello = await reader.line(HANDSHAKE_MS); } catch { return refuse('no hello'); }
+    // the phone ends its lines in \r\n
     const parts = hello.trim().split(' ');
     if ((parts.length !== 3 && parts.length !== 4) || parts[0] !== 'KULA1') return refuse('bad hello');
     if (!CHANNELS.includes(parts[1] as Channel)) return refuse('bad channel');
@@ -470,14 +475,16 @@ export class GateRefused extends Error {
 // Wraps an open socket in TLS 1.3 with our certificate, trusting only the pinned
 // fingerprint; no hostname check, peers are ip addresses. Rejects with
 // FP_MISMATCH when the worker shows another certificate.
-export function wrapClient(socket: net.Socket, t: TlsClient, timeoutMs = HANDSHAKE_MS): Promise<tls.TLSSocket> {
+export function wrapClient(socket: Duplex, t: TlsClient, timeoutMs = HANDSHAKE_MS): Promise<tls.TLSSocket> {
   return new Promise((resolve, reject) => {
     const s = tls.connect({ socket, key: t.identity.keyPem, cert: t.identity.certPem, rejectUnauthorized: false, minVersion: 'TLSv1.3', checkServerIdentity: () => undefined });
     const timer = setTimeout(() => { s.destroy(); reject(new Error('tls timeout')); }, timeoutMs);
     s.once('secureConnect', () => {
       clearTimeout(timer);
       const fp = peerFingerprint(s);
-      if (!fp || !sameHex(fp, t.fp)) { s.destroy(); return reject(new Error(FP_MISMATCH)); }
+      if (!fp) { s.destroy(); return reject(new Error(FP_MISMATCH)); }
+      if (t.fp && !sameHex(fp, t.fp)) { s.destroy(); return reject(new Error(FP_MISMATCH)); }
+      if (!t.fp && !t.pin) { s.destroy(); return reject(new GateRefused('not paired')); }
       resolve(s);
     });
     s.once('error', (e) => { clearTimeout(timer); reject(new Error(`tls ${e.message}`)); });
@@ -486,12 +493,16 @@ export function wrapClient(socket: net.Socket, t: TlsClient, timeoutMs = HANDSHA
 
 // Client side. On success `socket` is ready for raw traffic (the TLS socket in
 // v2, the one given in v1); `rest` is what the server already sent after its OK
-// line (normally nothing). With `tls` the v2 handshake runs, else v1.
-export async function handshake(socket: net.Socket, secret: string, channel: Channel, timeoutMs = HANDSHAKE_MS, clockMs?: number, tlsOpts?: TlsClient | null): Promise<{ rest: Buffer; socket: Duplex }> {
+// line (normally nothing); `fp` is the worker's certificate fingerprint in v2 (the
+// pinned one, or the learned one when tlsOpts.fp was empty). With `tls` the v2
+// handshake runs, else v1. The socket may be any duplex stream: a tcp socket on
+// the lan, a relayed stream from far away (relay.ts).
+export async function handshake(socket: Duplex, secret: string, channel: Channel, timeoutMs = HANDSHAKE_MS, clockMs?: number, tlsOpts?: TlsClient | null): Promise<{ rest: Buffer; socket: Duplex; fp: string | null }> {
   if (tlsOpts) {
     const s = await wrapClient(socket, tlsOpts, timeoutMs);
     const reader = new LineReader(s);
     try {
+      const fpS = peerFingerprint(s)!;
       const nonceC = nonce();
       writeLine(s, `KULA2 ${channel} ${nonceC} ${clockMs ?? Date.now()}`);
       const first = await reader.line(timeoutMs);
@@ -501,12 +512,12 @@ export async function handshake(socket: net.Socket, secret: string, channel: Cha
       const pairing = state === 'pin';
       if (pairing && !tlsOpts.pin) throw new GateRefused('not paired');
       const fpC = tlsOpts.identity.fp;
-      writeLine(s, pairing ? pinProofClient(tlsOpts.pin!, nonceC, nonceS, channel, tlsOpts.fp, fpC) : '-');
+      writeLine(s, pairing ? pinProofClient(tlsOpts.pin!, nonceC, nonceS, channel, fpS, fpC) : '-');
       const answer = await reader.line(timeoutMs);
       if (answer.startsWith('NO ')) throw new GateRefused(answer.slice(3));
       if (!answer.startsWith('OK ')) throw new Error(`bad server answer: ${JSON.stringify(answer)}`);
-      if (pairing && !sameHex(answer.slice(3), pinProofServer(tlsOpts.pin!, nonceC, nonceS, channel, tlsOpts.fp, fpC))) throw new Error('server failed its proof');
-      return { rest: reader.release(), socket: s };
+      if (pairing && !sameHex(answer.slice(3), pinProofServer(tlsOpts.pin!, nonceC, nonceS, channel, fpS, fpC))) throw new Error('server failed its proof');
+      return { rest: reader.release(), socket: s, fp: fpS };
     } catch (e) {
       reader.release();
       s.destroy();
@@ -525,7 +536,7 @@ export async function handshake(socket: net.Socket, secret: string, channel: Cha
     if (answer.startsWith('NO ')) throw new GateRefused(answer.slice(3));
     if (!answer.startsWith('OK ')) throw new Error(`bad server answer: ${JSON.stringify(answer)}`);
     if (!sameHex(answer.slice(3), serverProof(secret, nonceC, nonceS, channel))) throw new Error('server failed its proof');
-    return { rest: reader.release(), socket };
+    return { rest: reader.release(), socket, fp: null };
   } catch (e) {
     reader.release();
     throw e;

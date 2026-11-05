@@ -1,6 +1,7 @@
-import { llama, native, type PeerArg, type PeerFound, type PeerTls } from '@/llm/native';
+import { llama, native, type PeerArg, type PeerFound, type PeerRelay, type PeerTls } from '@/llm/native';
 import { DEFAULT_BW, DEFAULT_EFF, LOCAL_SHARE, planShares, type Estimate, type SimNet } from '@/llm/sim/model';
 import { modelProfile, NETWORKS, workerFromPeer } from '@/llm/sim/profiles';
+import { isRemote, learnPeer } from '@/llm/peers';
 import { peers as savedPeers, touchPeer, type LocalModel, type Mode, type Peer } from '@/llm/store';
 
 // The planner (after PrivateLM's cluster_service.dart, 31.10.2026): before a load, which
@@ -22,17 +23,27 @@ export type Plan = {
 
 export { LOCAL_SHARE, WORKER_SHARE } from '@/llm/sim/model';
 
+/** Why a peer far away cannot take part in split mode: every token would cross the internet, and only the api channel is relayed. */
+export const REMOTE_NO_SPLIT = 'remote';
+
 export async function probeAll(list: Peer[], channel: 'rpc' | 'api' = 'rpc'): Promise<{ ok: Peer[]; bad: { peer: Peer; why: string }[] }> {
-  if (!llama) return { ok: [], bad: list.map((peer) => ({ peer, why: 'nonative' })) };
+  // a relayed peer is never probed for split: it is skipped before the native side, with its own reason
+  const far = channel === 'rpc' ? list.filter(isRemote) : [];
+  const near = channel === 'rpc' ? list.filter((p) => !isRemote(p)) : list;
+  if (!llama) return { ok: [], bad: [...far.map((peer) => ({ peer, why: REMOTE_NO_SPLIT })), ...near.map((peer) => ({ peer, why: 'nonative' }))] };
   const n = native();
   const ok: Peer[] = [];
-  const bad: { peer: Peer; why: string }[] = [];
-  await Promise.all(list.map(async (peer) => {
-    const why = await n.probePeer(peer.host, peer.port, peer.secret, channel, peerTls(peer)).catch((e: Error) => e.message);
-    if (why) bad.push({ peer, why });
+  const bad: { peer: Peer; why: string }[] = far.map((peer) => ({ peer, why: REMOTE_NO_SPLIT }));
+  await Promise.all(near.map(async (peer) => {
+    const answer = await n.probePeer(peer.host, peer.port, peer.secret, channel, peerTls(peer), peerRelay(peer)).catch((e: Error) => e.message);
+    // "ok <fp>": a relayed, code-only peer answered and this is its certificate
+    const learned = answer?.startsWith('ok ') ? answer.slice(3) : null;
+    if (answer && !learned) bad.push({ peer, why: answer });
     else {
-      ok.push(peer);
-      touchPeer(peer.id, { last_ok: new Date().toISOString(), ...(peer.pin ? { pin: null, paired_at: new Date().toISOString() } : {}) });
+      const taught = learned ? { ...peer, fp: learned, pin: null } : peer.pin ? { ...peer, pin: null } : peer;
+      ok.push(taught);
+      touchPeer(peer.id, { last_ok: new Date().toISOString() });
+      learnPeer(peer, learned);
     }
   }));
   return { ok, bad };
@@ -76,8 +87,9 @@ export async function relocate(peer: Peer, ms = 4000): Promise<Peer | null> {
 export async function planSplit(model: LocalModel, localFreeMb: number, localBw: number, wanted: Peer[], share: boolean, ctx = 2048, net: SimNet = NETWORKS.wifi5): Promise<Plan> {
   const probed = await probeAll(wanted, 'rpc');
   const skipped = [...probed.bad];
-  // a peer that moved: one try to find it again
+  // a peer that moved: one try to find it again (not one far away: it is not on this wi-fi)
   for (const b of probed.bad) {
+    if (isRemote(b.peer)) continue;
     const moved = await relocate(b.peer);
     if (moved) {
       const again = await probeAll([moved], 'rpc');
@@ -96,8 +108,10 @@ export async function planSplit(model: LocalModel, localFreeMb: number, localBw:
   return { mode: 'split', used, skipped, localMb: sim.localMb, fitsAlone: sim.fitsAlone, totalMb: sim.totalMb, needMb: sim.needMb, aloneFaster: sim.aloneFaster, est: sim.est, estAlone: sim.estAlone };
 }
 
-/** Protocol v2 for a v3 peer (its fingerprint, and the pairing code until the first connection spent it), v1 for a v2 peer. */
-export const peerTls = (p: Pick<Peer, 'fp' | 'pin'>): PeerTls => (p.fp ? { fp: p.fp, pin: p.pin ?? null } : null);
+/** Protocol v2 for a v3 peer (its fingerprint, and the pairing code until the first connection spent it), v1 for a v2 peer. A relayed peer is always v2; an empty fp is learned on the first connection. */
+export const peerTls = (p: Pick<Peer, 'fp' | 'pin' | 'relay'>): PeerTls => (p.fp || p.relay ? { fp: p.fp ?? '', pin: p.pin ?? null } : null);
+/** The road to a peer far away, or null on the lan. */
+export const peerRelay = (p: Pick<Peer, 'relay'>): PeerRelay => p.relay ?? null;
 
 export const peerArgs = (plan: Plan): PeerArg[] => plan.used.map((p) => ({ host: p.host, port: p.port, secret: p.secret, weight: p.assignedMb, fp: p.fp ?? null, pin: p.pin ?? null }));
 

@@ -19,6 +19,8 @@ the connection, unchanged, to the local port of the requested channel.
 | `rpc` | `ggml-rpc-server` on 127.0.0.1 | split mode (one master at a time) |
 | `api` | `ApiServer.kt` / `node/src/api.ts` / dev-gate's shim on 127.0.0.1 | apart mode, the night |
 
+To reach a device behind another NAT the gate does not change: the relay pipes the two ends and v2 TLS runs end to end inside the pipe; see `docs/RELAY.md`.
+
 A master never talks to the gate directly either: it opens a **tunnel**, a listener on its
 own 127.0.0.1 that does the handshake once and then pipes bytes both ways. llama.cpp or the
 HTTP client is given `127.0.0.1:<tunnel port>`.

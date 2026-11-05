@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Platform, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import * as Brightness from 'expo-brightness';
 import QRCode from 'react-native-qrcode-svg';
 import Button from '@/components/Button';
@@ -8,9 +8,9 @@ import { useAppSize } from '@/hooks/useAppSize';
 import { useLang } from '@/i18n';
 import { hasNative, llama, type WorkerStatus } from '@/llm/native';
 import { explain } from '@/llm/errors';
-import { myPeerQr } from '@/llm/peers';
+import { myPeerQr, relayUrlOf } from '@/llm/peers';
 import { tapDone, tapSelect } from '@/lib/haptics';
-import { saveShare, share, useShare } from '@/llm/store';
+import { saveSettings, saveShare, settings, share, useShare } from '@/llm/store';
 import { colors, fonts, radius } from '@/theme/tokens';
 
 // "share this phone": starts the worker (its own process; the gate on the network, ggml's
@@ -18,6 +18,10 @@ import { colors, fonts, radius } from '@/theme/tokens';
 // The code is v3 once the worker reports its certificate (tls, a one-time pairing code that
 // changes after each pairing; the poll below picks the new one up), v2 with the secret before.
 // The screen stays on while sharing: Android gives the worker all cores only then.
+// "share far away" (5.11.2026): the worker also connects out to a relay and the code carries
+// the relay's address and a six digit code, so a device behind another nat can come in; the
+// relay only pipes encrypted bytes (docs/RELAY.md). The relay address is remembered in the
+// llm settings and is the default for "add by code" on the peers page.
 export default function ShareScreen() {
   const { t, tx, up } = useLang();
   const { width } = useAppSize();
@@ -26,6 +30,8 @@ export default function ShareScreen() {
   const [status, setStatus] = useState<WorkerStatus | null>(null);
   const [wifi, setWifi] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  const [far, setFar] = useState<boolean>(() => !!share()?.relay);
+  const [relayUrl, setRelayUrl] = useState<string>(() => settings().relayUrl);
 
   useEffect(() => {
     if (!hasNative()) return;
@@ -73,8 +79,10 @@ export default function ShareScreen() {
     setErr(null);
     tapSelect();
     try {
-      const { qr, share } = await myPeerQr();
-      await llama!.startWorker(share.port, share.secret, share.name);
+      const relay = far && relayUrl.trim() ? relayUrlOf(relayUrl) : null;
+      if (relay) saveSettings({ relayUrl: relay });
+      const { qr, share } = await myPeerQr({ relay });
+      await llama!.startWorker(share.port, share.secret, share.name, relay);
       setQr(qr);
       tapDone();
       llama!.requestBatteryUnrestricted().catch(() => {});
@@ -117,10 +125,33 @@ export default function ShareScreen() {
           </View>
           <Text style={styles.mono}>{up(`${mine?.name ?? ''} · ${wifi ?? ''}:${mine?.port ?? ''}`)}</Text>
           {status?.fp ? <Text style={styles.mono}>{up(`${t('share.fp')} ${status.fp.slice(0, 8)} ${status.fp.slice(8, 16)}${status.pin ? ` · ${t('share.pin')} ${status.pin}` : ''}`)}</Text> : null}
+          {mine?.relay ? (
+            status?.relay ? (
+              <>
+                <Text style={styles.code}>{status.relay.code.slice(0, 3)} {status.relay.code.slice(3)}</Text>
+                <Text style={styles.mono}>{up(`${t('share.relayCode')} · ${status.relay.url.replace(/^wss?:\/\//, '')}`)}</Text>
+                <Text style={styles.hint}>{t('share.relaySay')}</Text>
+              </>
+            ) : (
+              <Text style={styles.hint}>{status?.relayError ? t('share.relayError', { err: status.relayError }) : t('share.relayWaiting')}</Text>
+            )
+          ) : null}
           <Text style={styles.hint}>{t('share.screen')}{Platform.OS === 'web' ? '' : ` ${t('share.bright')}.`}</Text>
         </View>
       ) : null}
       {err ? <Text style={styles.err} accessibilityRole="alert">{err}</Text> : null}
+      {state !== 'running' && state !== 'starting' ? (
+        <View style={styles.farBox}>
+          <Pressable onPress={() => setFar((v) => !v)} hitSlop={8} style={styles.farRow} accessibilityRole="switch" accessibilityState={{ checked: far }} testID="share-far">
+            <View style={[styles.box, far && styles.boxOn]} />
+            <Text style={styles.farLabel}>{t('share.far')}</Text>
+          </Pressable>
+          <Text style={styles.hint}>{t('share.far.hint')}</Text>
+          {far ? (
+            <TextInput value={relayUrl} onChangeText={setRelayUrl} placeholder={t('share.relayUrl')} placeholderTextColor={colors.meta} autoCapitalize="none" autoCorrect={false} keyboardType="url" style={styles.input} testID="share-relay-url" />
+          ) : null}
+        </View>
+      ) : null}
       <View style={styles.actions}>
         {state === 'running' || state === 'starting' ? <Button label={t('share.stop')} onPress={stop} kind="line" /> : <Button label={t('share.start')} onPress={start} kind="red" />}
       </View>
@@ -142,5 +173,12 @@ const styles = StyleSheet.create({
   mono: { fontFamily: fonts.jet, fontSize: 11, letterSpacing: 1, color: colors.mute },
   hint: { fontFamily: fonts.regular, fontSize: 12, lineHeight: 17, color: colors.mute, textAlign: 'center' },
   err: { fontFamily: fonts.medium, fontSize: 13, color: colors.violet, marginTop: 12 },
+  code: { fontFamily: fonts.jet, fontSize: 30, letterSpacing: 4, color: colors.paper, marginTop: 8 },
+  farBox: { marginTop: 20, gap: 8 },
+  farRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  box: { width: 18, height: 18, borderRadius: 4, borderWidth: 1.5, borderColor: colors.paper },
+  boxOn: { backgroundColor: colors.spotText, borderColor: colors.spotText },
+  farLabel: { fontFamily: fonts.medium, fontSize: 14, color: colors.paper },
+  input: { height: 44, borderBottomWidth: 1, borderBottomColor: colors.ink3, fontFamily: fonts.regular, fontSize: 13, color: colors.paper },
   actions: { marginTop: 24, gap: 10 },
 });

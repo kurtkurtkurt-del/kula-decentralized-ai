@@ -1,0 +1,15 @@
+# render blueprint: a web service from the Dockerfile; render terminates tls, the url is wss://<name>.onrender.com
+services:
+  - type: web
+    name: kula-relay
+    runtime: docker
+    plan: free
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /health
+    envVars:
+      - key: PORT
+        value: "8787"
+      - key: RELAY_CODE_TTL_S
+        value: "600"
+      - key: RELAY_MAX_MB
+        value: "1024"

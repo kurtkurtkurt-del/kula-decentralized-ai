@@ -17,6 +17,7 @@ import { startApiServer, type ApiServer } from './api.js';
 import { loadOrCreate } from './audit/key.js';
 import { Ledger } from './audit/ledger.js';
 import { Auditor } from './audit/auditor.js';
+import { startRelayWorker, type RelayWorker } from './relay.js';
 
 export interface ShareOptions {
   port: number;
@@ -27,6 +28,8 @@ export interface ShareOptions {
   noQr?: boolean;
   // protocol v2: the gate also speaks tls and the qr is v3 (fingerprint + one-time code)
   tls?: boolean;
+  // far away masters: connect out to this relay, register, put the code in the qr (docs/RELAY.md). implies tls.
+  relay?: string;
 }
 
 // The qr the phone scans. v2 carries the shared secret (protocol v1); v3 carries
@@ -42,6 +45,7 @@ export interface PeerPayload {
   secret?: string;
   fp?: string;
   pin?: string;
+  relay?: { url: string; code: string };
   kind: 'pc';
   ram: number;
   bw: number;
@@ -140,14 +144,18 @@ export async function share(opts: ShareOptions): Promise<() => Promise<void>> {
 
   // protocol v2: this computer's certificate, the phones it has paired with, a one-time code per qr
   let tlsServer: TlsServer | undefined;
+  let relay: RelayWorker | null = null;
   const printQr = (port: number) => {
     const common = { k: 'kula-peer' as const, id, name, host: host ?? '0.0.0.0', port, kind: 'pc' as const, ram, bw, gpu: gpu.name, vram: gpu.vramMB };
     const payload: PeerPayload = tlsServer ? { ...common, v: 3, fp: tlsServer.identity.fp, pin: tlsServer.pin ?? undefined } : { ...common, v: 2, secret: secret! };
+    if (relay?.code && opts.relay) payload.relay = { url: opts.relay, code: relay.code };
     const text = JSON.stringify(payload);
     if (!opts.noQr) qrcode.generate(text, { small: true }, (q) => console.log(q));
     console.log(text);
+    if (payload.relay) console.log(`far away: kula-node peers add "${payload.relay.code}${payload.pin ? ' ' + payload.pin : ''}" --relay ${payload.relay.url}`);
     console.log();
   };
+  if (opts.relay && !opts.tls) { opts = { ...opts, tls: true }; log('--relay implies --tls: the handshake crosses the relay and must be end to end'); }
   if (opts.tls) {
     const identity = loadOrCreateIdentity(home(), key);
     const paired = new Paired(path.join(home(), 'paired'));
@@ -159,6 +167,19 @@ export async function share(opts: ShareOptions): Promise<() => Promise<void>> {
 
   const gate = await startGateServer({ port: opts.port, secret, targets, onEvent, admit: (peer, nonceC, unixMs) => auditor.hello(peer, nonceC, unixMs), tls: tlsServer });
   log(`gate listening on 0.0.0.0:${gate.port}${tlsServer ? (secret ? ' (v1 and v2 tls)' : ' (v2 tls only)') : ''}`);
+  if (opts.relay) {
+    // the relay sees this computer's id, name and certificate fingerprint, nothing more; a
+    // relayed stream reaches the gate from 127.0.0.1 and is served like any other
+    try {
+      relay = await startRelayWorker({
+        url: opts.relay, id, name, fp: tlsServer!.identity.fp, gatePort: gate.port, log,
+        onCode: (code, ttl) => { log(`relay code ${code} (good for ${Math.round(ttl / 60)} min)`); if (relay) printQr(gate.port); },
+        onMaster: (state) => log(state === 'connected' ? 'a master came in through the relay' : 'the master left the relay'),
+      });
+    } catch (e) {
+      log(`relay: ${(e as Error).message}; sharing on the lan only`);
+    }
+  }
   printQr(gate.port);
 
   const bonjour = new Bonjour();
@@ -180,6 +201,7 @@ export async function share(opts: ShareOptions): Promise<() => Promise<void>> {
     log('stopping');
     await new Promise<void>((r) => bonjour.unpublishAll(() => r()));
     bonjour.destroy();
+    await relay?.close();
     await gate.close();
     if (api) await api.close();
     if (rpc) await rpc.stop();

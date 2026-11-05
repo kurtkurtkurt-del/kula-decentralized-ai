@@ -37,6 +37,12 @@ class KulaLlamaModule : Module() {
     val fp = m?.get("fp") as? String ?: return null
     return Gate.TlsClient(identity, fp.lowercase(), m["pin"] as? String)
   }
+  /** `{url, code}` for a peer far away (docs/RELAY.md), null on the lan. */
+  private fun relayOf(m: Map<String, Any?>?): Relay.Ref? {
+    val url = m?.get("url") as? String ?: return null
+    val code = m["code"] as? String ?: return null
+    return Relay.Ref(url, code)
+  }
   private var discovery: Discovery? = null
   private var downloader: ModelDownloader? = null
   private var bound = false
@@ -164,11 +170,12 @@ class KulaLlamaModule : Module() {
 
     // --- peers --------------------------------------------------------------------------
     /** `tls` is `{fp, pin?}` for a v3 peer (protocol v2 over tls), null for a v2 peer (the secret). */
-    AsyncFunction("probePeer") { host: String, port: Int, secret: String, channel: String, tls: Map<String, Any?>? -> Gate.probe(host, port, secret, channel, tls = tlsOf(tls)) }
-    /** Opens (or reuses) an `api` tunnel to a peer; JS talks HTTP to 127.0.0.1:<port>. */
-    AsyncFunction("apiTunnel") { host: String, port: Int, secret: String, tls: Map<String, Any?>? ->
-      val key = "api:$host:$port"
-      tunnels[key]?.localPort ?: Gate.Tunnel(host, port, secret, "api", tlsOf(tls)).let { t -> t.start().also { tunnels[key] = t } }
+    AsyncFunction("probePeer") { host: String, port: Int, secret: String, channel: String, tls: Map<String, Any?>?, relay: Map<String, Any?>? -> Gate.probe(host, port, secret, channel, tls = tlsOf(tls), relay = relayOf(relay)) }
+    /** Opens (or reuses) an `api` tunnel to a peer; JS talks HTTP to 127.0.0.1:<port>. With `relay` the road is the relay. */
+    AsyncFunction("apiTunnel") { host: String, port: Int, secret: String, tls: Map<String, Any?>?, relay: Map<String, Any?>? ->
+      val r = relayOf(relay)
+      val key = if (r != null) "api:relay:${r.code}@${r.url}" else "api:$host:$port"
+      tunnels[key]?.localPort ?: Gate.Tunnel(host, port, secret, "api", tlsOf(tls), r).let { t -> t.start().also { tunnels[key] = t } }
     }
     /** This phone's own certificate fingerprint (what a worker pins once paired). */
     AsyncFunction("gateFingerprint") { identity.fp }
@@ -181,9 +188,10 @@ class KulaLlamaModule : Module() {
     }
 
     // --- worker (this phone shared) --------------------------------------------------------
-    AsyncFunction("startWorker") { port: Int, secret: String, name: String ->
+    AsyncFunction("startWorker") { port: Int, secret: String, name: String, relay: String? ->
       val intent = Intent(context, WorkerService::class.java).putExtra(WorkerService.EXTRA_PORT, port)
         .putExtra(WorkerService.EXTRA_SECRET, secret).putExtra(WorkerService.EXTRA_NAME, name)
+      if (!relay.isNullOrBlank()) intent.putExtra(WorkerService.EXTRA_RELAY, relay)
       ContextCompat.startForegroundService(context, intent)
     }
     AsyncFunction("stopWorker") {
@@ -202,6 +210,9 @@ class KulaLlamaModule : Module() {
         // protocol v2: the worker's certificate and the open pairing code for the v3 qr
         "fp" to s.optString("fp").ifEmpty { null }?.takeIf { alive }, "pin" to s.optString("pin").ifEmpty { null }?.takeIf { alive && !s.isNull("pin") },
         "paired" to s.optInt("paired"),
+        // far away: the relay and the code this worker can be reached by (docs/RELAY.md)
+        "relay" to s.optJSONObject("relay")?.takeIf { alive }?.let { mapOf("url" to it.optString("url"), "code" to it.optString("code")) },
+        "relayError" to s.optString("relayError").ifEmpty { null }?.takeIf { alive },
       )
     }
     AsyncFunction("gateLedger") { limit: Int -> auditTail(limit) }
