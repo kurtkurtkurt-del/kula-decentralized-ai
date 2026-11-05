@@ -144,7 +144,9 @@ createServer({ allowHalfOpen: true }, (sock) => {
       buf = buf.subarray(nl + 1);
       if (step === 0) {
         const p = line.split(' ');
-        if (p.length !== 3 || p[0] !== 'KULA1') return refuse('bad hello');
+        // 3 fields (v1) or 4 with the client's clock (v1.1, Gate.kt / node/src/gate.ts); the clock is not checked here
+        if ((p.length !== 3 && p.length !== 4) || p[0] !== 'KULA1') return refuse('bad hello');
+        if (p.length === 4 && !/^\d{1,16}$/.test(p[3])) return refuse('bad hello');
         if (p[1] !== 'rpc' && p[1] !== 'api') return refuse('bad channel');
         if (!/^[0-9a-f]{32}$/.test(p[2])) return refuse('bad nonce');
         channel = p[1]; nonceC = p[2]; nonceS = randomBytes(16).toString('hex');
