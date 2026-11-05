@@ -78,7 +78,9 @@ export default function ModelScreen() {
   const pick = (mode: Mode) => {
     // split on a model that fits alone: ask whether to keep it here
     if (mode === 'split' && fit && fit.verdict !== 'no') return setShareQ(mode);
-    start(mode);
+    // choosing split is choosing to share: the planner's live free-RAM figure can say "fits
+    // alone" where the passport said no, and must not quietly keep every layer here
+    start(mode, mode === 'split');
   };
 
   const rows: [string, string][] = [
