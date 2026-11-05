@@ -1,7 +1,7 @@
 #!/bin/sh
-# afterhours — a push to main needs a passing gate proof for the exact tree it pushes.
+# kula — a push to main needs a passing gate proof for the exact tree it pushes.
 # Installed by `npm install` in backend/ (postinstall → git config core.hooksPath).
-# A push of documents alone (.md, .claude/, prototypes/) is let through: prose cannot
+# A push of documents alone (.md, .claude/) is let through: prose cannot
 # break code. Everything else: commit → `npm run gate` (in backend/) → push.
 # Bypassing this with --no-verify is a lie to yourself; the CI runs the same checks.
 
@@ -18,7 +18,7 @@ while read local_ref local_sha remote_ref remote_sha; do
   else
     changed=$(git diff-tree --no-commit-id --name-only -r "$local_sha")
   fi
-  code=$(printf '%s\n' "$changed" | grep -vE '(\.md$|^\.claude/|^prototypes/|^\.claude/prompts/)' | grep -v '^$' || true)
+  code=$(printf '%s\n' "$changed" | grep -vE '(\.md$|^\.claude/)' | grep -v '^$' || true)
   [ -z "$code" ] && continue
 
   tree=$(git rev-parse "$local_sha^{tree}")

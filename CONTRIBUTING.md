@@ -60,7 +60,7 @@ Mac-as-worker recipe (`tools/dev-gate.mjs`) are in the progress log under "nası
 | `app/modules/kula-llama/audit-jvm` | `gradle test` | the Kotlin gate and audit tests without an Android SDK (JDK 21) |
 | `app/android` | `./gradlew :kula-llama:testReleaseUnitTest` | the same Kotlin tests with the SDK |
 | `backend/` | `npm test` | the schema, the rules, the seeds on PGlite |
-| root | `node tools-docs-links.mjs` | every relative link and anchor in the markdown resolves |
+| root | `node tools/docs-links.mjs` | every relative link and anchor in the markdown resolves |
 
 Run types, lint and jest before saying a task is done. CI (`.github/workflows/test.yml`)
 runs the backend and the app's checks on every push to `main` and every pull request.
@@ -97,7 +97,7 @@ holds the newest merged state is named at the top of the progress log.
 English for the code, the comments and the docs in `docs/` except the Turkish user guide
 and the progress log. Headings in lower case, short sentences, no superlatives. When a
 screen, a rule or a file changes, the page that describes it changes in the same commit,
-and `node tools-docs-links.mjs` stays green.
+and `node tools/docs-links.mjs` stays green.
 
 ## reporting a security problem
 

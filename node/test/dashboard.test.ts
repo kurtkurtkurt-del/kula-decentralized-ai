@@ -79,8 +79,8 @@ async function sseFirst(url: string, want = 1): Promise<{ events: { event: strin
   return { events, text };
 }
 
-test('qr: the same modules as passport/qr.js, level m, finders in the corners, an svg', () => {
-  const code = fs.readFileSync(path.join(here, '..', '..', 'passport', 'qr.js'), 'utf8');
+test('qr: the same modules as web/passport/qr.js, level m, finders in the corners, an svg', () => {
+  const code = fs.readFileSync(path.join(here, '..', '..', 'web', 'passport', 'qr.js'), 'utf8');
   const ctx: any = { window: {} };
   vm.createContext(ctx);
   vm.runInContext(code, ctx);

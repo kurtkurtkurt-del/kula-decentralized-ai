@@ -1,4 +1,4 @@
-/* afterhours — the gate: every check, then a proof bound to the tree it checked.
+/* kula — the gate: every check, then a proof bound to the tree it checked.
 
    "I ran the tests" used to be a sentence. Now it is a file: .qa/gate-proof.json at
    the repo root, with the tree hash of HEAD (the exact file contents of the commit),
@@ -7,9 +7,10 @@
    passing proof; a proof over a dirty tree says so and counts for nothing there.
    Order: commit → npm run gate → push.
 
-   Layers, in order: the backend's 858+ checks on PGlite, the app's types, lint and
-   unit tests, the site walk. No pipes anywhere: a pipe's exit code is the last
-   command's, not the gate's (a trap KULA's log recorded). */
+   Layers, in order: the sql stamps, the backend's checks on PGlite, the app's types, lint
+   and unit tests, the passport core snapshot, the Mac passport script (web/passport/mac.sh)
+   and the docs links. No pipes anywhere: a pipe's exit code is the last command's, not the
+   gate's. */
 
 import { execFileSync, spawnSync } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";
@@ -28,7 +29,8 @@ const layers = [
   ["app lint", "npx", ["expo", "lint"], "app"],
   ["app tests", "npm", ["test", "--", "--ci"], "app"],
   ["passport core", "npm", ["run", "passport:check"], "app"],
-  ["site", "python3", ["tools-site-check.py"], "."],
+  ["mac passport script", "python3", ["tools/passport-mac.py", "--check"], "."],
+  ["docs links", "node", ["tools/docs-links.mjs"], "."],
 ];
 const timings = {};
 let ok = true;

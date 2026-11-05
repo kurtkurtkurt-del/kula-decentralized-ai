@@ -1,4 +1,4 @@
-/* pasaport — the status check.
+/* kula — the status check.
    Is the database up, is the content in place, which of the SQL files have
    actually been run, and what wants attention.
    A non-zero exit code means something is wrong; a scheduled job can hook onto it.
@@ -8,10 +8,10 @@
 import { readFile } from "node:fs/promises";
 import { EXPECTED_SQL } from "./expected-sql.mjs";
 
-const text = await readFile(new URL("../../config.js", import.meta.url), "utf8");
+const text = await readFile(new URL("../../web/config.js", import.meta.url), "utf8");
 const box = {};
 new Function("window", text)(box);
-const config = box.PP_CONFIG || box.AH_CONFIG || {};
+const config = box.KULA_CONFIG || {};
 
 const address = (process.argv[2] || config.url || "").replace(/\/$/, "");
 const key = process.argv[3] || config.anonKey || "local";
@@ -40,7 +40,7 @@ try {
 const took = Date.now() - started;
 const count = (a) => Number(a || 0);
 
-console.log(`\npasaport · ${address}`);
+console.log(`\nkula · ${address}`);
 console.log(`response time       ${took} ms\n`);
 console.log(`projects            ${count(reply.projects)} (${count(reply.open_projects)} open)`);
 console.log(`people              ${count(reply.people)} · ${count(reply.passports)} with a passport`);

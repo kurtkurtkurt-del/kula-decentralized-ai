@@ -1,4 +1,4 @@
-/* pasaport — A LOCAL DEVELOPMENT SERVER. NOT Supabase.
+/* kula — A LOCAL DEVELOPMENT SERVER. NOT Supabase.
    It imitates the endpoints we use (a small subset of PostgREST and
    GoTrue) on top of PGlite. It exists for one reason: to run and test the
    live path for real before the project is opened.
@@ -364,6 +364,6 @@ const server = createServer(async (req, reply) => {
 server.listen(PORT, () => {
   console.log(`\nLOCAL imitation server: http://localhost:${PORT}`);
   console.log("This is NOT Supabase; for development only.\n");
-  console.log("for config.js:");
+  console.log("for web/config.js (or app/.env.development.local):");
   console.log(`  url: "http://localhost:${PORT}", anonKey: "local"\n`);
 });

@@ -1,4 +1,4 @@
-/* pasaport — the files a finished database has run, in order. Three things ask the same
+/* kula — the files a finished database has run, in order. Three things ask the same
    question: the health check, the setup build, the tests (test/lib.mjs builds up to the
    file under test). app/src/data/expectedSql.ts is a copy (setup.test.mjs checks). */
 export const EXPECTED_SQL = [

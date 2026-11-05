@@ -1,9 +1,9 @@
-# afterhours — a copy of the content every night, kept 90 days; and, since
+# kula — a copy of the content every night, kept 90 days; and, since
 # 12.10.2026, a copy of EVERYTHING in the public schema (profiles, friendships,
-# cards, groups: the personal data), encrypted, kept 30 days.
+# devices, night reports: the personal data), encrypted, kept 30 days.
 #
-# tools/backup.mjs reads with the public key in config.js, as the site does:
-# the nights, venues, djs and comments everyone can see. Each run is stored
+# tools/backup.mjs reads with the public key in web/config.js: the projects, their
+# abouts and samples, what everyone can see. Each run is stored
 # as a workflow artifact (Actions → backup → the run → Artifacts) and turned
 # back into SQL with `node tools/restore.mjs <file>`. Supabase keeps its own
 # daily backup on paid plans; this one is ours and does not depend on the plan.
@@ -12,7 +12,7 @@
 #   SUPABASE_DB_URL     Supabase → Settings → Database → connection string, session mode
 #   BACKUP_PASSPHRASE   any long sentence; the dump is useless without it
 # Without them the job says so and ends green. Restoring: download the artifact,
-# `gpg --decrypt afterhours-data-<run>.sql.gpg > data.sql` (auth.users first, then public), then psql it into a
+# `gpg --decrypt kula-data-<run>.sql.gpg > data.sql` (auth.users first, then public), then psql it into a
 # fresh project whose structure is in (setup-1, setup-2) — never into the live one
 # without a look first.
 
@@ -39,8 +39,8 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: afterhours-${{ github.run_id }}
-          path: backend/backup/afterhours-*.json
+          name: kula-${{ github.run_id }}
+          path: backend/backup/kula-*.json
           retention-days: 90
 
   personal:
@@ -81,12 +81,12 @@ jobs:
           ( /usr/lib/postgresql/17/bin/pg_dump "$SUPABASE_DB_URL" --data-only --table=auth.users --column-inserts --no-owner --no-privileges \
             && /usr/lib/postgresql/17/bin/pg_dump "$SUPABASE_DB_URL" --data-only --schema=public --no-owner --no-privileges ) \
             | gpg --batch --yes --symmetric --cipher-algo AES256 --passphrase "$BACKUP_PASSPHRASE" \
-            -o "afterhours-data-${{ github.run_id }}.sql.gpg"
-          ls -la afterhours-data-*.sql.gpg
+            -o "kula-data-${{ github.run_id }}.sql.gpg"
+          ls -la kula-data-*.sql.gpg
 
       - uses: actions/upload-artifact@v4
         if: steps.secrets.outputs.ready == 'yes'
         with:
-          name: afterhours-data-${{ github.run_id }}
-          path: afterhours-data-*.sql.gpg
+          name: kula-data-${{ github.run_id }}
+          path: kula-data-*.sql.gpg
           retention-days: 30

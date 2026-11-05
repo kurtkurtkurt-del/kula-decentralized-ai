@@ -1,6 +1,0 @@
-# afterhours
-User-agent: *
-Allow: /
-Disallow: /admin/
-
-Sitemap: https://kurtkurtkurt-del.github.io/afterhours/sitemap.xml
