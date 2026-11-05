@@ -25,7 +25,7 @@ export type PeerQr = {
 export function isPeerQr(text: string): boolean {
   try {
     const o = JSON.parse(text);
-    return o && o.k === 'kula-peer' && typeof o.secret === 'string' && typeof o.host === 'string';
+    return !!o && o.k === 'kula-peer' && typeof o.secret === 'string' && typeof o.host === 'string';
   } catch {
     return false;
   }
