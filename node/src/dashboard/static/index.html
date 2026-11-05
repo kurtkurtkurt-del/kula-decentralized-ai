@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="tr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>kula-node</title>
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<main>
+  <header>
+    <h1>kula-node <span id="who">·</span></h1>
+    <span class="chip" id="mode">…</span>
+    <span class="chip" id="live">bağlanıyor</span>
+    <span class="chip" id="up"></span>
+  </header>
+
+  <div class="grid">
+    <section class="card" id="c-self">
+      <h2>bu bilgisayar</h2>
+      <p class="big" id="self-name">…</p>
+      <p class="sub" id="self-sub"></p>
+      <dl id="self-facts" class="mt"></dl>
+      <p class="hint" id="self-hint" class="mt2"></p>
+    </section>
+
+    <section class="card" id="c-gate">
+      <h2>kapı</h2>
+      <p class="big wait" id="gate-state">…</p>
+      <p class="sub" id="gate-sub"></p>
+      <dl id="gate-facts" class="mt"></dl>
+    </section>
+
+    <section class="card" id="c-traffic">
+      <h2>kanal trafiği</h2>
+      <table><thead><tr><th>kanal</th><th>açık</th><th>açılış</th><th>giren</th><th>çıkan</th><th>ret</th></tr></thead><tbody id="traffic"></tbody></table>
+    </section>
+
+    <section class="card" id="c-model">
+      <h2>model <span class="right"><span class="chip" id="model-busy" hidden>meşgul</span></span></h2>
+      <p class="big" id="model-name">yüklü değil</p>
+      <p class="sub" id="model-sub"></p>
+      <div class="row" id="model-load" hidden>
+        <select id="model-pick"></select>
+        <button id="model-go" class="line">yükle</button>
+        <span class="hint" id="model-msg"></span>
+      </div>
+    </section>
+
+    <section class="card wide" id="c-peers">
+      <h2>eşler <span class="right"><button id="probe" class="line">yokla</button></span></h2>
+      <table><thead><tr><th>ad</th><th>rozet</th><th>adres</th><th>ram</th><th>bw</th><th>rpc</th><th>api</th><th>son</th></tr></thead><tbody id="peers"></tbody></table>
+      <p class="hint" id="peers-empty" hidden>eş yok. telefonun qr'ını <code>kula-node peers add</code> ile ekle.</p>
+    </section>
+
+    <section class="card" id="c-qr">
+      <h2>eşleşme</h2>
+      <div class="qr" id="qr" hidden><img id="qr-img" alt="eşleşme qr kodu"></div>
+      <p class="hint" id="qr-hint">kula → birlikte → bilgisayar ekle → bu kodu okut. kod kümenin sırrını taşır: sayfadaki tek yeri bu resim.</p>
+    </section>
+
+    <section class="card" id="c-ledger">
+      <h2>defter <span class="right"><button id="verify" class="line">zinciri doğrula</button></span></h2>
+      <p class="sub" id="ledger-state">…</p>
+      <pre class="ledger" id="ledger" class="mt2"></pre>
+    </section>
+
+    <section class="card wide" id="c-chat">
+      <h2>sohbet testi <span class="right"><select id="chat-dev"></select></span></h2>
+      <p class="hint">ayrı mod: istem tek bir cihaza gider, cevap buradan akar. yalnız bu bilgisayardan.</p>
+      <div class="out" id="chat-out"></div>
+      <div class="row">
+        <textarea id="chat-in" placeholder="bir şey sor…"></textarea>
+      </div>
+      <div class="row">
+        <button id="chat-send">gönder</button>
+        <button id="chat-reset" class="line">sıfırla</button>
+        <span class="hint" id="chat-stat"></span>
+      </div>
+    </section>
+
+    <section class="card wide" id="c-batch">
+      <h2>toplu test <span class="right"><button id="batch-go">8 istem gönder</button></span></h2>
+      <p class="hint" id="batch-stat">sekiz istem, en hızlı boş cihaza sırayla. cihaz başına tok/s.</p>
+      <div class="bars" id="bars"></div>
+      <pre id="batch-log" class="mt"></pre>
+    </section>
+
+    <section class="card wide" id="c-log">
+      <h2>günlük</h2>
+      <pre class="log" id="log"></pre>
+    </section>
+  </div>
+</main>
+<script src="app.js"></script>
+</body>
+</html>
