@@ -117,3 +117,37 @@ Hepsi emülatörde (`kula35`) + Mac'te `tools/dev-gate.mjs` ile denendi; commit'
   açılmalı.** Önerilen brief: ILERLEME'yi oku → dört cloud dalını gözden geçir (birleştirme yok) → emülatör + dev-gate
   ile bir küme turu daha → gerekiyorsa `app/` içinde `npm run apk` → en üste "sabah özeti".
 - Bu oturumda başka iş yapılmadı; ağaç temiz, HEAD `1873df7` + bu not.
+
+## 5.11 cloud: `claude/night-2` (gece planlayıcısı, sabah raporu)
+
+`origin/claude/vibrant-cori-y4ox9r` (gerçek `LlamaWorker`) üstüne `release/local-2026-10-20` birleştirildi
+(çakışma yok; `engine.ts`'teki `chatRemote` düzeltmesiyle 66 eski test yeşil kaldı). Eklenenler, hepsi `app/src/night/`:
+
+- `conditions.ts`: saf `evaluate(facts, rules)` → her koşul kendi bayrağıyla (off, noproject, nopassport, window,
+  charge, battery, hot, wifi), tek bir "neden". Okuyucular `expo-battery` (`getBatteryStateAsync`,
+  `getBatteryLevelAsync`, dinleyiciler) ve `expo-network` (`getNetworkStateAsync`, `NetworkStateType.WIFI`;
+  SDK 57'nin `bundledNativeModules` sürümü `~57.0.2` kuruldu). Sıcaklık bayrağı passport'un son ölçümünden
+  (`thermal.status ≥ 3` ya da pil ≥ 42 °C); canlı sensör yok. "Bu gece çalış" anahtarı `night.want`.
+- `scheduler.ts`: durum makinesi waiting → running → paused → running → done; bağımlılıklar dışarıdan verilir
+  (sahte saatle test). Koşul bozulunca işçi durur, yaptığı **parça** (`night.segments`) saklanır, yığın
+  (`queue.ts`, `night.queue`) kaldığı yerden sürer; uçuştaki birimler başa döner. Pencere kapanınca ya da yığın
+  bitince gece biter: rapor yazılır, `contribution_end` toplamlarla gider, pencere anahtarı `night.done`'a
+  yazılır (aynı pencerede ikinci başlangıç yok). Uygulama yeniden açılınca açık gece `night.start`'tan bulunur.
+- Arka plan: SDK 57 `expo-background-task` WorkManager/BGTask ile kısa, en erken 15 dk'da bir iş çalıştırır;
+  saatlerce model döndüremez. **Sınır açıkça:** gece uygulama açıkken çalışır; gerçek işçi ekranı kendisi açık
+  tutar (yalnız çalışırken, simülasyon dokunmaz), kilitlenirse duraklar, açılınca yığından sürer. Çalışırken
+  yapışkan (sticky) yerel bildirim (`notify.ts`, kanal `night`).
+- `report.ts` + `app/night/report.tsx`: birim, doğru kontrol oranı, cihaz başına tok/s, çalışılan süre
+  (duraklar hariç, parça sayısı), Wh = saat × ölçülen W (passport'ta `watts` yoksa 3 W varsayımı), önceki
+  gecelerin ortalamasına fark ve "en iyi gece". Passport kartında "dün gece: … birim · tok/s · wh" satırı ve
+  "bu gece çalış: açık/kapalı". Kart kwh'si eskisi gibi 4 W + 2 W/cihaz.
+- Sunucu: demo sunucuda `night_report` (client id ile tekrar güvenli) ve `night_reports`; outbox işi
+  `nightReport` yalnız DEMO'da gönderilir, canlı Supabase'de rpc yok → rapor telefonda "yalnız telefonda" kalır.
+- Ayarlar: "yalnız şarjda" ve "pil en az %20/30/50/80" (yalnız telefonda, `night.charge`, `night.minBattery`);
+  pencere saatleri eskisi gibi profilde.
+- Testler: `conditions.test.ts` (her bayrak tek tek, sıra, pencere anahtarı), `scheduler.test.ts` (sahte
+  saat: aç/kapa, dur/devam, kuru yığın, yeniden başlatma, "şimdi bitir"), `report.test.ts` (toplamlar, kuyruk
+  devamı), `demo.test.ts` güncellendi. tsc, lint (0 hata; `index.tsx`'teki eski effect hatası giderildi) ve
+  99 test yeşil. `docs.expo.dev` bu konteynerden erişilemedi; API'ler kurulu paketlerin tip dosyalarından okundu.
+- Eksik: ölçülen W passport'a girmedi (3 W varsayılıyor); canlı sunucuda `night_report` rpc'si; typed routes
+  dosyası `expo start` ile yenilenmeli (`/night/report` yeni).
