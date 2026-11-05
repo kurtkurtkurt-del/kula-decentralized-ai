@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import net from 'node:net';
 import { PassThrough } from 'node:stream';
 import { randomBytes } from 'node:crypto';
-import fc from 'fast-check';
+import * as fc from 'fast-check';
 import { startGateServer, handshake, probe, LineReader, isNonce, type GateEvent, type GateServer } from '../src/gate.ts';
 
 const SECRET = 'fuzz-secret';

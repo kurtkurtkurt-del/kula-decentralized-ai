@@ -3,7 +3,7 @@
 // junk lines are skipped; nothing after `done` counts.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import fc from 'fast-check';
+import * as fc from 'fast-check';
 import { Sse } from '../src/api.ts';
 import { SseReader, parseSse, type SseEvent } from '../../app/src/llm/sse.ts';
 

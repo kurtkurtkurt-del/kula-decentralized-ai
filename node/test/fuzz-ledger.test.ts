@@ -2,7 +2,7 @@
 // anywhere fails verification; the line text is a stable, order keeping serialisation.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import fc from 'fast-check';
+import * as fc from 'fast-check';
 import { readFileSync } from 'node:fs';
 import { fromSeed, generate } from '../src/audit/key.ts';
 import { GENESIS, KINDS, makeLine, sha256Hex, unsignedOf, verifyLines, type Fields, type Kind } from '../src/audit/ledger.ts';

@@ -29,8 +29,14 @@ export type PeerQr = {
 };
 
 const HEX = (n: number) => new RegExp(`^[0-9a-f]{${n}}$`, 'i');
+/** A qr code holds at most 2953 bytes; anything larger did not come from a kula screen. */
+export const MAX_QR_BYTES = 4096;
+
+const isPort = (p: unknown): p is number => typeof p === 'number' && Number.isInteger(p) && p >= 1 && p <= 65535;
+const numOrNull = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null);
 
 export function isPeerQr(text: string): boolean {
+  if (typeof text !== 'string' || text.length > MAX_QR_BYTES) return false;
   try {
     const o = JSON.parse(text);
     return !!o && o.k === 'kula-peer' && typeof o.host === 'string' && (typeof o.secret === 'string' || typeof o.fp === 'string');
@@ -42,14 +48,18 @@ export function isPeerQr(text: string): boolean {
 /** Parses a peer qr into a Peer (nothing stored). Throws 'notPeer' | 'self' | 'old'. */
 export function parsePeerQr(text: string): Peer {
   let o: PeerQr;
+  if (typeof text !== 'string' || text.length > MAX_QR_BYTES) throw new Error('notPeer');
   try {
     o = JSON.parse(text);
   } catch {
     throw new Error('notPeer');
   }
-  if (!o || o.k !== 'kula-peer') throw new Error('notPeer');
+  if (!o || typeof o !== 'object' || o.k !== 'kula-peer') throw new Error('notPeer');
   if (o.v !== 2 && o.v !== 3) throw new Error('old');
-  if (!o.id || !o.host || !o.port) throw new Error('notPeer');
+  // every field the connection is built from must be of its type: an object in `name` or a
+  // string in `port` would otherwise travel into the peer list and the native tunnel
+  if (typeof o.id !== 'string' || !o.id || typeof o.host !== 'string' || !o.host.trim() || !isPort(o.port)) throw new Error('notPeer');
+  if (o.id.length > 128 || o.host.length > 253) throw new Error('notPeer');
   let secret = '';
   let fp: string | null = null;
   let pin: string | null = null;
@@ -63,10 +73,11 @@ export function parsePeerQr(text: string): Peer {
     secret = o.secret;
   }
   if (o.id === myWorkerId) throw new Error('self');
+  const passport = o.passport && typeof o.passport === 'object' && !Array.isArray(o.passport) ? (o.passport as Record<string, unknown>) : null;
   return {
-    id: o.id, name: o.name || o.host, host: o.host, port: Number(o.port), secret, fp, pin, paired_at: null,
+    id: o.id, name: typeof o.name === 'string' && o.name.trim() ? o.name.slice(0, 64) : o.host, host: o.host.trim(), port: o.port, secret, fp, pin, paired_at: null,
     kind: o.kind === 'pc' || o.kind === 'tablet' ? o.kind : 'phone',
-    ram: o.ram ?? null, bw: o.bw ?? null, passport: (o.passport as Record<string, unknown>) ?? null,
+    ram: numOrNull(o.ram), bw: numOrNull(o.bw), passport,
     added_at: new Date().toISOString(), last_ok: null,
   };
 }
