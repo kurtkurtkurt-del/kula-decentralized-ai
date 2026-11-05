@@ -11,7 +11,12 @@
       "supportsTablet": false,
       "infoPlist": {
         "NSLocationWhenInUseUsageDescription": "kula uses your location to place your phone in its city on the network.",
-        "ITSAppUsesNonExemptEncryption": false
+        "ITSAppUsesNonExemptEncryption": false,
+        "NSLocalNetworkUsageDescription": "kula finds and talks to the other phones and computers you share models with on your wi-fi.",
+        "NSBonjourServices": [
+          "_kula._tcp"
+        ],
+        "NSCameraUsageDescription": "kula reads the passport of another device from its qr code."
       },
       "usesAppleSignIn": true
     },

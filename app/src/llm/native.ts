@@ -1,9 +1,10 @@
 import { Platform } from 'react-native';
 import { requireOptionalNativeModule, type EventSubscription } from 'expo-modules-core';
 
-// The native module (modules/kula-llama): llama.cpp on this phone and the phone cluster.
-// Absent in Expo Go, on iOS and on the web; the screens then say so and show the catalog
-// without download buttons. Everything here is a thin, typed wrapper; no logic.
+// The native module (modules/kula-llama): llama.cpp on this phone and the phone cluster,
+// Android (Kotlin + JNI) and iOS (Swift + Metal) with one JS surface. Absent in Expo Go
+// and on the web; the screens then say so and show the catalog without download buttons.
+// Everything here is a thin, typed wrapper; no logic.
 export type NativeInfo = { available: boolean; abi: string; fastCores: number; ramFreeMb: number; modelsDir: string; freeDiskMb: number; workerId: string; wifiIp: string | null };
 export type LoadResult = { loadMs: number; localLayers: number; layers: number; ctx: number; split: { buffer: string; mb: number | null }[] };
 export type DoneEvent = { id: number; tokens: number; ms: number; firstMs: number; tps: number; stopped: boolean; error: string | null };
@@ -49,9 +50,13 @@ type Module = {
   addListener(event: 'onPeerLost', fn: (e: { serviceName: string }) => void): EventSubscription;
 };
 
-export const llama: Module | null = Platform.OS === 'android' ? requireOptionalNativeModule<Module>('KulaLlama') : null;
+/** The platforms the module is built for; a development build is needed (not Expo Go). */
+export const NATIVE_PLATFORMS: readonly string[] = ['android', 'ios'];
+export const llama: Module | null = NATIVE_PLATFORMS.includes(Platform.OS) ? requireOptionalNativeModule<Module>('KulaLlama') : null;
 export const hasNative = () => !!llama;
-/** The module, or a thrown 'nonative' (Expo Go, iOS, web). */
+/** True on a phone (android/ios) where the module could exist: Expo Go lacks it, the web never has it. */
+export const nativePossible = () => NATIVE_PLATFORMS.includes(Platform.OS);
+/** The module, or a thrown 'nonative' (Expo Go, web). */
 export function native(): Module {
   if (!llama) throw new Error('nonative');
   return llama;

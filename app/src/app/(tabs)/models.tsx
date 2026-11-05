@@ -13,7 +13,7 @@ import { CATALOG, type CatalogModel } from '@/llm/catalog';
 import { useEngine } from '@/llm/engine';
 import { fitOn, fitTogether, type Fit } from '@/llm/fit';
 import { ggufFiles, hfUrl, kvGuess, paramsOf, quantOf, searchGguf, type HfFile, type HfRepo } from '@/llm/hf';
-import { hasNative, llama } from '@/llm/native';
+import { hasNative, llama, nativePossible } from '@/llm/native';
 import { cancelDownload, describe, forgetModel, initStore, retryDownload, saveSettings, startDownload, useDownloads, useLocalModels, usePeers, useSettings, type Download, type LocalModel } from '@/llm/store';
 import { colors, fonts, radius } from '@/theme/tokens';
 import { brand } from '@/theme/layout';
@@ -107,7 +107,7 @@ export default function ModelsScreen() {
   const dl = (id: string) => downloads.find((d) => d.id === id) ?? null;
   const have = (id: string) => local.find((m) => m.id === id) ?? null;
 
-  const banner = !hasNative() ? t('models.noNative') : !arm ? t('models.notArm') : !passport ? t('models.noPassport') : null;
+  const banner = !hasNative() ? t(nativePossible() ? 'models.noNativeGo' : 'models.noNative') : !arm ? t('models.notArm') : !passport ? t('models.noPassport') : null;
 
   return (
     <View style={styles.root}>

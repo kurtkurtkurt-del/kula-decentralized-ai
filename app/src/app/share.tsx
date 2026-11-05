@@ -1,18 +1,19 @@
 import { useEffect, useState } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import QRCode from 'react-native-qrcode-svg';
 import Button from '@/components/Button';
 import StaffPage from '@/components/StaffPage';
 import { useAppSize } from '@/hooks/useAppSize';
 import { useLang } from '@/i18n';
-import { hasNative, llama, type WorkerStatus } from '@/llm/native';
+import { hasNative, llama, nativePossible, type WorkerStatus } from '@/llm/native';
 import { myPeerQr } from '@/llm/peers';
 import { saveShare, share, useShare } from '@/llm/store';
 import { colors, fonts, radius } from '@/theme/tokens';
 
-// "share this phone": starts the worker (its own process; the gate on the network, ggml's
-// rpc server and the api behind it on 127.0.0.1) and shows the code another device scans.
-// The screen stays on while sharing: Android gives the worker all cores only then.
+// "share this phone": starts the worker (Android: its own process; iOS: in-process; the gate
+// on the network, ggml's rpc server and the api behind it on 127.0.0.1) and shows the code
+// another device scans. The screen stays on while sharing: Android gives the worker all
+// cores only then, and iOS suspends the app soon after it leaves the screen.
 export default function ShareScreen() {
   const { t, up } = useLang();
   const { width } = useAppSize();
@@ -66,7 +67,8 @@ export default function ShareScreen() {
   return (
     <StaffPage title={t('share.title')}>
       <Text style={styles.lede}>{t('share.lede')}</Text>
-      {!hasNative() ? <Text style={styles.err}>{t('models.noNative')}</Text> : null}
+      {!hasNative() ? <Text style={styles.err}>{t(nativePossible() ? 'models.noNativeGo' : 'models.noNative')}</Text> : null}
+      {hasNative() && Platform.OS === 'ios' ? <Text style={styles.hint}>{t('share.iosForeground')}</Text> : null}
       {hasNative() && !wifi ? <Text style={styles.err}>{t('share.noWifi')}</Text> : null}
       <View style={styles.card}>
         <Text style={[styles.state, state === 'running' && styles.stateOn]}>{line}</Text>
@@ -76,7 +78,7 @@ export default function ShareScreen() {
             <Text style={styles.meta}>{t('share.gate', { ok: status.connects, no: status.rejects })}</Text>
           </>
         ) : null}
-        {status?.throttled ? <Text style={styles.warn}>{t('share.throttled')}</Text> : null}
+        {status?.throttled ? <Text style={styles.warn}>{t(Platform.OS === 'ios' ? 'share.throttledIos' : 'share.throttled')}</Text> : null}
         {status && !status.batteryUnrestricted && state === 'running' ? (
           <Pressable onPress={() => llama!.requestBatteryUnrestricted()} hitSlop={8}><Text style={styles.link}>{t('share.battery')} ›</Text></Pressable>
         ) : null}
