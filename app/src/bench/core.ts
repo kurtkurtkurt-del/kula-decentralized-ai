@@ -10,6 +10,15 @@ export const BENCH_VERSION = 1;
 export const BLOB_MAX_MB = 64;    // GET /blob?mb=N: N is capped here on both workers
 export const TUNNEL_MB = 10;      // the tunnel speed test pulls this much
 export const RUNS = 3;            // every timed thing runs this often; the median is kept
+export const GEN_TOKENS = 64;     // tokens generated per timed run
+
+/** The one prompt both sides time (about 130 tokens with the chat template). */
+export const BENCH_PROMPT = 'You are timing a language model. Read this passage and answer in one long paragraph. '
+  + 'A cluster of phones on one wi-fi shares a model: each holds a part of the layers, the activations travel '
+  + 'between them for every token, and the slowest link sets the pace. Memory bandwidth decides how fast one '
+  + 'device streams its weights; the network decides how much the hops cost; the gate in front of every device '
+  + 'checks a shared secret before any byte reaches llama.cpp. Explain, step by step, what limits the speed of '
+  + 'such a cluster, which device should hold the output layer, and when running alone beats sharing.';
 
 export type Unit = 'tok/s' | 'ms' | 'MB/s';
 export type Series = { unit: Unit; runs: number[]; median: number; tokens?: number | null };
