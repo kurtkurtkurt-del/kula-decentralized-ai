@@ -3,6 +3,72 @@
 Plan: `~/.claude/plans/memoized-kindling-puddle.md` (4.11.2026). Bu dosya her adımda güncellenir:
 ne yapıldı, ne doğrulandı, ne kaldı. Döndüğünde önce burayı oku.
 
+## integrate-all (5.11 sabah, cloud oturumu, dal `claude/integrate-all`)
+
+`origin/claude/integrate-night` (`ec1ba27`) üstüne beş gece dalı sırayla merge commit'iyle alındı, squash yok;
+her dalın commit'leri origin'dekiyle aynı (hepsi `--is-ancestor`). Release ve main'e dokunulmadı; PR açılmadı.
+
+### sıra ve çakışmalar
+| # | dal | çakışma | nasıl çözüldü |
+|---|---|---|---|
+| 1 | `claude/models-library` | yok | — |
+| 2 | `claude/night-2` | `docs/ILERLEME.md` | iki bölüm de kaldı |
+| 3 | `claude/node-master` | `docs/ILERLEME.md` | iki bölüm de kaldı |
+| 4 | `claude/audit-ui` | yok | — |
+| 5 | `claude/gate-tls` | `Gate.kt`, `node/src/gate.ts`, `tools/dev-gate.mjs`, `app/src/llm/engine.ts`, `node/README.md`, `ILERLEME` | aşağıda |
+
+- **Gate.kt**: gate-tls'in yapısı (`handlePlain` / `handleTls` / `admit`, aynı portta v1 + v2) alındı; integrate-night'ın
+  denetçi sertleştirmesi üstüne kondu: her denetçi kancası `audit {}` / `runCatching` içinde (defter yazılamazsa kapı düşmez;
+  TLS'te denetçi patlarsa kapının kendi replay/saat kontrolü devreye girer), `NO` cevabı kayıttan **önce** yazılıyor, boş
+  hello `no hello`. Bounded `readLine` iki tarafta da vardı.
+- **node/src/gate.ts**: gate-tls'in v2 sunucusu (`servePlain` / `serveTls` / `admitted`) + integrate-night düzeltmeleri:
+  her bacak `allowHalfOpen` (sunucu, yerel hedef, uzak, Tunnel'ın yerel bacağı), `close()` açık yuvaları kapatıyor (hem kapı
+  hem Tunnel), rpc yuvası async connect'ten **önce** alınıp hata halinde bırakılıyor (`letGo`), hello/proof `trim`,
+  Tunnel'ın yerel bacağına baştan error listener.
+- **dev-gate.mjs**: v1 hello 3 ya da 4 alan + 4. alan rakam kontrolü (Gate.kt gibi); v2 her zaman 4 alan `KULA2`.
+- **engine.ts**: import satırı — `peerTls` (gate-tls) ve `registerEngine` (models-library) birlikte.
+- **peers.ts / peers.tsx / i18n**: çakışmadı; QR v3 (`peers.ts`) ve eş rozetleri (`peers.tsx`) ayrı dosyalarda, dict parçaları
+  ayrı önekler kullanıyor (yeni `i18n.test.ts` çakışma olmadığını doğruluyor).
+
+### bütünlük kontrolleri
+- **dev-gate `--tls` ↔ node kapısı ↔ Kotlin**: `node/test/gate-vectors.json` == `tools/gate-vectors.json` ve
+  `audit-vectors.json` da birebir (diff boş). v2 pin kanıtları `GateTlsTest` (Kotlin) ve `gate-tls.test.ts` (node) ile aynı
+  vektörlerden. Üstüne yeni `node/test/devgate.test.ts` gerçek `dev-gate.mjs --tls`i başlatıp node istemcisiyle v1 (3/4 alan),
+  yanlış pin, eşleşmemiş, pin ile eşleşme, eşleşmiş pinsiz, harcanmış pin, yabancı cihaz, yanlış parmak izi senaryolarını geçiyor.
+  (dev-gate'e `--dir` eklendi; test geçici dizin kullanıyor, repo `.llama/`si kirlenmiyor.)
+- **`LlamaWorker` ↔ night-2 planlayıcısı ↔ `chatLocal` reject düzeltmesi**: uyumlu. İşçi `chat()`i `await` ediyor, hata
+  `catch`e düşüp cihazı 5 dk "out" yapıp birimi yığına geri veriyor; reject olmadan (eski `throw`) bu catch'e hiç
+  düşülmüyordu. `stop()` yükleme sürerken gelirse ikinci `unload` duruyor. `scheduler.test.ts`, `engine-local.test.ts` yeşil.
+- **kula-node `chat` api ↔ ApiServer.kt**: `ApiServer.kt` hiçbir dalda değişmedi (`a969577`); node-master'ın `api.ts`
+  değişiklikleri `conformance.test.ts` + `api.test.ts`ten geçiyor.
+- **Kotlin derlemesi**: `Gate.kt`, `GateCert.kt`, `audit/` JVM'de derlendi ve test edildi. `KulaLlamaModule.kt` /
+  `WorkerService.kt` (audit-ui'nin defter fonksiyonları + gate-tls'in `identity`/`TlsServer`i) yalnız gözle birleştirildi:
+  `SoftwareKey`, `gateDir`, `pairedFile`, `key` tanımları yerinde; **Android derlemesi bu makinede yok**.
+
+### testler
+| nerede | komut | sonuç |
+|---|---|---|
+| `app/` | `npx tsc --noEmit` | temiz (her merge'den sonra) |
+| `app/` | `npx expo lint` | 0 hata, 9 uyarı (night-2 eski `index.tsx:14` hatasını gidermişti) |
+| `app/` | `npx jest` | 148/148 (15 dosya; merge 1: 99, 2: 132, 4: 143, 5: 146, +2 yeni `i18n.test.ts`) |
+| `node/` | `npm test` | 55/55 (merge 3: 46, 5: 54, +1 yeni `devgate.test.ts`) |
+| `app/modules/kula-llama/audit-jvm` | `gradle test` (JDK 21, Android SDK yok) | 29/29 (GateTlsTest 7 eklendi; merge 4'te 22/22) |
+| apk / `testReleaseUnitTest` | — | **yapılmadı** (SDK yok) |
+
+### telefonda denenecekler
+1. `npm run apk` ile derleme: `KulaLlamaModule.kt` + `WorkerService.kt` birleşimi ilk kez Android'de derlenecek.
+2. Paylaş → QR **v3** (parmak izi + kod) → ikinci telefondan tara → eşleşme → ayarlar → **beyin denetimi**: `pair` satırı
+   ve eşler sayfasında rozet görünmeli; aynı telefon ikinci bağlanışta kodsuz girmeli; kod harcanınca QR yenilenmeli.
+3. Mac'te `node tools/dev-gate.mjs --secret … --tls` (ya da `kula-node share --tls`): telefon v3 QR'ı okuyup bölünmüş/ayrı
+   modda sohbet etmeli; eski v2 QR (secret) aynı portta çalışmaya devam etmeli.
+4. Modeller: çok parçalı bir gguf indir (parça parça ilerleme, tek kayıt), "kullanılmayanları sil", boş alan uyarısı, kilitli
+   HF deposunda "lisansı oku".
+5. Gece: "bu gece çalış" açık, şarjda, pencere içinde → gerçek işçi başlamalı; şarjı çek → duraklamalı, tak → kaldığı
+   yerden; sabah `night/report` ve passport kartında "dün gece" satırı. Bir eş kapanınca birim başka cihaza gitmeli (reject
+   düzeltmesi), döngü asılmamalı.
+6. kula-node yönetici modu: `kula-node peers add/probe`, `kula-node master …` ile telefonlar işçi olarak; `ledger`.
+7. Eski telefon (Android 7, API 24): işçi süreci açılmalı (`B64.kt`).
+
 ## bütünleştirme (5.11 sabaha karşı, cloud oturumu, dal `claude/integrate-night`)
 
 Üç gece dalı `origin/release/local-2026-10-20` (`9a2f91f`) üstüne sırayla merge commit'iyle alındı, squash yok,
