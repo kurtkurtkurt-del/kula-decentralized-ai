@@ -5,8 +5,62 @@ import os from 'node:os';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import release from './fixtures/release-b11157.json' with { type: 'json' };
-import { pickAsset, buildInstructions, parseSidecar } from '../src/assets.ts';
-import { verifySidecar } from '../src/llama.ts';
+import { pickAsset, buildInstructions, parseSidecar, digestSha256 } from '../src/assets.ts';
+import { verifySidecar, planSetup, describePlan, SOURCE_SIZE, SOURCE_SHA256 } from '../src/llama.ts';
+import { bar, progressBar } from '../src/progress.ts';
+
+const fixture = path.join(path.dirname(new URL(import.meta.url).pathname), 'fixtures', 'release-b11157.json');
+
+test('the setup plan names every file, its size and the total up front', async () => {
+  const before = { home: process.env.KULA_NODE_HOME, rel: process.env.KULA_RELEASE_JSON, nv: process.env.KULA_NVIDIA };
+  process.env.KULA_NODE_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'kula-plan-'));
+  process.env.KULA_RELEASE_JSON = fixture;
+  try {
+    process.env.KULA_NVIDIA = '0';
+    const lin = await planSetup('linux', 'x64');
+    assert.equal(lin.action, 'download');
+    assert.deepEqual(lin.downloads.map((d) => d.name), ['llama-b11157-bin-ubuntu-x64.tar.gz']);
+    assert.equal(lin.totalBytes, lin.downloads[0].size);
+    process.env.KULA_NVIDIA = '1';
+    const cuda = await planSetup('linux', 'x64');
+    assert.equal(cuda.downloads.length, 2);
+    assert.equal(cuda.totalBytes, cuda.downloads[0].size! + cuda.downloads[1].size!);
+    const text = describePlan(cuda).join('\n');
+    assert.match(text, /will download 2 files, [\d.]+ MB in total/);
+    process.env.KULA_NVIDIA = '0';
+    const win = await planSetup('win32', 'x64');
+    assert.match(describePlan(win).join('\n'), /firewall/);
+    const mac = await planSetup('darwin', 'arm64');
+    assert.equal(mac.action, 'build');
+    assert.equal(mac.totalBytes, SOURCE_SIZE);
+    assert.equal(mac.downloads[0].sha256, SOURCE_SHA256);
+    assert.match(describePlan(mac).join('\n'), /will download 1 file, 37\.6 MB in total/);
+  } finally {
+    fs.rmSync(process.env.KULA_NODE_HOME!, { recursive: true, force: true });
+    for (const [k, v] of [['KULA_NODE_HOME', before.home], ['KULA_RELEASE_JSON', before.rel], ['KULA_NVIDIA', before.nv]] as const) {
+      if (v === undefined) delete process.env[k]; else process.env[k] = v;
+    }
+  }
+});
+
+test('the progress bar', () => {
+  assert.equal(bar(0, 100, 10), '[..........]   0%  0.0 / 0.0 MB');
+  assert.equal(bar(5e6, 10e6, 10), '[#####.....]  50%  5.0 / 10.0 MB');
+  assert.equal(bar(20e6, 10e6, 4), '[####] 100%  20.0 / 10.0 MB');
+  assert.equal(bar(1.5e6, 0), '1.5 MB');
+  // piped: a line per quarter, not one per chunk
+  const lines: string[] = [];
+  const p = progressBar('x', 100, { write: (s: string) => lines.push(s), isTTY: false });
+  for (let i = 0; i <= 100; i += 5) p.update(i, 0);
+  p.done();
+  assert.equal(lines.length, 5);
+  // a terminal: redrawn in place with \r, closed with a newline
+  const tty: string[] = [];
+  const q = progressBar('x', 0, { write: (s: string) => tty.push(s), isTTY: true });
+  q.update(50, 100); q.update(100, 100); q.done();
+  assert.ok(tty[0].startsWith('\r'));
+  assert.equal(tty.at(-1), '\n');
+});
 
 const assets = release.assets;
 const names = (p: ReturnType<typeof pickAsset>) => p && [p.asset.name, p.companion?.name ?? null];
@@ -46,10 +100,22 @@ test('the sidecar is parsed and enforced; a mismatch deletes the archive', async
   const logs: string[] = [];
   await verifySidecar(archive, `${sum}  a.tar.gz\n`, (s) => logs.push(s));
   assert.deepEqual(logs, ['sha256 ok']);
-  await verifySidecar(archive, null, (s) => logs.push(s));
-  assert.match(logs[1], /no \.sha256 sidecar/);
+  // no sidecar: github's digest is enough
+  await verifySidecar(archive, null, (s) => logs.push(s), sum);
+  assert.deepEqual(logs, ['sha256 ok', 'sha256 ok']);
+  // both known: both must match
+  await assert.rejects(verifySidecar(archive, `${sum}  a.tar.gz\n`, () => {}, 'ee'.repeat(32)), /sha256 mismatch/);
+  assert.equal(fs.existsSync(archive), false);
+  fs.writeFileSync(archive, 'not really an archive');
   await assert.rejects(verifySidecar(archive, 'ff'.repeat(32), () => {}), /sha256 mismatch/);
   assert.equal(fs.existsSync(archive), false);
+  // nothing to check against: refused and deleted, never unpacked
+  fs.writeFileSync(archive, 'not really an archive');
+  await assert.rejects(verifySidecar(archive, null, () => {}), /no sha256 to check it against/);
+  assert.equal(fs.existsSync(archive), false);
+  assert.equal(digestSha256(`sha256:${'AB'.repeat(32)}`), 'ab'.repeat(32));
+  assert.equal(digestSha256('md5:00'), null);
+  assert.equal(digestSha256(undefined), null);
   fs.rmSync(dir, { recursive: true, force: true });
 });
 

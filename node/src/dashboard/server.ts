@@ -56,6 +56,8 @@ export const BATCH_PROMPTS = [
 
 const TYPES: Record<string, string> = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml' };
 const STATIC = new Set(['index.html', 'app.js', 'app.css']);
+// tools/pack.mjs bakes the three files in: a packed executable has no static folder next to it
+declare const __KULA_STATIC__: Record<string, string> | undefined;
 
 export function staticDir(): string {
   return path.join(packageRoot(), 'src', 'dashboard', 'static');
@@ -104,7 +106,8 @@ export async function startDashboard(opts: DashboardOptions): Promise<Dashboard>
   const prefix = randomBytes(12).toString('hex');
   const dir = opts.staticDir ?? staticDir();
   const files = new Map<string, Buffer>();
-  for (const f of STATIC) files.set(f, fs.readFileSync(path.join(dir, f)));
+  const baked = !opts.staticDir && typeof __KULA_STATIC__ === 'object' ? __KULA_STATIC__ : null;
+  for (const f of STATIC) files.set(f, baked ? Buffer.from(baked[f], 'utf8') : fs.readFileSync(path.join(dir, f)));
   const streams = new Set<http.ServerResponse>();
   let port = 0;
 

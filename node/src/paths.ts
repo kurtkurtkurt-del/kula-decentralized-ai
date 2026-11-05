@@ -4,6 +4,7 @@ import path from 'node:path';
 import fs from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { isPacked } from './build.js';
 
 export function home(): string {
   const h = process.env.KULA_NODE_HOME || path.join(os.homedir(), '.kula-node');
@@ -18,7 +19,9 @@ export function expandHome(p: string): string {
 }
 
 // The folder that holds node/ (works from src/ under tsx and from dist/ after a build).
+// Packed into one executable there is no package folder: the executable's own folder stands in.
 export function packageRoot(): string {
+  if (isPacked()) return path.dirname(process.execPath);
   let dir = path.dirname(fileURLToPath(import.meta.url));
   for (let i = 0; i < 4; i++) {
     if (fs.existsSync(path.join(dir, 'package.json'))) return dir;
@@ -30,6 +33,7 @@ export function packageRoot(): string {
 // The repository root above node/, following git worktrees back to the main
 // checkout, because a shared build lives next to the main checkout.
 export function repoRoots(): string[] {
+  if (isPacked()) return [];
   const roots = new Set<string>();
   const pkg = packageRoot();
   roots.add(path.dirname(pkg));
