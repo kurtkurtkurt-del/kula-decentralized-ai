@@ -1,0 +1,23 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+  <!-- talk mode (docs/VOICE.md). RECORD_AUDIO comes from expo-speech-recognition's plugin,
+       READ/WRITE_CALENDAR from app.json. -->
+  <!-- route the mic to a bluetooth headset (setCommunicationDevice / startBluetoothSco) -->
+  <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
+  <!-- "set an alarm for 7" / "a timer for 10 minutes": the clock app's own intents -->
+  <uses-permission android:name="com.android.alarm.permission.SET_ALARM" />
+
+  <application>
+    <!-- Reads message notifications (whatsapp, sms, telegram, signal…) into a small ring in
+         memory so the secretary can read them aloud. Only works after the user turns on
+         "notification access" for kula in the system settings; nothing leaves the phone. -->
+    <service
+      android:name=".MessageListener"
+      android:label="kula talk"
+      android:exported="true"
+      android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE">
+      <intent-filter>
+        <action android:name="android.service.notification.NotificationListenerService" />
+      </intent-filter>
+    </service>
+  </application>
+</manifest>

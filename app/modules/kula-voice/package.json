@@ -1,0 +1,7 @@
+{
+  "name": "kula-voice",
+  "version": "0.1.0",
+  "description": "talk mode on the phone: headset button, bluetooth mic route, message notifications, alarm and draft intents (android)",
+  "main": "index.ts",
+  "private": true
+}

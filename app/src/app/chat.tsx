@@ -141,7 +141,14 @@ export default function ChatScreen() {
       <EdgeBack />
       <KeyboardAvoidingView style={styles.root} behavior="padding">
         <View style={styles.band}>
-          <Text style={styles.title}>{t('chat.title')}</Text>
+          <View style={styles.titleRow}>
+            <Text style={styles.title}>{t('chat.title')}</Text>
+            {/* talk mode (app/talk.tsx): the same model, spoken to, hands-free */}
+            <Pressable onPress={() => { tapLight(); running.current?.stop(); router.push('/talk'); }} accessibilityRole="button" accessibilityLabel={t('voice.chat.talk')} accessibilityHint={t('voice.chat.talkHint')} testID="chat-talk" style={({ pressed }) => [styles.talk, pressed && styles.pressed]}>
+              <View style={styles.talkDot} />
+              <Text style={styles.talkText}>{t('voice.chat.talk')}</Text>
+            </Pressable>
+          </View>
           <Text style={styles.sub} numberOfLines={1}>{engine.model ? `${engine.model.name.toLowerCase()} · ${engine.mode} · ${engine.split.map((s) => `${s.name.toLowerCase()} ${s.gb} gb`).join(' · ')}` : ''}</Text>
         </View>
         <View style={styles.root}>
@@ -220,6 +227,10 @@ export default function ChatScreen() {
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: colors.ink },
   band: { paddingTop: brand.top - 8, paddingHorizontal: brand.left, paddingBottom: 10, gap: 2 },
+  titleRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 },
+  talk: { flexDirection: 'row', alignItems: 'center', gap: 8, minHeight: 44, paddingHorizontal: 18, borderRadius: radius.pill, backgroundColor: colors.paper },
+  talkDot: { width: 10, height: 10, borderRadius: 5, backgroundColor: colors.spot },
+  talkText: { fontFamily: fonts.semibold, fontSize: 14, color: colors.ink, letterSpacing: 0.2 },
   title: { fontFamily: fonts.semibold, fontSize: 30, lineHeight: 32, letterSpacing: -0.9, color: colors.paper },
   sub: { fontFamily: fonts.regular, fontSize: 11.5, color: colors.mute },
   body: { paddingHorizontal: brand.left, paddingVertical: 8, gap: 10 },

@@ -27,10 +27,11 @@
         "ACCESS_COARSE_LOCATION",
         "ACCESS_FINE_LOCATION",
         "android.permission.ACCESS_COARSE_LOCATION",
-        "android.permission.ACCESS_FINE_LOCATION"
+        "android.permission.ACCESS_FINE_LOCATION",
+        "android.permission.READ_CALENDAR",
+        "android.permission.WRITE_CALENDAR"
       ],
       "blockedPermissions": [
-        "android.permission.RECORD_AUDIO",
         "android.permission.READ_EXTERNAL_STORAGE",
         "android.permission.WRITE_EXTERNAL_STORAGE"
       ]
@@ -84,7 +85,7 @@
         {
           "photosPermission": "kula shows the photo you choose at the top of your account.",
           "cameraPermission": "kula reads the passport of another device from its qr code.",
-          "microphonePermission": false
+          "microphonePermission": "kula listens in talk mode only, while you talk to it. your voice is recognised on this phone."
         }
       ],
       "expo-web-browser",
@@ -97,6 +98,20 @@
         }
       ],
       "expo-apple-authentication",
+      [
+        "expo-speech-recognition",
+        {
+          "microphonePermission": "kula listens in talk mode only, while you talk to it. your voice is recognised on this phone.",
+          "speechRecognitionPermission": "kula turns what you say in talk mode into words on this phone.",
+          "androidSpeechServicePackages": ["com.google.android.googlequicksearchbox", "com.google.android.as", "com.google.android.tts"]
+        }
+      ],
+      [
+        "expo-calendar",
+        {
+          "calendarPermission": "kula reads your day aloud and adds what you ask for in talk mode, after you say yes."
+        }
+      ],
       "expo-image",
       [
         "expo-build-properties",

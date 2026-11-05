@@ -6,6 +6,7 @@ import StaffPage, { Field, Said } from '@/components/StaffPage';
 import Button from '@/components/Button';
 import LangRow from '@/components/LangRow';
 import PickerSheet from '@/components/PickerSheet';
+import TalkSettings from '@/components/TalkSettings';
 import { Panel, Row, Section, Switch, Value } from '@/components/Row';
 import { useAuth } from '@/auth/AuthContext';
 import { useProfile } from '@/data/profile';
@@ -131,6 +132,9 @@ export default function SettingsScreen() {
       </Panel>
       <Field label={t('settings.relay')} value={relay ?? llm.relayUrl} onChangeText={setRelay} onBlur={() => { if (relay !== null) { saveLlmSettings({ relayUrl: relay.trim() ? relayUrlOf(relay) : '' }); setRelay(null); } }} placeholder="wss://relay.example" autoCapitalize="none" autoCorrect={false} keyboardType="url" />
       <Text style={styles.hint}>{t('settings.relay.hint')}</Text>
+
+      <Section title={t('voice.set.title')} />
+      <TalkSettings />
 
       <Section title={t('settings.account')} />
       <Panel>

@@ -6,7 +6,7 @@ import Svg, { Circle, Path, Rect } from 'react-native-svg';
 // its colour, so a column of them reads at a glance: plans, skips, loads, prompts, the night.
 export type GlyphKind =
   | 'plan' | 'skip' | 'load' | 'dispatch' | 'retry' | 'night' | 'unit' | 'check' | 'out' | 'error'
-  | 'pair' | 'connect' | 'reject' | 'claim' | 'health' | 'end';
+  | 'pair' | 'connect' | 'reject' | 'claim' | 'health' | 'end' | 'voice';
 
 const SIZE = 26;
 
@@ -55,6 +55,13 @@ function Mark({ kind, color }: { kind: string; color: string }) {
       return <Path d="M5 12.5h3l1.6-4 2.8 8 1.8-4H19" {...p} />;
     case 'end':
       return <Rect x={8} y={8} width={8} height={8} rx={1.5} {...p} />;
+    case 'voice': // the secretary did something: a microphone
+      return (
+        <>
+          <Rect x={9.5} y={5.5} width={5} height={8.5} rx={2.5} {...p} />
+          <Path d="M7.5 11.5a4.5 4.5 0 0 0 9 0M12 16v2.5" {...p} />
+        </>
+      );
     default:
       return <Circle cx={12} cy={12} r={2.5} fill={color} />;
   }

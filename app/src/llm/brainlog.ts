@@ -12,7 +12,8 @@ import type { Mode } from '@/llm/store';
 // shows it in the reader's language; detail is data (names, numbers) shown as it is.
 // The newest KEEP lines are kept on the phone (kv, brain.log) and survive a restart.
 
-export type BrainKind = 'plan' | 'skip' | 'load' | 'dispatch' | 'retry' | 'night' | 'unit' | 'check' | 'out' | 'error';
+// 'voice': what the talk-mode secretary did (voice/tools.ts): heard … → calendar, alarm, note…
+export type BrainKind = 'plan' | 'skip' | 'load' | 'dispatch' | 'retry' | 'night' | 'unit' | 'check' | 'out' | 'error' | 'voice';
 export type Tone = 'info' | 'ok' | 'warn' | 'bad';
 export type BrainEntry = {
   at: number;
