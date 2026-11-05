@@ -4,6 +4,33 @@ Plan: `~/.claude/plans/memoized-kindling-puddle.md` (4.11.2026). Bu dosya her ad
 ne yapıldı, ne doğrulandı, ne kaldı. Döndüğünde önce burayı oku.
 
 ## integrate-all (5.11 sabah, cloud oturumu, dal `claude/integrate-all`)
+## 5.11 Mac: tek dosya kula-node (`claude/node-pack`)
+
+`origin/claude/node-master` + `integrate-night` + `web-dashboard` merge'leri üstüne (ILERLEME çakışmaları iki taraf
+tutularak çözüldü). Node kurmadan çalışan tek dosya ikililer. PR yok, tag/release yok, release/main'e dokunulmadı.
+
+- `node/tools/pack.mjs`: esbuild tek CJS paket (pano dosyaları içine gömülü) → Node SEA blob'u → postject ile resmi
+  Node 24.22.2 ikilisine. Hedefler: mac-arm64, mac-x64, linux-x64, linux-arm64, win-x64. Node arşivleri nodejs.org
+  `SHASUMS256.txt` ile, o dosyanın kendi sha256'sı `tools/packlib.mjs`'de sabit. Mac ikilileri `codesign --sign -`.
+  Bağımlılıklar saf JS (bonjour-service, qrcode-terminal); bundle'a native addon girerse pack durur.
+- `packaging/install.sh` (mac/linux, `~/.local/bin`, PATH notu), `packaging/install.ps1` (Windows, kullanıcı PATH'i,
+  güvenlik duvarı notu): ikisi de `sha256sums.txt` ile doğrular, tutmazsa hiçbir şey kurmaz. `packaging/homebrew/`
+  ve `packaging/winget/` taslak (sha yerine yer tutucu); `tools/release-files.mjs` gerçek sha'larla doldurur, .deb'i
+  de yazar (dpkg-deb gerekmez). Sürüm hep `node/package.json`'dan.
+- `.github/workflows/node-pack.yml`: `v*` tag'de test → hedef başına iş → .deb/formül/winget/kurulum betikleri/
+  `sha256sums.txt` → o tag'in release'ine (yoksa taslak release). Aksiyonlar sha ile sabit. Tag ≠ package.json sürümü
+  ise durur. Henüz hiç çalışmadı (tag yok).
+- İlk açılış: argümansız `kula-node` kısa menü (setup, share, peers, help; bench komutu yok). `setup` önce toplam
+  indirme boyutunu ve her dosyanın sha256'sını yazar, sonra ilerleme çubuğu. Linux/Windows llama arşivi artık
+  github'ın `digest` alanıyla da doğrulanıyor; ne sidecar ne digest varsa reddediliyor (önceden atlıyordu).
+  `--json`: `--version`, `setup --check/--dry-run`, `setup`, `probe`, `peers list`, `peers probe`.
+- Denendi: bu Mac'te mac-arm64 ikilisi yapıldı (122.6 MB), `--version`, `--help`, menü, `setup --dry-run`, `share`
+  + pano (200) çalıştı; install.sh yerel sunucudan gerçek ikiliyi kurdu. mac-x64 Rosetta altında `--version` verdi;
+  linux-x64 (127 MB) ve win-x64 (94 MB) yapıldı ama çalıştırılmadı. `npm test`: 65 test, 64 geçti, 1 atlandı (eski,
+  127.0.0.2 yok). Windows'ta install.ps1 denenmedi (pwsh yok).
+- Açık: depo özelse `curl … | sh` çalışmaz (release dosyaları herkese açık olmalı); ikililer imzasız (Windows
+  SmartScreen uyarır, mac'te tarayıcıyla inene `xattr -d com.apple.quarantine`); linux-arm64 CI'da çalıştırılmıyor.
+
 ## 5.11 cloud: yerel pano (`claude/web-dashboard`)
 
 `origin/claude/node-master` + `origin/claude/integrate-night` merge'i üstüne (ILERLEME çakışması iki taraf da
@@ -387,6 +414,22 @@ beyin'in aktarma hizmetinin ilk hâli; tam anlatım `docs/RELAY.md`.
 - Testler: backend 61 + 28 yeni kontrol, hepsi yeşil; jest 109 (night-data, demo); tsc ve lint 0 hata; gate aşağıda.
 - `docs/BACKEND.md`: şema, RLS kararları, gizlilik, kenar fonksiyonları, beyin v1 defter toplama planı.
 - Canlıya: `node tools/migrate.mjs --write` ile 18 girer; kenar fonksiyonları isteğe bağlı. Eski sunucuda rapor telefonda kalır.
+
+- `kula-node peers add|list|rm|probe|scan`: eşler `~/.kula-node/peers.json`'da (600). `add` QR json v2, base64url kod
+  (`list --code`) veya `host:port:secret` alır. `probe` iki kanalda TCP+el sıkışma (2 sn), `scan` `_kula._tcp`
+  (bonjour-service). Secret ekrana yazılmaz.
+- `kula-node chat --model <gguf> --mode apart|split [--peer …] [--batch] [--prompt]`:
+  - ayrı: yerel llama-server + her eşin `api` kanalına tünel → `/load`, `/chat` SSE; istem en hızlı boş cihaza
+    (önce bant genişliği, sonra ölçülen tok/s). Eşler modeli bu bilgisayardan çeker (rastgele yollu HTTP, Range var;
+    `--model-url` ile dış adres). `--batch` 8 istemi dağıtır, cihaz başına tok/s yazar.
+  - bölünmüş: `src/planner.ts` = `app/src/llm/cluster.ts`'nin kopyası (çıktı katmanı yerelde, 0.7/0.75/1.1); eş başına
+    `rpc` tüneli, `llama-server --rpc 127.0.0.1:p1,… --tensor-split yerel,p1,…`.
+  - Yüklemeden önce 2 sn probe; cevap vermeyen eş sebebiyle düşer, `ggml_backend_rpc_add_server` abort etmez.
+- İkili yoksa: split "run kula-node setup" der ve durur; apart yerel cihazı düşürüp eşlerle devam eder.
+- Testler (42, hepsi geçti; llama ikilisi yok, sahte süreçler): planlayıcı birimleri, eş defteri + yanlış secret reddi,
+  ayrı mod uçtan uca (iki sahte işçi gerçek kapı arkasında, 8 istem, tok/s), split planı + tüneller + sahte llama-server.
+- Gerçek cihazla denenmedi (cloud'da telefon/ikili yok). Sabah: Mac'te `npm test`, sonra emülatör "telefonu paylaş" QR'ı ile
+  `peers add` → `peers probe` → `chat --mode apart --batch`.
 
 ## bütünleştirme (5.11 sabaha karşı, cloud oturumu, dal `claude/integrate-night`)
 

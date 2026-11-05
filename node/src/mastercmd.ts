@@ -55,6 +55,11 @@ export async function peersCommand(sub: string | undefined, rest: string[], flag
   }
   if (sub === 'list' || sub === 'ls' || sub === undefined) {
     const list = readPeers(file);
+    if (flags.json) {
+      // the secret stays masked here too; --code is the one way to get it out
+      console.log(JSON.stringify(list.map((p) => ({ ...p, secret: maskSecret(p.secret), ...(flags.code ? { code: peerCode(p) } : {}) })), null, 2));
+      return 0;
+    }
     if (!list.length) { console.log(`no peers yet (${file}); add one with: kula-node peers add '<qr json>'`); return 0; }
     for (const p of list) console.log(flags.code ? `${row(p)}\n  code: ${peerCode(p)}` : row(p));
     return 0;
@@ -76,9 +81,10 @@ export async function peersCommand(sub: string | undefined, rest: string[], flag
     let bad = 0;
     for (const r of results) {
       const fmt = (x: typeof r.rpc) => (x.ok ? `OK ${x.ms} ms` : `NO ${x.reason}`);
-      console.log(`${r.peer.name.padEnd(18)} ${whereIs(r.peer)}  rpc ${fmt(r.rpc)}  api ${fmt(r.api)}${r.peer.fp && !wanted.find((p) => p.id === r.peer.id)?.fp ? `  (certificate learned: ${r.peer.fp.slice(0, 16)}…)` : ''}`);
+      if (!flags.json) console.log(`${r.peer.name.padEnd(18)} ${whereIs(r.peer)}  rpc ${fmt(r.rpc)}  api ${fmt(r.api)}${r.peer.fp && !wanted.find((p) => p.id === r.peer.id)?.fp ? `  (certificate learned: ${r.peer.fp.slice(0, 16)}…)` : ''}`);
       if (!r.rpc.ok && !r.api.ok) bad++;
     }
+    if (flags.json) console.log(JSON.stringify(results.map((r) => ({ id: r.peer.id, name: r.peer.name, host: r.peer.host, port: r.peer.port, rpc: r.rpc, api: r.api })), null, 2));
     // stamp last_ok
     const stamped = all.map((p) => results.find((r) => r.peer.id === p.id)?.peer ?? p);
     writePeersSafe(stamped, file);

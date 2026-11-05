@@ -1,0 +1,126 @@
+# On a v* tag: kula-node as single binaries (node/tools/pack.mjs: esbuild bundle +
+# node single executable application, injected into node 24's official binaries),
+# one job per target, then .debs, homebrew formula, winget manifests, the install
+# scripts and sha256sums.txt, all uploaded to the GitHub release of that tag (a
+# draft is made when there is none). By hand (workflow_dispatch) it builds and
+# keeps the files as an artifact, without touching any release.
+name: node-pack
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: node-pack-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  test:
+    name: node tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    defaults:
+      run: { working-directory: node }
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: node/package-lock.json
+      - run: npm ci --no-audit --no-fund
+      - run: npx tsc -p tsconfig.json --noEmit
+      - run: npm test
+      - name: the tag is node/package.json's version
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          want="v$(node -p 'require("./package.json").version')"
+          [ "$GITHUB_REF_NAME" = "$want" ] || { echo "tag $GITHUB_REF_NAME, but node/package.json says $want"; exit 1; }
+
+  build:
+    name: pack ${{ matrix.target }}
+    needs: test
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # macOS binaries need codesign, so a Mac packs both; the arm64 one is run there
+          - { target: mac-arm64, os: macos-14 }
+          - { target: mac-x64, os: macos-14 }
+          - { target: linux-x64, os: ubuntu-24.04 }
+          # packed on x64 (postject writes any format); not run in ci
+          - { target: linux-arm64, os: ubuntu-24.04 }
+          - { target: win-x64, os: windows-2022 }
+    defaults:
+      run: { working-directory: node, shell: bash }
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: node/package-lock.json
+      - run: npm ci --no-audit --no-fund
+      # pack.mjs runs the binary (--version, --json, --help) when the target is this runner's own
+      - run: node tools/pack.mjs --target ${{ matrix.target }}
+      - name: size
+        run: ls -l dist-bin && cat dist-bin/sha256sums.txt
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: pack-${{ matrix.target }}
+          path: node/dist-bin/kula-node-*
+          if-no-files-found: error
+          retention-days: 30
+
+  release:
+    name: release files
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: pack-*
+          path: out
+          merge-multiple: true
+      - name: debs, formula, winget, install scripts, sha256sums.txt
+        run: |
+          cp packaging/install.sh packaging/install.ps1 out/
+          chmod 755 out/kula-node-mac-* out/kula-node-linux-*
+          node node/tools/release-files.mjs out
+          ls -l out
+          {
+            echo '### kula-node single binaries'
+            echo '```'
+            cat out/sha256sums.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: check the sums
+        working-directory: out
+        run: sha256sum -c sha256sums.txt
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: kula-node-release-files
+          path: out/*
+          if-no-files-found: error
+          retention-days: 30
+      - name: upload to the release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --draft --verify-tag --title "kula-node $TAG" --notes "kula-node $TAG: single binaries for macOS, Linux and Windows. Install: see docs/NODE.md."
+          gh release upload "$TAG" out/* --clobber

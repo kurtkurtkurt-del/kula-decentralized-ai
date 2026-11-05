@@ -17,7 +17,9 @@ on 127.0.0.1 only.
 
 ## Setup
 
-You need Node.js 20 or newer.
+Without Node.js: one-file binaries for macOS, Linux and Windows and one-line
+installers, see [docs/NODE.md, install](../docs/NODE.md#install). From the
+sources you need Node.js 20 or newer.
 
 ```
 cd node
