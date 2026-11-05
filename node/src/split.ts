@@ -9,6 +9,7 @@ import { planWithProbe, tensorSplit, type Plan, type ProbeFn } from './planner.j
 import type { Peer } from './peers.js';
 import { freePort, startChild, type Child } from './children.js';
 import type { LlamaBinaries } from './llama.js';
+import type { SimModel, SimNet } from './sim.js';
 
 type Log = (s: string) => void;
 
@@ -21,9 +22,12 @@ export interface SplitSetup {
 }
 
 export interface SplitOptions {
-  modelBytes: number;
+  model: SimModel;
+  ctx: number;
   localFreeMb: number;
   localBw: number;
+  localEff?: number;
+  net?: SimNet;
   peers: Peer[];
   share?: boolean;
   probeMs?: number;
@@ -34,7 +38,7 @@ export interface SplitOptions {
 // Plans and opens the tunnels. Throws TooBig when even together it does not fit.
 export async function prepareSplit(opts: SplitOptions): Promise<SplitSetup> {
   const log = opts.log ?? (() => {});
-  const plan = await planWithProbe({ modelBytes: opts.modelBytes, localFreeMb: opts.localFreeMb, localBw: opts.localBw, wanted: opts.peers, share: opts.share ?? true, timeoutMs: opts.probeMs ?? 2000, probe: opts.probe });
+  const plan = await planWithProbe({ model: opts.model, ctx: opts.ctx, localFreeMb: opts.localFreeMb, localBw: opts.localBw, localEff: opts.localEff, net: opts.net, wanted: opts.peers, share: opts.share ?? true, timeoutMs: opts.probeMs ?? 2000, probe: opts.probe });
   for (const s of plan.skipped) log(`${s.peer.name}: skipped, ${s.why}`);
   const tunnels: SplitSetup['tunnels'] = [];
   for (const u of plan.used) {

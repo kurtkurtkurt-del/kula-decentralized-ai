@@ -1,71 +1,74 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { planSplit, planWithProbe, tensorSplit, TooBig, LOCAL_SHARE, WORKER_SHARE, NEED_FACTOR, MB } from '../src/planner.ts';
-import type { Peer } from '../src/peers.ts';
+import { readFileSync } from 'node:fs';
+import { planSplit, planWithProbe, tensorSplit, TooBig, simModel, type Peer } from '../src/planner.ts';
+import { planShares, MB } from '../src/sim.ts';
 
 let n = 1;
-const peer = (id: string, ram: number, bw: number): Peer => ({ id, name: id, host: '10.0.0.' + n++, port: 50551, secret: 'aa'.repeat(8), kind: 'phone', ram, bw, added_at: 't' });
+const peer = (id: string, ram: number, bw: number, kind: Peer['kind'] = 'phone'): Peer => ({ id, name: id, host: '10.0.0.' + n++, port: 50551, secret: 'aa'.repeat(8), kind, ram, bw, added_at: 't' });
+const q06 = simModel({ id: 'qwen3-0.6b-q8', size: 639446688, layers: 28, hidden: 1024, vocab: 151936, quant: 'Q8_0', kv_mb_per_1k: 56 });
+const q7 = simModel({ id: 'qwen2.5-7b-q4', size: 4683074240, layers: 28, hidden: 3584, vocab: 152064, quant: 'Q4_K_M', kv_mb_per_1k: 56 });
+
+test('the core is the very file the phone runs', () => {
+  const here = readFileSync(new URL('../src/sim.ts', import.meta.url), 'utf8');
+  const phone = readFileSync(new URL('../../app/src/llm/sim/model.ts', import.meta.url), 'utf8');
+  assert.equal(here, phone, 'node/src/sim.ts must be a copy of app/src/llm/sim/model.ts (cp it)');
+});
+
+test('the shared vectors give the same plans here (tools/planner-vectors.json)', () => {
+  const { vectors } = JSON.parse(readFileSync(new URL('../../tools/planner-vectors.json', import.meta.url), 'utf8'));
+  assert.ok(vectors.length >= 6);
+  for (const v of vectors) {
+    const { fileBytes, ...rest } = v.input.model;
+    const model = { ...rest, fileMb: fileBytes / MB };
+    if (v.error) assert.throws(() => planShares({ ...v.input, model }), new RegExp(v.error), v.name);
+    else {
+      const p = planShares({ ...v.input, model });
+      assert.deepEqual({ localMb: p.localMb, used: p.used, needMb: p.needMb, aloneFaster: p.aloneFaster, est: p.est }, v.expect, v.name);
+    }
+  }
+});
 
 test('fits alone and no share: everything stays local, no worker used', () => {
-  const plan = planSplit({ modelBytes: 1000 * MB, localFreeMb: 4000, localBw: 50, peers: [peer('a', 6000, 20)], share: false });
-  assert.equal(plan.needMb, Math.round(1000 * NEED_FACTOR));
+  const plan = planSplit({ model: q06, ctx: 2048, localFreeMb: 4000, localBw: 50, peers: [peer('a', 6000, 20)], share: false });
   assert.equal(plan.fitsAlone, true);
   assert.equal(plan.localMb, plan.needMb);
   assert.deepEqual(plan.used, []);
-  assert.equal(plan.totalMb, Math.round(4000 * LOCAL_SHARE + 6000 * WORKER_SHARE));
+  assert.deepEqual(tensorSplit(plan), [plan.needMb]);
 });
 
-test('fits alone and share: split by bandwidth, capped by capacity, overflow to the fastest', () => {
-  // local 50 GB/s, worker 10 GB/s: 5:1 by speed
-  const plan = planSplit({ modelBytes: 1200 * MB, localFreeMb: 4000, localBw: 50, peers: [peer('a', 6000, 10)], share: true });
-  assert.equal(plan.fitsAlone, true);
-  assert.equal(plan.localMb + plan.used[0].assignedMb, plan.needMb);
-  assert.equal(plan.localMb, Math.round((plan.needMb * 50) / 60));
-  // a slow local with a tiny capacity: the cap holds and the rest goes to the worker
-  const capped = planSplit({ modelBytes: 1000 * MB, localFreeMb: 1000, localBw: 50, peers: [peer('a', 6000, 10)], share: true });
-  assert.equal(capped.localMb, Math.round(1000 * LOCAL_SHARE));
-  assert.equal(capped.used[0].assignedMb, capped.needMb - capped.localMb);
-});
-
-test('does not fit alone: fill the fastest first, devices not needed stay out, output layer local', () => {
+test('does not fit alone: the fastest worker first, the slow one stays out, the output layer local', () => {
   const fast = peer('fast', 8000, 40);
   const slow = peer('slow', 8000, 5);
-  const plan = planSplit({ modelBytes: 7000 * MB, localFreeMb: 4000, localBw: 20, peers: [slow, fast], share: false });
+  const plan = planSplit({ model: q7, ctx: 2048, localFreeMb: 4000, localBw: 20, peers: [slow, fast], share: false });
   assert.equal(plan.fitsAlone, false);
-  // fast worker (40) takes its whole capacity, local (20) the rest; slow never asked
   assert.equal(plan.used.length, 1);
   assert.equal(plan.used[0].id, 'fast');
-  assert.equal(plan.used[0].assignedMb, Math.round(8000 * WORKER_SHARE));
-  assert.equal(plan.localMb, plan.needMb - plan.used[0].assignedMb);
-  assert.ok(plan.localMb > 0, 'the output layer needs memory here');
+  assert.ok(plan.localMb >= 300 + 260, 'the runtime and the output layer need memory here');
+  assert.ok(plan.used[0].layers > 20);
   assert.deepEqual(tensorSplit(plan), [plan.localMb, plan.used[0].assignedMb]);
+  assert.ok(plan.est.tps > 0 && plan.est.loadS > 0);
 });
 
-test('unknown ram and bandwidth get the defaults from the phone planner (2000 MB, 4 GB/s)', () => {
-  const p = { ...peer('x', 0, 0), ram: null, bw: null };
-  const plan = planSplit({ modelBytes: 2000 * MB, localFreeMb: 2000, localBw: 0, peers: [p], share: false });
-  assert.equal(plan.totalMb, Math.round(2000 * LOCAL_SHARE + 2000 * WORKER_SHARE));
+test('a mac as the master and a phone as the worker: the phone gets nothing it should not', () => {
+  const plan = planSplit({ model: q06, ctx: 2048, localFreeMb: 4000, localBw: 68, localEff: 0.3, peers: [peer('s25', 6500, 65.9)], share: true });
+  assert.equal(plan.fitsAlone, true);
+  assert.equal(plan.aloneFaster, true); // one hop over wi-fi costs more than a 0.6b saves
 });
 
 test('too big even together throws TooBig with the numbers', () => {
-  assert.throws(() => planSplit({ modelBytes: 20000 * MB, localFreeMb: 4000, localBw: 20, peers: [peer('a', 4000, 10)], share: true }), (e: unknown) => e instanceof TooBig && e.needMb === 22000 && e.totalMb === 5800);
+  assert.throws(() => planSplit({ model: q7, ctx: 2048, localFreeMb: 1400, localBw: 8, peers: [peer('a', 1400, 8)], share: true }), (e: unknown) => e instanceof TooBig && e.needMb > 5000 && e.totalMb === 2030);
 });
 
 test('planWithProbe drops the peers that did not answer in time and says why', async () => {
   const live = peer('live', 8000, 30);
   const dead = peer('dead', 8000, 30);
-  const wrong = peer('wrong', 8000, 30);
   const asked: string[] = [];
   const plan = await planWithProbe({
-    modelBytes: 7000 * MB, localFreeMb: 4000, localBw: 20, wanted: [live, dead, wrong], share: true, timeoutMs: 2000,
-    probe: async (host, port, secret, channel, ms) => {
-      asked.push(`${channel}:${ms}`);
-      if (host === live.host && port === 50551) return { ok: true, ms: 3 };
-      if (host === wrong.host) return { ok: false, reason: 'wrong secret' };
-      return { ok: false, reason: 'connect timeout' };
-    },
+    model: q7, ctx: 2048, localFreeMb: 4000, localBw: 20, wanted: [live, dead], share: true,
+    probe: async (host) => { asked.push(host); return host === live.host ? { ok: true, ms: 3 } : { ok: false, reason: 'timeout' }; },
   });
-  assert.ok(asked.every((a) => a === 'rpc:2000'));
+  assert.equal(asked.length, 2);
   assert.deepEqual(plan.used.map((u) => u.id), ['live']);
-  assert.deepEqual(plan.skipped.map((s) => `${s.peer.id}:${s.why}`).sort(), ['dead:connect timeout', 'wrong:wrong secret']);
+  assert.deepEqual(plan.skipped.map((s) => [s.peer.id, s.why]), [['dead', 'timeout']]);
 });

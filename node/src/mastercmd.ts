@@ -11,6 +11,7 @@ import { findLlama, sha256File } from './llama.js';
 import { serveModel } from './modelserve.js';
 import { freeRamMB, lanIPv4, measureBandwidth } from './sysinfo.js';
 import { expandHome } from './paths.js';
+import { simModelOf } from './gguf.js';
 
 type Flags = Record<string, string | boolean>;
 const stamp = () => new Date().toISOString().slice(11, 19);
@@ -121,7 +122,7 @@ export async function chatCommand(flags: Flags): Promise<number> {
     if (!llama) { console.error('split mode needs llama.cpp on this computer: run kula-node setup'); return 1; }
     let setup;
     try {
-      setup = await prepareSplit({ modelBytes: size, localFreeMb: freeRamMB(), localBw: bw, peers, share: flags['keep-local'] !== true, probeMs, log });
+      setup = await prepareSplit({ model: simModelOf(modelFile), ctx, localFreeMb: freeRamMB(), localBw: bw, peers, share: flags['keep-local'] !== true, probeMs, log });
     } catch (e) {
       if (e instanceof TooBig) { console.error(e.message); return 1; }
       throw e;

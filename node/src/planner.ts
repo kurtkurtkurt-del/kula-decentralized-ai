@@ -1,28 +1,29 @@
-// The split planner, a copy of app/src/llm/cluster.ts (planSplit) for the
-// computer side. Kept a pure function over numbers so it can be tested
-// without a network; `planWithProbe` below does the 2 s probe first, because
-// llama.cpp's ggml_backend_rpc_add_server aborts the whole process on a
-// worker that does not answer, so only peers that answered are handed to it.
-// The output layer always stays local; workers get weights by free RAM
-// (capacity) in order of memory bandwidth (speed).
-import type { Peer } from './peers.js';
+// The split planner for the computer side: the same core as the phone's
+// (src/sim.ts is a byte-for-byte copy of app/src/llm/sim/model.ts; the test
+// checks that) behind the shape kula-node's master command uses. Kept a pure
+// function over numbers so it can be tested without a network; `planWithProbe`
+// below does the 2 s probe first, because llama.cpp's ggml_backend_rpc_add_server
+// aborts the whole process on a worker that does not answer, so only peers that
+// answered are handed to it.
 import { probe as gateProbe, type ProbeResult } from './gate.js';
+import type { Peer } from './peers.js';
+import { DEFAULT_BW, DEFAULT_EFF, LOCAL_SHARE, MB, planShares, WORKER_SHARE, type Estimate, type SimModel, type SimNet } from './sim.js';
 
-export const MB = 1024 * 1024;
-export const LOCAL_SHARE = 0.7;   // of this computer's free RAM a model may take
-export const WORKER_SHARE = 0.75; // of a worker's advertised free RAM
-export const NEED_FACTOR = 1.1;   // file × this: buffers and the context
+export { LOCAL_SHARE, WORKER_SHARE, MB };
 
-export type Mode = 'apart' | 'split';
+export type { Peer };
 
 export interface Plan {
   mode: 'split';
-  used: (Peer & { assignedMb: number })[];
+  used: (Peer & { assignedMb: number; layers: number })[];
   skipped: { peer: Peer; why: string }[];
   localMb: number;
   fitsAlone: boolean;
+  aloneFaster: boolean;
   totalMb: number;
   needMb: number;
+  est: Estimate;
+  estAlone: Estimate | null;
 }
 
 export class TooBig extends Error {
@@ -31,58 +32,46 @@ export class TooBig extends Error {
   }
 }
 
+
 export interface PlanInput {
-  modelBytes: number;
+  model: SimModel;
+  ctx: number;
   localFreeMb: number;
-  localBw: number;      // GB/s; 0 → a default of 4
+  localBw: number;      // GB/s; 0 → DEFAULT_BW
+  localEff?: number;    // 0.3 for a mac m1 (measured); DEFAULT_EFF otherwise
   peers: Peer[];        // the ones that answered the probe
   skipped?: { peer: Peer; why: string }[];
   share: boolean;       // when it fits alone: share anyway?
+  net?: SimNet;
+}
+
+/** A model's shape for the planner from what the catalog or a gguf header says. */
+export function simModel(m: { id: string; size: number; layers: number; hidden: number; vocab: number; quant: string; kv_mb_per_1k: number }): SimModel {
+  const bpp = /q8/i.test(m.quant) ? 1 : /q3/i.test(m.quant) ? 0.45 : /f16|bf16/i.test(m.quant) ? 2 : 0.55;
+  return { id: m.id, fileMb: m.size / MB, layers: m.layers, hidden: m.hidden, vocab: m.vocab, bytesPerParam: bpp, kvMbPer1k: m.kv_mb_per_1k };
 }
 
 export function planSplit(input: PlanInput): Plan {
-  const needMb = Math.round((input.modelBytes / MB) * NEED_FACTOR);
-  const local = { capMb: input.localFreeMb * LOCAL_SHARE, bw: input.localBw || 4 };
-  const workers = input.peers.map((p) => ({ peer: p, capMb: (p.ram ?? 2000) * WORKER_SHARE, bw: p.bw ?? 4 }));
-  const totalMb = local.capMb + workers.reduce((a, w) => a + w.capMb, 0);
-  if (needMb > totalMb) throw new TooBig(needMb, Math.round(totalMb));
-  const fitsAlone = needMb <= local.capMb;
-  type Row = { peer: Peer | null; capMb: number; bw: number; assignedMb: number };
-  const rows: Row[] = [{ peer: null, ...local, assignedMb: 0 }, ...workers.map((w) => ({ ...w, assignedMb: 0 }))];
-  if (fitsAlone && !input.share) {
-    rows[0].assignedMb = needMb;
-  } else if (fitsAlone && input.share) {
-    // split by speed, capped by capacity, overflow redistributed
-    const sumBw = rows.reduce((a, r) => a + r.bw, 0);
-    let left = needMb;
-    for (const r of rows) r.assignedMb = Math.min(r.capMb, (needMb * r.bw) / sumBw);
-    left -= rows.reduce((a, r) => a + r.assignedMb, 0);
-    for (const r of rows.sort((a, b) => b.bw - a.bw)) {
-      if (left <= 0) break;
-      const extra = Math.min(r.capMb - r.assignedMb, left);
-      r.assignedMb += extra;
-      left -= extra;
+  const net = input.net ?? { mbps: 30, rttMs: 3 };
+  try {
+    const sim = planShares({
+      model: input.model, ctx: input.ctx, share: input.share, net,
+      local: { id: 'me', capMb: input.localFreeMb * LOCAL_SHARE, bw: input.localBw || DEFAULT_BW, eff: input.localEff ?? DEFAULT_EFF },
+      workers: input.peers.map((p) => ({ id: p.id, capMb: (p.ram ?? 2000) * WORKER_SHARE, bw: p.bw ?? DEFAULT_BW, eff: p.kind === 'pc' ? 0.3 : DEFAULT_EFF })),
+    });
+    return {
+      mode: 'split',
+      used: sim.used.map((u) => ({ ...(input.peers.find((p) => p.id === u.id) as Peer), assignedMb: u.assignedMb, layers: u.layers })),
+      skipped: input.skipped ?? [],
+      localMb: sim.localMb, fitsAlone: sim.fitsAlone, aloneFaster: sim.aloneFaster, totalMb: sim.totalMb, needMb: sim.needMb, est: sim.est, estAlone: sim.estAlone,
+    };
+  } catch (e) {
+    if ((e as Error).message === 'toobig' || (e as Error).message === 'local') {
+      const need = Math.round(input.model.fileMb * 1.05 + (input.model.kvMbPer1k * input.ctx) / 1024 + 300);
+      throw new TooBig(need, Math.round(input.localFreeMb * LOCAL_SHARE + input.peers.reduce((a, p) => a + (p.ram ?? 2000) * WORKER_SHARE, 0)));
     }
-  } else {
-    // does not fit here: fill the fastest first, up to capacity; devices not needed stay out
-    let left = needMb;
-    for (const r of [...rows].sort((a, b) => b.bw - a.bw)) {
-      const take = Math.min(r.capMb, left);
-      r.assignedMb = take;
-      left -= take;
-      if (left <= 0) break;
-    }
+    throw e;
   }
-  const used = rows.filter((r) => r.peer && r.assignedMb > 0).map((r) => ({ ...(r.peer as Peer), assignedMb: Math.round(r.assignedMb) }));
-  return {
-    mode: 'split',
-    used,
-    skipped: input.skipped ?? [],
-    localMb: Math.round(rows.find((r) => !r.peer)!.assignedMb),
-    fitsAlone,
-    totalMb: Math.round(totalMb),
-    needMb,
-  };
 }
 
 export type ProbeFn = (host: string, port: number, secret: string, channel: 'rpc' | 'api', timeoutMs: number) => Promise<ProbeResult>;
@@ -94,7 +83,7 @@ export async function planWithProbe(opts: Omit<PlanInput, 'peers' | 'skipped'> &
   const results = await Promise.all(opts.wanted.map(async (peer) => ({ peer, r: await probe(peer.host, peer.port, peer.secret, 'rpc', opts.timeoutMs ?? 2000) })));
   const peers = results.filter((x) => x.r.ok).map((x) => x.peer);
   const skipped = results.filter((x) => !x.r.ok).map((x) => ({ peer: x.peer, why: (x.r as { reason: string }).reason }));
-  return planSplit({ modelBytes: opts.modelBytes, localFreeMb: opts.localFreeMb, localBw: opts.localBw, share: opts.share, peers, skipped });
+  return planSplit({ ...opts, peers, skipped });
 }
 
 // The --rpc list and the tensor split llama.cpp wants: local first, then the
