@@ -1,18 +1,47 @@
-// The gate: the one port a kula device opens. A short line based handshake
-// proves both sides know the cluster secret, then the connection is piped raw
-// to a local target (the rpc server or the api server). This must stay byte for
-// byte identical to the Kotlin gate in app/modules/kula-llama.
+// The gate: the one port a kula device opens. Two protocols share it and the
+// server tells them apart by the first byte: a TLS ClientHello starts with 0x16,
+// a v1 hello with 'K'. v1 is a line based handshake that proves both sides know
+// the cluster secret; v2 is TLS 1.3 between two self-signed certificates (pinned
+// by fingerprint, paired once with a one-time code) with a short hello inside.
+// Either way the connection is then piped raw to a local target (the rpc server
+// or the api server). This must stay byte for byte identical to the Kotlin gate
+// in app/modules/kula-llama (Gate.kt); docs/GATE.md describes both protocols.
 import net from 'node:net';
+import tls from 'node:tls';
+import { Duplex } from 'node:stream';
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
+import { ReplayCheck, clockCheck } from './audit/checks.js';
+import { fingerprint, type GateIdentity, type Paired } from './tls.js';
 
 export type Channel = 'rpc' | 'api';
 export const CHANNELS: Channel[] = ['rpc', 'api'];
 export const HANDSHAKE_MS = 5000;
+export const FP_MISMATCH = 'fingerprint mismatch';
 
+// v: which protocol the connection spoke; fp: the client's certificate fingerprint (v2).
 export type GateEvent =
-  | { type: 'open'; channel: Channel; peer: string; at: number }
-  | { type: 'close'; channel: Channel; peer: string; at: number; ms: number; bytesIn: number; bytesOut: number }
-  | { type: 'reject'; channel: Channel | null; peer: string; at: number; reason: string };
+  | { type: 'open'; channel: Channel; peer: string; at: number; v: 1 | 2; fp?: string }
+  | { type: 'close'; channel: Channel; peer: string; at: number; ms: number; bytesIn: number; bytesOut: number; v: 1 | 2; fp?: string }
+  | { type: 'reject'; channel: Channel | null; peer: string; at: number; reason: string; v: 1 | 2; fp?: string }
+  | { type: 'pair'; channel: Channel; peer: string; at: number; v: 2; fp: string };
+
+// The worker's side of v2: its identity, the clients it already trusts and the
+// current one-time pairing code (null: none open). The code is spent by the first
+// client that proves it; onPinUsed is where share() makes the next one.
+export interface TlsServer {
+  identity: GateIdentity;
+  paired: Paired;
+  pin: string | null;
+  onPinUsed?: () => void;
+}
+
+// The master's side of v2: its identity, the worker's fingerprint from the qr
+// and, until paired, the pairing code.
+export interface TlsClient {
+  identity: GateIdentity;
+  fp: string;
+  pin?: string | null;
+}
 
 export function nonce(): string {
   return randomBytes(16).toString('hex');
@@ -34,6 +63,15 @@ export function clientProof(secret: string, nonceC: string, nonceS: string, chan
 // What the server answers with: HMAC(secret, nonce_s|nonce_c|channel).
 export function serverProof(secret: string, nonceC: string, nonceS: string, channel: string): string {
   return hmac(secret, `${nonceS}|${nonceC}|${channel}`);
+}
+
+// v2 pairing proofs, both ways: fp_s is the worker's fingerprint, fp_c the client's.
+export function pinProofClient(pin: string, nonceC: string, nonceS: string, channel: string, fpS: string, fpC: string): string {
+  return hmac(pin, `${nonceC}|${nonceS}|${channel}|${fpS}|${fpC}`);
+}
+
+export function pinProofServer(pin: string, nonceC: string, nonceS: string, channel: string, fpS: string, fpC: string): string {
+  return hmac(pin, `${nonceS}|${nonceC}|${channel}|${fpS}|${fpC}`);
 }
 
 export function sameHex(a: string, b: string): boolean {
@@ -61,12 +99,15 @@ export class LineReader {
     this.flush();
   };
 
-  constructor(private readonly socket: net.Socket) {
+  constructor(private readonly socket: Duplex) {
     socket.on('data', this.onData);
     socket.on('end', this.onEnd);
     socket.on('close', this.onEnd);
     socket.on('error', this.onError);
   }
+
+  // Bytes that were read before this reader existed (the protocol sniff).
+  feed(chunk: Buffer) { this.onData(chunk); }
 
   private flush() {
     if (!this.waiting) return;
@@ -116,14 +157,14 @@ export class LineReader {
   }
 }
 
-function writeLine(socket: net.Socket, line: string) {
+function writeLine(socket: Duplex, line: string) {
   socket.write(line + '\n');
 }
 
 // Pipes a <-> b after the handshake. `fromA` is what the line reader on `a`
 // had already buffered: it goes to b first. Resolves with byte counts when
 // either side closes.
-export function pipeBoth(a: net.Socket, b: net.Socket, fromA: Buffer, fromB: Buffer = Buffer.alloc(0)): Promise<{ aToB: number; bToA: number }> {
+export function pipeBoth(a: Duplex, b: Duplex, fromA: Buffer, fromB: Buffer = Buffer.alloc(0)): Promise<{ aToB: number; bToA: number }> {
   return new Promise((resolve) => {
     let aToB = fromA.length;
     let bToA = fromB.length;
@@ -162,6 +203,43 @@ export interface GateServerOptions {
   targets: Targets;
   onEvent?: (e: GateEvent) => void;
   admit?: Admit;
+  // with this the port also speaks v2 (tls); without it a tls client is told "NO no tls"
+  tls?: TlsServer;
+}
+
+// A duplex over a socket whose first bytes were already read: the TLS wrapper
+// takes over a net.Socket's handle and would lose what the sniff consumed, so it
+// gets this stream instead.
+function prefixed(sock: net.Socket, first: Buffer): Duplex {
+  const d = new Duplex({
+    read() { sock.resume(); },
+    write(chunk, _enc, cb) { sock.write(chunk, cb); },
+    final(cb) { sock.end(cb); },
+    destroy(err, cb) { sock.destroy(); cb(err); },
+  });
+  d.push(first);
+  sock.on('data', (c: Buffer) => { if (!d.push(c)) sock.pause(); });
+  sock.on('end', () => d.push(null));
+  sock.on('error', (e) => d.destroy(e));
+  sock.on('close', () => d.destroy());
+  return d;
+}
+
+function waitFirstChunk(socket: net.Socket, timeoutMs: number): Promise<Buffer | null> {
+  return new Promise((resolve) => {
+    const t = setTimeout(() => { socket.off('data', on); resolve(null); }, timeoutMs);
+    const done = () => { clearTimeout(t); socket.off('data', on); resolve(null); };
+    const on = (c: Buffer) => { clearTimeout(t); socket.off('end', done); socket.off('close', done); resolve(c); };
+    socket.once('data', on);
+    socket.once('end', done);
+    socket.once('close', done);
+  });
+}
+
+// Fingerprint of the certificate the other side showed, null when it showed none.
+export function peerFingerprint(socket: tls.TLSSocket): string | null {
+  const cert = socket.getPeerCertificate();
+  return cert && cert.raw ? fingerprint(cert.raw) : null;
 }
 
 export interface GateServer {
@@ -185,61 +263,144 @@ export async function startGateServer(opts: GateServerOptions): Promise<GateServ
   // many of its connections are open.
   let rpcPeer: string | null = null;
   let rpcOpen = 0;
+  // v2 checks replays and clocks itself when no admit hook does
+  const ring = new ReplayCheck();
+  const secureContext = opts.tls ? tls.createSecureContext({ key: opts.tls.identity.keyPem, cert: opts.tls.identity.certPem, minVersion: 'TLSv1.3' }) : null;
 
-  const server = net.createServer((socket) => {
-    socket.setNoDelay(true);
-    const peer = socket.remoteAddress ?? '?';
+  // After the proof: find the target, say OK, pipe until either side closes.
+  const admitted = async (socket: Duplex, peer: string, channel: Channel, okLine: string, rest: Buffer, v: 1 | 2, fp: string | undefined, refuse: (reason: string) => void) => {
+    let targetPort: number | null = null;
+    try { targetPort = await opts.targets(channel); } catch { targetPort = null; }
+    if (targetPort == null) return refuse('channel closed');
+    if (channel === 'rpc' && rpcPeer !== null && rpcPeer !== peer && rpcOpen > 0) return refuse('busy');
+    let target: net.Socket;
+    try { target = await connectLocal(targetPort); } catch { return refuse('target down'); }
+    target.setNoDelay(true);
+    if (channel === 'rpc') { rpcPeer = peer; rpcOpen++; }
+    writeLine(socket, okLine);
+    const at = Date.now();
+    emit({ type: 'open', channel, peer, at, v, fp });
+    const counts = await pipeBoth(socket, target, rest);
+    if (channel === 'rpc') { rpcOpen--; if (rpcOpen === 0) rpcPeer = null; }
+    emit({ type: 'close', channel, peer, at: Date.now(), ms: Date.now() - at, bytesIn: counts.aToB, bytesOut: counts.bToA, v, fp });
+  };
+
+  const servePlain = async (socket: net.Socket, peer: string, first: Buffer) => {
     const reader = new LineReader(socket);
+    reader.feed(first);
     let channel: Channel | null = null;
-
     const refuse = (reason: string) => {
-      emit({ type: 'reject', channel, peer, at: Date.now(), reason });
+      emit({ type: 'reject', channel, peer, at: Date.now(), reason, v: 1 });
       try { writeLine(socket, `NO ${reason}`); } catch {}
       socket.end();
       setTimeout(() => socket.destroy(), 200);
     };
+    let hello: string;
+    try { hello = await reader.line(HANDSHAKE_MS); } catch { return refuse('no hello'); }
+    const parts = hello.split(' ');
+    if ((parts.length !== 3 && parts.length !== 4) || parts[0] !== 'KULA1') return refuse('bad hello');
+    if (!CHANNELS.includes(parts[1] as Channel)) return refuse('bad channel');
+    channel = parts[1] as Channel;
+    const nonceC = parts[2];
+    if (!isNonce(nonceC)) return refuse('bad nonce');
+    let unixMs: number | null = null;
+    if (parts.length === 4) {
+      if (!/^\d{1,16}$/.test(parts[3])) return refuse('bad hello');
+      unixMs = Number(parts[3]);
+    }
+    if (opts.admit) {
+      const why = opts.admit(peer, nonceC, unixMs);
+      if (why) return refuse(why);
+    }
+    const nonceS = nonce();
+    writeLine(socket, nonceS);
+    let proof: string;
+    try { proof = await reader.line(HANDSHAKE_MS); } catch { return refuse('no proof'); }
+    if (!sameHex(proof, clientProof(opts.secret, nonceC, nonceS, channel))) return refuse('wrong secret');
+    socket.setTimeout(0);
+    await admitted(socket, peer, channel, `OK ${serverProof(opts.secret, nonceC, nonceS, channel)}`, reader.release(), 1, undefined, refuse);
+  };
 
+  const serveTls = async (raw: net.Socket, peer: string, first: Buffer, t: TlsServer) => {
+    const socket = new tls.TLSSocket(prefixed(raw, first), { isServer: true, secureContext: secureContext!, requestCert: true, rejectUnauthorized: false });
+    socket.on('error', () => {});
+    const secure = await new Promise<boolean>((resolve) => {
+      const timer = setTimeout(() => resolve(false), HANDSHAKE_MS);
+      socket.once('secure', () => { clearTimeout(timer); resolve(true); });
+      socket.once('error', () => { clearTimeout(timer); resolve(false); });
+      socket.once('close', () => { clearTimeout(timer); resolve(false); });
+    });
+    if (!secure) {
+      emit({ type: 'reject', channel: null, peer, at: Date.now(), reason: 'tls', v: 2 });
+      socket.destroy();
+      return;
+    }
+    const fpC = peerFingerprint(socket) ?? undefined;
+    const reader = new LineReader(socket);
+    let channel: Channel | null = null;
+    const refuse = (reason: string) => {
+      emit({ type: 'reject', channel, peer, at: Date.now(), reason, v: 2, fp: fpC });
+      try { writeLine(socket, `NO ${reason}`); } catch {}
+      socket.end();
+      setTimeout(() => socket.destroy(), 200);
+    };
+    let hello: string;
+    try { hello = await reader.line(HANDSHAKE_MS); } catch { return refuse('no hello'); }
+    const parts = hello.split(' ');
+    if (parts.length !== 4 || parts[0] !== 'KULA2') return refuse('bad hello');
+    if (!CHANNELS.includes(parts[1] as Channel)) return refuse('bad channel');
+    channel = parts[1] as Channel;
+    const nonceC = parts[2];
+    if (!isNonce(nonceC)) return refuse('bad nonce');
+    if (!/^\d{1,16}$/.test(parts[3])) return refuse('bad hello');
+    const unixMs = Number(parts[3]);
+    const why = opts.admit ? opts.admit(peer, nonceC, unixMs) : (ring.check(peer, nonceC) ?? clockCheck(unixMs, Date.now()));
+    if (why) return refuse(why);
+    if (!fpC) return refuse('no client cert');
+    const paired = t.paired.has(fpC);
+    const pin = t.pin;
+    if (!paired && pin === null) return refuse('not paired');
+    const nonceS = nonce();
+    writeLine(socket, `${nonceS} ${paired ? 'paired' : 'pin'}`);
+    let proof: string;
+    try { proof = await reader.line(HANDSHAKE_MS); } catch { return refuse('no proof'); }
+    const fpS = t.identity.fp;
+    let okLine: string;
+    if (paired) {
+      if (proof !== '-') return refuse('bad proof');
+      okLine = 'OK -';
+    } else {
+      if (!sameHex(proof, pinProofClient(pin!, nonceC, nonceS, channel, fpS, fpC))) return refuse('wrong pin');
+      // the first connection with the right code pairs the client and spends the code
+      t.paired.add(fpC);
+      t.pin = null;
+      emit({ type: 'pair', channel, peer, at: Date.now(), v: 2, fp: fpC });
+      t.onPinUsed?.();
+      okLine = `OK ${pinProofServer(pin!, nonceC, nonceS, channel, fpS, fpC)}`;
+    }
+    await admitted(socket, peer, channel, okLine, reader.release(), 2, fpC, refuse);
+  };
+
+  const server = net.createServer((socket) => {
+    socket.setNoDelay(true);
+    const peer = socket.remoteAddress ?? '?';
+    socket.on('error', () => {});
     (async () => {
-      let hello: string;
-      try { hello = await reader.line(HANDSHAKE_MS); } catch { return refuse('no hello'); }
-      const parts = hello.split(' ');
-      if ((parts.length !== 3 && parts.length !== 4) || parts[0] !== 'KULA1') return refuse('bad hello');
-      if (!CHANNELS.includes(parts[1] as Channel)) return refuse('bad channel');
-      channel = parts[1] as Channel;
-      const nonceC = parts[2];
-      if (!isNonce(nonceC)) return refuse('bad nonce');
-      let unixMs: number | null = null;
-      if (parts.length === 4) {
-        if (!/^\d{1,16}$/.test(parts[3])) return refuse('bad hello');
-        unixMs = Number(parts[3]);
+      const first = await waitFirstChunk(socket, HANDSHAKE_MS);
+      if (!first) {
+        emit({ type: 'reject', channel: null, peer, at: Date.now(), reason: 'no hello', v: 1 });
+        try { socket.end('NO no hello\n'); } catch {}
+        return;
       }
-      if (opts.admit) {
-        const why = opts.admit(peer, nonceC, unixMs);
-        if (why) return refuse(why);
+      if (first[0] === 0x16) {
+        if (!opts.tls) {
+          emit({ type: 'reject', channel: null, peer, at: Date.now(), reason: 'no tls', v: 2 });
+          socket.end('NO no tls\n');
+          return;
+        }
+        return serveTls(socket, peer, first, opts.tls);
       }
-      const nonceS = nonce();
-      writeLine(socket, nonceS);
-      let proof: string;
-      try { proof = await reader.line(HANDSHAKE_MS); } catch { return refuse('no proof'); }
-      if (!sameHex(proof, clientProof(opts.secret, nonceC, nonceS, channel))) return refuse('wrong secret');
-
-      let targetPort: number | null = null;
-      try { targetPort = await opts.targets(channel); } catch { targetPort = null; }
-      if (targetPort == null) return refuse('channel closed');
-      if (channel === 'rpc' && rpcPeer !== null && rpcPeer !== peer && rpcOpen > 0) return refuse('busy');
-      let target: net.Socket;
-      try { target = await connectLocal(targetPort); } catch { return refuse('target down'); }
-      target.setNoDelay(true);
-      if (channel === 'rpc') { rpcPeer = peer; rpcOpen++; }
-
-      socket.setTimeout(0);
-      writeLine(socket, `OK ${serverProof(opts.secret, nonceC, nonceS, channel)}`);
-      const rest = reader.release();
-      const at = Date.now();
-      emit({ type: 'open', channel, peer, at });
-      const counts = await pipeBoth(socket, target, rest);
-      if (channel === 'rpc') { rpcOpen--; if (rpcOpen === 0) rpcPeer = null; }
-      emit({ type: 'close', channel, peer, at: Date.now(), ms: Date.now() - at, bytesIn: counts.aToB, bytesOut: counts.bToA });
+      return servePlain(socket, peer, first);
     })().catch(() => socket.destroy());
   });
 
@@ -261,9 +422,52 @@ export class GateRefused extends Error {
   }
 }
 
-// Client side. On success the socket is ready for raw traffic; `rest` is what
-// the server already sent after its OK line (normally nothing).
-export async function handshake(socket: net.Socket, secret: string, channel: Channel, timeoutMs = HANDSHAKE_MS, clockMs?: number): Promise<{ rest: Buffer }> {
+// Wraps an open socket in TLS 1.3 with our certificate, trusting only the pinned
+// fingerprint; no hostname check, peers are ip addresses. Rejects with
+// FP_MISMATCH when the worker shows another certificate.
+export function wrapClient(socket: net.Socket, t: TlsClient, timeoutMs = HANDSHAKE_MS): Promise<tls.TLSSocket> {
+  return new Promise((resolve, reject) => {
+    const s = tls.connect({ socket, key: t.identity.keyPem, cert: t.identity.certPem, rejectUnauthorized: false, minVersion: 'TLSv1.3', checkServerIdentity: () => undefined });
+    const timer = setTimeout(() => { s.destroy(); reject(new Error('tls timeout')); }, timeoutMs);
+    s.once('secureConnect', () => {
+      clearTimeout(timer);
+      const fp = peerFingerprint(s);
+      if (!fp || !sameHex(fp, t.fp)) { s.destroy(); return reject(new Error(FP_MISMATCH)); }
+      resolve(s);
+    });
+    s.once('error', (e) => { clearTimeout(timer); reject(new Error(`tls ${e.message}`)); });
+  });
+}
+
+// Client side. On success `socket` is ready for raw traffic (the TLS socket in
+// v2, the one given in v1); `rest` is what the server already sent after its OK
+// line (normally nothing). With `tls` the v2 handshake runs, else v1.
+export async function handshake(socket: net.Socket, secret: string, channel: Channel, timeoutMs = HANDSHAKE_MS, clockMs?: number, tlsOpts?: TlsClient | null): Promise<{ rest: Buffer; socket: Duplex }> {
+  if (tlsOpts) {
+    const s = await wrapClient(socket, tlsOpts, timeoutMs);
+    const reader = new LineReader(s);
+    try {
+      const nonceC = nonce();
+      writeLine(s, `KULA2 ${channel} ${nonceC} ${clockMs ?? Date.now()}`);
+      const first = await reader.line(timeoutMs);
+      if (first.startsWith('NO ')) throw new GateRefused(first.slice(3));
+      const [nonceS, state] = first.split(' ');
+      if (!isNonce(nonceS) || (state !== 'paired' && state !== 'pin')) throw new Error(`bad server nonce: ${JSON.stringify(first)}`);
+      const pairing = state === 'pin';
+      if (pairing && !tlsOpts.pin) throw new GateRefused('not paired');
+      const fpC = tlsOpts.identity.fp;
+      writeLine(s, pairing ? pinProofClient(tlsOpts.pin!, nonceC, nonceS, channel, tlsOpts.fp, fpC) : '-');
+      const answer = await reader.line(timeoutMs);
+      if (answer.startsWith('NO ')) throw new GateRefused(answer.slice(3));
+      if (!answer.startsWith('OK ')) throw new Error(`bad server answer: ${JSON.stringify(answer)}`);
+      if (pairing && !sameHex(answer.slice(3), pinProofServer(tlsOpts.pin!, nonceC, nonceS, channel, tlsOpts.fp, fpC))) throw new Error('server failed its proof');
+      return { rest: reader.release(), socket: s };
+    } catch (e) {
+      reader.release();
+      s.destroy();
+      throw e;
+    }
+  }
   const reader = new LineReader(socket);
   try {
     const nonceC = nonce();
@@ -276,7 +480,7 @@ export async function handshake(socket: net.Socket, secret: string, channel: Cha
     if (answer.startsWith('NO ')) throw new GateRefused(answer.slice(3));
     if (!answer.startsWith('OK ')) throw new Error(`bad server answer: ${JSON.stringify(answer)}`);
     if (!sameHex(answer.slice(3), serverProof(secret, nonceC, nonceS, channel))) throw new Error('server failed its proof');
-    return { rest: reader.release() };
+    return { rest: reader.release(), socket };
   } catch (e) {
     reader.release();
     throw e;
@@ -296,12 +500,13 @@ export type ProbeResult = { ok: true; ms: number } | { ok: false; reason: string
 
 // Does one handshake and hangs up. `reason` is the server's NO reason or the
 // local error.
-export async function probe(host: string, port: number, secret: string, channel: Channel, timeoutMs = 2000): Promise<ProbeResult> {
+export async function probe(host: string, port: number, secret: string, channel: Channel, timeoutMs = 2000, tlsOpts?: TlsClient | null): Promise<ProbeResult> {
   const t0 = Date.now();
   let socket: net.Socket | null = null;
   try {
     socket = await connectRemote(host, port, timeoutMs);
-    await handshake(socket, secret, channel, timeoutMs);
+    const h = await handshake(socket, secret, channel, timeoutMs, undefined, tlsOpts);
+    h.socket.destroy();
     return { ok: true, ms: Date.now() - t0 };
   } catch (e) {
     if (e instanceof GateRefused) return { ok: false, reason: e.reason };
@@ -322,6 +527,7 @@ export class Tunnel {
     readonly gatePort: number,
     readonly secret: string,
     readonly channel: Channel,
+    readonly tls: TlsClient | null = null,
   ) {}
 
   async listen(localPort = 0): Promise<number> {
@@ -331,8 +537,8 @@ export class Tunnel {
       try {
         remote = await connectRemote(this.host, this.gatePort);
         remote.setNoDelay(true);
-        const { rest } = await handshake(remote, this.secret, this.channel);
-        await pipeBoth(remote, local, rest);
+        const { rest, socket } = await handshake(remote, this.secret, this.channel, HANDSHAKE_MS, undefined, this.tls);
+        await pipeBoth(socket, local, rest);
       } catch {
         local.destroy();
         remote?.destroy();
