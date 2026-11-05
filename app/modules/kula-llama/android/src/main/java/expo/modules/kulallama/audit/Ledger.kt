@@ -3,7 +3,6 @@ package expo.modules.kulallama.audit
 import java.io.File
 import java.io.FileOutputStream
 import java.security.MessageDigest
-import java.util.Base64
 
 /**
  * The audit ledger: append-only JSON lines, each hash-chained to the one before and signed
@@ -68,7 +67,7 @@ class Ledger(
     /** Signs an unsigned line (a complete JSON object ending in the prev field). */
     fun sign(unsigned: String, key: DeviceKey): String {
       val body = unsigned.removeSuffix("}")
-      val sig = Base64.getEncoder().encodeToString(key.sign(body.toByteArray(Charsets.UTF_8)))
+      val sig = B64.encode(key.sign(body.toByteArray(Charsets.UTF_8)))
       return "$body,\"sig\":\"$sig\"}"
     }
 
@@ -77,7 +76,7 @@ class Ledger(
       val m = sigTail.find(line) ?: return null
       val body = line.substring(0, m.range.first)
       val prev = prevField.find(body)?.groupValues?.get(1) ?: return null
-      val sig = runCatching { Base64.getDecoder().decode(m.groupValues[1]) }.getOrNull() ?: return null
+      val sig = runCatching { B64.decode(m.groupValues[1]) }.getOrNull() ?: return null
       return Triple(body, prev, sig)
     }
 

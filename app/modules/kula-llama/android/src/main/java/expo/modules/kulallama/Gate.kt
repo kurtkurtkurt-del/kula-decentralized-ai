@@ -161,7 +161,9 @@ object Gate {
       if (channel != "rpc" && channel != "api") return refuse(s, out, peer, channel, "bad channel")
       if (!nonceC.matches(NONCE)) return refuse(s, out, peer, channel, "bad nonce")
       val clientMs = if (p.size == 4) (p[3].toLongOrNull() ?: return refuse(s, out, peer, channel, "bad hello")) else null
-      auditor?.onHello(peer, nonceC, clientMs)?.takeIf { !it.ok }?.let { return refuse(s, out, peer, channel, it.reason ?: "audit") }
+      // an auditor that throws must not take the gate down; its verdicts do refuse
+      val verdict = runCatching { auditor?.onHello(peer, nonceC, clientMs) }.onFailure { Log.w(TAG, "auditor hello: ${it.message}") }.getOrNull()
+      if (verdict != null && !verdict.ok) return refuse(s, out, peer, channel, verdict.reason ?: "audit")
       val nonceS = randomHex(16)
       out.write("$nonceS\n".toByteArray()); out.flush()
       val proof = readLine(inp).trim()
@@ -179,7 +181,7 @@ object Gate {
       ssl.wantClientAuth = true
       try { ssl.startHandshake() } catch (e: Exception) {
         Log.w(TAG, "tls from $peer: ${e.message}")
-        onEvent(Event("reject", peer, null, "tls", null, 2)); auditor?.onReject(peer, null, "tls")
+        onEvent(Event("reject", peer, null, "tls", null, 2)); audit { it.onReject(peer, null, "tls") }
         runCatching { ssl.close() }
         return
       }
@@ -195,7 +197,7 @@ object Gate {
       if (channel != "rpc" && channel != "api") return refuse2(channel, "bad channel")
       if (!nonceC.matches(NONCE)) return refuse2(channel, "bad nonce")
       val clientMs = p[3].toLongOrNull() ?: return refuse2(channel, "bad hello")
-      val verdict: Verdict = auditor?.onHello(peer, nonceC, clientMs) ?: run {
+      val verdict: Verdict = runCatching { auditor?.onHello(peer, nonceC, clientMs) }.onFailure { Log.w(TAG, "auditor hello: ${it.message}") }.getOrNull() ?: run {
         Checks.replay(ring, nonceC, peer).takeIf { !it.ok } ?: Checks.clock(clientMs, System.currentTimeMillis())
       }
       if (!verdict.ok) return refuse2(channel, verdict.reason ?: "audit")
@@ -219,7 +221,7 @@ object Gate {
         t.paired.add(fpC)
         t.spend()
         onEvent(Event("pair", peer, channel, null, fpC, 2))
-        auditor?.onPair(peer, linkedMapOf("fp" to fpC, "channel" to channel))
+        audit { it.onPair(peer, linkedMapOf("fp" to fpC, "channel" to channel)) }
         reply = "OK ${pinProofServer(code, nonceC, nonceS, channel, fpS, fpC)}"
       }
       admit(ssl, inp, out, peer, channel, reply, 2, fpC)
@@ -234,21 +236,29 @@ object Gate {
       out.write("$okLine\n".toByteArray()); out.flush()
       s.soTimeout = 0
       onEvent(Event("connect", peer, channel, null, fp, v))
-      auditor?.onConnect(peer, channel)
+      audit { it.onConnect(peer, channel) }
       val started = System.currentTimeMillis()
       if (channel == "rpc") { currentPeer = peer; connected.incrementAndGet() }
       val bytes = pipe(s, inp, local, ByteArray(0))
       if (channel == "rpc" && connected.decrementAndGet() == 0) currentPeer = null
       onEvent(Event("end", peer, channel, null, fp, v))
-      auditor?.onEnd(peer, channel, bytes, (System.currentTimeMillis() - started) / 1000)
+      audit { it.onEnd(peer, channel, bytes, (System.currentTimeMillis() - started) / 1000) }
     }
 
     private fun refuse(s: Socket, out: OutputStream, peer: String, channel: String?, why: String, fp: String? = null, v: Int = 1) {
       Log.w(TAG, "refused $peer ($channel, v$v): $why")
       onEvent(Event("reject", peer, channel, why, fp, v))
-      auditor?.onReject(peer, channel, why)
+      // the answer first, then the record: a ledger that cannot be written must not leave
+      // the client hanging without its NO
       runCatching { out.write("NO $why\n".toByteArray()); out.flush() }
       runCatching { s.close() }
+      audit { it.onReject(peer, channel, why) }
+    }
+
+    /** Runs an auditor hook; a failure (disk full, directory gone) is logged and never breaks the connection. */
+    private fun audit(block: (Auditor) -> Unit) {
+      val a = auditor ?: return
+      runCatching { block(a) }.onFailure { Log.w(TAG, "auditor: ${it.message}") }
     }
   }
 

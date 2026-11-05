@@ -250,7 +250,7 @@ export interface GateServer {
 
 function connectLocal(port: number, timeoutMs = 3000): Promise<net.Socket> {
   return new Promise((resolve, reject) => {
-    const s = net.connect({ host: '127.0.0.1', port });
+    const s = net.connect({ host: '127.0.0.1', port, allowHalfOpen: true });
     const t = setTimeout(() => { s.destroy(); reject(new Error('timeout')); }, timeoutMs);
     s.once('connect', () => { clearTimeout(t); resolve(s); });
     s.once('error', (e) => { clearTimeout(t); reject(e); });
@@ -273,15 +273,17 @@ export async function startGateServer(opts: GateServerOptions): Promise<GateServ
     try { targetPort = await opts.targets(channel); } catch { targetPort = null; }
     if (targetPort == null) return refuse('channel closed');
     if (channel === 'rpc' && rpcPeer !== null && rpcPeer !== peer && rpcOpen > 0) return refuse('busy');
-    let target: net.Socket;
-    try { target = await connectLocal(targetPort); } catch { return refuse('target down'); }
-    target.setNoDelay(true);
+    // the rpc slot is taken before the (async) connect, so two peers arriving together cannot both get it
     if (channel === 'rpc') { rpcPeer = peer; rpcOpen++; }
+    const letGo = () => { if (channel === 'rpc') { rpcOpen--; if (rpcOpen === 0) rpcPeer = null; } };
+    let target: net.Socket;
+    try { target = await connectLocal(targetPort); } catch { letGo(); return refuse('target down'); }
+    target.setNoDelay(true);
     writeLine(socket, okLine);
     const at = Date.now();
     emit({ type: 'open', channel, peer, at, v, fp });
     const counts = await pipeBoth(socket, target, rest);
-    if (channel === 'rpc') { rpcOpen--; if (rpcOpen === 0) rpcPeer = null; }
+    letGo();
     emit({ type: 'close', channel, peer, at: Date.now(), ms: Date.now() - at, bytesIn: counts.aToB, bytesOut: counts.bToA, v, fp });
   };
 
@@ -297,7 +299,7 @@ export async function startGateServer(opts: GateServerOptions): Promise<GateServ
     };
     let hello: string;
     try { hello = await reader.line(HANDSHAKE_MS); } catch { return refuse('no hello'); }
-    const parts = hello.split(' ');
+    const parts = hello.trim().split(' ');
     if ((parts.length !== 3 && parts.length !== 4) || parts[0] !== 'KULA1') return refuse('bad hello');
     if (!CHANNELS.includes(parts[1] as Channel)) return refuse('bad channel');
     channel = parts[1] as Channel;
@@ -316,7 +318,7 @@ export async function startGateServer(opts: GateServerOptions): Promise<GateServ
     writeLine(socket, nonceS);
     let proof: string;
     try { proof = await reader.line(HANDSHAKE_MS); } catch { return refuse('no proof'); }
-    if (!sameHex(proof, clientProof(opts.secret, nonceC, nonceS, channel))) return refuse('wrong secret');
+    if (!sameHex(proof.trim(), clientProof(opts.secret, nonceC, nonceS, channel))) return refuse('wrong secret');
     socket.setTimeout(0);
     await admitted(socket, peer, channel, `OK ${serverProof(opts.secret, nonceC, nonceS, channel)}`, reader.release(), 1, undefined, refuse);
   };
@@ -381,7 +383,13 @@ export async function startGateServer(opts: GateServerOptions): Promise<GateServ
     await admitted(socket, peer, channel, okLine, reader.release(), 2, fpC, refuse);
   };
 
-  const server = net.createServer((socket) => {
+  // Half-open on every leg: a peer that sends its FIN after the request still gets the
+  // answer (llama.cpp's tunnels and the phone's Tunnel shut their write side first). The
+  // open sockets are kept so close() can end them; net.Server.close() only stops listening.
+  const open = new Set<net.Socket>();
+  const server = net.createServer({ allowHalfOpen: true }, (socket) => {
+    open.add(socket);
+    socket.once('close', () => open.delete(socket));
     socket.setNoDelay(true);
     const peer = socket.remoteAddress ?? '?';
     socket.on('error', () => {});
@@ -412,7 +420,10 @@ export async function startGateServer(opts: GateServerOptions): Promise<GateServ
   return {
     port: addr.port,
     server,
-    close: () => new Promise<void>((resolve) => server.close(() => resolve())),
+    close: () => new Promise<void>((resolve) => {
+      server.close(() => resolve());
+      for (const s of open) s.destroy();
+    }),
   };
 }
 
@@ -489,7 +500,7 @@ export async function handshake(socket: net.Socket, secret: string, channel: Cha
 
 export function connectRemote(host: string, port: number, timeoutMs = 3000): Promise<net.Socket> {
   return new Promise((resolve, reject) => {
-    const s = net.connect({ host, port });
+    const s = net.connect({ host, port, allowHalfOpen: true });
     const t = setTimeout(() => { s.destroy(); reject(new Error('connect timeout')); }, timeoutMs);
     s.once('connect', () => { clearTimeout(t); resolve(s); });
     s.once('error', (e) => { clearTimeout(t); reject(e); });
@@ -520,6 +531,7 @@ export async function probe(host: string, port: number, secret: string, channel:
 // accepted connection through a freshly handshaken connection to the gate.
 export class Tunnel {
   private server: net.Server | null = null;
+  private readonly open = new Set<net.Socket>();
   port = 0;
 
   constructor(
@@ -531,7 +543,12 @@ export class Tunnel {
   ) {}
 
   async listen(localPort = 0): Promise<number> {
-    const server = net.createServer(async (local) => {
+    const server = net.createServer({ allowHalfOpen: true }, async (local) => {
+      // llama.cpp may reset the local leg while the remote handshake is still going; without
+      // a listener that error would take the process down
+      local.on('error', () => {});
+      this.open.add(local);
+      local.once('close', () => this.open.delete(local));
       local.setNoDelay(true);
       let remote: net.Socket | null = null;
       try {
@@ -557,6 +574,7 @@ export class Tunnel {
     return new Promise((resolve) => {
       if (!this.server) return resolve();
       this.server.close(() => resolve());
+      for (const s of this.open) s.destroy();
       this.server = null;
     });
   }

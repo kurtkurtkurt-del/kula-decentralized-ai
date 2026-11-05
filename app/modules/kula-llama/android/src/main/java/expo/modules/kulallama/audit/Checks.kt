@@ -9,21 +9,29 @@ data class Verdict(val ok: Boolean, val reason: String? = null, val warn: List<S
   }
 }
 
-/** Per-peer memory of the last [size] nonces, the only state the checks keep. */
-class ReplayRing(private val size: Int = 1000) {
-  private val rings = HashMap<String, ArrayDeque<String>>()
-  private val seen = HashMap<String, HashSet<String>>()
+/**
+ * Per-peer memory of the last [size] nonces, the only state the checks keep. At most
+ * [maxPeers] addresses are remembered, least recently seen first out: hellos arrive before
+ * the secret is checked, so any host on the lan could otherwise pin a ring per address.
+ */
+class ReplayRing(private val size: Int = 1000, private val maxPeers: Int = 64) {
+  private class Peer(val ring: ArrayDeque<String> = ArrayDeque(), val seen: HashSet<String> = HashSet())
+  private val peers = object : LinkedHashMap<String, Peer>(16, 0.75f, true) {
+    override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Peer>?) = size > maxPeers
+  }
 
   /** True when [nonce] was already used by [peer]; remembers it otherwise. */
   @Synchronized
   fun seenBefore(nonce: String, peer: String): Boolean {
-    val set = seen.getOrPut(peer) { HashSet() }
-    if (!set.add(nonce)) return true
-    val ring = rings.getOrPut(peer) { ArrayDeque() }
-    ring.addLast(nonce)
-    if (ring.size > size) set.remove(ring.removeFirst())
+    val p = peers.getOrPut(peer) { Peer() }
+    if (!p.seen.add(nonce)) return true
+    p.ring.addLast(nonce)
+    if (p.ring.size > size) p.seen.remove(p.ring.removeFirst())
     return false
   }
+
+  /** How many addresses are remembered right now. */
+  @Synchronized fun peerCount() = peers.size
 }
 
 /**

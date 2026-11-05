@@ -171,14 +171,21 @@ export default function PassportScreen() {
               <View style={[styles.barIn, { width: `${Math.min(100, (night.seconds / (8.5 * 3600)) * 100)}%` }]} />
             </View>
             <View style={styles.between}>
-              <Text style={styles.meta}>{`${Math.floor(night.seconds / 3600)}h ${two(Math.floor((night.seconds % 3600) / 60))}m · ${night.kwh.toFixed(4)} kwh · ${night.tps} tok/s`}</Text>
+              <Text style={styles.meta}>{`${Math.floor(night.seconds / 3600)}h ${two(Math.floor((night.seconds % 3600) / 60))}m · ${night.kwh.toFixed(4)} kwh · ${night.tps} tok/s${night.real ? ` · ${t('night.units', { n: night.units ?? 0 })}` : ''}`}</Text>
               {night.state === 'running' ? (
                 <Pressable onPress={() => endNow()} hitSlop={8}>
                   <Text style={[styles.meta, styles.link]}>{t('night.endNow')}</Text>
                 </Pressable>
               ) : null}
             </View>
-            <Text style={styles.sim}>{t('night.sim')} · {t('night.foreground')}</Text>
+            {/* real (5.11.2026): the model and the devices, the known-answer checks; else the simulation line */}
+            <Text style={styles.sim}>
+              {night.real
+                ? `${t('night.real', { model: night.model ?? '', n: night.devices?.length ?? 1 })}${night.checked ? ` · ${t('night.checked', { ok: (night.checked ?? 0) - (night.wrong ?? 0), n: night.checked })}` : ''}`
+                : t('night.sim')}
+              {' · '}
+              {t('night.foreground')}
+            </Text>
           </View>
         </View>
 

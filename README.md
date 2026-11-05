@@ -70,6 +70,34 @@ with llama.cpp and lets several devices work together.
 - **Testing without two phones:** an arm64 emulator (`avd kula35`) as the master and the Mac as a
   worker through `node/` (kula-node). `docs/ILERLEME.md` has the log.
 
+## The night, for real (5.11.2026)
+
+Until now the night was a simulation: a counter that moved by the passport's estimate. Now a
+model runs, behind the same `NightWorker` interface, so `useNight.ts` and the passport tab did
+not change shape.
+
+- **Which worker:** `app/src/night/useNight.ts` picks `LlamaWorker` when the native module and
+  a local model exist, `SimulatedWorker` otherwise (Expo Go, iOS, the web, a phone with no
+  download yet). The choice is made when the night starts.
+- **The work:** `app/src/night/jobs.ts`. A `JobSource` hands out units (`{id, type, prompt,
+  maxTokens, expected?}`) and takes results back. v0 has no server side for this: `DemoJobs` is
+  a bundled list of 60 short prompts in three kinds (classify → one word, summarise → one
+  sentence, translate en→tr/de) and keeps the results on the phone (kv-store `night.results`).
+  About one classify unit in eight carries a known answer: the trust idea, a device whose checks
+  come out wrong is not trusted with the rest. `ServerJobs` throws `notyet` and names the rpc it
+  will call.
+- **The loop:** `app/src/night/LlamaWorker.ts`. The chosen model (`settings().modelId`, else the
+  largest local one that fits by `fitOn`) is loaded in *apart* mode with the saved peers (alone
+  when there are none or none answers). Every device runs its own loop with one unit in flight:
+  beyin's rule, jobs are split, models are not. A device that fails is out for five minutes and
+  its unit goes back on the pile; the night goes on. Tokens, seconds and kWh (4 W this phone,
+  2 W per extra device) go on the card as before; `units`, `checked`, `wrong` and the model ride
+  along in the outbox job, `contribution_end` does not read them yet. The screen is kept on
+  through the native module while the night runs.
+- **Tests:** `app/src/__tests__/night.test.ts`, with the engine mocked: round-robin over two
+  devices, a failing device skipped for five minutes, known answers counted, `stop()` ending
+  the loops with totals, the demo list handed out once.
+
 ---
 
 _The notes below are the afterhours README the repo was forked from; parts of it no longer apply._

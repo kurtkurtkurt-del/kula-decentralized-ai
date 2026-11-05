@@ -187,6 +187,7 @@ function serve(sock, peer, first, v, fpC) {
       if (step === 0) {
         const p = line.split(' ');
         if (v === 1 ? (p.length !== 3 && p.length !== 4) || p[0] !== 'KULA1' : p.length !== 4 || p[0] !== 'KULA2') return refuse('bad hello');
+        if (v === 1 && p.length === 4 && !/^\d{1,16}$/.test(p[3])) return refuse('bad hello');
         if (p[1] !== 'rpc' && p[1] !== 'api') return refuse('bad channel');
         if (!/^[0-9a-f]{32}$/.test(p[2])) return refuse('bad nonce');
         channel = p[1]; nonceC = p[2]; nonceS = randomBytes(16).toString('hex');
