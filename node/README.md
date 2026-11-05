@@ -1,6 +1,7 @@
 # kula-node
 
-Makes a computer a worker in a kula cluster. The phone that runs the cluster
+Makes a computer a worker in a kula cluster, or the computer that runs one
+(see "Running a cluster from this computer"). The phone that runs the cluster
 scans a QR (or finds the computer over mDNS), and from then on the computer
 lends its memory and compute the same way the other phones do:
 
@@ -104,6 +105,86 @@ While it runs:
 Firewall: allow incoming TCP on the gate port (macOS asks once; on Linux open
 it in ufw/firewalld; on Windows accept the Defender prompt or add a rule).
 
+## Running a cluster from this computer
+
+The computer can also be the side that runs the cluster, the role the phone
+has in `app/`. Workers are phones ("share this phone") or other computers
+(`kula-node share`); this computer keeps their QR payloads in a peer book and
+talks to them through the same gate.
+
+### The peer book
+
+```
+kula-node peers add '{"k":"kula-peer","v":2,"id":"…","name":"pixel","host":"192.168.1.33","port":50551,"secret":"…"}'
+kula-node peers add <code>                 # the same peer as one base64url line (peers list --code prints it)
+kula-node peers add 192.168.1.20:50551:<secret hex>
+kula-node peers list [--code]
+kula-node peers rm <id | id prefix | name>
+kula-node peers probe [id…] [--timeout 2000]
+kula-node peers scan [--timeout 3000]
+```
+
+Peers live in `~/.kula-node/peers.json`, written with mode 600 and never with a
+secret on the terminal (`list` shows the first four hex chars). `add` accepts the
+QR json a worker shows (`v` must be 2), the base64url code of that json, or
+`host:port:secret` when nothing else is at hand. The same `id` replaces the old
+entry, so a worker whose address changed is just added again.
+
+`probe` opens one TCP connection per channel and does the handshake (2 s each);
+it prints `OK <ms>` or the gate's `NO <reason>` for `rpc` and `api` and stamps
+`last_ok`. `channel closed` still means the worker is up (its program for that
+channel is not running). `scan` listens for `_kula._tcp` on the lan
+(bonjour-service) and lists what announces itself; the mDNS record carries no
+secret, so a new worker still needs its QR or code.
+
+### Chat
+
+```
+kula-node chat --model ~/models/qwen2.5-1.5b-q4.gguf --mode apart [--peer id,id…] [--batch] [--prompt "…"]
+kula-node chat --model ~/models/qwen2.5-7b-q4.gguf  --mode split [--peer id,id…]
+```
+
+Before anything is loaded every wanted peer (default: all saved ones) is
+probed on the channel the mode needs, 2 s by default (`--probe-ms`). A peer
+that does not answer is dropped with its reason and the run goes on without
+it; in split mode this is what keeps llama.cpp alive, because
+`ggml_backend_rpc_add_server` aborts the whole process on an address that does
+not answer.
+
+**apart**: every device runs the whole model. This computer starts its own
+`llama-server` on 127.0.0.1 (unless `--no-local`) and each peer gets `POST
+/load` through a local tunnel to its `api` channel, then prompts go to the
+fastest free device: by advertised bandwidth at first, by measured tok/s once
+known, one prompt per device at a time. Workers fetch the model from this
+computer: `chat` serves the gguf on a lan port under a random path
+(`/m/<24 hex>/<name>`, Range supported) for the run, or from `--model-url` if
+you pass one. `--batch` sends eight built-in prompts (or one per line of a
+file) over all devices at once and prints, per device, how many prompts it
+took, the tokens and its tok/s; `--verbose` adds the answers. Without
+`--batch` or `--prompt` it is an interactive chat (empty line quits, `/reset`
+clears the history); `--device <name>` pins one device.
+
+**split**: the planner from the phone (`src/planner.ts`, a copy of
+`app/src/llm/cluster.ts`): need = file × 1.1; this computer may use 70 % of
+its free RAM, a worker 75 % of what it advertised; when the model does not fit
+here alone the fastest devices (memory bandwidth) are filled first and the
+rest stay out; when it fits here alone it is still shared by bandwidth unless
+`--keep-local`; `toobig` when even together it does not fit. The output layer
+stays on this computer: the local share is the first entry of the tensor split
+and llama.cpp keeps the last layers on the main device. Then one local tunnel
+per used peer to its `rpc` channel and
+
+```
+llama-server --host 127.0.0.1 … -m <gguf> --rpc 127.0.0.1:p1,127.0.0.1:p2 --tensor-split <local>,<p1>,<p2>
+```
+
+and the same chat client as apart mode on top of it. A worker's rpc server is
+never reached directly: the tunnels are the only path, and they end at 127.0.0.1.
+
+Without llama.cpp on this computer `split` says so and stops; `apart` drops the
+local device with the same hint and carries on with the peers (`--no-local`
+skips the attempt). `--bw <GB/s>` skips the bandwidth measurement.
+
 ## Checking a worker
 
 From any machine on the network:
@@ -188,7 +269,15 @@ proof line are kept and forwarded.
 ```
 npm test        # node --test, localhost only, never fetches llama.cpp
 
-Tests: `gate.test.ts` (protocol and vectors), `audit.test.ts` (vectors, chain,
+Tests: `gate.test.ts` (protocol and vectors), `planner.test.ts` (the split
+planner over numbers, the probe dropping dead peers), `peers.test.ts` (QR /
+code / short form parsing, peers.json mode 600, probes against a real gate
+including `wrong secret` and a silent port, a tunnel with the wrong secret
+closed without a byte, mDNS scan over a fake browser), `apart.test.ts` (two
+fake workers behind real gates, the model served from here, 8 prompts spread,
+tok/s per device, the model server's Range and random path), `split.test.ts`
+(plan + tunnels, the `--rpc`/`--tensor-split` arguments, a fake llama-server
+process, the no-binary error), `audit.test.ts` (vectors, chain,
 tampering, rotation, checks, the gate's clock field, `kula-node ledger`),
 `setup.test.ts` (`pickAsset` over the recorded release, sidecar, build
 instructions), `api.test.ts` and `conformance.test.ts` (the apart-mode api
@@ -200,7 +289,11 @@ Files: `src/gate.ts` (protocol, server, client, Tunnel, probe), `src/llama.ts`
 (find / build / download llama.cpp), `src/assets.ts` (which release archive),
 `src/audit/` (key, ledger, checks, auditor), `src/ledgercmd.ts`,
 `src/api.ts` (the apart-mode HTTP API),
-`src/share.ts` (the worker), `src/sysinfo.ts` (lan ip, memory, bandwidth, gpu),
+`src/share.ts` (the worker), `src/peers.ts` (the peer book, mDNS scan,
+probes), `src/planner.ts` (the split planner), `src/apart.ts` (apart-mode
+scheduler and api client), `src/split.ts` (rpc tunnels and llama-server over
+them), `src/modelserve.ts` (the gguf served to workers), `src/mastercmd.ts`
+(`peers`, `chat`), `src/sysinfo.ts` (lan ip, memory, bandwidth, gpu),
 `src/children.ts` (child processes on free ports), `src/download.ts`
 (resumable downloads), `src/cli.ts`.
 
