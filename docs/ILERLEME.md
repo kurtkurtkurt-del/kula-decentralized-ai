@@ -117,3 +117,18 @@ Hepsi emülatörde (`kula35`) + Mac'te `tools/dev-gate.mjs` ile denendi; commit'
   açılmalı.** Önerilen brief: ILERLEME'yi oku → dört cloud dalını gözden geçir (birleştirme yok) → emülatör + dev-gate
   ile bir küme turu daha → gerekiyorsa `app/` içinde `npm run apk` → en üste "sabah özeti".
 - Bu oturumda başka iş yapılmadı; ağaç temiz, HEAD `1873df7` + bu not.
+
+## 5.11 sabaha karşı: cloud 2. dalga (kullanıcı: "hepsini cloud ile kodla")
+
+Opus oturumu durduruldu; `release/local-2026-10-20` origin'e itildi (`9a2f91f`). Altı cloud oturumu, her biri kendi dalı:
+
+| dal | iş | üstüne kurulduğu dal |
+|---|---|---|
+| `claude/integrate-night` | üç gece dalını release üstüne birleştir, testler, inceleme | release |
+| `claude/audit-ui` | ayarlar → beyin denetimi sayfası, eş rozetleri, `llm/audit.ts` | quirky-einstein |
+| `claude/node-master` | kula-node yönetici modu: `peers`, `chat --mode apart\|split`, planlayıcı portu | loving-dijkstra |
+| `claude/models-library` | çok parçalı gguf, HF lisans/gated, disk, gerçek kv ile fit | release |
+| `claude/gate-tls` | kapı protokol v2: TLS 1.3 + parmak izi, QR v3, vektörler, `docs/GATE.md` | quirky-einstein |
+| `claude/night-2` | gece işçisi koşulları, planlayıcı, sabah raporu, ayarlar | vibrant-cori |
+
+Hiçbiri release'e dokunmaz, PR açmaz. Cloud oturumları bitince haber vermez: sabah `git fetch origin && git branch -r`.
