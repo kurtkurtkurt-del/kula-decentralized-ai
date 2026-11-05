@@ -3,6 +3,78 @@
 Plan: `~/.claude/plans/memoized-kindling-puddle.md` (4.11.2026). Bu dosya her adımda güncellenir:
 ne yapıldı, ne doğrulandı, ne kaldı. Döndüğünde önce burayı oku.
 
+## testler ve i18n (5.11 gündüz, cloud oturumu, dal `claude/tests-i18n`)
+
+`origin/claude/integrate-night` (`ec1ba27`) üstüne; başka dal birleştirilmedi (gate-tls'in v3 qr'ı, models-library,
+audit-ui bu dalda yok). Sonuç: app 176 test (önce 68), node 40 (önce 28), `npx tsc --noEmit` temiz, `npx expo lint`
+0 hata (9 eski uyarı). Tek komut: `cd app && npm run gate` (tsc → lint → jest → i18n denetimi).
+
+### i18n bütünlük testi (`app/src/__tests__/i18n.test.ts`, `npm run i18n`)
+- 792 anahtarın üçü de (en/de/tr) dolu, `{yer}` tutucuları üç dilde aynı, küçük harf üslubu (biri büyükle başlıyorsa
+  üçü de), her `.one/.other` çiftinde `{n}` var.
+- Kaynak taraması (`src/`, testler/vendor/i18n hariç): `t('…')`, `tn('…')`, `tx('…')` ile istenen her anahtar sözlükte;
+  `tx('day.' + x)` ve ``t(`peers.kind.${…}`)`` gibi 13 ön ek için arkasında en az bir anahtar var; anahtar tabloları
+  (OfflineBar `KIND`, AuthContext hata eşlemesi) da "istenen" sayılır.
+- **Eksik çeviri çıkmadı**; sözlük üç dilde tam. Eklenenler: `model.err.nomodel`, `chat.err.gone`, `chat.err.busy`
+  (sohbet ekranı `nomodel` / `peer gone` / `peer http 409` kodlarını ham basıyordu).
+- **Kullanılmayan 232 anahtar** (rapor, hata değil; test çalışınca listeyi basar): çoğu kaldırılmış ekranlardan
+  (`onboarding.*`, `signup.*`, `tagline.*`, `call.*`, `terms.*`, `closed.*`, `settings.email/password.*`,
+  `friend.result.*`). Silmedim: web sitesi sözlüğünün aynası, karar senin. Test tavanı: sözlüğün üçte birinden az.
+
+### llm birim testleri (`cluster`, `fit`, `peers`, `store`, `engine-remote`, `hf`, `native`)
+- `planSplit`: eş yok / tek eş / ulaşılamayan (sebebiyle `skipped`) / taşınmış eş (NSD ile yeniden bulunur) / sığıyor
+  ama paylaş (hıza göre, kapasiteyle kesilir, taşan buraya döner) / çıktı katmanı yerelde (eşler gerekmiyorsa `used`
+  boş) / bilinmeyen bw→4, ram→2000 / `peerArgs` ağırlıkları / `splitSummary`. Sahte kapı + jest sahte saat (relocate
+  4 s bekler).
+- `fit`: passport yok, bütçe yok (ram_free×0.8, heap tabanı), tight bandı, ctx önerisi (2'nin kuvveti, en çok 4096,
+  hiçbiri sığmazsa 512), bant genişliği yoksa tps yok, `fitTogether` boş liste.
+- `peers`: v2 qr bozuk girdiler (boş, `{`, `null`, dizi, yanlış `k`, v1/v3/"2"/eksik → `old`, id/host/port eksik,
+  secret kısa/hex değil/null/dizi, kendi kodu → `self`), büyük harf hex, 8 eş tavanı, `myPeerQr` gizi kalıcı.
+  **Düzeltme:** `isPeerQr('null')` `false` yerine `null` dönüyordu. v3 qr bu dalda yok; gate-tls birleşince
+  bu dosyaya v3 vakaları eklenmeli.
+- `store.reconcile`: silinmiş dosya düşer, `.part` model sayılmaz, katalogdaki yarım `.part` "interrupted" indirme
+  olarak görünür (retry devam ettirir), bilinmeyen `.part` yok sayılır, liste okunamazsa çökmez; indirme olayları
+  running→done→kaydet, error+retry, cancel; `forgetModel` seçimi temizler; hook'lar her yazımda yeniden çizer.
+- `engine.chatRemote` sahte XHR ile: parçalı chunk'lar, ortadan kesilmiş satır, son bayt readyState 3'te gelip
+  readyState 4 boş, her şey tek seferde 4'te, yorum/keep-alive/bozuk json atlanır, akışta `error`, **409 busy →
+  `peer http 409`**, done'suz biten akış, soket ölürse `peer gone`, `stop()` abort + `/stop`. `chat()` cihaz seçimi
+  (boş olan, açık `device`, `nomodel`), `load()` üç modda (apart'ta yüklenemeyen eş `skipped`'a, split'te `toobig`
+  → unload + reject).
+- `hf`: arama satırları (gated/lisans tag ya da card'dan), dosya ağacı (çok parçalı ve mmproj elenir, küçükten
+  büyüğe), `hf 429/404`, `quantOf/paramsOf/kvGuess`.
+
+### gece işçisi döngüsü (`night-loop`, `jobs`, `useNight`)
+- Cihaz birimin ortasında koparsa: birim yığının önüne döner, öbür cihaz alır, kopan 5 dk dışarıda; kaynak `next()`
+  fırlatırsa gece temiz biter; `done()` fırlatsa sayım sürer.
+- `stop()` model yüklenirken: döngü başlamaz, bir kez daha unload, ekran kilidi kapanır; birimin ortasında `stop()`:
+  cihazda durdurulur, geç gelen cevap sayılmaz/kaydedilmez; gece içinde ikinci `start()` eskisini bitirir.
+- Bilinen cevap: `**Positive**`, `"positive".`, `Negative — …` doğru; `positively`, boş, "The sentiment is positive"
+  yanlış; yanlış cevap cihazın kaydında, birim yine sayılır.
+- `useNight`: koşullar (şarj/dolu, wifi isteğe bağlı, pencere, passport), bekleme sebebi sırası, sunucu başlatmayı
+  reddederse başlamaz, koşul düşünce `endNight` toplamlarla, `endNow`, gerçek/simülasyon işçi seçimi, `startNightWatch`
+  (30 s, app aktif, pil olayı). Hook `react-test-renderer` ile.
+- **Bulgu (davranış, değiştirmedim):** yığın boşalmışken kopan cihazın birimi yığına döner ama gece bitmiş olur; birim
+  o gece yapılmaz (demo kaynakta kaybolur, sunucu kaynağı ertesi gece verir). İlk test bunu belgeliyor.
+
+### node
+- `test/vectors.test.ts`: `app/modules/kula-llama/tools/gate-vectors.json` **dosyanın kendisi** okunur (kopya değil);
+  `node/test/gate-vectors.json` onunla bayt bayt aynı olmalı; her vektör `clientProof/serverProof`'tan çıkar, kanal
+  mesajın parçası. `app/` yanında yoksa atlanır.
+- `test/api-errors.test.ts`: 404/yanlış metod; `/load` bozuk json, eksik alan, `..`/`/`/boş ad, yol → taban ad,
+  kaynak 404, dinlenmeyen host, başlamayan backend (`kula-node setup` cümlesi); `/chat` modelsiz 409, mesajsız 400,
+  backend 503 → akışta hata; sohbet sürerken `/load`/`/unload`/`/chat` 409 busy, `/stop wasBusy`, ikinci `/unload`
+  zararsız; 1 MB üstü gövde reddi.
+
+### kapsam (`npm run coverage`, `src/llm` + `src/night`)
+Satır bazında hepsi ≥ %80: toplam %96.4 ifade / %88.6 dal / %99.2 satır. En düşük `native.ts` %85.7 ifade (modül
+varken `return llama` satırı jest altında erişilmez). Önce `hf.ts` %0, `useNight.ts` %0, `native.ts` %43 idi.
+
+### başka
+- `src/app/index.tsx`: night-2'deki lint düzeltmesinin aynısı (effect içinde setState → türetilmiş değer); artık
+  `expo lint` 0 hata, böylece `npm run gate` yeşil. night-2 birleşince çakışmaz (içerik aynı).
+- Jest'in `jest.mock` fabrikası `mock` ön ekli olmayan dış değişkeni (tip parametresi adını bile) kabul etmiyor;
+  `@/llm/native` sahtelerinde `get llama()` getter'ı gerekli (fabrika, `const`'tan önce çalışıyor).
+
 ## bütünleştirme (5.11 sabaha karşı, cloud oturumu, dal `claude/integrate-night`)
 
 Üç gece dalı `origin/release/local-2026-10-20` (`9a2f91f`) üstüne sırayla merge commit'iyle alındı, squash yok,
