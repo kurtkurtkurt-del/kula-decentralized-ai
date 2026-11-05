@@ -51,7 +51,7 @@ object Relay {
   fun httpUrl(url: String): String = url.trim().replace(Regex("^ws(s?)://", RegexOption.IGNORE_CASE), "http$1://")
 
   /** One WebSocket whose frames arrive on a queue: text frames as [String], binary as [ByteArray], the end as null. */
-  private class Ws(url: String) {
+  internal class Ws(url: String) {
     val frames = LinkedBlockingQueue<Any?>()
     @Volatile var open = false
     @Volatile var closeReason: String? = null
@@ -241,7 +241,7 @@ object Relay {
    * what arrives is read as a stream. TLS layers over it through SSLSocketFactory.createSocket
    * (socket, host, port, autoClose), which only uses the two streams and close().
    */
-  class RelaySocket(private val ws: Ws) : Socket() {
+  internal class RelaySocket(private val ws: Ws) : Socket() {
     private val incoming = PipedInputStream(256 * 1024)
     private val feeder = PipedOutputStream(incoming)
     private val closed = AtomicBoolean(false)

@@ -205,7 +205,9 @@ object Gate {
     private fun handleTls(raw: Socket, peer: String, t: TlsServer, consumed: InputStream, handshakeDone: () -> Unit) {
       val ctx = SSLContext.getInstance("TLS")
       ctx.init(t.identity.keyManagers(), arrayOf(AnyClientTrust), null)
-      val ssl = ctx.socketFactory.createSocket(raw, consumed, true) as SSLSocket
+      // Android's SSLSocketFactory has no createSocket(socket, consumed, autoClose): the byte the
+      // gate read to tell TLS from v1 goes back in front of the stream through a thin socket
+      val ssl = ctx.socketFactory.createSocket(PrefixedSocket(raw, consumed), raw.inetAddress.hostAddress, raw.port, true) as SSLSocket
       ssl.useClientMode = false
       ssl.enabledProtocols = arrayOf("TLSv1.3")
       ssl.wantClientAuth = true
@@ -291,6 +293,15 @@ object Gate {
       // swallows a ledger that cannot be written, so the NO always goes out
       audit { it.onReject(peer, channel, why) }
       runCatching { out.write("NO $why\n".toByteArray()); out.flush() }
+      // closing with unread input (the rest of a hello we did not read) makes TCP send a reset,
+      // and the client would see "connection reset" instead of the reason: end our side first,
+      // drain a little, then close
+      runCatching { s.shutdownOutput() }
+      runCatching {
+        s.soTimeout = 200
+        val inp = s.getInputStream(); val buf = ByteArray(512); var n = 0
+        while (n < 4096) { val r = inp.read(buf); if (r < 0) break; n += r }
+      }
       runCatching { s.close() }
     }
 
@@ -299,6 +310,30 @@ object Gate {
       val a = auditor ?: return
       runCatching { block(a) }.onFailure { Log.w(TAG, "auditor: ${it.message}") }
     }
+  }
+
+  /** A connected socket with bytes already read from it put back in front of its input. */
+  private class PrefixedSocket(private val raw: Socket, consumed: InputStream) : Socket() {
+    private val input: InputStream = SequenceInputStream(consumed, raw.getInputStream())
+    override fun getInputStream(): InputStream = input
+    override fun getOutputStream(): OutputStream = raw.getOutputStream()
+    override fun isConnected(): Boolean = raw.isConnected
+    override fun isClosed(): Boolean = raw.isClosed
+    override fun getInetAddress(): InetAddress? = raw.inetAddress
+    override fun getPort(): Int = raw.port
+    override fun getLocalAddress(): InetAddress = raw.localAddress
+    override fun getLocalPort(): Int = raw.localPort
+    override fun getRemoteSocketAddress(): java.net.SocketAddress? = raw.remoteSocketAddress
+    override fun getLocalSocketAddress(): java.net.SocketAddress? = raw.localSocketAddress
+    override fun setSoTimeout(timeout: Int) { raw.soTimeout = timeout }
+    override fun getSoTimeout(): Int = raw.soTimeout
+    override fun setTcpNoDelay(on: Boolean) { raw.tcpNoDelay = on }
+    override fun getTcpNoDelay(): Boolean = raw.tcpNoDelay
+    override fun shutdownInput() = raw.shutdownInput()
+    override fun shutdownOutput() = raw.shutdownOutput()
+    override fun isInputShutdown(): Boolean = raw.isInputShutdown
+    override fun isOutputShutdown(): Boolean = raw.isOutputShutdown
+    override fun close() = raw.close()
   }
 
   /** The server's view of client certificates: TLS accepts any, the gate decides by fingerprint afterwards. */
@@ -410,8 +445,8 @@ object Gate {
    * With [relay] the probe goes through the relay (api channel only; split needs the lan) and
    * a learned certificate comes back as "ok <fp>" so the caller can pin it.
    */
-  fun probe(host: String, port: Int, secret: String, channel: String = "rpc", timeoutMs: Int = 2000, tls: TlsClient? = null, relay: Relay.Ref? = null): String? =
-    try {
+  fun probe(host: String, port: Int, secret: String, channel: String = "rpc", timeoutMs: Int = 2000, tls: TlsClient? = null, relay: Relay.Ref? = null): String? {
+    return try {
       if (relay != null) {
         if (channel != "api") return "remote: split mode needs the lan"
         val t = tls ?: return "a relayed peer needs tls"
@@ -429,6 +464,7 @@ object Gate {
         null
       }
     } catch (e: Exception) { e.message ?: "unreachable" }
+  }
 
   /**
    * Local tunnel: llama.cpp connects to 127.0.0.1:<returned port>; each connection is

@@ -22,6 +22,7 @@ sourceSets {
 
 dependencies {
   implementation("org.json:json:20240303")
+  implementation("com.squareup.okhttp3:okhttp:4.12.0") // Relay.kt, which Gate.kt reaches since the relay
   testImplementation("junit:junit:4.13.2")
 }
 
