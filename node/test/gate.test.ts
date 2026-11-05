@@ -199,3 +199,72 @@ test('bytes sent right after the proof line are not lost', async () => {
     target.close();
   }
 });
+
+test('a client that half-closes after its request still gets the late answer', async () => {
+  // the target answers 150 ms after it sees the request's end, like an http server that
+  // reads to EOF; before allowHalfOpen the gate tore the pipe down at the client's FIN
+  const target = net.createServer({ allowHalfOpen: true }, (c) => {
+    let got = '';
+    c.on('data', (d: Buffer) => { got += d.toString(); });
+    c.on('end', () => setTimeout(() => c.end(`answer to ${got}`), 150));
+  });
+  await new Promise<void>((r) => target.listen(0, '127.0.0.1', () => r()));
+  const gate = await startGateServer({ port: 0, host: '127.0.0.1', secret: SECRET, targets: () => (target.address() as net.AddressInfo).port });
+  const tunnel = new Tunnel('127.0.0.1', gate.port, SECRET, 'api');
+  const local = await tunnel.listen();
+  try {
+    const c = net.connect({ port: local, host: '127.0.0.1', allowHalfOpen: true });
+    await new Promise((r) => c.once('connect', r));
+    c.end('ping');
+    const reply = await new Promise<string>((resolve) => {
+      let buf = '';
+      c.on('data', (d: Buffer) => { buf += d.toString(); });
+      c.on('end', () => resolve(buf));
+      c.on('close', () => resolve(buf));
+    });
+    assert.equal(reply, 'answer to ping');
+  } finally {
+    await tunnel.close();
+    await gate.close();
+    target.close();
+  }
+});
+
+test('close() returns while a piped connection is still open, and ends it', async () => {
+  const echo = await echoServer();
+  const gate = await startGateServer({ port: 0, host: '127.0.0.1', secret: SECRET, targets: () => echo.port });
+  const tunnel = new Tunnel('127.0.0.1', gate.port, SECRET, 'rpc');
+  const local = await tunnel.listen();
+  const c = net.connect(local, '127.0.0.1');
+  await new Promise((r) => c.once('connect', r));
+  c.write('x');
+  await new Promise((r) => c.once('data', r));
+  const closed = new Promise<void>((r) => c.once('close', () => r()));
+  const t0 = Date.now();
+  await Promise.race([
+    Promise.all([tunnel.close(), gate.close()]),
+    new Promise((_, rej) => setTimeout(() => rej(new Error('close() hung')), 1500)),
+  ]);
+  await closed;
+  assert.ok(Date.now() - t0 < 1500);
+  echo.close();
+});
+
+test('a hello or proof ending in \\r\\n is taken, like the phone does', async () => {
+  const echo = await echoServer();
+  const gate = await startGateServer({ port: 0, host: '127.0.0.1', secret: SECRET, targets: () => echo.port });
+  try {
+    const s = net.connect(gate.port, '127.0.0.1');
+    await new Promise((r) => s.once('connect', r));
+    const nonceC = 'abcdef0123456789abcdef0123456789';
+    s.write(`KULA1 api ${nonceC}\r\n`);
+    const nonceS = await readLine(s);
+    s.write(clientProof(SECRET, nonceC, nonceS, 'api') + '\r\n');
+    const ok = await readLine(s);
+    assert.ok(ok.startsWith('OK '), ok);
+    s.destroy();
+  } finally {
+    await gate.close();
+    echo.close();
+  }
+});

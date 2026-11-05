@@ -4,8 +4,8 @@ import { WATTS, type NightStatus, type NightWorker } from './NightWorker';
 // something and the counter does not move while the JS thread is asleep), then the
 // counter grows by tps × seconds since the last tick, and the energy by 4 W.
 //
-// TODO (the real worker): start llama.cpp's rpc-server through a native module with
-// the project's model, read its token count here, and keep the same status shape.
+// Kept (5.11.2026) for the builds without the native module or without a model on the
+// phone; the real worker is LlamaWorker.ts, useNight.ts picks between them.
 const TICK = 10_000;
 
 export class SimulatedWorker implements NightWorker {
