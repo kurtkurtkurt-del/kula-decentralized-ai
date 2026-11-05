@@ -292,6 +292,32 @@ probes over TLS. The whole thing is in `docs/GATE.md` at the repository root;
 `test/gate-vectors.json` carries the v2 proofs and the TBS certificate hash
 both sides must reproduce.
 
+## Far away: the relay
+
+Two devices behind two NATs cannot reach each other's gate. `kula-node share
+--relay wss://<relay>` also connects out to a relay (`node/relay/`, a small
+WebSocket server you run on Fly, Render or any box) and registers; the relay
+answers with a six digit code that lives ten minutes and goes into the QR as
+`relay: {url, code}` (and is printed as a `peers add` line). A master anywhere
+adds the worker by its QR, or by the code read out over the phone:
+
+```
+kula-node peers add "123456 0123456789abcdef" --relay wss://relay.example    # $KULA_RELAY is the default
+kula-node peers probe                       # api through the relay; learns and pins the certificate
+kula-node chat --model x.gguf --mode apart --model-url https://…/x.gguf
+```
+
+Every relayed stream is one gate connection, piped on the worker into the gate
+on 127.0.0.1, so protocol v2 runs end to end and the relay sees TLS records
+only (`--relay` implies `--tls`; a v2 secret is never relayed). A peer added by
+code alone has no fingerprint yet: the first connection takes the certificate
+it sees and the pin proof, which covers both fingerprints, vouches for it; a
+relay in the middle fails that proof. Only the `api` channel crosses a relay:
+`chat --mode apart` uses a far peer, `--mode split` leaves it out and says so
+(every token would cross the internet). One master at a time per worker; wrong
+codes are rate limited. `docs/RELAY.md` has the protocol, the limits and the
+trust argument; `test/relay.test.ts` runs it all against the real server.
+
 ## Development
 
 ```
@@ -308,7 +334,9 @@ tok/s per device, the model server's Range and random path), `split.test.ts`
 (plan + tunnels, the `--rpc`/`--tensor-split` arguments, a fake llama-server
 process, the no-binary error), `audit.test.ts` (vectors, chain,
 tampering, rotation, checks, the gate's clock field, `kula-node ledger`),
-`setup.test.ts` (`pickAsset` over the recorded release, sidecar, build
+`relay.test.ts` (the relay end to end: an apart chat through it with the relay
+seeing TLS records only, code expiry, one master at a time, rate limits, a
+code-only peer learning the certificate), `setup.test.ts` (`pickAsset` over the recorded release, sidecar, build
 instructions), `api.test.ts` and `conformance.test.ts` (the apart-mode api
 against a fake llama-server, SSE text byte for byte, `/stop`, `NO busy`).
 npm run dev -- share --no-qr

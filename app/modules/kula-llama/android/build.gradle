@@ -55,6 +55,8 @@ android {
 
 dependencies {
   implementation "org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0"
+  // the relay client (Relay.kt): React Native already ships OkHttp, this only names the version we compile against
+  implementation "com.squareup.okhttp3:okhttp:4.12.0"
   testImplementation "junit:junit:4.13.2"
   testImplementation "org.json:json:20240303"
 }

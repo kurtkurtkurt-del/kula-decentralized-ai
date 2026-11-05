@@ -45,6 +45,10 @@ class WorkerService : Service() {
   private var tls: Gate.TlsServer? = null
   private var api: ApiServer? = null
   private var auditor: Auditor? = null
+  private var relay: Relay.Worker? = null
+  @Volatile private var relayUrl: String? = null
+  @Volatile private var relayCode: String? = null
+  @Volatile private var relayError: String? = null
   @Volatile private var running = false
   @Volatile private var rpcPort = 0
   private var ramMb = 0L
@@ -58,6 +62,8 @@ class WorkerService : Service() {
     const val EXTRA_PORT = "port"
     const val EXTRA_SECRET = "secret"
     const val EXTRA_NAME = "name"
+    /** wss:// of a relay to register with, so a master far away can come in by code (docs/RELAY.md). */
+    const val EXTRA_RELAY = "relay"
     const val SERVICE_TYPE = "_kula._tcp."
     const val PROCESS_SUFFIX = ":worker"
     private const val CHANNEL_ID = "kula-worker"
@@ -131,7 +137,18 @@ class WorkerService : Service() {
           when (ev.kind) { "connect" -> connects++; "reject" -> rejects++ }
         }.also { it.start() }
         Log.i(TAG, "worker: $threads threads, $ramMb MB free, %.1f GB/s, gate $port".format(bandwidth))
-        advertise(port, intent?.getStringExtra(EXTRA_NAME) ?: Build.MODEL)
+        val name = intent?.getStringExtra(EXTRA_NAME) ?: Build.MODEL
+        // far away masters: register with the relay; every relayed stream reaches the gate on
+        // 127.0.0.1 and is served like any other (tls end to end, the relay sees ciphertext)
+        intent?.getStringExtra(EXTRA_RELAY)?.takeIf { it.isNotBlank() }?.let { url ->
+          relayUrl = url
+          relay = Relay.Worker(url, workerId(this), name, identity.fp, port,
+            onCode = { code, _ -> relayCode = code; relayError = null; writeStatus("running", peer = gate?.currentPeer, heldMb = residentMb()) },
+            onMaster = { state -> Log.i(TAG, "relay master $state") },
+            onError = { err -> relayCode = null; relayError = err; writeStatus("running", peer = gate?.currentPeer, heldMb = residentMb()) },
+          ).also { it.start() }
+        }
+        advertise(port, name)
         writeStatus("running")
         startStatusLoop()
         // blocks for the life of the process
@@ -188,6 +205,11 @@ class WorkerService : Service() {
     if (peer != null) json.put("peer", peer)
     // what the v3 qr needs: this worker's certificate fingerprint and the open pairing code
     tls?.let { json.put("fp", it.identity.fp).put("pin", it.pin ?: JSONObject.NULL).put("paired", it.paired.size()) }
+    // the relay code for the v3 qr (and the "share far away" screen), or why there is none yet
+    val url = relayUrl
+    val code = relayCode
+    if (url != null && code != null) json.put("relay", JSONObject().put("url", url).put("code", code))
+    relayError?.let { json.put("relayError", it) }
     statusFile(this).writeText(json.toString())
   }
 
@@ -239,6 +261,7 @@ class WorkerService : Service() {
 
   private fun shutdown() {
     running = false
+    relay?.stop()
     gate?.stop(); api?.stop()
     try { registration?.let { nsd?.unregisterService(it) } } catch (_: IllegalArgumentException) {}
     registration = null

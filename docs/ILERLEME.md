@@ -3,6 +3,45 @@
 Plan: `~/.claude/plans/memoized-kindling-puddle.md` (4.11.2026). Bu dosya her adımda güncellenir:
 ne yapıldı, ne doğrulandı, ne kaldı. Döndüğünde önce burayı oku.
 
+## aktarıcı (5.11 gündüz, cloud oturumu, dal `claude/relay`)
+
+Soru: "Berlin'deki biriyle telefonlarımı birleştirebilir miyim?" Şimdiye kadar hayır (iki NAT). Bu dal
+beyin'in aktarma hizmetinin ilk hâli; tam anlatım `docs/RELAY.md`.
+
+- Dal: `origin/claude/gate-tls` üstüne önce `origin/claude/integrate-night` (çakışma: `Gate.kt`, `gate.ts`,
+  `dev-gate.mjs` — v2 yapısı korundu, gecenin yarı açık boru / `audit{}` sarmalayıcı / rpc slot sırası /
+  `\r\n` toleransı içeri alındı), sonra `origin/claude/node-master` (`peers`/`chat` komutları; yalnız doc
+  çakışması) merge edildi. Release/main'e dokunulmadı, PR açılmadı.
+- `node/relay/` **kula-relay**: `ws` üstünde WebSocket (gerekçe RELAY.md: PaaS/443/RN/çerçeveleme hazır).
+  Kayıt `{id,name,fp}` → 6 haneli kod, 10 dk, dolunca yenisi; yönetici `{code}` ile gelir, akış başına ikinci
+  bağlantı, aktarıcı ikili çerçeveleri boru yapar, içerik görmez. Aynı anda tek yönetici (`busy`), IP başına
+  120 bağlantı/dk ve 10 yanlış kod/dk, oturum başına 1 GiB, 16 akış, 1 MiB çerçeve, 5 dk sessizlik.
+  Dockerfile, `fly.toml`, `render.yaml`, README; `/health`.
+- kula-node: `share --relay wss://…` (tls'i zorlar; QR v3'e `relay`, ekrana `peers add` satırı);
+  `peers add "123456 <pin>" --relay …` (`$KULA_RELAY`), v3 QR + relay ayrıştırma; `peers probe` aktarıcıdan
+  `api` dener, sertifikayı öğrenir ve pinler; `chat --mode apart` uzak eşi `RelayTunnel` ile cihaz yapar,
+  `--mode split` uzak eşi probe etmeden atlar ve söyler. `handshake` artık her Duplex'te çalışır ve `fp`
+  döndürür; `TlsClient.fp=''` = öğren (pin kanıtı iki parmak izini kapsadığı için araya giren aktarıcı
+  `wrong pin` alır). `ws` kula-node bağımlılığı oldu.
+- Uygulama: `Peer.relay`, `Settings.relayUrl`; `share.tsx` "uzaktan paylaş" + aktarıcı adresi, ekranda kod;
+  `peers.tsx` "kod ile ekle" (`123456 0123…`), uzak eş satırı, kontrol uzak eşi `api`den; `cluster.ts`
+  uzak eşi split'te `remote` ile atlar, NSD aramaz; mod sayfası "n uzaktaki dışarıda: bölünmüş aynı wi-fi
+  ister"; ayarlar sayfasında aktarıcı alanı. `native.ts` imzaları: `probePeer(..., relay)` ("ok <fp>"
+  döner), `apiTunnel(..., relay)`, `startWorker(..., relay)`.
+- Kotlin: `Relay.kt` (OkHttp WebSocket; `Relay.Worker` dışarı bağlanır ve akışı `127.0.0.1:kapı`ya borular;
+  `Relay.Master` + `RelaySocket` (Socket alt sınıfı, TLS üstüne biner)); `Gate.probe/Tunnel` relay alır,
+  `PinnedTrust("")` öğrenir, `peerFp`; `WorkerService` `EXTRA_RELAY`, durum dosyasında `relay`/`relayError`;
+  `build.gradle` okhttp 4.12. **Cihazda denenmedi, derlenmedi** (cloud'da Android SDK yok).
+- Testler: node 54 → 61 (`relay.test.ts` 6: uçtan uca ayrı sohbet + aktarıcının gördüğü her çerçeve TLS
+  kaydı, kod süresi, ikinci yönetici `busy`, hız sınırı, yalnız kodla eş pin kanıtıyla sertifika öğrenir /
+  yanlış pin / pinsiz / başka parmak izi, `openApart`+`planWithProbe`; `peers.test.ts` +1). Jest 72 geçiyor
+  (+3: v3+relay, elle kod, `probeAll` remote). `tsc` iki pakette yeşil. **Önceden var olan ve bu dalın
+  dokunmadığı iki kırmızı:** `expo lint` `index.tsx:14` hatası (ILERLEME'de zaten not), jest
+  `engine-local.test.ts` suite'i `expo-sqlite/WebStorage` yüzünden açılmıyor (gate-tls'te de aynı).
+- Sabah için: Mac'te `cd node && npm test`; `cd node/relay && npm run dev` (8787) → bir uçbirimde
+  `kula-node share --relay ws://127.0.0.1:8787`, öbüründe `peers add "<kod> <pin>" --relay ws://127.0.0.1:8787`
+  → `peers probe` → `chat --mode apart --model-url …`. Sonra Fly'a `fly deploy`, telefonda apk.
+
 ## bütünleştirme (5.11 sabaha karşı, cloud oturumu, dal `claude/integrate-night`)
 
 Üç gece dalı `origin/release/local-2026-10-20` (`9a2f91f`) üstüne sırayla merge commit'iyle alındı, squash yok,

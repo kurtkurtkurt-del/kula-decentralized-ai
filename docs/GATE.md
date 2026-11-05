@@ -16,6 +16,9 @@ JVM testleri `GateTest.kt`, `GateTlsTest.kt`; node testleri `gate.test.ts`, `gat
 başlar → v2; `K` (`KULA1`) → v1 düz metin. Böylece eski telefonlar ve `--tls`siz dev-gate
 istemcileri hiçbir şey değişmeden çalışır; yeni bir usta, v2 QR'lı eski bir işçiye v1 ile bağlanır.
 
+Uzaktan (iki NAT arasından) bağlanmak için kapı değişmez: aktarıcı iki ucu boru yapar, v2 TLS
+borunun içinde uçtan uca kurulur; bkz. `docs/RELAY.md`.
+
 ## protokol v1 — paylaşılan gizli anahtar (QR v2)
 
 Satırlar `\n` ile biter, sonra düz boru. Gizli anahtar (`secret`) eşleşmede üretilir ve
