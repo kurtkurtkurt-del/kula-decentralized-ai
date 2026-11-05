@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { lastPassport } from '@/data/passport';
 import { native, type LoadResult, type Message } from '@/llm/native';
 import { peerArgs, planSplit, probeAll, splitSummary, type Plan } from '@/llm/cluster';
-import { type LocalModel, type Mode, type Peer, saveSettings } from '@/llm/store';
+import { type LocalModel, type Mode, type Peer, registerEngine, saveSettings } from '@/llm/store';
 
 // The engine: one model loaded at a time, in one of three ways. `alone` and `split` run
 // in this process (split: the layers this phone does not hold sit on tunnelled peers).
@@ -96,6 +96,8 @@ export async function unload() {
   await native().unload().catch(() => {});
   set({ model: null, load: null, plan: null, split: [], devices: [], error: null });
 }
+// a model's file is deleted only after it is out of memory
+registerEngine({ beforeForget: async (id) => { if (state.model?.id === id) await unload(); }, runningId: () => state.model?.id ?? null });
 
 // ---- generation -----------------------------------------------------------------------
 export type Reply = { tokens: number; ms: number; firstMs: number; tps: number; stopped: boolean; device: string };
