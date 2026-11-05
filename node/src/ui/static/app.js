@@ -7,9 +7,6 @@ import * as wiz from './wizard.js';
 const $ = (id) => document.getElementById(id);
 const base = location.pathname.replace(/[^/]*$/, '');
 const apiUrl = (p) => `${base}api/${p}`;
-// trying the body text lighter (6.11.2026): ?w=100|200|300|400 on the address sets the weight
-// of ordinary text; bold stays bold
-try { const w = Number(new URLSearchParams(location.search).get('w')); if ([100, 200, 300, 400, 500].includes(w)) document.documentElement.style.setProperty('--body-w', String(w)); } catch {}
 const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
 const svg = (paths) => { const ns = 'http://www.w3.org/2000/svg'; const s = document.createElementNS(ns, 'svg'); s.setAttribute('viewBox', '0 0 20 20'); s.setAttribute('aria-hidden', 'true'); for (const d of paths) { const p = document.createElementNS(ns, 'path'); p.setAttribute('d', d); s.appendChild(p); } return s; };
 const ICON = {
