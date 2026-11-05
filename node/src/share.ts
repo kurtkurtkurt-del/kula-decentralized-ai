@@ -171,11 +171,13 @@ export async function share(opts: ShareOptions): Promise<ShareHandle> {
   // protocol v2: this computer's certificate, the phones it has paired with, a one-time code per qr
   let tlsServer: TlsServer | undefined;
   let relay: RelayWorker | null = null;
+  let qrText = ''; // the last qr printed: the dashboard shows the same one
   const printQr = (port: number) => {
     const common = { k: 'kula-peer' as const, id, name, host: host ?? '0.0.0.0', port, kind: 'pc' as const, ram, bw, gpu: gpu.name, vram: gpu.vramMB };
     const payload: PeerPayload = tlsServer ? { ...common, v: 3, fp: tlsServer.identity.fp, pin: tlsServer.pin ?? undefined } : { ...common, v: 2, secret: secret! };
     if (relay?.code && opts.relay) payload.relay = { url: opts.relay, code: relay.code };
     const text = JSON.stringify(payload);
+    qrText = text;
     if (!opts.noQr) qrcode.generate(text, { small: true }, (q) => console.log(q));
     console.log(text);
     if (payload.relay) console.log(`far away: kula-node peers add "${payload.relay.code}${payload.pin ? ' ' + payload.pin : ''}" --relay ${payload.relay.url}`);
@@ -219,7 +221,7 @@ export async function share(opts: ShareOptions): Promise<ShareHandle> {
       dashboard = await startDashboard({
         port: opts.dashboard ?? DASHBOARD_PORT,
         state,
-        qrText: () => text,
+        qrText: () => qrText,
         chat: localChatSource(() => targets('api'), models, name),
         actions: {
           probe: peersUi.probe,

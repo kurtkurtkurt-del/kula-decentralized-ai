@@ -18,6 +18,7 @@ import { explain } from '@/llm/errors';
 import { fitOn, fitTogether, type Fit } from '@/llm/fit';
 import { FILE_FILTERS, HfError, SUGGESTED_QUERIES, ggufFiles, hfUrl, isSplit, kvGuess, licenseUrl, paramsOf, quantOf, repoUrl, searchGguf, type HfFile, type HfRepo } from '@/llm/hf';
 import { KEEP_FREE, freeDiskBytes } from '@/llm/disk';
+import { measuredFor } from '@/bench/store';
 import { hasNative, llama } from '@/llm/native';
 import { describe, forgetModel, forgetUnused, initStore, rememberQuery, saveSettings, startDownload, unusedModels, useDownloads, useHfHistory, useLocalModels, usePeers, useSettings, useUxFlags, type LocalModel } from '@/llm/store';
 import { tapSelect } from '@/lib/haptics';
@@ -73,7 +74,7 @@ export default function ModelsScreen() {
 
   const rows = useMemo(() => {
     const list = CATALOG.map((m) => {
-      const f = fitOn(passport, { size: m.size, kv_mb_per_1k: m.kv_mb_per_1k, ctx: 2048 });
+      const f = fitOn(passport, { size: m.size, kv_mb_per_1k: m.kv_mb_per_1k, ctx: 2048 }, measuredFor('self', { id: m.id }));
       const tog = pool.length > 1 && f.verdict === 'no' ? fitTogether(pool, { size: m.size, kv_mb_per_1k: m.kv_mb_per_1k, ctx: 2048 }) : null;
       return { m, f, tog, rank: f.verdict === 'fits' ? 0 : f.verdict === 'tight' ? 1 : tog && tog.verdict !== 'no' ? 2 : 3 };
     });

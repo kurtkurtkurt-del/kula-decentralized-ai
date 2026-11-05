@@ -1,5 +1,6 @@
 import { llama, native, type PeerArg, type PeerFound, type PeerRelay, type PeerTls } from '@/llm/native';
-import { DEFAULT_BW, DEFAULT_EFF, LOCAL_SHARE, planShares, type Estimate, type SimNet } from '@/llm/sim/model';
+import { DEFAULT_BW, DEFAULT_EFF, LOCAL_SHARE, planShares, withMeasured, type Estimate, type SimNet } from '@/llm/sim/model';
+import { measuredFor } from '@/bench/store';
 import { modelProfile, NETWORKS, workerFromPeer } from '@/llm/sim/profiles';
 import { isRemote, learnPeer } from '@/llm/peers';
 import { peers as savedPeers, touchPeer, type LocalModel, type Mode, type Peer } from '@/llm/store';
@@ -99,10 +100,13 @@ export async function planSplit(model: LocalModel, localFreeMb: number, localBw:
       }
     }
   }
+  // a bench on this model (this phone, or a peer measured by kula-node bench) replaces bw × eff
+  const sm = modelProfile(model);
+  const key = modelKey(model);
   const sim = planShares({
-    model: modelProfile(model), ctx, share, net,
-    local: { id: 'me', capMb: localFreeMb * LOCAL_SHARE, bw: localBw || DEFAULT_BW, eff: DEFAULT_EFF },
-    workers: probed.ok.map(workerFromPeer),
+    model: sm, ctx, share, net,
+    local: withMeasured({ id: 'me', capMb: localFreeMb * LOCAL_SHARE, bw: localBw || DEFAULT_BW, eff: DEFAULT_EFF }, sm, measuredFor('self', key)),
+    workers: probed.ok.map((p) => withMeasured(workerFromPeer(p), sm, measuredFor(p.id, key))),
   });
   const used = sim.used.map((u) => ({ ...(probed.ok.find((p) => p.id === u.id) as Peer), assignedMb: u.assignedMb }));
   return { mode: 'split', used, skipped, localMb: sim.localMb, fitsAlone: sim.fitsAlone, totalMb: sim.totalMb, needMb: sim.needMb, aloneFaster: sim.aloneFaster, est: sim.est, estAlone: sim.estAlone };
@@ -125,6 +129,9 @@ export function splitSummary(split: { buffer: string; mb: number | null }[], nam
   }
   return Array.from(by, ([name, mb]) => ({ name, gb: Math.round(mb / 102.4) / 10 })).sort((a, b) => b.gb - a.gb);
 }
+
+/** How the bench history names a model: its id, or its file and size (docs/BENCH.md). */
+export const modelKey = (m: Pick<LocalModel, 'id' | 'file' | 'size'>) => ({ id: m.id, file: m.file, size: m.size });
 
 /** Peers to try for a mode: all saved ones; the probe decides. */
 export const candidates = () => savedPeers();

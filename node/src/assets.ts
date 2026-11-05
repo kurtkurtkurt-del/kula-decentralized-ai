@@ -1,6 +1,12 @@
 // Choosing a llama.cpp release archive for a machine. Pure: it only looks at
 // names, so it is tested against a recorded asset list and never the network.
-export interface Asset { name: string; browser_download_url: string; size?: number }
+// `digest` is what the github api gives for each asset: "sha256:<hex>"
+export interface Asset { name: string; browser_download_url: string; size?: number; digest?: string | null }
+
+export function digestSha256(digest: string | null | undefined): string | null {
+  const m = /^sha256:([0-9a-fA-F]{64})$/.exec(digest ?? '');
+  return m ? m[1].toLowerCase() : null;
+}
 
 export interface Pick {
   asset: Asset;

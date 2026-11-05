@@ -8,11 +8,14 @@ import { createHash } from 'node:crypto';
 import { spawn, spawnSync } from 'node:child_process';
 import { home, repoRoots } from './paths.js';
 import { download } from './download.js';
-import { pickAsset, buildInstructions as instructionsFor, parseSidecar, type Asset } from './assets.js';
+import { pickAsset, buildInstructions as instructionsFor, parseSidecar, digestSha256, type Asset } from './assets.js';
+import { progressBar, mb } from './progress.js';
 
 export const TAG = 'b11157';
 export const SOURCE_URL = `https://github.com/ggml-org/llama.cpp/archive/refs/tags/${TAG}.tar.gz`;
 export const SOURCE_SHA256 = 'a3e6b30fd4dc2c65b560427a9f733f419fd48193c0e0fdc6b21e3464709f1c8c';
+// github sends the source tarball chunked, without a length; this is its size
+export const SOURCE_SIZE = 37563218;
 const RELEASE_API = `https://api.github.com/repos/ggml-org/llama.cpp/releases/tags/${TAG}`;
 
 export interface LlamaBinaries {
@@ -102,22 +105,124 @@ export function buildInstructions(platform: string = process.platform): string {
   return instructionsFor(TAG, platform);
 }
 
+type Log = (s: string) => void;
+
+// One file setup fetches: where from, how big, which sha256 it must have.
+export interface PlannedDownload {
+  name: string;
+  url: string;
+  size: number | null;
+  // the expected sha256 when known up front (pinned or github's digest); a
+  // .sha256 sidecar, when the release has one, is fetched and checked as well
+  sha256: string | null;
+  sidecar: string | null;
+  cached: boolean;
+  why: string;
+}
+
+export interface SetupPlan {
+  tag: string;
+  platform: string;
+  arch: string;
+  action: 'build' | 'download';
+  dest: string;
+  downloads: PlannedDownload[];
+  // bytes still to fetch (cached files left out); null when a size is unknown
+  totalBytes: number | null;
+  notes: string[];
+}
+
+// What setup would do on this machine, without doing it.
+export async function planSetup(platform: string = process.platform, arch: string = os.arch()): Promise<SetupPlan> {
+  const dir = cacheDir();
+  if (platform === 'darwin') {
+    const tarball = path.join(dir, `${TAG}.tar.gz`);
+    const cached = fs.existsSync(tarball) && (await sha256File(tarball)) === SOURCE_SHA256;
+    return {
+      tag: TAG, platform, arch, action: 'build', dest: path.join(dir, 'build', 'bin'),
+      downloads: [{ name: `${TAG}.tar.gz`, url: SOURCE_URL, size: SOURCE_SIZE, sha256: SOURCE_SHA256, sidecar: null, cached, why: 'the pinned source, built here with cmake' }],
+      totalBytes: cached ? 0 : SOURCE_SIZE,
+      notes: ['then ggml-rpc-server and llama-server are built with cmake (needs: brew install cmake ninja; a few minutes)'],
+    };
+  }
+  const assets = await fetchRelease();
+  const nvidia = hasNvidia();
+  const pick = pickAsset(platform, arch, nvidia, assets);
+  if (!pick) throw new Error(`no release asset for ${platform}/${arch} in ${TAG}; assets: ${assets.map((a) => a.name).join(', ')}\n` + buildInstructions(platform));
+  const entry = (a: Asset, side: Asset | null, why: string): PlannedDownload => ({
+    name: a.name, url: a.browser_download_url, size: a.size ?? null, sha256: digestSha256(a.digest),
+    sidecar: side?.browser_download_url ?? null, cached: false, why,
+  });
+  const downloads = [entry(pick.asset, pick.sidecar, pick.why)];
+  if (pick.companion) downloads.push(entry(pick.companion, assets.find((a) => a.name === `${pick.companion!.name}.sha256`) ?? null, 'the cuda runtime it needs'));
+  const unknown = downloads.some((d) => d.size == null);
+  const notes = [`unpacked into ${path.join(dir, 'bin')}`];
+  if (platform === 'win32') notes.push(WINDOWS_FIREWALL_NOTE);
+  return {
+    tag: TAG, platform, arch, action: 'download', dest: path.join(dir, 'bin'), downloads,
+    totalBytes: unknown ? null : downloads.reduce((n, d) => n + (d.size ?? 0), 0),
+    notes,
+  };
+}
+
+export const WINDOWS_FIREWALL_NOTE =
+  'windows: the first `kula-node share` makes windows defender firewall ask about kula-node; allow it on private networks only (that is your home wi-fi), never public';
+
+export function describePlan(p: SetupPlan): string[] {
+  const todo = p.downloads.filter((d) => !d.cached);
+  const lines = [`llama.cpp ${p.tag} for ${p.platform}/${p.arch}:`];
+  lines.push(todo.length === 0
+    ? '  nothing to download (already here)'
+    : `  will download ${todo.length} file${todo.length > 1 ? 's' : ''}, ${p.totalBytes == null ? 'size unknown' : mb(p.totalBytes)} in total`);
+  for (const d of p.downloads) {
+    lines.push(`  ${d.name}  ${d.size != null ? mb(d.size) : '? MB'}${d.cached ? '  (already downloaded)' : ''}  ${d.why}`);
+    lines.push(`    ${d.url}`);
+    lines.push(`    sha256 ${d.sha256 ?? (d.sidecar ? 'from the .sha256 sidecar' : 'NOT KNOWN: setup will refuse it')}`);
+  }
+  for (const n of p.notes) lines.push(`  ${n}`);
+  return lines;
+}
+
+// Fetches one planned file into dir and checks it; returns the local path.
+async function fetchChecked(d: PlannedDownload, dir: string, log: Log): Promise<string> {
+  const file = path.join(dir, d.name);
+  if (!d.cached || !fs.existsSync(file)) {
+    log(`downloading ${d.name}`);
+    const bar = progressBar(d.name.length > 28 ? `${d.name.slice(0, 25)}...` : d.name, d.size ?? 0);
+    try { await download(d.url, file, bar.update); } finally { bar.done(); }
+  }
+  const sidecarText = d.sidecar ? await (await fetch(d.sidecar)).text() : null;
+  await verifySidecar(file, sidecarText, log, d.sha256);
+  return file;
+}
+
+// The archive must match every sha256 we know for it: the .sha256 sidecar and
+// the expected value (pinned, or github's digest). With neither, it is refused.
+export async function verifySidecar(archive: string, sidecarText: string | null, log: Log, expected: string | null = null): Promise<void> {
+  const wants: string[] = [];
+  if (sidecarText !== null) {
+    const w = parseSidecar(sidecarText);
+    if (!w) throw new Error(`${path.basename(archive)}.sha256 holds no sha256`);
+    wants.push(w);
+  }
+  if (expected) wants.push(expected.toLowerCase());
+  if (!wants.length) {
+    fs.rmSync(archive, { force: true });
+    throw new Error(`${path.basename(archive)}: no sha256 to check it against (no .sha256 sidecar, no digest from github); refusing to use it`);
+  }
+  const got = await sha256File(archive);
+  for (const want of wants) {
+    if (got !== want) { fs.rmSync(archive); throw new Error(`${path.basename(archive)}: sha256 mismatch (got ${got}, want ${want}); the file was deleted, run setup again`); }
+  }
+  log('sha256 ok');
+}
+
 // macOS: build from the pinned source tarball.
-async function buildFromSource(log: (s: string) => void): Promise<LlamaBinaries> {
+async function buildFromSource(plan: SetupPlan, log: Log): Promise<LlamaBinaries> {
   if (!have('cmake')) throw new Error('cmake is missing (brew install cmake ninja)\n' + buildInstructions());
   const dir = cacheDir();
   fs.mkdirSync(dir, { recursive: true });
-  const tarball = path.join(dir, `${TAG}.tar.gz`);
-  if (!fs.existsSync(tarball) || (await sha256File(tarball)) !== SOURCE_SHA256) {
-    log(`downloading ${SOURCE_URL}`);
-    await download(SOURCE_URL, tarball, (got, total) => process.stdout.write(`\r  ${(got / 1e6).toFixed(1)} / ${(total / 1e6).toFixed(1)} MB`));
-    process.stdout.write('\n');
-    const sum = await sha256File(tarball);
-    if (sum !== SOURCE_SHA256) {
-      fs.rmSync(tarball);
-      throw new Error(`source tarball sha256 mismatch: got ${sum}, want ${SOURCE_SHA256}`);
-    }
-  }
+  const tarball = await fetchChecked(plan.downloads[0], dir, log);
   const src = path.join(dir, 'src');
   if (!fs.existsSync(path.join(src, 'CMakeLists.txt'))) {
     fs.rmSync(src, { recursive: true, force: true });
@@ -150,64 +255,27 @@ export async function fetchRelease(): Promise<Asset[]> {
   return rel.assets;
 }
 
-async function fetchArchive(asset: Asset, sidecar: Asset | null, dir: string, log: (s: string) => void): Promise<string> {
-  const archive = path.join(dir, asset.name);
-  if (!fs.existsSync(archive)) {
-    log(`downloading ${asset.browser_download_url}`);
-    await download(asset.browser_download_url, archive, (got, total) => process.stdout.write(`\r  ${(got / 1e6).toFixed(1)} / ${(total / 1e6).toFixed(1)} MB`));
-    process.stdout.write('\n');
-  }
-  await verifySidecar(archive, sidecar ? await (await fetch(sidecar.browser_download_url)).text() : null, log);
-  return archive;
-}
-
-// The sidecar is optional in these releases; when it exists the archive must match it.
-export async function verifySidecar(archive: string, sidecarText: string | null, log: (s: string) => void): Promise<void> {
-  if (sidecarText === null) { log(`no .sha256 sidecar for ${path.basename(archive)}; skipping the check`); return; }
-  const want = parseSidecar(sidecarText);
-  if (!want) throw new Error(`${path.basename(archive)}.sha256 holds no sha256`);
-  const got = await sha256File(archive);
-  if (got !== want) { fs.rmSync(archive); throw new Error(`${path.basename(archive)}: sha256 mismatch (got ${got}, want ${want}); the file was deleted, run setup again`); }
-  log('sha256 ok');
-}
-
 // Linux and Windows: a release archive of the same tag.
-async function downloadRelease(log: (s: string) => void, dryRun: boolean): Promise<LlamaBinaries | null> {
-  log(`looking up release ${TAG}`);
-  const assets = await fetchRelease();
-  const nvidia = hasNvidia();
-  const pick = pickAsset(process.platform, os.arch(), nvidia, assets);
-  if (!pick) throw new Error(`no release asset for ${process.platform}/${os.arch()} in ${TAG}; assets: ${assets.map((a) => a.name).join(', ')}\n` + buildInstructions());
-  const mb = (a: Asset) => (a.size ? ` (${(a.size / 1e6).toFixed(0)} MB)` : '');
-  log(`${pick.asset.name}${mb(pick.asset)}: ${pick.why}`);
-  if (pick.companion) log(`${pick.companion.name}${mb(pick.companion)}: the cuda runtime it needs`);
-  log(pick.sidecar ? 'sha256: checked against the .sha256 sidecar' : 'sha256: this asset has no .sha256 sidecar');
-  if (dryRun) {
-    log(`would download to ${cacheDir()} and unpack into ${path.join(cacheDir(), 'bin')}`);
-    log(`  ${pick.asset.browser_download_url}`);
-    if (pick.companion) log(`  ${pick.companion.browser_download_url}`);
-    return null;
-  }
+async function downloadRelease(plan: SetupPlan, log: Log): Promise<LlamaBinaries> {
   const dir = cacheDir();
   fs.mkdirSync(dir, { recursive: true });
-  const archive = await fetchArchive(pick.asset, pick.sidecar, dir, log);
-  const companion = pick.companion ? await fetchArchive(pick.companion, assets.find((a) => a.name === `${pick.companion!.name}.sha256`) ?? null, dir, log) : null;
+  const files: string[] = [];
+  for (const d of plan.downloads) files.push(await fetchChecked(d, dir, log));
   const out = path.join(dir, 'bin');
   fs.rmSync(out, { recursive: true, force: true });
   fs.mkdirSync(out, { recursive: true });
   // tar reads zip too (bsdtar on windows 10+ and macOS; gnu tar on linux only
   // handles .tar.gz, and those are what linux gets)
-  await run('tar', ['-xf', archive, '-C', out], dir, log);
-  if (companion) await run('tar', ['-xf', companion, '-C', out], dir, log);
+  for (const f of files) await run('tar', ['-xf', f, '-C', out], dir, log);
   const found = binariesUnder(out, 3);
   if (!found) {
     const rpc = RPC_NAMES.join(' or ');
-    throw new Error(`the archive ${pick.asset.name} has no ${rpc} inside (or no llama-server).\n` + buildInstructions());
+    throw new Error(`the archive ${plan.downloads[0].name} has no ${rpc} inside (or no llama-server).\n` + buildInstructions());
   }
   return found;
 }
 
-export async function setup(opts: { check?: boolean; dryRun?: boolean; log?: (s: string) => void } = {}): Promise<LlamaBinaries | null> {
+export async function setup(opts: { check?: boolean; dryRun?: boolean; log?: Log } = {}): Promise<LlamaBinaries | null> {
   const log = opts.log ?? ((s) => console.log(s));
   const found = findLlama();
   if (found) {
@@ -221,13 +289,12 @@ export async function setup(opts: { check?: boolean; dryRun?: boolean; log?: (s:
     log('run: kula-node setup');
     return null;
   }
-  if (process.platform === 'darwin') {
-    if (opts.dryRun) { log(`would download ${SOURCE_URL} (sha256 ${SOURCE_SHA256}) and build it under ${cacheDir()}`); return null; }
-    const got = await buildFromSource(log);
-    log(`ready: ${got.where}`);
-    return got;
-  }
-  const got = await downloadRelease(log, opts.dryRun === true);
-  if (got) log(`ready: ${got.where}`);
+  if (process.platform !== 'darwin') log(`looking up release ${TAG}`);
+  const plan = await planSetup();
+  for (const l of describePlan(plan)) log(l);
+  if (opts.dryRun) return null;
+  const got = plan.action === 'build' ? await buildFromSource(plan, log) : await downloadRelease(plan, log);
+  log(`ready: ${got.where}`);
+  if (process.platform === 'win32') log(WINDOWS_FIREWALL_NOTE);
   return got;
 }

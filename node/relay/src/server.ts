@@ -224,6 +224,8 @@ export async function startRelay(opts: RelayOptions): Promise<RelayServer> {
           if (!badCodes.take(ip)) return refuse(ws, 'rate limited');
           return refuse(ws, 'unknown code');
         }
+        // a master that already sent its close frame is gone, even before its socket is
+        if (w.session && w.session.ws.readyState !== WebSocket.OPEN) endSession(w.session, 'master gone');
         if (w.session) return refuse(ws, 'busy');
         const s: Session = { id: randomBytes(16).toString('hex'), worker: w, ws, streams: new Set(), bytes: 0, ip };
         w.session = s;

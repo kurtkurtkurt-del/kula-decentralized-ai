@@ -5,12 +5,13 @@
 // layers on the main device. Before any of that a 2 s probe drops the peers
 // that do not answer: ggml_backend_rpc_add_server aborts on a dead address.
 import { Tunnel } from './gate.js';
-import { planWithProbe, simModel, tensorSplit, type Plan, type ProbeFn } from './planner.js';
-import type { SimModel } from './sim.js';
+import { planWithProbe, tensorSplit, MB, type Plan, type ProbeFn } from './planner.js';
+import { guessShape } from './gguf.js';
 import { peerTls, type Peer } from './peers.js';
 import type { GateIdentity } from './tls.js';
 import { freePort, startChild, type Child } from './children.js';
 import type { LlamaBinaries } from './llama.js';
+import type { SimModel, SimNet } from './sim.js';
 
 type Log = (s: string) => void;
 
@@ -23,11 +24,17 @@ export interface SplitSetup {
 }
 
 export interface SplitOptions {
-  modelBytes: number;
-  model?: SimModel;      // the model's shape when the gguf header was read; else a rough one from the size
+  // the model's shape: from the gguf header (gguf.ts simModelOf) when the caller read it,
+  // else guessed from the size alone
+  model?: SimModel;
+  modelBytes?: number;
   ctx?: number;
   localFreeMb: number;
   localBw: number;
+  localEff?: number;
+  net?: SimNet;
+  localTps?: number | null;
+  peerTps?: Record<string, number | null | undefined>;
   peers: Peer[];
   share?: boolean;
   probeMs?: number;
@@ -39,8 +46,9 @@ export interface SplitOptions {
 // Plans and opens the tunnels. Throws TooBig when even together it does not fit.
 export async function prepareSplit(opts: SplitOptions): Promise<SplitSetup> {
   const log = opts.log ?? (() => {});
-  const model = opts.model ?? simModel({ id: 'model', size: opts.modelBytes, layers: 28, hidden: 2048, vocab: 150000, quant: 'Q4_K_M', kv_mb_per_1k: 112 });
-  const plan = await planWithProbe({ model, ctx: opts.ctx ?? 2048, localFreeMb: opts.localFreeMb, localBw: opts.localBw, wanted: opts.peers, share: opts.share ?? true, timeoutMs: opts.probeMs ?? 2000, probe: opts.probe, identity: opts.identity });
+  if (!opts.model && !opts.modelBytes) throw new Error('prepareSplit: need model or modelBytes');
+  const model = opts.model ?? (() => { const g = guessShape(opts.modelBytes!); return { id: 'model', fileMb: opts.modelBytes! / MB, layers: g.layers, hidden: g.hidden, vocab: g.vocab, bytesPerParam: g.bytesPerParam, kvMbPer1k: g.kvMbPer1k }; })();
+  const plan = await planWithProbe({ model, ctx: opts.ctx ?? 2048, localFreeMb: opts.localFreeMb, localBw: opts.localBw, localEff: opts.localEff, net: opts.net, localTps: opts.localTps, peerTps: opts.peerTps, wanted: opts.peers, share: opts.share ?? true, timeoutMs: opts.probeMs ?? 2000, probe: opts.probe, identity: opts.identity });
   for (const s of plan.skipped) log(`${s.peer.name}: skipped, ${s.why}`);
   const tunnels: SplitSetup['tunnels'] = [];
   for (const u of plan.used) {

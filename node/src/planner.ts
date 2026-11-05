@@ -8,7 +8,7 @@
 import { REMOTE_NO_SPLIT, peerTls, type Peer } from './peers.js';
 import { probe as gateProbe, type ProbeResult, type TlsClient } from './gate.js';
 import type { GateIdentity } from './tls.js';
-import { DEFAULT_BW, DEFAULT_EFF, LOCAL_SHARE, MB, planShares, WORKER_SHARE, type Estimate, type SimModel, type SimNet } from './sim.js';
+import { DEFAULT_BW, DEFAULT_EFF, LOCAL_SHARE, MB, planShares, withMeasured, WORKER_SHARE, type Estimate, type SimModel, type SimNet } from './sim.js';
 
 export { LOCAL_SHARE, WORKER_SHARE, MB };
 export type { Peer };
@@ -44,6 +44,9 @@ export interface PlanInput {
   skipped?: { peer: Peer; why: string }[];
   share: boolean;       // when it fits alone: share anyway?
   net?: SimNet;
+  // measured decoding tok/s on this model (kula-node bench); they replace bw × eff
+  localTps?: number | null;
+  peerTps?: Record<string, number | null | undefined>;
 }
 
 /** A model's shape for the planner from what the catalog or a gguf header says. */
@@ -57,8 +60,8 @@ export function planSplit(input: PlanInput): Plan {
   try {
     const sim = planShares({
       model: input.model, ctx: input.ctx, share: input.share, net,
-      local: { id: 'me', capMb: input.localFreeMb * LOCAL_SHARE, bw: input.localBw || DEFAULT_BW, eff: input.localEff ?? DEFAULT_EFF },
-      workers: input.peers.map((p) => ({ id: p.id, capMb: (p.ram ?? 2000) * WORKER_SHARE, bw: p.bw ?? DEFAULT_BW, eff: p.kind === 'pc' ? 0.3 : DEFAULT_EFF })),
+      local: withMeasured({ id: 'me', capMb: input.localFreeMb * LOCAL_SHARE, bw: input.localBw || DEFAULT_BW, eff: input.localEff ?? DEFAULT_EFF }, input.model, input.localTps),
+      workers: input.peers.map((p) => withMeasured({ id: p.id, capMb: (p.ram ?? 2000) * WORKER_SHARE, bw: p.bw ?? DEFAULT_BW, eff: p.kind === 'pc' ? 0.3 : DEFAULT_EFF }, input.model, input.peerTps?.[p.id])),
     });
     return {
       mode: 'split',

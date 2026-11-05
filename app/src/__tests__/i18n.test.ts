@@ -2,6 +2,7 @@
 // in two parts (dict.ts spreads them in order, so a duplicate would silently win).
 import { describe, expect, it } from '@jest/globals';
 import { audit } from '@/i18n/parts/audit';
+import { bench } from '@/i18n/parts/bench';
 import { common } from '@/i18n/parts/common';
 import { coops } from '@/i18n/parts/coops';
 import { home } from '@/i18n/parts/home';
@@ -15,7 +16,7 @@ import { ux } from '@/i18n/parts/ux';
 import { brain } from '@/i18n/parts/brain';
 import { dict } from '@/i18n/dict';
 
-const parts: Record<string, Record<string, Record<string, string>>> = { common, home, tabs, pages, staff, tips, coops, server, models, audit, ux, brain };
+const parts: Record<string, Record<string, Record<string, string>>> = { common, home, tabs, pages, staff, tips, coops, server, models, audit, ux, brain, bench };
 
 describe('i18n dict', () => {
   it('has no key in two parts', () => {

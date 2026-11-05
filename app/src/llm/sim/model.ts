@@ -78,6 +78,22 @@ export const spreadMb = (m: SimModel, ctx: number) => m.fileMb * FILE_FACTOR - e
 
 const tpsOf = (d: SimDevice, gb: number) => (d.bw * (d.eff || DEFAULT_EFF)) / gb;
 
+/**
+ * The efficiency that makes estimateAlone give back a measured tok/s on this model (bench:
+ * docs/BENCH.md). It carries over to other models on the same device as well as anything
+ * does: the decode step streams the weights either way.
+ */
+export function effFromTps(m: SimModel, bw: number, tps: number): number {
+  const gb = (m.fileMb * FILE_FACTOR) / 1024;
+  return (tps * gb) / (bw || DEFAULT_BW);
+}
+
+/** A device with a measured tok/s folded in (as its eff), or the device as it was without one. */
+export function withMeasured(d: SimDevice, m: SimModel, tps: number | null | undefined): SimDevice {
+  if (!tps || !(tps > 0)) return d;
+  return { ...d, bw: d.bw || DEFAULT_BW, eff: effFromTps(m, d.bw, tps) };
+}
+
 /** Decoding on one device alone, and the time to open the file from disk. */
 export function estimateAlone(m: SimModel, d: SimDevice): Estimate {
   const gb = (m.fileMb * FILE_FACTOR) / 1024;

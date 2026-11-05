@@ -17,7 +17,9 @@ on 127.0.0.1 only.
 
 ## Setup
 
-You need Node.js 20 or newer.
+Without Node.js: one-file binaries for macOS, Linux and Windows and one-line
+installers, see [docs/NODE.md, install](../docs/NODE.md#install). From the
+sources you need Node.js 20 or newer.
 
 ```
 cd node
@@ -196,6 +198,21 @@ never reached directly: the tunnels are the only path, and they end at 127.0.0.1
 Without llama.cpp on this computer `split` says so and stops; `apart` drops the
 local device with the same hint and carries on with the peers (`--no-local`
 skips the attempt). `--bw <GB/s>` skips the bandwidth measurement.
+
+## Measuring
+
+```
+kula-node bench --model ~/models/qwen3-0.6b-q8.gguf [--peer id,id…]
+```
+
+Local prompt and generation tok/s (3 runs, median), first token, memory
+bandwidth, the gate round trip and the tunnel speed (10 MB of `GET /blob`) to
+each peer (to this computer's own gate when there is none), each peer's tok/s in
+apart mode and, with llama.cpp here, the split's load time and token time. The
+record goes to `~/.kula-node/bench/<date>.json` (shape: `tools/bench-schema.json`,
+fields: `docs/BENCH.md`) and `chat` then plans with the measured tok/s for that
+model instead of bandwidth × efficiency. `--no-apart`, `--no-split`, `--runs`,
+`--tokens`, `--json`.
 
 ## Checking a worker
 

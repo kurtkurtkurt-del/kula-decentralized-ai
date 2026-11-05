@@ -18,6 +18,9 @@ import { DashboardState, type DeviceView } from './dashboard/state.js';
 import { startDashboard, BATCH_PROMPTS, type Dashboard } from './dashboard/server.js';
 import { selfView, peerActions, ledgerActions, hostName, DASHBOARD_PORT } from './dashboard/wire.js';
 import { deviceId } from './share.js';
+import { simModelOf } from './gguf.js';
+import { readBenches } from './bench.js';
+import { measuredTps } from './benchcore.js';
 
 type Flags = Record<string, string | boolean>;
 const stamp = () => new Date().toISOString().slice(11, 19);
@@ -55,6 +58,11 @@ export async function peersCommand(sub: string | undefined, rest: string[], flag
   }
   if (sub === 'list' || sub === 'ls' || sub === undefined) {
     const list = readPeers(file);
+    if (flags.json) {
+      // the secret stays masked here too; --code is the one way to get it out
+      console.log(JSON.stringify(list.map((p) => ({ ...p, secret: maskSecret(p.secret), ...(flags.code ? { code: peerCode(p) } : {}) })), null, 2));
+      return 0;
+    }
     if (!list.length) { console.log(`no peers yet (${file}); add one with: kula-node peers add '<qr json>'`); return 0; }
     for (const p of list) console.log(flags.code ? `${row(p)}\n  code: ${peerCode(p)}` : row(p));
     return 0;
@@ -76,9 +84,10 @@ export async function peersCommand(sub: string | undefined, rest: string[], flag
     let bad = 0;
     for (const r of results) {
       const fmt = (x: typeof r.rpc) => (x.ok ? `OK ${x.ms} ms` : `NO ${x.reason}`);
-      console.log(`${r.peer.name.padEnd(18)} ${whereIs(r.peer)}  rpc ${fmt(r.rpc)}  api ${fmt(r.api)}${r.peer.fp && !wanted.find((p) => p.id === r.peer.id)?.fp ? `  (certificate learned: ${r.peer.fp.slice(0, 16)}…)` : ''}`);
+      if (!flags.json) console.log(`${r.peer.name.padEnd(18)} ${whereIs(r.peer)}  rpc ${fmt(r.rpc)}  api ${fmt(r.api)}${r.peer.fp && !wanted.find((p) => p.id === r.peer.id)?.fp ? `  (certificate learned: ${r.peer.fp.slice(0, 16)}…)` : ''}`);
       if (!r.rpc.ok && !r.api.ok) bad++;
     }
+    if (flags.json) console.log(JSON.stringify(results.map((r) => ({ id: r.peer.id, name: r.peer.name, host: r.peer.host, port: r.peer.port, rpc: r.rpc, api: r.api })), null, 2));
     // stamp last_ok
     const stamped = all.map((p) => results.find((r) => r.peer.id === p.id)?.peer ?? p);
     writePeersSafe(stamped, file);
@@ -130,7 +139,16 @@ export async function chatCommand(flags: Flags): Promise<number> {
     if (!llama) { console.error('split mode needs llama.cpp on this computer: run kula-node setup'); return 1; }
     let setup;
     try {
-      setup = await prepareSplit({ modelBytes: size, localFreeMb: freeRamMB(), localBw: bw, peers, share: flags['keep-local'] !== true, probeMs, log, identity: me });
+      // the shape from the gguf header (a guess from the size when it cannot be read); measured
+      // tok/s on this model (kula-node bench) replace bandwidth x efficiency
+      const sm = simModelOf(modelFile);
+      const benches = readBenches();
+      const key = { id: sm.id, file: path.basename(modelFile), size };
+      const localTps = measuredTps(benches, 'self', key);
+      const peerTps = Object.fromEntries(peers.map((p) => [p.id, measuredTps(benches, p.id, key)]));
+      const known = [localTps ? `here ${localTps}` : null, ...peers.filter((p) => peerTps[p.id]).map((p) => `${p.name} ${peerTps[p.id]}`)].filter(Boolean);
+      if (known.length) log(`measured tok/s used by the planner: ${known.join(', ')}`);
+      setup = await prepareSplit({ model: sm, ctx, localFreeMb: freeRamMB(), localBw: bw, localTps, peerTps, peers, share: flags['keep-local'] !== true, probeMs, log, identity: me });
     } catch (e) {
       if (e instanceof TooBig) { console.error(e.message); return 1; }
       throw e;
@@ -156,9 +174,12 @@ export async function chatCommand(flags: Flags): Promise<number> {
       url = srv.url;
       log(`serving the model to the peers at ${url.replace(/\/m\/[0-9a-f]+\//, '/m/…/')}`);
     }
+    const benches = readBenches();
+    const key = { id: simModelOf(modelFile).id, file: path.basename(modelFile), size };
+    const measured = Object.fromEntries([['local', measuredTps(benches, 'self', key)], ...peers.map((p) => [p.id, measuredTps(benches, p.id, key)])]);
     cluster = await openApart({
       model: { url: url ?? 'file://' + modelFile, sha256, size, name: path.basename(modelFile), ctx },
-      localModelFile: flags['no-local'] === true ? null : modelFile, localBw: bw, llama, peers, probeMs, log, identity: me,
+      localModelFile: flags['no-local'] === true ? null : modelFile, localBw: bw, llama, peers, probeMs, log, identity: me, measuredTps: measured,
     });
   }
   // what the probe learned (a far peer's certificate, a spent pin, last_ok) goes back to the book

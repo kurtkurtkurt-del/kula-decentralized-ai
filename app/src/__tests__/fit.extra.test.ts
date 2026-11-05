@@ -34,7 +34,7 @@ describe('haveMb', () => {
 describe('fitOn', () => {
   it('without a passport nothing fits and nothing is estimated', () => {
     const f = fitOn(null, m(500));
-    expect(f).toEqual({ needMb: needMb(m(500)), haveMb: 0, verdict: 'no', maxCtx: 0, tps: null });
+    expect(f).toEqual({ needMb: needMb(m(500)), haveMb: 0, verdict: 'no', maxCtx: 0, tps: null, measured: false });
     expect(defaultCtx(f)).toBe(512);
   });
   it('is tight between 85 % and 100 % of what the device has', () => {

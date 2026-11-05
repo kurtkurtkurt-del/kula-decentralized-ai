@@ -17,3 +17,7 @@ dist/
 
 # an old local build of the passport app on some machines (not part of the repo)
 native/
+
+# kula-node single binaries (node/tools/pack.mjs) and the node downloads they are made from
+node/dist-bin/
+node/.pack-cache/

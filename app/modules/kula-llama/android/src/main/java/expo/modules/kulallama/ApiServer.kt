@@ -23,8 +23,11 @@ import kotlin.concurrent.thread
  *                                      public http(s), sha256 is needed to download (Guard.kt)
  *   POST /chat  {messages:[{role,content}], maxTokens?, temperature?}   SSE: {t:"piece"} … {done, tokens, ms}
  *   POST /stop
+ *   GET  /blob?mb=N                    N MB (1024²) of zeros, N capped at 64: the bench's tunnel
+ *                                      speed test (app/src/bench, kula-node bench)
  *
- * The same four routes are what kula-node (Part 2) serves on a computer.
+ * The same routes are what kula-node serves on a computer (node/src/api.ts); its conformance
+ * tests pin the bytes, this file follows them by hand (blobMb = bench/core.ts blobMb).
  */
 class ApiServer(private val context: Context, private val modelsDir: File, private val threads: Int) {
   private var listener: ServerSocket? = null
@@ -79,6 +82,7 @@ class ApiServer(private val context: Context, private val modelsDir: File, priva
     s.soTimeout = 0
     when {
       method == "GET" && path == "/status" -> json(out, 200, status())
+      method == "GET" && path.substringBefore('?') == "/blob" -> blob(out, path.substringAfter('?', ""))
       method == "POST" && path == "/stop" -> { Native.stop(); json(out, 200, JSONObject().put("ok", true)) }
       method == "POST" && path == "/load" -> load(out, json)
       method == "POST" && path == "/chat" -> chat(out, json)
@@ -178,6 +182,22 @@ class ApiServer(private val context: Context, private val modelsDir: File, priva
     }
   }
 
+  /** N MB of zeros, fixed length, no compression; does not take `busy` (no model involved). */
+  private fun blob(out: OutputStream, query: String) {
+    val q = query.split('&').firstOrNull { it.startsWith("mb=") }?.substringAfter('=')
+    val mb = blobMb(q) ?: return json(out, 400, JSONObject().put("error", "need mb"))
+    val total = mb.toLong() * 1024 * 1024
+    out.write("HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: $total\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n".toByteArray())
+    val chunk = ByteArray(64 * 1024)
+    var sent = 0L
+    while (sent < total) {
+      val n = minOf(chunk.size.toLong(), total - sent).toInt()
+      out.write(chunk, 0, n)
+      sent += n
+    }
+    out.flush()
+  }
+
   private fun sseHead(out: OutputStream) {
     out.write("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\nConnection: close\r\n\r\n".toByteArray()); out.flush()
   }
@@ -192,5 +212,17 @@ class ApiServer(private val context: Context, private val modelsDir: File, priva
     out.write(b); out.flush()
   }
 
-  companion object { private const val TAG = "kula-api" }
+  companion object {
+    private const val TAG = "kula-api"
+    const val BLOB_MAX_MB = 64
+
+    /** ?mb=… as the blob size: null unless digits only and ≥ 1; capped at BLOB_MAX_MB. */
+    fun blobMb(q: String?): Int? {
+      if (q.isNullOrEmpty() || !q.all { it in '0'..'9' }) return null
+      val digits = q.trimStart('0')
+      if (digits.isEmpty()) return null
+      if (digits.length > 6) return BLOB_MAX_MB
+      return minOf(digits.toInt(), BLOB_MAX_MB)
+    }
+  }
 }

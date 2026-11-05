@@ -10,10 +10,11 @@ import { models } from './parts/models';
 import { audit } from './parts/audit';
 import { ux } from './parts/ux';
 import { brain } from './parts/brain';
+import { bench } from './parts/bench';
 
 // Every string in one table. When a key appears in two parts the later wins,
 // so each part uses its own prefix (home.* · brain.* · project.* …).
-export const dict = { ...common, ...home, ...tabs, ...pages, ...staff, ...tips, ...coops, ...server, ...models, ...audit, ...ux, ...brain } as const;
+export const dict = { ...common, ...home, ...tabs, ...pages, ...staff, ...tips, ...coops, ...server, ...models, ...audit, ...ux, ...brain, ...bench } as const;
 
 export type Key = keyof typeof dict;
 type Roots<K> = K extends `${infer Base}.other` ? Base : never;

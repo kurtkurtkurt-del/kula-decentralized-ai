@@ -137,6 +137,9 @@ export class DashboardState {
       const i = g.open.findIndex((o) => o.peer === e.peer && o.channel === e.channel);
       if (i >= 0) g.open.splice(i, 1);
       t[e.channel].closes++; t[e.channel].bytesIn += e.bytesIn; t[e.channel].bytesOut += e.bytesOut;
+    } else if (e.type === 'pair') {
+      // a phone paired with this computer's one-time code: a peer, not a connection
+      g.lastPeer = e.peer; g.lastAt = e.at;
     } else {
       g.lastReject = { peer: e.peer, reason: e.reason, at: e.at };
       if (e.channel) t[e.channel].rejects++;
