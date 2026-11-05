@@ -5,6 +5,15 @@ import fs from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
+declare const __KULA_PACKED__: boolean | undefined;
+
+// True inside a single executable made by tools/pack.mjs: esbuild defines the
+// flag; node's own sea module answers the same question on 22+.
+export function isPacked(): boolean {
+  if (typeof __KULA_PACKED__ === 'boolean') return __KULA_PACKED__;
+  try { return (process as unknown as { getBuiltinModule?: (n: string) => { isSea?: () => boolean } }).getBuiltinModule?.('node:sea')?.isSea?.() ?? false; } catch { return false; }
+}
+
 export function home(): string {
   const h = process.env.KULA_NODE_HOME || path.join(os.homedir(), '.kula-node');
   fs.mkdirSync(h, { recursive: true });
@@ -19,6 +28,7 @@ export function expandHome(p: string): string {
 
 // The folder that holds node/ (works from src/ under tsx and from dist/ after a build).
 export function packageRoot(): string {
+  if (isPacked()) return path.dirname(process.execPath);
   let dir = path.dirname(fileURLToPath(import.meta.url));
   for (let i = 0; i < 4; i++) {
     if (fs.existsSync(path.join(dir, 'package.json'))) return dir;
@@ -31,6 +41,8 @@ export function packageRoot(): string {
 // checkout, because a shared build lives next to the main checkout.
 export function repoRoots(): string[] {
   const roots = new Set<string>();
+  // a packed binary lives anywhere; the checkout's .llama/host is not next to it
+  if (isPacked()) return [];
   const pkg = packageRoot();
   roots.add(path.dirname(pkg));
   try {

@@ -41,6 +41,18 @@ export interface PeerPayload {
   vram: number;
 }
 
+// Windows asks once, with a dialog, whether a program may accept connections.
+// The dialog is easy to dismiss by mistake; this says what to pick and how to
+// repair it afterwards.
+export function firewallNote(port: number): string {
+  return [
+    `windows firewall: a dialog may ask whether kula-node may accept connections.`,
+    `  tick "private networks" and press allow, or the phone will never reach port ${port}.`,
+    `  pressed cancel? run once in an administrator powershell:`,
+    `    New-NetFirewallRule -DisplayName kula-node -Direction Inbound -Protocol TCP -LocalPort ${port} -Profile Private -Action Allow`,
+  ].join('\n');
+}
+
 export function deviceId(): string {
   const file = path.join(home(), 'id');
   try {
@@ -129,6 +141,7 @@ export async function share(opts: ShareOptions): Promise<() => Promise<void>> {
 
   const gate = await startGateServer({ port: opts.port, secret, targets, onEvent, admit: (peer, nonceC, unixMs) => auditor.hello(peer, nonceC, unixMs) });
   log(`gate listening on 0.0.0.0:${gate.port}`);
+  if (process.platform === 'win32') log(firewallNote(gate.port));
 
   const payload: PeerPayload = { k: 'kula-peer', v: 2, id, name, host: host ?? '0.0.0.0', port: gate.port, secret, kind: 'pc', ram, bw, gpu: gpu.name, vram: gpu.vramMB };
   const text = JSON.stringify(payload);

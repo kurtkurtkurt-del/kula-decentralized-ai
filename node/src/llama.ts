@@ -9,6 +9,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import { home, repoRoots } from './paths.js';
 import { download } from './download.js';
 import { pickAsset, buildInstructions as instructionsFor, parseSidecar, type Asset } from './assets.js';
+import { bar, mb } from './progress.js';
 
 export const TAG = 'b11157';
 export const SOURCE_URL = `https://github.com/ggml-org/llama.cpp/archive/refs/tags/${TAG}.tar.gz`;
@@ -110,8 +111,7 @@ async function buildFromSource(log: (s: string) => void): Promise<LlamaBinaries>
   const tarball = path.join(dir, `${TAG}.tar.gz`);
   if (!fs.existsSync(tarball) || (await sha256File(tarball)) !== SOURCE_SHA256) {
     log(`downloading ${SOURCE_URL}`);
-    await download(SOURCE_URL, tarball, (got, total) => process.stdout.write(`\r  ${(got / 1e6).toFixed(1)} / ${(total / 1e6).toFixed(1)} MB`));
-    process.stdout.write('\n');
+    await download(SOURCE_URL, tarball, bar(`  ${TAG}.tar.gz`));
     const sum = await sha256File(tarball);
     if (sum !== SOURCE_SHA256) {
       fs.rmSync(tarball);
@@ -154,8 +154,7 @@ async function fetchArchive(asset: Asset, sidecar: Asset | null, dir: string, lo
   const archive = path.join(dir, asset.name);
   if (!fs.existsSync(archive)) {
     log(`downloading ${asset.browser_download_url}`);
-    await download(asset.browser_download_url, archive, (got, total) => process.stdout.write(`\r  ${(got / 1e6).toFixed(1)} / ${(total / 1e6).toFixed(1)} MB`));
-    process.stdout.write('\n');
+    await download(asset.browser_download_url, archive, bar(`  ${asset.name}`));
   }
   await verifySidecar(archive, sidecar ? await (await fetch(sidecar.browser_download_url)).text() : null, log);
   return archive;
@@ -171,6 +170,11 @@ export async function verifySidecar(archive: string, sidecarText: string | null,
   log('sha256 ok');
 }
 
+// What the last setup decided, for --json.
+export interface SetupPlan { platform: string; arch: string; nvidia: boolean; asset: string; companion: string | null; sidecar: boolean; totalBytes: number; dest: string; urls: string[] }
+let lastPlan: SetupPlan | null = null;
+export const setupPlan = (): SetupPlan | null => lastPlan;
+
 // Linux and Windows: a release archive of the same tag.
 async function downloadRelease(log: (s: string) => void, dryRun: boolean): Promise<LlamaBinaries | null> {
   log(`looking up release ${TAG}`);
@@ -178,10 +182,13 @@ async function downloadRelease(log: (s: string) => void, dryRun: boolean): Promi
   const nvidia = hasNvidia();
   const pick = pickAsset(process.platform, os.arch(), nvidia, assets);
   if (!pick) throw new Error(`no release asset for ${process.platform}/${os.arch()} in ${TAG}; assets: ${assets.map((a) => a.name).join(', ')}\n` + buildInstructions());
-  const mb = (a: Asset) => (a.size ? ` (${(a.size / 1e6).toFixed(0)} MB)` : '');
-  log(`${pick.asset.name}${mb(pick.asset)}: ${pick.why}`);
-  if (pick.companion) log(`${pick.companion.name}${mb(pick.companion)}: the cuda runtime it needs`);
+  const size = (a: Asset) => (a.size ? ` (${mb(a.size)} MB)` : '');
+  log(`${pick.asset.name}${size(pick.asset)}: ${pick.why}`);
+  if (pick.companion) log(`${pick.companion.name}${size(pick.companion)}: the cuda runtime it needs`);
+  const total = (pick.asset.size ?? 0) + (pick.companion?.size ?? 0);
+  if (total) log(`total download: ${mb(total)} MB`);
   log(pick.sidecar ? 'sha256: checked against the .sha256 sidecar' : 'sha256: this asset has no .sha256 sidecar');
+  lastPlan = { platform: process.platform, arch: os.arch(), nvidia, asset: pick.asset.name, companion: pick.companion?.name ?? null, sidecar: !!pick.sidecar, totalBytes: total, dest: path.join(cacheDir(), 'bin'), urls: [pick.asset.browser_download_url, ...(pick.companion ? [pick.companion.browser_download_url] : [])] };
   if (dryRun) {
     log(`would download to ${cacheDir()} and unpack into ${path.join(cacheDir(), 'bin')}`);
     log(`  ${pick.asset.browser_download_url}`);

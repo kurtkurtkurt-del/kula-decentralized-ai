@@ -1,6 +1,9 @@
 // The command line: setup, share, probe.
 import { probe, type Channel } from './gate.js';
-import { setup, TAG } from './llama.js';
+import { setup, setupPlan, findLlama, candidates, TAG } from './llama.js';
+import { VERSION, DIST } from './version.js';
+import { menu } from './menu.js';
+import { collectInfo, infoText } from './info.js';
 import { share } from './share.js';
 import { home } from './paths.js';
 import { ledgerCommand } from './ledgercmd.js';
@@ -9,6 +12,8 @@ import { peersCommand, chatCommand } from './mastercmd.js';
 const HELP = `kula-node: make this computer a worker in a kula cluster
 
 usage:
+  kula-node                          a short menu (on a terminal)
+  kula-node info [--no-bandwidth]    this computer: address, ram, bandwidth, gpu, llama.cpp
   kula-node setup [--check] [--dry-run]   get llama.cpp ${TAG} (build on macOS, download on linux/windows)
       --dry-run         only say which archive would be fetched
   kula-node share [options]          open the gate and wait for the phone
@@ -37,8 +42,11 @@ running a cluster from this computer:
       --keep-local       split: when the model fits here, do not share it anyway
       --probe-ms <n>     how long a worker has to answer before it is dropped (default 2000)
 
+every command takes --json for machine readable output (setup, info, probe, peers list/probe, version)
 files live in ${home()} (KULA_NODE_HOME overrides)
 `;
+
+const out = (o: unknown) => console.log(JSON.stringify(o));
 
 function parse(argv: string[]): { cmd: string; flags: Record<string, string | boolean>; rest: string[] } {
   const [cmd = 'help', ...tail] = argv;
@@ -66,13 +74,39 @@ function num(v: string | boolean | undefined, dflt: number): number {
 }
 
 export async function main(argv: string[]): Promise<number> {
+  if (argv.length === 0) {
+    // no arguments: a menu on a terminal, the help in a pipe
+    if (!process.stdin.isTTY || !process.stdout.isTTY) { console.log(HELP); return 0; }
+    const pick = await menu();
+    if (!pick) return 0;
+    return main(pick);
+  }
   const { cmd, flags, rest } = parse(argv);
+  const json = flags.json === true;
   if (cmd === 'help' || cmd === '--help' || cmd === '-h' || flags.help) { console.log(HELP); return 0; }
-  if (cmd === '--version' || cmd === 'version') { console.log(`kula-node 0.1.0 (llama.cpp ${TAG})`); return 0; }
+  if (cmd === '--version' || cmd === '-v' || cmd === 'version') {
+    if (json) out({ name: 'kula-node', version: VERSION, dist: DIST, llama: TAG, node: process.version, platform: process.platform, arch: process.arch });
+    else console.log(`kula-node ${VERSION} (${DIST}, llama.cpp ${TAG})`);
+    return 0;
+  }
+
+  if (cmd === 'info') {
+    const i = await collectInfo({ bandwidth: flags['no-bandwidth'] !== true });
+    if (json) out(i); else console.log(infoText(i));
+    return 0;
+  }
 
   if (cmd === 'setup') {
     const dryRun = flags['dry-run'] === true;
-    const got = await setup({ check: flags.check === true, dryRun });
+    const check = flags.check === true;
+    if (json && check) {
+      const found = findLlama();
+      out({ ok: !!found, tag: TAG, where: found?.where ?? null, rpcServer: found?.rpcServer ?? null, llamaServer: found?.llamaServer ?? null, lookedIn: candidates() });
+      return found ? 0 : 1;
+    }
+    const lines: string[] = [];
+    const got = await setup({ check, dryRun, log: json ? (s) => lines.push(s) : undefined });
+    if (json) out({ ok: !!got || dryRun, dryRun, tag: TAG, where: got?.where ?? null, plan: setupPlan(), log: lines });
     return got || dryRun ? 0 : 1;
   }
 
@@ -88,11 +122,16 @@ export async function main(argv: string[]): Promise<number> {
     if (!host || !portS || !secret) { console.error('usage: kula-node probe <host> <port> <secret>'); return 2; }
     const port = Number(portS);
     let bad = 0;
+    const res: Record<string, unknown> = {};
     for (const channel of ['rpc', 'api'] as Channel[]) {
       const r = await probe(host, port, secret, channel, num(flags.timeout, 2000));
+      res[channel] = r;
+      if (!r.ok) bad++;
+      if (json) continue;
       if (r.ok) console.log(`${channel}: OK (${r.ms} ms)`);
-      else { console.log(`${channel}: NO ${r.reason}`); bad++; }
+      else console.log(`${channel}: NO ${r.reason}`);
     }
+    if (json) out({ ok: !bad, host, port, ...res });
     return bad ? 1 : 0;
   }
 

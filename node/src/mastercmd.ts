@@ -40,6 +40,7 @@ export async function peersCommand(sub: string | undefined, rest: string[], flag
   }
   if (sub === 'list' || sub === 'ls' || sub === undefined) {
     const list = readPeers(file);
+    if (flags.json === true) { console.log(JSON.stringify(list.map((p) => ({ ...p, secret: undefined, secretMasked: maskSecret(p.secret) })))); return 0; }
     if (!list.length) { console.log(`no peers yet (${file}); add one with: kula-node peers add '<qr json>'`); return 0; }
     for (const p of list) console.log(flags.code ? `${row(p)}\n  code: ${peerCode(p)}` : row(p));
     return 0;
@@ -59,6 +60,12 @@ export async function peersCommand(sub: string | undefined, rest: string[], flag
     if (!wanted.length) { console.error(rest.length ? `no such peer: ${rest.join(' ')}` : 'no peers to probe'); return 1; }
     const results = await probePeers(wanted, num(flags.timeout, 2000));
     let bad = 0;
+    if (flags.json === true) {
+      for (const r of results) if (!r.rpc.ok && !r.api.ok) bad++;
+      console.log(JSON.stringify(results.map((r) => ({ id: r.peer.id, name: r.peer.name, host: r.peer.host, port: r.peer.port, rpc: r.rpc, api: r.api }))));
+      writePeersSafe(all.map((p) => results.find((r) => r.peer.id === p.id)?.peer ?? p), file);
+      return bad ? 1 : 0;
+    }
     for (const r of results) {
       const fmt = (x: typeof r.rpc) => (x.ok ? `OK ${x.ms} ms` : `NO ${x.reason}`);
       console.log(`${r.peer.name.padEnd(18)} ${r.peer.host}:${r.peer.port}  rpc ${fmt(r.rpc)}  api ${fmt(r.api)}`);
