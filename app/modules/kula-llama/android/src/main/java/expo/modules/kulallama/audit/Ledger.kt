@@ -35,6 +35,9 @@ class Ledger(
     ordered["kind"] = kind
     if (peer != null) ordered["peer"] = peer
     for ((k, v) in fields) if (k != "t" && k != "kind" && k != "peer" && k != "prev" && k != "sig") ordered[k] = v
+    // the file is gone and nothing rotated it: it was cleared (settings → beyin audit), so a
+    // new chain starts from the genesis zeros instead of pointing at a line nobody can read
+    if (!file.exists()) lastHash = GENESIS
     ordered["prev"] = lastHash
     val unsigned = Json.obj(ordered)
     val line = sign(unsigned, key)
@@ -47,6 +50,10 @@ class Ledger(
 
   /** The last [limit] lines of the current file, oldest first. */
   fun tail(limit: Int): List<String> = tail(file, limit)
+
+  /** Deletes this ledger and its rotated files; the next append starts a new chain. */
+  @Synchronized
+  fun clear(): Boolean = clear(file).also { lastHash = GENESIS }
 
   private fun rotateIfFull(t: Long) {
     if (!file.exists() || file.length() <= maxBytes) return
@@ -98,6 +105,19 @@ class Ledger(
         }
       }
       return -1
+    }
+
+    /**
+     * Deletes [file] and the files rotated away from it (`<name>.<t>.jsonl`, `<name>.<t>.<n>.jsonl`).
+     * The only thing that ever removes ledger lines; the user asks for it, with a confirmation.
+     */
+    fun clear(file: File): Boolean {
+      val base = file.name.removeSuffix(".jsonl")
+      val rotated = Regex("^" + Regex.escape(base) + "\\.[0-9]+(\\.[0-9]+)?\\.jsonl$")
+      var ok = true
+      file.parentFile?.listFiles()?.filter { rotated.matches(it.name) }?.forEach { ok = it.delete() && ok }
+      if (file.exists()) ok = file.delete() && ok
+      return ok
     }
 
     /** SHA-256 of the last line of [file], or the genesis zeros when there is none. */
