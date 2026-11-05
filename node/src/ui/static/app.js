@@ -490,6 +490,7 @@ function whereText() {
   box.replaceChildren();
   const dot = $('where-dot');
   dot.className = 'dot';
+  $('where').classList.remove('empty');
   if (st?.loading) {
     dot.classList.add('busy');
     box.append('loading ', el('b', '', st.loading.model), ` · ${st.loading.line}`);
@@ -498,11 +499,12 @@ function whereText() {
   if (st?.loaded) {
     const l = st.loaded;
     dot.classList.add(l.devices.some((d) => d.busy) ? 'busy' : 'ok');
-    const names = l.devices.map((d) => d.name).join(', ') || '—';
+    const names = (l.parts?.length ? l.parts : l.devices).map((d) => d.name).join(', ') || '—';
     box.append(el('b', '', l.model.name), ` on ${names} · ${l.mode === 'phone' ? 'phone' : l.mode}`);
     return;
   }
-  box.append('no model yet · start a chat');
+  $('where').classList.add('empty');
+  box.append('no model yet · ', el('b', '', 'start a chat'));
 }
 
 function updateEmpty() {
@@ -734,7 +736,6 @@ $('new-chat').addEventListener('click', () => { newChat(); if (matchMedia('(max-
 let searchTimer = null;
 $('search').addEventListener('input', () => { clearTimeout(searchTimer); searchTimer = setTimeout(loadChats, 200); });
 $('where').addEventListener('click', () => (isGuest() ? setBrain(!$('app').classList.contains('brain-open')) : openConnect()));
-$('open-connect').addEventListener('click', openConnect);
 
 // ---------- connect: devices
 
