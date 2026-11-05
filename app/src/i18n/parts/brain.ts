@@ -1,36 +1,49 @@
 // The brain tab (5.11.2026): beyin at work on this phone. brain.* · the decisions log's
 // lines (llm/brainlog.ts) are brain.plan.* · brain.why.* · brain.load.* · brain.dispatch ·
-// brain.retry* · brain.night.* · brain.unit · brain.check.* · brain.out.
+// brain.retry* · brain.night.* · brain.unit · brain.check.* · brain.out, and their few words
+// on the timeline brain.short.*. The tab shows little text (5.11.2026, "more visual"): the
+// long sentences kept here (brain.idle, brain.log.empty, brain.ledger.lede…) are what a
+// screen reader says where the eye gets a drawing.
 export const brain = {
   'brain.title': { en: 'the brain.', de: 'the brain.', tr: 'beyin.' },
-  'brain.lede': { en: 'what beyin does on this phone: it checks every device it works with, plans each load, and hands out the night’s work. all of it stays here.', de: 'was beyin auf diesem handy tut: es prüft jedes gerät, mit dem es arbeitet, plant jedes laden und verteilt die arbeit der nacht. alles bleibt hier.', tr: 'beyin bu telefonda ne yapıyor: birlikte çalıştığı her cihazı denetliyor, her yüklemeyi planlıyor, gecenin işini dağıtıyor. hepsi burada kalıyor.' },
+
+  // the figure at the top: one line under it, the rest said to a screen reader
+  'brain.devices.n.one': { en: '{n} device', de: '{n} gerät', tr: '{n} cihaz' },
+  'brain.devices.n.other': { en: '{n} devices', de: '{n} geräte', tr: '{n} cihaz' },
+  'brain.a11y.node': { en: '{name}: {state}, holds {pct} % of the model, the checker: {verdict}', de: '{name}: {state}, hält {pct} % des modells, der prüfer: {verdict}', tr: '{name}: {state}, modelin % {pct} kısmını tutuyor, denetçi: {verdict}' },
+  'brain.a11y.nodeOff': { en: '{name}: {state}, the checker: {verdict}', de: '{name}: {state}, der prüfer: {verdict}', tr: '{name}: {state}, denetçi: {verdict}' },
+  'brain.a11y.more': { en: 'and {n} more like it', de: 'und {n} weitere wie diese', tr: 've bunun gibi {n} tane daha' },
+  'brain.a11y.tile': { en: '{n} {what} in the ledger, {day} in the last 24 hours', de: '{n} {what} im hauptbuch, {day} in den letzten 24 stunden', tr: 'defterde {n} {what}, son 24 saatte {day}' },
 
   'brain.now': { en: 'right now', de: 'gerade jetzt', tr: 'şu an' },
   'brain.idle': { en: 'no model loaded. load one in models and the brain plans it.', de: 'kein modell geladen. lade eines unter modelle, und the brain plant es.', tr: 'yüklü model yok. modellerden birini yükle, beyin planlasın.' },
+  'brain.empty.model': { en: 'no model loaded', de: 'kein modell geladen', tr: 'yüklü model yok' },
+  'brain.empty.load': { en: 'models', de: 'modelle', tr: 'modeller' },
   'brain.loading': { en: 'working on it: {what}', de: 'dabei: {what}', tr: 'üzerinde çalışıyor: {what}' },
-  'brain.lastError': { en: 'the last load failed: {why}. the reasons are below.', de: 'das letzte laden ist gescheitert: {why}. die gründe stehen unten.', tr: 'son yükleme başarısız: {why}. gerekçeler aşağıda.' },
+  'brain.lastError': { en: 'the last load failed: {why}', de: 'das letzte laden ist gescheitert: {why}', tr: 'son yükleme başarısız: {why}' },
   'brain.generating': { en: 'answering', de: 'antwortet', tr: 'yanıtlıyor' },
   'brain.mode.alone': { en: 'alone', de: 'allein', tr: 'tek başına' },
-  'brain.mode.apart': { en: 'each its own', de: 'jedes für sich', tr: 'ayrı ayrı' },
-  'brain.mode.split': { en: 'one model, split', de: 'ein modell, geteilt', tr: 'tek model, bölünmüş' },
+  'brain.mode.apart': { en: 'apart', de: 'getrennt', tr: 'ayrı ayrı' },
+  'brain.mode.split': { en: 'split', de: 'geteilt', tr: 'bölünmüş' },
   'brain.busy': { en: '{n} of {all} devices busy', de: '{n} von {all} geräten beschäftigt', tr: '{all} cihazdan {n} tanesi meşgul' },
+  'brain.speed.together': { en: 'together', de: 'zusammen', tr: 'birlikte' },
   'brain.shares': { en: 'who holds what', de: 'wer was hält', tr: 'kim neyi tutuyor' },
   'brain.open.chat': { en: 'open the chat', de: 'zum chat', tr: 'sohbeti aç' },
 
-  'brain.cluster': { en: 'the cluster', de: 'der verbund', tr: 'küme' },
   'brain.this': { en: 'this phone', de: 'dieses handy', tr: 'bu telefon' },
   'brain.devices.none': { en: 'no other device yet. pair one and the brain checks it before it gets any work.', de: 'noch kein anderes gerät. koppel eines, und the brain prüft es, bevor es arbeit bekommt.', tr: 'henüz başka cihaz yok. birini eşle; beyin ona iş vermeden önce denetler.' },
-  'brain.devices.add': { en: 'connected devices', de: 'verbundene geräte', tr: 'bağlı cihazlar' },
+  'brain.devices.add': { en: 'devices', de: 'geräte', tr: 'cihazlar' },
   'brain.device.tps': { en: '~{tps} tok/s', de: '~{tps} tok/s', tr: '~{tps} tok/s' },
   'brain.device.busy': { en: 'busy', de: 'beschäftigt', tr: 'meşgul' },
   'brain.device.out': { en: 'sitting out', de: 'setzt aus', tr: 'dışarıda bekliyor' },
   'brain.device.idle': { en: 'ready', de: 'bereit', tr: 'hazır' },
+  'brain.device.refused': { en: 'refused', de: 'abgewiesen', tr: 'reddedildi' },
   'brain.device.saved': { en: 'paired · not in the model now', de: 'gekoppelt · gerade nicht im modell', tr: 'eşli · şu an modelde değil' },
 
   'brain.decisions': { en: 'what it decided', de: 'was es entschieden hat', tr: 'neye karar verdi' },
   'brain.log.empty': { en: 'no decision yet. load a model alone, apart or split, or let a night run, and the reasons show here.', de: 'noch keine entscheidung. lade ein modell allein, getrennt oder geteilt, oder lass eine nacht laufen, und die gründe stehen hier.', tr: 'henüz karar yok. bir modeli tek başına, ayrı ya da bölünmüş yükle veya bir gece çalıştır; gerekçeler burada görünür.' },
-  'brain.log.clear': { en: 'clear the decisions', de: 'entscheidungen löschen', tr: 'kararları temizle' },
-  'brain.log.counts': { en: '{n} lines · {warn} warnings · {bad} failures', de: '{n} zeilen · {warn} warnungen · {bad} fehler', tr: '{n} satır · {warn} uyarı · {bad} hata' },
+  'brain.empty.decisions': { en: 'no decisions yet', de: 'noch keine entscheidung', tr: 'henüz karar yok' },
+  'brain.log.clear': { en: 'clear', de: 'leeren', tr: 'temizle' },
   'brain.log.more': { en: 'show all {n}', de: 'alle {n} zeigen', tr: '{n} satırın hepsini göster' },
   'brain.log.less': { en: 'show fewer', de: 'weniger zeigen', tr: 'daha az göster' },
 
@@ -39,15 +52,42 @@ export const brain = {
   'brain.ledger.full': { en: 'the full ledger', de: 'das ganze hauptbuch', tr: 'defterin tamamı' },
   'brain.ledger.empty': { en: 'nothing signed yet: the ledger fills when a device pairs, connects or loads.', de: 'noch nichts signiert: das hauptbuch füllt sich, wenn ein gerät koppelt, verbindet oder lädt.', tr: 'henüz imzalı bir şey yok: bir cihaz eşleşince, bağlanınca ya da yükleyince defter dolar.' },
   'brain.ledger.noNative': { en: 'the ledger is kept by the android app; this build has none.', de: 'das hauptbuch führt die android-app; dieser build hat keins.', tr: 'defteri android uygulaması tutar; bu sürümde yok.' },
+  'brain.empty.ledger': { en: 'nothing signed yet', de: 'noch nichts signiert', tr: 'henüz imzalı bir şey yok' },
+  'brain.empty.noNative': { en: 'no ledger in this build', de: 'kein hauptbuch in diesem build', tr: 'bu sürümde defter yok' },
+  'brain.chain.ok': { en: 'chain intact', de: 'kette intakt', tr: 'zincir sağlam' },
+  'brain.chain.broken': { en: 'chain broken', de: 'kette gebrochen', tr: 'zincir kırık' },
 
   'brain.night': { en: 'the night', de: 'die nacht', tr: 'gece' },
   'brain.night.report': { en: 'the morning report', de: 'der morgenbericht', tr: 'sabah raporu' },
   'brain.night.noReport': { en: 'no morning report yet', de: 'noch kein morgenbericht', tr: 'henüz sabah raporu yok' },
   'brain.night.idle': { en: 'not working now', de: 'arbeitet gerade nicht', tr: 'şu an çalışmıyor' },
+  'brain.night.unitsWord': { en: 'units', de: 'einheiten', tr: 'birim' },
+  'brain.night.right': { en: '{pct} % right', de: '{pct} % richtig', tr: '% {pct} doğru' },
+  'brain.night.window': { en: 'the night window: {from} to {to}', de: 'das nachtfenster: {from} bis {to}', tr: 'gece aralığı: {from} – {to}' },
 
   'brain.wider': { en: 'the wider network', de: 'das weitere netz', tr: 'daha geniş ağ' },
   'brain.wider.tonight': { en: 'tokens the network can make tonight, in {hours} hours', de: 'tokens, die das netz heute nacht schafft, in {hours} stunden', tr: 'ağın bu gece {hours} saatte üretebileceği token' },
   'brain.wider.basis': { en: '{phones} phones, {observed} from real nights · each runs its own model', de: '{phones} handys, {observed} aus echten nächten · jedes mit eigenem modell', tr: '{phones} telefon, {observed} gerçek geceden · her biri kendi modelini çalıştırır' },
+
+  // the timeline's few words per line (components/brain/grouping.ts); the sentences below open on a tap
+  'brain.short.alone': { en: '{model} · alone', de: '{model} · allein', tr: '{model} · tek başına' },
+  'brain.short.split': { en: '{model} · split over {n}', de: '{model} · auf {n} geteilt', tr: '{model} · {n} cihaza bölündü' },
+  'brain.short.apart': { en: '{model} · on {n}', de: '{model} · auf {n}', tr: '{model} · {n} cihazda' },
+  'brain.short.kept': { en: 'kept here', de: 'bleibt hier', tr: 'burada kaldı' },
+  'brain.short.aloneFaster': { en: 'alone is faster', de: 'allein schneller', tr: 'tek başına daha hızlı' },
+  'brain.short.expect': { en: '~{tps} tok/s expected', de: '~{tps} tok/s erwartet', tr: '~{tps} tok/s bekleniyor' },
+  'brain.short.skip': { en: '{name} left out', de: '{name} ausgelassen', tr: '{name} dışarıda' },
+  'brain.short.ready': { en: '{model} ready · {s} s', de: '{model} bereit · {s} s', tr: '{model} hazır · {s} sn' },
+  'brain.short.failed': { en: '{model} did not load', de: '{model} nicht geladen', tr: '{model} yüklenmedi' },
+  'brain.short.dispatch': { en: 'a prompt → {device}', de: 'ein prompt → {device}', tr: 'bir istem → {device}' },
+  'brain.short.retry': { en: '{from} dropped one', de: '{from} ließ eins fallen', tr: '{from} birini bıraktı' },
+  'brain.short.nightStart': { en: 'the night began', de: 'die nacht begann', tr: 'gece başladı' },
+  'brain.short.nightEnd': { en: 'night over · {units} units', de: 'nacht vorbei · {units} einheiten', tr: 'gece bitti · {units} birim' },
+  'brain.short.nightFailed': { en: 'the night did not start', de: 'die nacht startete nicht', tr: 'gece başlamadı' },
+  'brain.short.unit': { en: '{device} · {n} units', de: '{device} · {n} einheiten', tr: '{device} · {n} birim' },
+  'brain.short.units': { en: '{devices} devices · {n} units · {tokens} tokens', de: '{devices} geräte · {n} einheiten · {tokens} tokens', tr: '{devices} cihaz · {n} birim · {tokens} token' },
+  'brain.short.wrong': { en: '{device} · a wrong answer', de: '{device} · eine falsche antwort', tr: '{device} · yanlış bir cevap' },
+  'brain.short.out': { en: '{device} out · {min} min', de: '{device} draußen · {min} min', tr: '{device} dışarıda · {min} dk' },
 
   // the decisions log's lines
   'brain.plan.alone': { en: '{model} alone on this phone', de: '{model} allein auf diesem handy', tr: '{model} bu telefonda tek başına' },
