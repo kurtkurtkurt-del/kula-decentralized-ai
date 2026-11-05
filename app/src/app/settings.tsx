@@ -9,7 +9,7 @@ import PickerSheet from '@/components/PickerSheet';
 import { Panel, Row, Section, Switch, Value } from '@/components/Row';
 import { useAuth } from '@/auth/AuthContext';
 import { useProfile } from '@/data/profile';
-import { exportToFile, saveProfile, saveSettings } from '@/data/settings';
+import { MIN_BATTERY_CHOICES, exportToFile, nightRules, saveNightRules, saveProfile, saveSettings } from '@/data/settings';
 import { useCities } from '@/data/cities';
 import { SITE } from '@/data/projects';
 import { invalidate } from '@/lib/offline';
@@ -29,7 +29,10 @@ export default function SettingsScreen() {
   const tick = useRefreshOnFocus('profile');
   const profile = useProfile(tick);
   const { cities } = useCities();
-  const [picking, setPicking] = useState<'from' | 'to' | 'city' | null>(null);
+  const [picking, setPicking] = useState<'from' | 'to' | 'city' | 'battery' | null>(null);
+  // the night's local rules (night-2): on charge only, the battery threshold
+  const [rules, setRules] = useState(nightRules);
+  const setRule = (patch: Parameters<typeof saveNightRules>[0]) => { saveNightRules(patch); setRules(nightRules()); };
   const [editing, setEditing] = useState(false);
   const [name, setName] = useState('');
   const [handle, setHandle] = useState('');
@@ -62,6 +65,9 @@ export default function SettingsScreen() {
         <Row label={t('settings.night.from')} onPress={() => setPicking('from')} right={<Value text={profile?.night_from?.slice(0, 5) ?? '23:00'} more />} />
         <Row label={t('settings.night.to')} onPress={() => setPicking('to')} right={<Value text={profile?.night_to?.slice(0, 5) ?? '07:30'} more />} />
         <Row label={t('settings.night.wifi')} hint={t('settings.night.wifi.hint')} onPress={() => flip('wifi_only')} right={<Switch on={profile?.wifi_only ?? true} />} />
+        <Row label={t('settings.night.charge')} hint={t('settings.night.charge.hint')} onPress={() => setRule({ chargeOnly: !rules.chargeOnly })} right={<Switch on={rules.chargeOnly} />} />
+        <Row label={t('settings.night.battery')} hint={t('settings.night.battery.hint')} onPress={() => setPicking('battery')} right={<Value text={`${rules.minBattery} %`} more />} />
+        <Row label={t('settings.night.report')} onPress={() => router.push('/night/report')} right={<Value text="" more />} />
       </Panel>
 
       <Section title={t('settings.profile')} />
@@ -123,6 +129,7 @@ export default function SettingsScreen() {
       <Said text={said} bad />
 
       <PickerSheet open={picking === 'from' || picking === 'to'} title={t(picking === 'to' ? 'settings.night.to' : 'settings.night.from')} options={HOURS.map((h) => ({ id: h, label: h }))} selected={(picking === 'to' ? profile?.night_to : profile?.night_from)?.slice(0, 5) ?? null} onSelect={(h) => { saveSettings(picking === 'to' ? { night_to: h } : { night_from: h }).catch((e) => setSaid(serverText(e))); setPicking(null); }} onClose={() => setPicking(null)} />
+      <PickerSheet open={picking === 'battery'} title={t('settings.night.battery')} options={MIN_BATTERY_CHOICES.map((n) => ({ id: String(n), label: `${n} %` }))} selected={String(rules.minBattery)} onSelect={(id) => { setRule({ minBattery: Number(id) }); setPicking(null); }} onClose={() => setPicking(null)} />
       <PickerSheet open={picking === 'city'} title={t('settings.city')} options={cities.map((c) => ({ id: c.id, label: c.name, extra: c.country.toUpperCase() }))} selected={city} onSelect={(id) => { setCity(id); setPicking(null); }} onClose={() => setPicking(null)} note={t('settings.city.hint')} />
     </StaffPage>
   );
