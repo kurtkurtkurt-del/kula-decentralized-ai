@@ -1,0 +1,54 @@
+# on a v* tag (or by hand): kula-node built and packed with `npm pack`, uploaded as an artifact.
+# the tarball installs anywhere with `npm i -g ./kula-node-<version>.tgz` (node 20+).
+name: node-release
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+jobs:
+  pack:
+    name: npm pack
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run: { working-directory: node }
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: node/package-lock.json
+      - run: npm ci --no-audit --no-fund
+      - run: npm run build
+      - run: npm test
+      - name: pack
+        id: pack
+        run: |
+          mkdir -p ../dist
+          file=$(npm pack --pack-destination ../dist --json | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>console.log(JSON.parse(s)[0].filename))')
+          echo "file=$file" >> "$GITHUB_OUTPUT"
+          {
+            echo '### kula-node'
+            echo '| | |'
+            echo '|---|---|'
+            echo "| tarball | \`$file\` |"
+            echo "| size | $(numfmt --to=iec "$(stat -c %s "../dist/$file")") |"
+            echo "| ref | ${GITHUB_REF_NAME} |"
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: smoke install
+        run: |
+          tmp=$(mktemp -d); cd "$tmp"
+          npm init -y >/dev/null && npm i --no-audit --no-fund "$GITHUB_WORKSPACE/dist/${{ steps.pack.outputs.file }}"
+          ls node_modules/.bin/kula-node
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: kula-node-${{ github.ref_name }}
+          path: dist/*.tgz
+          if-no-files-found: error
+          retention-days: 90

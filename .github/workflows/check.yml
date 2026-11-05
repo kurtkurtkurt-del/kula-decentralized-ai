@@ -1,0 +1,218 @@
+# every push and pull request: the app's types, lint and tests; kula-node's tests; the audit/gate
+# kotlin tests on a plain jvm; and the repo's own gate (backend/tools/gate.mjs) as the last word.
+# apk builds live in apk.yml (manual or on a v* tag): they take an hour and need the ndk.
+name: check
+
+on:
+  push:
+    branches: ['**']
+    tags-ignore: ['**']
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: check-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  NODE_VERSION: 22
+  CI: 1
+
+jobs:
+  app:
+    name: app (tsc, lint, jest)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run: { working-directory: app }
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+      - run: npm ci --no-audit --no-fund
+      - name: types
+        id: tsc
+        run: npx tsc --noEmit
+      - name: lint
+        id: lint
+        if: ${{ !cancelled() }}
+        run: npx expo lint
+      - name: tests
+        id: jest
+        if: ${{ !cancelled() }}
+        run: npx jest --ci 2>&1 | tee jest.log; exit "${PIPESTATUS[0]}"
+      - name: passport snapshot
+        id: passport
+        if: ${{ !cancelled() }}
+        run: npm run passport:check
+      - name: summary
+        if: ${{ always() }}
+        env:
+          R_TSC: ${{ steps.tsc.outcome }}
+          R_LINT: ${{ steps.lint.outcome }}
+          R_JEST: ${{ steps.jest.outcome }}
+          R_PASSPORT: ${{ steps.passport.outcome }}
+        run: |
+          tests=$(grep -E '^Tests:' jest.log 2>/dev/null | head -1 || echo '')
+          {
+            echo '### app'
+            echo '| step | result |'
+            echo '|---|---|'
+            echo "| tsc --noEmit | $R_TSC |"
+            echo "| expo lint | $R_LINT |"
+            echo "| jest | $R_JEST ${tests:+(${tests})} |"
+            echo "| passport:check | $R_PASSPORT |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  node:
+    name: kula-node (node ${{ matrix.node }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        node: [20, 22]
+    defaults:
+      run: { working-directory: node }
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+          cache-dependency-path: node/package-lock.json
+      - run: npm ci --no-audit --no-fund
+      - name: build
+        id: build
+        run: npm run build
+      - name: tests
+        id: test
+        if: ${{ !cancelled() }}
+        run: npm test 2>&1 | tee test.log; exit "${PIPESTATUS[0]}"
+      - name: summary
+        if: ${{ always() }}
+        env:
+          R_BUILD: ${{ steps.build.outcome }}
+          R_TEST: ${{ steps.test.outcome }}
+          NODE: ${{ matrix.node }}
+        run: |
+          pass=$(grep -E '^# pass' test.log 2>/dev/null | awk '{print $3}'); fail=$(grep -E '^# fail' test.log 2>/dev/null | awk '{print $3}')
+          {
+            echo "### kula-node (node $NODE)"
+            echo '| step | result |'
+            echo '|---|---|'
+            echo "| tsc build | $R_BUILD |"
+            echo "| node --test | $R_TEST (pass ${pass:-?}, fail ${fail:-?}) |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  audit-jvm:
+    name: audit + gate (kotlin, jvm)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run: { working-directory: app/modules/kula-llama/audit-jvm }
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78 # v6.2.0
+        with:
+          distribution: temurin
+          java-version: 17
+      - uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c # v6.4.1
+        with:
+          gradle-version: '8.14.3'
+          cache-read-only: ${{ github.ref != 'refs/heads/main' }}
+      - name: gradle test
+        id: test
+        run: gradle test --no-daemon --console=plain
+      - name: summary
+        if: ${{ always() }}
+        env:
+          R_TEST: ${{ steps.test.outcome }}
+        run: |
+          total=0; failed=0; skipped=0
+          for f in build/test-results/test/*.xml; do
+            [ -f "$f" ] || continue
+            t=$(grep -o 'tests="[0-9]*"' "$f" | head -1 | grep -o '[0-9]*'); fl=$(grep -o 'failures="[0-9]*"' "$f" | head -1 | grep -o '[0-9]*'); e=$(grep -o 'errors="[0-9]*"' "$f" | head -1 | grep -o '[0-9]*'); s=$(grep -o 'skipped="[0-9]*"' "$f" | head -1 | grep -o '[0-9]*')
+            total=$((total + ${t:-0})); failed=$((failed + ${fl:-0} + ${e:-0})); skipped=$((skipped + ${s:-0}))
+          done
+          {
+            echo '### audit-jvm'
+            echo '| step | result |'
+            echo '|---|---|'
+            echo "| gradle test | $R_TEST ($total tests, $failed failed, $skipped skipped) |"
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: ${{ failure() }}
+        with:
+          name: audit-jvm-test-reports
+          path: app/modules/kula-llama/audit-jvm/build/reports/tests/
+          retention-days: 7
+
+  gate:
+    name: gate (backend/tools/gate.mjs)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: |
+            app/package-lock.json
+            backend/package-lock.json
+      - run: npm ci --no-audit --no-fund --ignore-scripts
+        working-directory: backend
+      - run: npm ci --no-audit --no-fund
+        working-directory: app
+      - name: gate
+        id: gate
+        run: node backend/tools/gate.mjs
+      - name: summary
+        if: ${{ always() }}
+        env:
+          R_GATE: ${{ steps.gate.outcome }}
+        run: |
+          {
+            echo '### gate'
+            echo '| layer | ms |'
+            echo '|---|---|'
+            if [ -f .qa/gate-proof.json ]; then
+              node -e 'const p=require("./.qa/gate-proof.json");for(const [k,v] of Object.entries(p.ms))console.log(`| ${k} | ${v} |`);console.log(`| **${p.ok?"GATE PASS":"GATE FAIL"}** | tree ${p.tree.slice(0,12)} |`)'
+            else
+              echo "| (no proof written) | $R_GATE |"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  summary:
+    name: summary
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    needs: [app, node, audit-jvm, gate]
+    if: ${{ always() }}
+    steps:
+      - name: table
+        env:
+          R_APP: ${{ needs.app.result }}
+          R_NODE: ${{ needs.node.result }}
+          R_JVM: ${{ needs.audit-jvm.result }}
+          R_GATE: ${{ needs.gate.result }}
+        run: |
+          {
+            echo '## check'
+            echo '| job | result |'
+            echo '|---|---|'
+            echo "| app (tsc, lint, jest, passport) | $R_APP |"
+            echo "| kula-node (node 20, 22) | $R_NODE |"
+            echo "| audit-jvm (kotlin) | $R_JVM |"
+            echo "| gate (backend, app, site) | $R_GATE |"
+          } >> "$GITHUB_STEP_SUMMARY"
+          for r in "$R_APP" "$R_NODE" "$R_JVM" "$R_GATE"; do
+            [ "$r" = success ] || { echo "a job did not succeed: $r"; exit 1; }
+          done

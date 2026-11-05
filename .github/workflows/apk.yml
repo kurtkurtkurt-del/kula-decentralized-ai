@@ -1,0 +1,199 @@
+# a release apk on ubuntu, the way `npm run apk` builds it on the mac (app/tools/apk.mjs):
+# jdk 17, android sdk + ndk 27.1.12297006 + cmake 3.22.1, llama.cpp b11157 from the cached tarball.
+# two profiles: `min` (one cpu variant, -PkulaLlamaVariants=min, quick) and `full` (every variant,
+# what ships). manual, or on a v* tag. signing: the KULA_KEYSTORE_B64 secret when it exists
+# (plus KULA_KEYSTORE_PASSWORD, KULA_KEY_ALIAS, KULA_KEY_PASSWORD), expo's debug key otherwise.
+name: apk
+
+on:
+  workflow_dispatch:
+    inputs:
+      profiles:
+        description: which profiles to build (min, full, or both)
+        type: choice
+        default: both
+        options: [both, min, full]
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+env:
+  NODE_VERSION: 22
+  NDK_VERSION: 27.1.12297006
+  CMAKE_VERSION: 3.22.1
+  CI: 1
+
+jobs:
+  plan:
+    name: plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      profiles: ${{ steps.pick.outputs.profiles }}
+    steps:
+      - id: pick
+        env:
+          CHOICE: ${{ github.event.inputs.profiles || 'both' }}
+        run: |
+          case "$CHOICE" in
+            min)  echo 'profiles=["min"]' >> "$GITHUB_OUTPUT" ;;
+            full) echo 'profiles=["full"]' >> "$GITHUB_OUTPUT" ;;
+            *)    echo 'profiles=["min","full"]' >> "$GITHUB_OUTPUT" ;;
+          esac
+
+  apk:
+    name: apk (${{ matrix.profile }})
+    needs: plan
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ matrix.profile == 'min' && 90 || 150 }}
+    strategy:
+      fail-fast: false
+      matrix:
+        profile: ${{ fromJSON(needs.plan.outputs.profiles) }}
+    defaults:
+      run: { working-directory: app }
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: free disk space
+        working-directory: /
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android/sdk/ndk /opt/ghc /usr/local/.ghcup || true
+          df -h / | tail -1
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+      - run: npm ci --no-audit --no-fund
+
+      - uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78 # v6.2.0
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd # v4.0.4
+        with:
+          packages: >-
+            platform-tools
+            ndk;${{ env.NDK_VERSION }}
+            cmake;${{ env.CMAKE_VERSION }}
+          log-accepted-android-sdk-licenses: false
+
+      - uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c # v6.4.1
+        with:
+          cache-read-only: ${{ !startsWith(github.ref, 'refs/tags/') && github.ref != 'refs/heads/main' }}
+
+      - name: llama.cpp tag
+        id: llama
+        run: |
+          tag=$(grep -oE "TAG = '[^']+'" modules/kula-llama/tools/llama-src.mjs | cut -d"'" -f2)
+          echo "llama.cpp $tag"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+      - name: llama.cpp tarball cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .llama/*.tar.gz
+          key: llama-tarball-${{ steps.llama.outputs.tag }}
+      - name: llama.cpp source
+        run: node modules/kula-llama/tools/llama-src.mjs && node modules/kula-llama/tools/llama-src.mjs --check
+
+      - name: release env
+        run: npm run release:check
+
+      - name: keystore
+        id: keystore
+        env:
+          KEYSTORE_B64: ${{ secrets.KULA_KEYSTORE_B64 }}
+          KEY_ALIAS: ${{ secrets.KULA_KEY_ALIAS }}
+        run: |
+          if [ -n "$KEYSTORE_B64" ]; then
+            printf '%s' "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/kula.keystore"
+            echo "file=$RUNNER_TEMP/kula.keystore" >> "$GITHUB_OUTPUT"
+            echo "mode=keystore (alias ${KEY_ALIAS:-kula})" >> "$GITHUB_OUTPUT"
+            echo "signing with the KULA_KEYSTORE_B64 keystore"
+          else
+            echo "file=" >> "$GITHUB_OUTPUT"
+            echo "mode=DEBUG KEY" >> "$GITHUB_OUTPUT"
+            echo "::warning title=debug-signed apk::no KULA_KEYSTORE_B64 secret: this apk is signed with expo's debug key. it installs for testing, but no store accepts it and a later keystore-signed build will not update over it."
+          fi
+
+      - name: build (npm run apk)
+        id: build
+        env:
+          KULA_GRADLE_ARGS: ${{ matrix.profile == 'min' && '-PkulaLlamaVariants=min' || '' }}
+          KULA_KEYSTORE_FILE: ${{ steps.keystore.outputs.file }}
+          KULA_KEYSTORE_PASSWORD: ${{ secrets.KULA_KEYSTORE_PASSWORD }}
+          KULA_KEY_ALIAS: ${{ secrets.KULA_KEY_ALIAS || 'kula' }}
+          KULA_KEY_PASSWORD: ${{ secrets.KULA_KEY_PASSWORD || secrets.KULA_KEYSTORE_PASSWORD }}
+          GRADLE_OPTS: -Dorg.gradle.jvmargs=-Xmx4g
+        run: |
+          start=$(date +%s)
+          npm run apk
+          echo "seconds=$(( $(date +%s) - start ))" >> "$GITHUB_OUTPUT"
+
+      - name: verify native libs
+        id: verify
+        env:
+          PROFILE: ${{ matrix.profile }}
+          SIGNING: ${{ steps.keystore.outputs.mode }}
+          SECONDS_TAKEN: ${{ steps.build.outputs.seconds }}
+        run: |
+          apk=$(ls ../dist/*.apk | head -1)
+          echo "apk=$apk" >> "$GITHUB_OUTPUT"
+          unzip -l "$apk" > listing.txt
+          libs=$(grep -E 'lib/arm64-v8a/.*\.so$' listing.txt | awk '{printf "%s %s\n", $4, $1}')
+          echo "$libs"
+          missing=0
+          for want in 'libggml-cpu-' 'libggml-rpc.so' 'libllama.so'; do
+            if ! grep -qE "lib/arm64-v8a/${want}" listing.txt; then echo "::error::missing $want in $apk"; missing=1; fi
+          done
+          variants=$(grep -cE 'lib/arm64-v8a/libggml-cpu-.*\.so$' listing.txt || true)
+          if [ "$PROFILE" = full ] && [ "$variants" -lt 2 ]; then echo "::error::full profile has only $variants libggml-cpu variant(s)"; missing=1; fi
+          if grep -qE 'lib/arm64-v8a/libggml-cpu-android_armv9' listing.txt; then echo "::error::armv9 variant shipped (never on a pixel 8)"; missing=1; fi
+          size=$(stat -c %s "$apk"); human=$(numfmt --to=iec "$size")
+          sigcheck=$(("$ANDROID_HOME"/build-tools/*/apksigner verify --print-certs "$apk" 2>/dev/null || true) | grep -E 'Signer #1 certificate DN' | head -1)
+          {
+            echo "### apk ($PROFILE)"
+            echo "| | |"
+            echo "|---|---|"
+            echo "| file | \`$(basename "$apk")\` |"
+            echo "| size | $human ($size bytes) |"
+            echo "| build time | ${SECONDS_TAKEN}s |"
+            echo "| signing | $SIGNING |"
+            echo "| certificate | ${sigcheck:-?} |"
+            echo "| libggml-cpu variants | $variants |"
+            echo "| required libs | $([ "$missing" = 0 ] && echo 'all present' || echo '**MISSING**') |"
+            echo
+            echo '<details><summary>lib/arm64-v8a</summary>'
+            echo
+            echo '| lib | bytes |'
+            echo '|---|---|'
+            echo "$libs" | while read -r name bytes; do echo "| $(basename "$name") | $bytes |"; done
+            echo
+            echo '</details>'
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit "$missing"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: ${{ always() && steps.build.outcome == 'success' }}
+        with:
+          name: kula-apk-${{ matrix.profile }}-${{ github.ref_name }}
+          path: dist/*.apk
+          if-no-files-found: error
+          retention-days: ${{ startsWith(github.ref, 'refs/tags/') && 90 || 14 }}
+
+      - name: gradle logs on failure
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: apk-${{ matrix.profile }}-build-logs
+          path: |
+            app/android/app/build/outputs/logs/
+            app/android/app/build/intermediates/cxx/**/*.txt
+            app/modules/kula-llama/android/.cxx/**/CMakeOutput.log
+          if-no-files-found: ignore
+          retention-days: 7
