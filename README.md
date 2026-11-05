@@ -1,8 +1,37 @@
 # kula decentralized ai
 
+[![check](https://github.com/kurtkurtkurt-del/kula-decentralized-ai/actions/workflows/check.yml/badge.svg)](https://github.com/kurtkurtkurt-del/kula-decentralized-ai/actions/workflows/check.yml)
+[![apk](https://github.com/kurtkurtkurt-del/kula-decentralized-ai/actions/workflows/apk.yml/badge.svg)](https://github.com/kurtkurtkurt-del/kula-decentralized-ai/actions/workflows/apk.yml)
+[![node-release](https://github.com/kurtkurtkurt-del/kula-decentralized-ai/actions/workflows/node-release.yml/badge.svg)](https://github.com/kurtkurtkurt-del/kula-decentralized-ai/actions/workflows/node-release.yml)
+
 **your phone works a night for a project you chose.**
 
 Forked from afterhours on 20.10.2026; the app lends the phone's idle, charging hours to a social-benefit AI project. The Kotlin measurement app lives in `../device-passport/`; the app carries a copy of its `Measure.kt`/`Passport.kt` in `app/modules/passport-measure/`.
+
+## CI (5.11.2026)
+
+GitHub Actions, in `.github/workflows/`; every action is pinned to a commit sha (dependabot moves them).
+
+- **check** (every push and pull request): four jobs in parallel, each with its own time limit, and a
+  summary table on the run page. `app`: `tsc --noEmit`, `expo lint`, `jest --ci`, `passport:check`.
+  `kula-node`: build and tests on node 20 and 22. `audit-jvm`: the Kotlin audit and gate tests on a
+  plain JVM 17 (`app/modules/kula-llama/audit-jvm`, no Android SDK). `gate`: the repo's own
+  `backend/tools/gate.mjs` (backend tests on PGlite, the app layers again, the site walk), whose
+  layer timings land in the summary.
+- **apk** (`workflow_dispatch`, or a `v*` tag): a release apk on ubuntu the way `npm run apk` builds
+  it — JDK 17, Android SDK, NDK 27.1.12297006, cmake 3.22.1, llama.cpp b11157 from a cached tarball
+  (`.llama/`). Two profiles as a matrix: `min` (`-PkulaLlamaVariants=min`, one CPU variant, quick)
+  and `full` (every variant, what ships). The apk is uploaded as an artifact; `unzip -l` must show
+  `libllama.so`, `libggml-rpc.so` and the `libggml-cpu-*.so` variants (none of them armv9), and the
+  sizes go in the summary. **Signing:** with the repository secrets `KULA_KEYSTORE_B64` (the keystore,
+  base64), `KULA_KEYSTORE_PASSWORD`, `KULA_KEY_ALIAS`, `KULA_KEY_PASSWORD` the apk is signed for real;
+  without them it is signed with Expo's debug key and the run carries a loud warning (it installs for
+  testing, no store takes it, and a keystore-signed build will not update over it). The same knobs
+  work locally: `KULA_KEYSTORE_FILE=… KULA_KEYSTORE_PASSWORD=… npm run apk`, and
+  `KULA_GRADLE_ARGS=-PkulaLlamaVariants=min npm run apk` for a quick one.
+- **node-release** (`v*` tag or by hand): kula-node built, tested, `npm pack`ed, smoke-installed and
+  uploaded as `kula-node-<tag>`.
+- Locally: `actionlint .github/workflows/*.yml`; the jobs run the same commands you run by hand.
 
 ## Demo builds (no server)
 
