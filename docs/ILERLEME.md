@@ -202,3 +202,27 @@ Hepsi emülatörde (`kula35`) + Mac'te `tools/dev-gate.mjs` ile denendi; commit'
   açılmalı.** Önerilen brief: ILERLEME'yi oku → dört cloud dalını gözden geçir (birleştirme yok) → emülatör + dev-gate
   ile bir küme turu daha → gerekiyorsa `app/` içinde `npm run apk` → en üste "sabah özeti".
 - Bu oturumda başka iş yapılmadı; ağaç temiz, HEAD `1873df7` + bu not.
+
+## 5.11 cloud: model kütüphanesi (`claude/models-library`, `release/local-2026-10-20` üstüne)
+
+Yalnız JS; native dokunulmadı (indirici parça başına aynı `download(id,url,name,sha,size)` çağrısını alır).
+
+- `hf.ts`: çok parçalı gguf (`-00001-of-0000n`) tek girdi (`parts[]`, toplam boyut, her parçanın sha256'sı; eksik parça seti atlanır);
+  `hfFetch` 429/5xx/ağ kopmasında geri çekilme (retry-after, 1-2-4 sn, 3 deneme) ve `HfError` kodu
+  (`ratelimit`/`offline`/`gated`/`notfound`/`http`); `cardData.license` öncelikli, `gated` "auto"/"manual" da kilitli sayılır;
+  `licenseUrl`, `FILE_FILTERS` (Q4_K_M, Q8_0, ≤2 gb, ≤4 gb, tek dosya), `SUGGESTED_QUERIES`.
+- `store.ts`: `LocalModel.parts[]`; indirme parça parça (`<id>#<n>` native kimliği), hepsi inince tek kayıt, `path` ilk parça
+  (llama.cpp kalanını yanında bulur); `reconcileModels` her parçayı arar; `forgetModel` önce motoru boşaltır
+  (`registerEngine` kancası, döngüsel import yok) ve bütün parçaları siler; `forgetUnused` seçili ve çalışanı korur;
+  `readMeta` gguf başlığını bir kez okuyup katman/kv/ctx_max'ı kayda yazar; arama geçmişi son 5 (`llm.hfHistory`).
+- `fit.ts`: `kvFromMeta` (katman × kv başı × (k+v) × 2 B), `factsFromMeta`, `fitInput` (başlık varsa katalog/tahmini ezer),
+  `suggestCtx` (sığan en büyük 2ⁿ, model sınırı ve 8k ile; sığmazsa 1k).
+- `disk.ts`: `Paths.availableDiskSpace` (expo-file-system 57, senkron getter, bayt); 200 MB pay.
+- Modeller sekmesi: "modeller X gb · Y gb boş" + "kullanılmayanları sil (n)"; indirmeden önce boş alan kontrolü ve ne kadar
+  eksik olduğu; HF satırında 🔒 + "lisansı oku"; kilitli depoda dosya listesi açılmaz, açıklama + tarayıcı; son aramalar ve
+  öneri çipleri; dosya süzgeci çipleri; HF hatası okunur mesaj. Model sayfası: HF modelleri için de parametre/quant/katman/
+  kv/lisans/kaynak satırları, "lisansı oku" + "hugging face" bağlantıları, ctx önerisi ("kullan").
+- Testler: `hf.test.ts` (gruplama, quant/params, gated, sahte fetch ile 429/çevrimdışı geri çekilme), `fit.test.ts`,
+  `store.test.ts` (sahte native ile parçalı indirme, reconcile, silme sırası, kullanılmayanlar, başlık, geçmiş). 90 test yeşil;
+  tsc temiz; lint'te yalnız eski `index.tsx:14` hatası (benden önce de vardı).
+- Kalan: gerçek telefonda parçalı bir modelle (ör. 70B Q4 iki parça) uçtan uca denenmedi; kilitli depo için token girişi yok.

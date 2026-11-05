@@ -3,7 +3,9 @@ import { COMBINE, type Passport } from '@/passport/contract';
 // Does this model fit this phone, and how fast would it go? Pure functions over the
 // passport (src/data/passport.ts) and a model's size, so the catalog can be sorted before
 // anything is downloaded. Numbers follow PrivateLM's pre-load check (file + KV + overhead)
-// and the passport's own budget rule (app_mem_cap, ram_free × 0.8).
+// and the passport's own budget rule (app_mem_cap, ram_free × 0.8). Once a file is on the
+// phone its GGUF header gives the true layer and KV figures (kvFromMeta); they win over
+// the catalog's or the name-based guess.
 export type FitInput = { size: number; kv_mb_per_1k: number; ctx: number };
 export type Fit = {
   needMb: number;          // file + kv + overhead at this ctx
@@ -77,3 +79,60 @@ const r1 = (x: number) => Math.round(x * 10) / 10;
 
 /** A sensible default context for a model on a device: the largest that fits, at most 4 096. */
 export const defaultCtx = (f: Fit) => Math.min(4096, Math.max(512, f.maxCtx || 512));
+
+// ---- from the file's own header ----------------------------------------------------------
+/** What ggufMeta (native) hands back, as strings: layers, heads_kv, key_len … */
+export type GgufMeta = Record<string, string>;
+export type MetaFacts = { layers: number; kv_mb_per_1k: number; ctx_max: number; arch: string | null; name: string | null; license: string | null };
+
+/**
+ * KV cache per 1 024 tokens from the header: layers × heads_kv × (k + v dims) × 2 bytes (f16).
+ * key/value dims fall back to embd / heads when the header does not name them. Null when
+ * the header lacks the layer or head counts (then the catalog or the guess stays).
+ */
+export function kvFromMeta(meta: GgufMeta | null | undefined): number | null {
+  if (!meta) return null;
+  const n = (k: string) => Number(meta[k]) || 0;
+  const layers = n('layers');
+  const heads = n('heads');
+  const headsKv = n('heads_kv') || heads;
+  if (!layers || !headsKv) return null;
+  const dim = n('embd') && heads ? Math.round(n('embd') / heads) : 0;
+  const k = n('key_len') || dim;
+  const v = n('value_len') || dim;
+  if (!k || !v) return null;
+  return Math.round((layers * headsKv * (k + v) * 2 * 1024) / MB * 10) / 10;
+}
+
+/** The facts the fit needs, when the header gives them. */
+export function factsFromMeta(meta: GgufMeta | null | undefined): MetaFacts | null {
+  const kv = kvFromMeta(meta);
+  if (!meta || kv === null) return null;
+  return {
+    layers: Number(meta.layers) || 0,
+    kv_mb_per_1k: kv,
+    ctx_max: Number(meta.ctx) || 0,
+    arch: meta.arch || null,
+    name: meta.name || null,
+    license: meta.license || null,
+  };
+}
+
+/** A model's fit input with the header's figures over the stored ones, when there is a header. */
+export function fitInput(m: { size: number; kv_mb_per_1k: number }, ctx: number, meta?: GgufMeta | null): FitInput {
+  const kv = kvFromMeta(meta);
+  return { size: m.size, kv_mb_per_1k: kv ?? m.kv_mb_per_1k, ctx };
+}
+
+/**
+ * The context to suggest: the largest power of two that fits, no more than the model was
+ * trained for and no more than 8 192 (longer costs speed on a phone); 1 024 when nothing fits,
+ * so the user can still try.
+ */
+export function suggestCtx(f: Fit, ctxMax: number): number {
+  const cap = Math.min(ctxMax > 0 ? ctxMax : 8192, 8192);
+  if (f.maxCtx <= 0) return Math.min(1024, cap);
+  let c = 512;
+  while (c * 2 <= Math.min(f.maxCtx, cap)) c *= 2;
+  return c;
+}
