@@ -159,6 +159,24 @@ Hepsi emülatörde (`kula35`) + Mac'te `tools/dev-gate.mjs` ile denendi; commit'
 
 Önerilen sıra: vibrant-cori → loving-dijkstra → quirky-einstein (her birinden sonra `npm test`, en son apk + küme turu).
 
+## 5.11 gece: iOS modülü (`claude/ios-module`, cloud, Mac'siz)
+
+- Dal `origin/claude/integrate-night` üstüne. Ayrıntı ve kontrol listesi: `docs/IOS.md`.
+- **Ortak C++ çekirdek** `app/modules/kula-llama/cpp/core/kula_core.{h,cpp}`: JNI'deki bütün mantık (backend yükleme,
+  küme planı, yükleme, üretim, utf-8 parça tutma, bant genişliği, `serve`) buraya taşındı; Android JNI
+  (`kula_llama.cpp`) artık ince bir katman, imzalar ve istisnalar aynı. `KULA_BACKEND_DL` (Android .so'lar) ve
+  `KULA_USE_GPU` (iOS Metal) derleme anahtarları. İki yapılandırma da Linux'ta `clang++ -fsyntax-only` geçti
+  (llama.cpp b11157 başlıklarıyla; arşiv indirme proxy'de 403, başlıklar raw.githubusercontent'tan alındı).
+- **iOS** `app/modules/kula-llama/ios/`: `KulaLlamaBridge.{h,mm}` (ObjC++), `KulaLlamaModule.swift` (aynı 30 işlev,
+  aynı olaylar), `Gate.swift`+`Sockets.swift` (BSD soket, aynı protokol), `ModelDownloader.swift` (Range devam, sha256),
+  `Discovery.swift` (Bonjour), `Worker.swift` (süreç içi, ön plan), `ApiServer.swift` (aynı SSE), `Audit/` (Ed25519 defter).
+  `KulaLlama.podspec` modül kökünde; `tools/ios-llama.sh` llama.cpp'yi Metal+RPC xcframework yapar (`prepare_command`).
+- **app.json**: `NSLocalNetworkUsageDescription`, `NSBonjourServices`, `NSCameraUsageDescription`.
+- **JS**: `native.ts` modülü android+ios'ta arar (`NATIVE_PLATFORMS`, `nativePossible()`); "yalnız android" metinleri
+  "telefon uygulaması (android ya da iphone)" oldu, Expo Go için ayrı metin; paylaşım ekranı iOS'ta ön plan notu ve
+  termal uyarı. Yeni test `native-platforms.test.ts`. Jest 70/70, tsc temiz, lint eski 1 hata.
+- **Derlenmedi** (Mac yok): Swift/ObjC++ yalnız elle okundu. Sabah Mac'te `docs/IOS.md` listesi.
+
 ## 5.11 gece eklenenler (kullanıcı isteği)
 
 - Her katalog modelinin bilgi sayfası var: neyi iyi yapar · ne için kullanılır (tr/en/de), indirmeden önce de açılır.
