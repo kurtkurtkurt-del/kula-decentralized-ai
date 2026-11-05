@@ -6,7 +6,7 @@
 // kula-node (node/) is the real thing; this is the smallest piece of it, kept here so the
 // module's own tests do not depend on node/.
 //
-//   node tools/dev-gate.mjs --secret <hex> [--port 50551] [--model path.gguf] [--tls]
+//   node tools/dev-gate.mjs --secret <hex> [--port 50551] [--model path.gguf] [--tls [--pin <code>] [--dir <state dir>]]
 //
 // --tls adds protocol v2 (docs/GATE.md) on the same port: TLS 1.3 with a self-signed P-256
 // certificate (made once with the openssl command line into ../../../.llama/dev-gate/, which
@@ -35,7 +35,8 @@ const same = (a, b) => a.length === b.length && timingSafeEqual(Buffer.from(a), 
 // --- protocol v2 (--tls): certificate, paired phones, one-time code -------------------
 let tlsCtx = null, fp = null, pin = null;
 const paired = new Set();
-const tlsDir = resolve(here, '../../../../.llama/dev-gate');
+// --dir moves the certificate and the paired list elsewhere (node/test/devgate.test.ts uses a temp dir)
+const tlsDir = args.dir ? resolve(String(args.dir)) : resolve(here, '../../../../.llama/dev-gate');
 const pairedFile = join(tlsDir, 'paired');
 if (args.tls) {
   mkdirSync(tlsDir, { recursive: true });
