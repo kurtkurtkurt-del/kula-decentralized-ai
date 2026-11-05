@@ -5,10 +5,16 @@ import { accuracy, compare, useReports, type NightReport } from '@/night/report'
 import { useLang } from '@/i18n';
 import { colors, fonts, radius } from '@/theme/tokens';
 import { useState } from 'react';
+import { router } from 'expo-router';
+import { doneSince } from '@/tasks/schedule';
+import { useTasks } from '@/tasks/store';
+import { wordsOf } from '@/tasks/jobs';
 
 // The morning report (night-2): last night in numbers (units, checks right, tok/s per
 // device, time worked, Wh at the measured or assumed wattage), against the nights before,
-// and the earlier nights under it, each openable. The data is night/report.ts.
+// and the earlier nights under it, each openable. The data is night/report.ts. Above it
+// (5.11.2026), the person's own projects whose answer came in during the night shown (or
+// the last day), each opening its project (tasks/schedule.ts doneSince).
 const two = (n: number) => String(n).padStart(2, '0');
 const hm = (seconds: number) => `${Math.floor(seconds / 3600)}h ${two(Math.floor((seconds % 3600) / 60))}m`;
 const at = (ms: number) => { const d = new Date(ms); return `${two(d.getHours())}:${two(d.getMinutes())}`; };
@@ -22,8 +28,19 @@ export default function NightReportScreen() {
   const previous = r ? all.filter((x) => x.id < r.id) : [];
   const cmp = r ? compare(r, previous) : null;
   const acc = r ? accuracy(r) : null;
+  const tasks = useTasks();
+  const [since] = useState(() => Date.now() - 24 * 3600_000);
+  const done = doneSince(tasks, r && picked ? r.startedAt - 12 * 3600_000 : since).filter((x) => !r || !picked || x.last!.at <= r.endedAt + 12 * 3600_000);
   return (
     <StaffPage title={t('night.report')}>
+      {done.length ? (
+        <>
+          <Section title={t('task.report.title')} />
+          <Panel>
+            {done.map((x) => <Row key={x.id} label={x.title} hint={`${at(x.last!.at)} · ${t('task.notify.body', { n: wordsOf(x.last!.answer) })}`} onPress={() => router.push({ pathname: '/task/[id]', params: { id: x.id } })} right={<Value text="" more />} />)}
+          </Panel>
+        </>
+      ) : null}
       {!r ? <Quiet text={t('night.report.none')} /> : (
         <>
           <Text style={styles.date}>{`${r.id} · ${r.slug.replace(/-/g, ' ')} · ${at(r.startedAt)} – ${at(r.endedAt)}`}</Text>

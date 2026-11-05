@@ -1,16 +1,21 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
-import { router } from 'expo-router';
+import { router, useLocalSearchParams } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import PullDownScroll from '@/components/PullDownScroll';
 import Avatar from '@/components/Avatar';
 import { useTabBarSpace } from '@/components/TabBar';
+import Messages from '@/components/connect/Messages';
+import YourPeople from '@/components/connect/YourPeople';
 import { useAuth } from '@/auth/AuthContext';
 import { callInbox, type CallInvite } from '@/data/calls';
 import { COOP_COLORS, myCoops, type CoopRow } from '@/data/coops';
 import { friendsLive, type LiveFriend } from '@/data/contribution';
-import { friendsKept, kept, type FriendKept } from '@/data/friends';
+import { friendsKept, friendsList, kept, type FriendKept, type FriendRow } from '@/data/friends';
+import { inbox } from '@/data/messages';
+import type { DmThread } from '@/data/dms';
+import { useTabReset } from '@/hooks/useTabReset';
 import type { Project } from '@/data/projects';
 import { useRefreshOnFocus } from '@/hooks/useRefresh';
 import { upperData, useLang } from '@/i18n';
@@ -18,15 +23,31 @@ import { dayLabel } from '@/data/when';
 import { colors, fonts, radius } from '@/theme/tokens';
 import { brand } from '@/theme/layout';
 
-// Connect: your coops (who you work nights with), the calls waiting for you, the
-// projects your friends keep (grouped, so one project shows once with every friend on
-// it), and your own kept projects as a row.
+type ConnectView = 'people' | 'messages';
+
+// Connect, the second tab (5.11.2026: it took the messages tab's place and holds the
+// messages): a switch at the top, people | messages. people: find someone, the requests,
+// your people as faces, then your coops (who you work nights with), the calls waiting for
+// you, the projects your friends keep (grouped, one project once with every friend on it)
+// and your own kept projects. messages: your conversations (components/connect/Messages).
+// /people?view=messages opens the messages; the old /messages route redirects there.
 export default function ConnectScreen() {
   const { session } = useAuth();
   const insets = useSafeAreaInsets();
   const tabSpace = useTabBarSpace();
   const { t, tn, up } = useLang();
-  const tick = useRefreshOnFocus('coops', 'friendsKept', 'kept', 'calls', 'live');
+  const params = useLocalSearchParams<{ view?: string }>();
+  const [view, setView] = useState<ConnectView>(params.view === 'messages' ? 'messages' : 'people');
+  const [asked, setAsked] = useState(params.view);
+  // a link to /people?view=… while the tab is already mounted: follow it (derived, no effect)
+  if (params.view !== asked) {
+    setAsked(params.view);
+    if (params.view === 'messages' || params.view === 'people') setView(params.view);
+  }
+  useTabReset('people', () => setView('people'));
+  const tick = useRefreshOnFocus('coops', 'friendsKept', 'kept', 'calls', 'live', 'dms', 'friends');
+  const [dmsRead, setDms] = useState<DmThread[] | null>(null);
+  const [friends, setFriends] = useState<FriendRow[]>([]);
   const [coops, setCoops] = useState<CoopRow[]>([]);
   const [calls, setCalls] = useState<CallInvite[]>([]);
   const [theirsRead, setTheirs] = useState<FriendKept[] | null>(null);
@@ -40,10 +61,15 @@ export default function ConnectScreen() {
     friendsKept().then(setTheirs, () => setTheirs([]));
     kept().then(setMine, () => {});
     friendsLive().then(setLive, () => {});
+    inbox().then((i) => setDms(i.dms), () => setDms([]));
+    friendsList().then(setFriends, () => {});
   }, [uid]);
   useEffect(load, [load, tick]);
   // a guest counts as signed in; with no session at all the page is the same, only empty
   const theirs = uid ? theirsRead : [];
+  const dms = uid ? dmsRead : [];
+  const unread = (dms ?? []).reduce((a, d) => a + (d.unread ? 1 : 0), 0);
+  const requests = friends.filter((f) => f.status === 'pending' && f.direction === 'incoming').length;
 
   const grouped = Object.values(
     (theirs ?? []).reduce<Record<string, FriendKept & { friends: string[] }>>((acc, k) => {
@@ -63,9 +89,25 @@ export default function ConnectScreen() {
         header={<View style={styles.band}><Text style={styles.title}>{t('connect.title')}</Text></View>}
         contentContainerStyle={[styles.body, { paddingBottom: tabSpace + insets.bottom + 28 }]}
         showsVerticalScrollIndicator={false}
+        keyboardShouldPersistTaps="handled"
       >
+        <View style={styles.tabs} accessibilityRole="tablist">
+          {(['people', 'messages'] as const).map((k) => (
+            <Pressable key={k} onPress={() => setView(k)} accessibilityRole="tab" accessibilityState={{ selected: view === k }} style={[styles.tab, view === k && styles.tabOn]}>
+              <Text style={[styles.tabText, view === k && styles.tabTextOn]}>
+                {t(k === 'people' ? 'connect.view.people' : 'connect.view.messages')}
+                {k === 'people' && requests ? ` · ${requests}` : ''}
+                {k === 'messages' && unread ? ` · ${unread}` : ''}
+              </Text>
+            </Pressable>
+          ))}
+        </View>
+        {view === 'messages' ? <Messages dms={dms} live={live} friends={friends} /> : null}
+        {view === 'people' ? (
         <>
-            <View style={styles.headRow}>
+            <YourPeople friends={friends} live={live} onChanged={load} />
+
+            <View style={[styles.headRow, styles.sectionTop]}>
               <Text style={styles.section}>{up(t('coops.title'))}</Text>
               <Pressable onPress={() => router.push('/coops/join')} hitSlop={8}><Text style={styles.link}>{t('coops.join')}</Text></Pressable>
             </View>
@@ -133,6 +175,7 @@ export default function ConnectScreen() {
               ))}
             </View>
         </>
+        ) : null}
       </PullDownScroll>
     </View>
   );
@@ -143,6 +186,11 @@ const styles = StyleSheet.create({
   band: { position: 'absolute', top: 0, left: 0, right: 0, height: brand.top + 44, backgroundColor: colors.ink, zIndex: 2 },
   title: { position: 'absolute', top: brand.top - 8, left: brand.left, fontFamily: fonts.semibold, fontSize: 30, lineHeight: 32, letterSpacing: -0.9, color: colors.paper },
   body: { paddingTop: brand.top + 48, paddingHorizontal: brand.left },
+  tabs: { flexDirection: 'row', alignSelf: 'flex-start', padding: 3, borderRadius: radius.pill, backgroundColor: colors.ink2, marginTop: 10 },
+  tab: { paddingHorizontal: 14, height: 32, borderRadius: radius.pill, justifyContent: 'center' },
+  tabOn: { backgroundColor: colors.paper },
+  tabText: { fontFamily: fonts.medium, fontSize: 13, color: colors.paper },
+  tabTextOn: { color: colors.ink },
   note: { fontFamily: fonts.regular, fontSize: 14, lineHeight: 20, color: colors.mute, marginTop: 10 },
   headRow: { flexDirection: 'row', alignItems: 'baseline', justifyContent: 'space-between', marginTop: 10 },
   section: { fontFamily: fonts.regular, fontSize: 11, letterSpacing: 1.4, color: colors.mute, marginTop: 10 },
