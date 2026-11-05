@@ -12,7 +12,9 @@ export type NightDevice = { id: string; name: string; tokens: number; units: num
 export type NightStatus = {
   state: 'idle' | 'waiting' | 'running' | 'done';
   // why it waits: outside the window, not on charge, not on wi-fi, nothing kept, no passport
-  reason?: 'window' | 'charge' | 'wifi' | 'noproject' | 'nopassport';
+  // night-2 added battery (under the threshold), hot (the passport's thermal flag), off
+  // ("work tonight" switched off), done (this window's night is finished)
+  reason?: 'window' | 'charge' | 'wifi' | 'noproject' | 'nopassport' | 'battery' | 'hot' | 'off' | 'done';
   slug: string | null;
   startedAt: number | null;
   tokens: number;
@@ -28,7 +30,8 @@ export type NightStatus = {
   devices?: NightDevice[];
 };
 export type NightWorker = {
-  start(slug: string, tps: number): void;
+  // key (night-2): the night's window key, so a pile kept on the phone can be continued
+  start(slug: string, tps: number, key?: string): void;
   stop(): void;
   status(): NightStatus;
   // called on every change
