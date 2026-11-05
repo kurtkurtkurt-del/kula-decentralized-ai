@@ -139,6 +139,50 @@ varken `return llama` satırı jest altında erişilmez). Önce `hf.ts` %0, `use
   `expo lint` 0 hata, böylece `npm run gate` yeşil. night-2 birleşince çakışmaz (içerik aynı).
 - Jest'in `jest.mock` fabrikası `mock` ön ekli olmayan dış değişkeni (tip parametresi adını bile) kabul etmiyor;
   `@/llm/native` sahtelerinde `get llama()` getter'ı gerekli (fabrika, `const`'tan önce çalışıyor).
+## ci (5.11 sabah, cloud oturumu, dal `claude/ci`, `claude/integrate-night` üstüne)
+
+GitHub Actions kuruldu: `.github/workflows/`. Her action sha ile sabit (`# vX.Y.Z` yorumu yanında); dependabot
+(`.github/dependabot.yml`) haftada bir action'ları, ayda bir `app/` ve `node/` npm paketlerini (expo/react-native
+major'ları hariç) günceller.
+
+- **check.yml** — her push ve PR. Dört iş paralel, her birinde `timeout-minutes`, her iş kendi tablosunu ve
+  sondaki `summary` işi genel tabloyu `$GITHUB_STEP_SUMMARY`'ye yazar: `app` (npm ci + cache, tsc, expo lint,
+  jest --ci, passport:check), `node` (node 20 ve 22 matrisi; build + test), `audit-jvm` (temurin 17 +
+  gradle 8.14.3, `audit-jvm` gradle testleri; düşerse rapor artifact), `gate` (`backend/tools/gate.mjs` tam
+  olarak; katman süreleri `.qa/gate-proof.json`'dan tabloya).
+- **apk.yml** — elle (`profiles`: both/min/full) ya da `v*` etiketinde. ubuntu, temurin 17, android-actions ile
+  SDK + `ndk;27.1.12297006` + `cmake;3.22.1`, `.llama/*.tar.gz` için actions/cache (anahtar llama-src.mjs'deki
+  TAG'den), `llama-src.mjs` + `--check`, `release:check`, sonra `npm run apk`. Matris: `min`
+  (`-PkulaLlamaVariants=min`, 90 dk sınır) ve `full` (150 dk). `unzip -l` ile `libllama.so`, `libggml-rpc.so`,
+  `libggml-cpu-*` aranır (full'de en az 2 varyant; armv9 görülürse hata), boyut ve apksigner sertifikası özete
+  yazılır, apk `kula-apk-<profil>-<ref>` artifact'ı olur. İmza: `KULA_KEYSTORE_B64` (+ `KULA_KEYSTORE_PASSWORD`,
+  `KULA_KEY_ALIAS`, `KULA_KEY_PASSWORD`) secret'ı varsa onunla; yoksa debug imza ve `::warning`.
+- **node-release.yml** — `v*` etiketi ya da elle: kula-node build + test + `npm pack` + geçici klasöre kurulum
+  denemesi; `kula-node-<tag>` artifact'ı.
+- `app/tools/apk.mjs` iki düğme kazandı (başka bir şey değişmedi): `KULA_GRADLE_ARGS` (gradle'a ek argüman) ve
+  `KULA_KEYSTORE_FILE` + parola/alias env'leri (prebuild'den sonra üretilen `android/app/build.gradle`'a imza
+  bloğu ekler; `android/` yine elle düzenlenmiyor, prebuild her seferinde sıfırdan yazıyor).
+- `app/src/app/index.tsx`: `expo lint` kırmızıydı (`react-hooks/set-state-in-effect`: oturum gelince effect
+  içinde `setDone`). Yönlendirme artık türetilmiş (`done || (ready && session)`); davranış aynı. Lint 0 hata.
+- README: üç rozet + "CI" bölümü.
+
+**Yerelde doğrulananlar (bu kutuda):** `actionlint` 1.7.7 üç workflow'u temiz geçti (shellcheck kurulamadı,
+`act` yok). app: tsc ✓, lint ✓ (0 hata, 7 uyarı), jest 68/68 ✓, passport:check ✓. kula-node: 28/28 ✓.
+`backend/tools/gate.mjs`: GATE PASS (backend 40 s, 7 katman). audit-jvm gradle: bu kutunun proxy'si Maven
+Central'a 429 veriyordu; 6. denemede indi, 21/21 ✓.
+
+**CI turları:** 1. tur (`7ac35f5`): app ✓, node 20/22 ✓, gate ✓, audit-jvm ✗ — `AuditorGateTest.replayAndClock…`
+satır 61: beklenen `connect,end,reject,reject,connect,end` sırası bozuk. Sebep testte: gate önce `onEvent(end)`
+çağırıp sonra defter satırını yazıyor; test callback'i bekleyip hemen sonraki hello'yu attığı için yavaş runner'da
+`reject` satırı `end`'den önce düşüyor (Mac'te hiç görünmedi). Düzeltme yalnız testte (`waitForLines`: her
+hello'dan sonra defter satır sayısını bekle); Gate.kt değişmedi. Yerelde 21/21 ✓. **2. tur (`fcde2eb`): altı iş de yeşil** (app, node 20, node 22, audit-jvm, gate, summary) —
+https://github.com/kurtkurtkurt-del/kula-decentralized-ai/actions/runs/41988114488
+
+**Kalan / sana:** apk.yml bu oturumda koşturulmadı (yalnız elle ya da `v*` etiketiyle tetiklenir; ilk `full` koşusu
+~1–2 saat, `min` ile başla: Actions → apk → Run workflow → profiles: min). İmza için repo secret'ları:
+`KULA_KEYSTORE_B64` (`base64 -i kula.keystore`), `KULA_KEYSTORE_PASSWORD`, `KULA_KEY_ALIAS`, `KULA_KEY_PASSWORD`;
+yoksa apk debug imzalı çıkar ve koşu uyarı taşır. Gradle cache yalnız main'de yazılır (`cache-read-only`); dal
+release'e/main'e alınınca ısınır. `claude/ci` release ve main'e dokunmadı, PR açılmadı.
 
 ## bütünleştirme (5.11 sabaha karşı, cloud oturumu, dal `claude/integrate-night`)
 

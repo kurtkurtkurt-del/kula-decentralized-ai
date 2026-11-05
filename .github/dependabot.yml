@@ -1,0 +1,27 @@
+# actions are pinned by sha in .github/workflows/*.yml; dependabot keeps the sha and the version comment moving.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule: { interval: weekly }
+    groups:
+      actions: { patterns: ['*'] }
+    commit-message: { prefix: 'ci' }
+  - package-ecosystem: npm
+    directory: /node
+    schedule: { interval: monthly }
+    commit-message: { prefix: 'node' }
+    open-pull-requests-limit: 3
+  - package-ecosystem: npm
+    directory: /app
+    schedule: { interval: monthly }
+    commit-message: { prefix: 'app' }
+    open-pull-requests-limit: 3
+    # expo pins its own sdk family; a major bump is `npx expo install --fix`, not a dependabot pr
+    ignore:
+      - dependency-name: 'expo*'
+        update-types: ['version-update:semver-major']
+      - dependency-name: 'react-native*'
+        update-types: ['version-update:semver-major']
+      - dependency-name: 'react'
+        update-types: ['version-update:semver-major']
