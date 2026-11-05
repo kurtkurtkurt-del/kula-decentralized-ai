@@ -39,6 +39,7 @@ const fake = {
   stopped: [] as string[],
   loadFails: false,
   loadMs: 0,
+  loadWait: null as Promise<void> | null,
   loads: 0,
   unloads: 0,
 };
@@ -47,6 +48,7 @@ jest.mock('@/llm/engine', () => ({
   load: async () => {
     fake.loads++;
     if (fake.loadMs) await new Promise((r) => setTimeout(r, fake.loadMs));
+    if (fake.loadWait) await fake.loadWait;
     if (fake.loadFails) throw new Error('toobig');
   },
   unload: async () => { fake.unloads++; },
@@ -75,6 +77,12 @@ import { SimulatedWorker, inWindow, work } from '@/night/SimulatedWorker';
 const unit = (i: number, expected?: string): Unit => ({ id: `u${i}`, type: 'classify', prompt: `u${i}`, maxTokens: 4, ...(expected ? { expected } : {}) });
 const units = (n: number) => Array.from({ length: n }, (_, i) => unit(i + 1));
 const tick = (ms = 20) => new Promise((r) => setTimeout(r, ms));
+// waits for what a test is about to check instead of a fixed sleep: a loaded machine (the
+// whole suite at once) can take longer than 10 ms for a few promise hops
+const until = async (cond: () => boolean, ms = 3000) => {
+  const end = Date.now() + ms;
+  while (!cond() && Date.now() < end) await tick(2);
+};
 let clock = 1_000_000;
 const make = (list: Unit[] | JobSource) => new LlamaWorker({ source: () => (Array.isArray(list) ? new DemoJobs(list) : list), now: () => clock, idleMs: 2 });
 
@@ -85,6 +93,7 @@ beforeEach(() => {
   fake.behave = () => ({ text: 'positive', tokens: 3 });
   fake.loadFails = false;
   fake.loadMs = 0;
+  fake.loadWait = null;
   fake.loads = 0;
   fake.unloads = 0;
   mockModels.chosen = 'm';
@@ -101,21 +110,24 @@ describe('a device that drops mid-unit', () => {
     fake.behave = (dev) => (dev === 'p1' ? 'hang' : { text: 'ok', tokens: 1 });
     const w = make(units(4));
     w.start('beyin', 5);
-    await tick(10);
+    await until(() => fake.pending.length === 1 && fake.calls.filter((c) => c.dev === 'me').length === 3);
     expect(fake.pending.map((p) => `${p.dev}:${p.unit}`)).toEqual(['p1:u2']);
     // the phone has meanwhile taken u1, u3, u4 and found the pile empty
     expect(fake.calls.filter((c) => c.dev === 'me').map((c) => c.unit)).toEqual(['u1', 'u3', 'u4']);
     expect(w.status().state).toBe('running'); // waits for the tablet's unit
     // now the tablet's socket dies
     fake.pending[0].reject(new Error('peer gone'));
-    await tick(10);
-    // u2 went back to the pile; the phone's loop had already ended (the pile was empty when
-    // it looked), so the tablet's loop (out for five minutes, pile drained) ends the night
+    await until(() => !!w.status().devices?.find((d) => d.id === 'p1')?.out);
+    // u2 went back to the pile. Whether the phone's loop was still looking (it takes u2) or had
+    // already ended (nobody does: the tablet is out) depends on timing; both are right. What
+    // must hold: the tablet is out, u2 is never counted for it, and nothing is done twice.
+    await w.settled();
     const s = w.status();
     expect(s.devices!.find((d) => d.id === 'p1')!.out).toBe(true);
-    expect(s.units).toBe(3);
-    expect(storedResults().map((r) => r.id).sort()).toEqual(['u1', 'u3', 'u4']);
-    await w.settled();
+    const done = storedResults().map((r) => r.id).sort();
+    expect([['u1', 'u3', 'u4'], ['u1', 'u2', 'u3', 'u4']]).toContainEqual(done);
+    expect(s.units).toBe(done.length);
+    expect(fake.calls.filter((c) => c.dev === 'p1').map((c) => c.unit)).toEqual(['u2']);
     expect(w.status().state).toBe('done');
   });
   it('hands the unit to the other device when the pile is not yet empty', async () => {
@@ -129,7 +141,7 @@ describe('a device that drops mid-unit', () => {
     const slow: JobSource = { next: async () => { await tick(5); return src.next(); }, done: (u, r) => src.done(u, r), retry: (u) => src.retry(u) };
     const w = make(slow);
     w.start('beyin', 5);
-    await tick(8);
+    await until(() => fake.pending.length === 1);
     expect(fake.pending).toHaveLength(1);
     const dropped = fake.pending[0].unit;
     fake.pending[0].reject(new Error('peer gone'));
@@ -164,13 +176,15 @@ describe('a device that drops mid-unit', () => {
 
 describe('stopping', () => {
   it('stop() while the model loads: no loop starts, the model is unloaded once more, nothing counted', async () => {
-    fake.loadMs = 30;
+    let open = () => {};
+    fake.loadWait = new Promise<void>((r) => { open = r; });
     const w = make(units(5));
     w.start('beyin', 5);
-    await tick(5);
+    await until(() => fake.loads === 1);
     expect(w.status().state).toBe('running');
     w.stop();
     expect(w.status().state).toBe('done');
+    open(); // the load ends only after the stop
     await w.settled();
     expect(fake.calls).toEqual([]);
     expect(fake.unloads).toBe(2); // once in stop(), once when begin() finds it is no longer alive
@@ -180,7 +194,7 @@ describe('stopping', () => {
     fake.behave = () => 'hang';
     const w = make(units(5));
     w.start('beyin', 5);
-    await tick(10);
+    await until(() => fake.pending.length === 2);
     expect(fake.pending).toHaveLength(2);
     w.stop();
     expect(fake.stopped.sort()).toEqual(['me', 'p1']);
@@ -195,7 +209,7 @@ describe('stopping', () => {
     fake.behave = () => 'hang';
     const w = make(units(5));
     w.start('first', 5);
-    await tick(10);
+    await until(() => fake.pending.length === 2);
     const old = [...fake.pending];
     fake.pending = [];
     fake.behave = () => ({ text: 'ok', tokens: 1 });
