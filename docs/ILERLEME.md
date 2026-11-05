@@ -3,6 +3,48 @@
 Plan: `~/.claude/plans/memoized-kindling-puddle.md` (4.11.2026). Bu dosya her adımda güncellenir:
 ne yapıldı, ne doğrulandı, ne kaldı. Döndüğünde önce burayı oku.
 
+## 5.11 cloud: ölçüm takımı (`claude/bench`)
+
+`origin/claude/node-master` + `origin/claude/integrate-night` (merge, tek çakışma bu dosyada, iki bölüm de kaldı) üstüne.
+Amaç: planlayıcı katsayı (`bw × 0.6 / gb`) yerine gerçek ölçümle çalışsın. Ortak biçim `kula-bench/1`:
+**`tools/bench-schema.json`**, alanlar/birimler/yorum **`docs/BENCH.md`**.
+
+- `kula-node bench --model <gguf> [--peer id…]` (`node/src/bench.ts`): bellek bant genişliği; yerel llama-server
+  `/completion` ile istem değerlendirme ve üretim tok/s **ayrı** (ısınma + 3 tekrar, medyan), ilk token, yükleme süresi;
+  eş başına kapı gidiş-dönüşü (3 el sıkışma), tünel hızı (`GET /blob?mb=10`), ayrı modda eşin tok/s'si (`/load`
+  süresi + 3×64 token); bölünmüş modda rpc tünelleri + `--rpc` yükleme süresi, tok/s, token başına ms. İkili yoksa
+  split "kula-node setup" diyerek atlanır; her atlama `skipped[]`'de sebebiyle. Sonuç `~/.kula-node/bench/<tarih>.json`
+  (600) + tablo; `--json`, `--out`, `--no-local/apart/split`, `--runs/--tokens/--mb/--bw`.
+- İşçi api'sine `GET /blob?mb=N` (1..64, varsayılan 10, 64 KB parçalar halinde akar; aralık dışı 400): `node/src/api.ts`
+  **ve** `ApiServer.kt` (sorgu dizesi artık yoldan ayrılıyor). Uyum testi `node/test/conformance.test.ts`.
+- Uygulama `ayarlar → ölçüm` (`app/src/app/bench.tsx`, `src/llm/benchrun.ts`): native `memBandwidth`, yüklü modelle
+  `generate` 64×3 (prompt_tps telefonda yok, not düşülür), eş başına `probePeer` süresi, `apiTunnel` + `/blob` hızı,
+  ayrı modda yüklü eşlerde `chatRemote` 64×3, bölünmüş yüklemede `loadMs` + token gecikmesi. Sonuç kartı, **json paylaş**
+  (expo-sharing; web'de panoya), geçmiş 20 ölçüm kv-store `llm.bench` (`src/llm/bench.ts`).
+- Planlayıcı: `measuredTps(deviceId, modelFile)` en yeni ölçümü bulur (telefon = passport `device_id` + `local`, eş =
+  `peers[].id` + `apart`; split sayılmaz). `fitOn` ölçüm varsa onu verir (`measured: true`, ekranda "ölçülen hız" / ✓);
+  `fitTogether` ve `planSplit` payları `effectiveBw = tps × gb / 0.6` ile böler; yoksa eski `bw`. `FitInput.file` eklendi,
+  çağıran dört yer dosya adını geçiyor. `node/src/planner.ts` henüz okumuyor (BENCH.md'de not).
+- Testler: node 52 (yeni `bench.test.ts`: sahte llama-server + iki gerçek kapı arkasında sahte işçi + sahte split sunucu,
+  şema doğrulaması, şemanın reddettikleri), app 79 (`bench.test.ts`: sahte native/engine ile tam tur, atlama sebepleri,
+  geçmiş sınırı, `measuredTps`/`fitOn`/`fitTogether`/`planSplit` ölçümle). tsc iki tarafta temiz; lint'te yalnız eski
+  `index.tsx:14` hatası. **Kotlin derlenmedi** (cloud'da SDK yok) — ilk `npm run apk`'da görülür.
+
+### kullanıcının telefonda çalıştıracağı 3 ölçüm
+
+1. **Yalnız telefon**: `modeller → Gemma 3 1B (ya da Qwen3 0.6B Q8) → çalıştır → yalnız`, sonra `ayarlar → ölçüm → şimdi ölç`.
+   Beklenen: `memory.bandwidth_gbs` ≈ 60–66 (S25+ passport 65.9), `local.gen_tps` medyanı ve `first_token_ms`.
+   Kontrol: `gen_tps × model_gb / bandwidth` 0.4–0.7 arasında mı? Modeller ekranında hız artık ✓ ile ölçülen.
+2. **Telefon + Mac, ayrı mod**: Mac'te `kula-node share`, telefonda QR → `modeller → aynı model → ayrı`, yüklenince
+   `ayarlar → ölçüm`. Beklenen: `peers[mac].gate_rtt_ms` (wi-fi'da < 20 ms), `tunnel.mb_per_s` (emülatörde 1.3'tü;
+   gerçek wi-fi'da 5–30 bekleniyor), `peers[mac].apart.gen_tps` (Mac'te llama-server 34 tok/s ölçülmüştü, tünelden
+   benzeri). **json paylaş** → dosyayı sakla.
+3. **Tersi, Mac'ten**: telefonda `telefonu paylaş`, Mac'te `kula-node peers add <kod>` →
+   `kula-node bench --model ~/models/<aynı gguf> --peer <telefon>`. Beklenen: Mac'in `local.prompt_tps` ve
+   `gen_tps` ayrı, telefonun `apart.gen_tps`'si 1'deki `local.gen_tps` ile uyuşmalı (uyuşmuyorsa tünel/ısınma farkı),
+   `split` satırı: yükleme süresi ve `token_ms` ≥ `gate_rtt_ms`. Üç json'u karşılaştırınca katsayıların yerine ölçüm
+   oturur; sonraki adım `node/src/planner.ts`'nin de `~/.kula-node/bench` okuması.
+
 ## 5.11 cloud: bilgisayardan küme yönetimi (`claude/node-master`)
 
 `origin/claude/loving-dijkstra-ku8d4t` + `release/local-2026-10-20` üstüne, yalnız `node/` içinde:
