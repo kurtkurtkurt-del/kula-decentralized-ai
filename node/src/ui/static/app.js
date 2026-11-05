@@ -1486,11 +1486,6 @@ const VIEWS = {
   model: () => {
     const phone = phoneNow();
     const out = [q('which model?')];
-    const sub = el('p', 'wiz-p');
-    const n = S.peers.filter((p) => p.reach?.ok).length;
-    sub.append(n ? `${n} device${n === 1 ? '' : 's'} answer${n === 1 ? 's' : ''}${phone ? `, ${phone.name} first` : ''}. ` : S.status?.llama ? 'no device answers: it can still run on this computer. ' : 'no device answers right now. ');
-    sub.appendChild(btn('+ add a device', 'link', () => { $('connect').close(); openDevices(); }))
-    out.push(sub);
     const l = S.status?.loaded;
     if (l) {
       const n = el('p', 'hint');
