@@ -1635,8 +1635,6 @@ if (/^[0-9a-f]{8,32}$/.test(fromHash)) openChat(fromHash);
 refreshStatus().then(() => {
   if (isGuest()) return;
   refreshInvite();
-  // nothing loaded: the connect sheet opens by itself, at the model question when a paired
-  // phone answers, else at the first question; a model loaded: no sheet
   // 6.11.2026: no sheet opens by itself on load; the page waits for a click on connect or devices
 });
 setInterval(() => { if (!document.hidden) refreshStatus(); }, 2500);
