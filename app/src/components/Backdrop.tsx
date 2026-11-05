@@ -1,18 +1,6 @@
-import { StyleSheet, View } from 'react-native';
-import { Image } from 'expo-image';
-import { colors } from '@/theme/tokens';
+import NightNetwork from '@/components/NightNetwork';
 
-// Night photo with an ink tint. The intro and the next screen share this background.
+// The intro's background: kula's night drawn in code (components/NightNetwork.tsx).
 export default function Backdrop() {
-  return (
-    <View style={styles.fill} pointerEvents="none">
-      <Image source={require('../../assets/intro/concert.jpg')} style={styles.fill} contentFit="cover" />
-      <View style={[styles.fill, styles.tint]} />
-    </View>
-  );
+  return <NightNetwork />;
 }
-
-const styles = StyleSheet.create({
-  fill: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 },
-  tint: { backgroundColor: colors.ink, opacity: 0.35 },
-});
