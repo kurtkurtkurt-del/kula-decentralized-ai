@@ -3,7 +3,10 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import readline from 'node:readline';
-import { discover, findPeer, maskSecret, parsePeerText, peerCode, peersFile, probePeers, readPeers, removePeer, upsertPeer, writePeers, type Peer } from './peers.js';
+import { discover, findPeer, maskSecret, parsePeerText, peerCode, peersFile, probePeers, readPeers, removePeer, upsertPeer, writePeers, whereIs, type Peer } from './peers.js';
+import { loadOrCreateIdentity } from './tls.js';
+import { loadOrCreate as loadDeviceKey } from './audit/key.js';
+import { home } from './paths.js';
 import { openApart, batchReport, type Cluster, type Message } from './apart.js';
 import { prepareSplit, startSplitServer } from './split.js';
 import { TooBig } from './planner.js';
@@ -22,8 +25,15 @@ const num = (v: string | boolean | undefined, d: number): number => { if (v === 
 function row(p: Peer, extra = ''): string {
   const ram = p.ram != null ? `${p.ram} MB` : '?';
   const bw = p.bw != null ? `${p.bw} GB/s` : '?';
-  return `${p.id.slice(0, 8)}  ${p.name.padEnd(18)} ${p.kind.padEnd(6)} ${p.host}:${p.port}  secret ${maskSecret(p.secret)}  ram ${ram}  bw ${bw}${p.last_ok ? `  ok ${p.last_ok.slice(0, 16)}` : ''}${extra}`;
+  const trust = p.fp ? `cert ${p.fp.slice(0, 8)}${p.pin ? ' +pin' : ''}` : p.relay ? (p.pin ? 'pin, cert to learn' : 'no pin, no cert') : `secret ${maskSecret(p.secret)}`;
+  return `${p.id.slice(0, 8)}  ${p.name.padEnd(18)} ${p.kind.padEnd(6)} ${whereIs(p)}  ${trust}  ram ${ram}  bw ${bw}${p.last_ok ? `  ok ${p.last_ok.slice(0, 16)}` : ''}${extra}`;
 }
+
+// This computer's certificate (protocol v2): made on first use, kept in ~/.kula-node.
+const identity = () => loadOrCreateIdentity(home(), loadDeviceKey());
+
+// the relay for a code typed without one: --relay, else $KULA_RELAY
+const relayOf = (flags: Flags): string | undefined => str(flags.relay) ?? process.env.KULA_RELAY ?? undefined;
 
 export async function peersCommand(sub: string | undefined, rest: string[], flags: Flags): Promise<number> {
   const file = str(flags.file) ?? peersFile();
@@ -31,7 +41,8 @@ export async function peersCommand(sub: string | undefined, rest: string[], flag
     let text = rest.join(' ');
     if (!text || text === '-') text = fs.readFileSync(0, 'utf8');
     let peer: Peer;
-    try { peer = parsePeerText(text); } catch (e) { console.error(`peers add: ${(e as Error).message}`); return 2; }
+    try { peer = parsePeerText(text, relayOf(flags)); } catch (e) { console.error(`peers add: ${(e as Error).message}`); return 2; }
+    if (peer.relay && !peer.fp && !peer.pin) console.error('note: a relay code alone cannot pair; add the worker\'s pairing code after it (123456 <pin>) or scan its full code');
     if (str(flags.name)) peer.name = str(flags.name)!;
     const { list, added } = upsertPeer(readPeers(file), peer);
     writePeersSafe(list, file);
@@ -57,11 +68,11 @@ export async function peersCommand(sub: string | undefined, rest: string[], flag
     const all = readPeers(file);
     const wanted = rest.length ? rest.map((r) => findPeer(all, r)).filter((p): p is Peer => !!p) : all;
     if (!wanted.length) { console.error(rest.length ? `no such peer: ${rest.join(' ')}` : 'no peers to probe'); return 1; }
-    const results = await probePeers(wanted, num(flags.timeout, 2000));
+    const results = await probePeers(wanted, num(flags.timeout, 2000), undefined, undefined, identity());
     let bad = 0;
     for (const r of results) {
       const fmt = (x: typeof r.rpc) => (x.ok ? `OK ${x.ms} ms` : `NO ${x.reason}`);
-      console.log(`${r.peer.name.padEnd(18)} ${r.peer.host}:${r.peer.port}  rpc ${fmt(r.rpc)}  api ${fmt(r.api)}`);
+      console.log(`${r.peer.name.padEnd(18)} ${whereIs(r.peer)}  rpc ${fmt(r.rpc)}  api ${fmt(r.api)}${r.peer.fp && !wanted.find((p) => p.id === r.peer.id)?.fp ? `  (certificate learned: ${r.peer.fp.slice(0, 16)}…)` : ''}`);
       if (!r.rpc.ok && !r.api.ok) bad++;
     }
     // stamp last_ok
@@ -81,7 +92,7 @@ export async function peersCommand(sub: string | undefined, rest: string[], flag
     }
     return 0;
   }
-  console.error('usage: kula-node peers add <qr json | code | host:port:secret> | list [--code] | rm <id> | probe [id…] | scan');
+  console.error('usage: kula-node peers add <qr json | code | host:port:secret | 6-digit relay code [pin] --relay wss://…> | list [--code] | rm <id> | probe [id…] | scan');
   return 2;
 }
 
@@ -109,6 +120,10 @@ export async function chatCommand(flags: Flags): Promise<number> {
   const wantedRefs = typeof flags.peer === 'string' ? flags.peer.split(',').filter(Boolean) : [];
   const peers = wantedRefs.length ? wantedRefs.map((r) => { const p = findPeer(all, r); if (!p) throw new Error(`no such peer: ${r}`); return p; }) : all;
   const llama = findLlama();
+  const me = identity();
+  const peersFileUsed = str(flags.file) ?? peersFile();
+  const remote = peers.filter((p) => p.relay);
+  if (mode === 'split' && remote.length) log(`${remote.map((p) => p.name).join(', ')}: far away (relay); split mode needs the lan, apart mode would use ${remote.length === 1 ? 'it' : 'them'}`);
   const ctx = num(flags.ctx, 4096);
   const maxTokens = num(flags['max-tokens'], 256);
   const size = fs.statSync(modelFile).size;
@@ -121,7 +136,7 @@ export async function chatCommand(flags: Flags): Promise<number> {
     if (!llama) { console.error('split mode needs llama.cpp on this computer: run kula-node setup'); return 1; }
     let setup;
     try {
-      setup = await prepareSplit({ modelBytes: size, localFreeMb: freeRamMB(), localBw: bw, peers, share: flags['keep-local'] !== true, probeMs, log });
+      setup = await prepareSplit({ modelBytes: size, localFreeMb: freeRamMB(), localBw: bw, peers, share: flags['keep-local'] !== true, probeMs, log, identity: me });
     } catch (e) {
       if (e instanceof TooBig) { console.error(e.message); return 1; }
       throw e;
@@ -130,7 +145,7 @@ export async function chatCommand(flags: Flags): Promise<number> {
     if (!setup.plan.used.length) log('no worker answered: running the model here alone');
     cluster = await openApart({
       model: { url: 'file://' + modelFile, sha256: await sha256File(modelFile), size, name: path.basename(modelFile), ctx },
-      localModelFile: modelFile, localBw: bw, llama, peers: [], probeMs, log,
+      localModelFile: modelFile, localBw: bw, llama, peers: [], probeMs, log, identity: me,
       startBackend: (file, c) => startSplitServer(llama, file, c, setup, log),
     });
   } else {
@@ -138,6 +153,7 @@ export async function chatCommand(flags: Flags): Promise<number> {
     log('hashing the model (once, for the peers)');
     const sha256 = await sha256File(modelFile);
     let url = str(flags['model-url']);
+    if (!url && remote.length) { console.error(`${remote.map((p) => p.name).join(', ')}: far away; a model served from this lan does not reach it. pass --model-url with an address it can fetch (https), or let it use a model it already has (the worker api keeps what it downloaded)`); }
     if (!url && peers.length) {
       const host = lanIPv4();
       if (!host) { console.error('no lan ipv4 address: the peers cannot fetch the model from here; pass --model-url'); return 1; }
@@ -148,9 +164,11 @@ export async function chatCommand(flags: Flags): Promise<number> {
     }
     cluster = await openApart({
       model: { url: url ?? 'file://' + modelFile, sha256, size, name: path.basename(modelFile), ctx },
-      localModelFile: flags['no-local'] === true ? null : modelFile, localBw: bw, llama, peers, probeMs, log,
+      localModelFile: flags['no-local'] === true ? null : modelFile, localBw: bw, llama, peers, probeMs, log, identity: me,
     });
   }
+  // what the probe learned (a far peer's certificate, a spent pin, last_ok) goes back to the book
+  if (cluster.stamped.length) writePeersSafe(readPeers(peersFileUsed).map((p) => cluster.stamped.find((s) => s.id === p.id) ?? p), peersFileUsed);
   log(`devices: ${cluster.devices.map((d) => d.name).join(', ')}${cluster.skipped.length ? `; skipped: ${cluster.skipped.map((s) => `${s.peer.name} (${s.why})`).join(', ')}` : ''}`);
 
   const shutdown = async () => { await cluster.close(); for (const c of extraClose) await c().catch(() => {}); };

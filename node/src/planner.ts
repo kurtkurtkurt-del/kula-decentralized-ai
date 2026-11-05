@@ -5,8 +5,9 @@
 // worker that does not answer, so only peers that answered are handed to it.
 // The output layer always stays local; workers get weights by free RAM
 // (capacity) in order of memory bandwidth (speed).
-import type { Peer } from './peers.js';
-import { probe as gateProbe, type ProbeResult } from './gate.js';
+import { REMOTE_NO_SPLIT, peerTls, type Peer } from './peers.js';
+import { probe as gateProbe, type ProbeResult, type TlsClient } from './gate.js';
+import type { GateIdentity } from './tls.js';
 
 export const MB = 1024 * 1024;
 export const LOCAL_SHARE = 0.7;   // of this computer's free RAM a model may take
@@ -85,13 +86,20 @@ export function planSplit(input: PlanInput): Plan {
   };
 }
 
-export type ProbeFn = (host: string, port: number, secret: string, channel: 'rpc' | 'api', timeoutMs: number) => Promise<ProbeResult>;
+export type ProbeFn = (host: string, port: number, secret: string, channel: 'rpc' | 'api', timeoutMs: number, tls?: TlsClient | null) => Promise<ProbeResult>;
 
 // Probes every wanted peer on the rpc channel (2 s) and plans with the ones
-// that answered. Unreachable peers are in `skipped` with the gate's reason.
-export async function planWithProbe(opts: Omit<PlanInput, 'peers' | 'skipped'> & { wanted: Peer[]; timeoutMs?: number; probe?: ProbeFn }): Promise<Plan> {
+// that answered. Unreachable peers are in `skipped` with the gate's reason. A
+// peer far away (relay) is skipped before any probe: every token of a split
+// would cross the internet, and only the api channel is relayed anyway.
+export async function planWithProbe(opts: Omit<PlanInput, 'peers' | 'skipped'> & { wanted: Peer[]; timeoutMs?: number; probe?: ProbeFn; identity?: GateIdentity }): Promise<Plan> {
   const probe = opts.probe ?? gateProbe;
-  const results = await Promise.all(opts.wanted.map(async (peer) => ({ peer, r: await probe(peer.host, peer.port, peer.secret, 'rpc', opts.timeoutMs ?? 2000) })));
+  const results = await Promise.all(opts.wanted.map(async (peer): Promise<{ peer: Peer; r: ProbeResult }> => {
+    if (peer.relay) return { peer, r: { ok: false, reason: REMOTE_NO_SPLIT } };
+    const tls = opts.identity ? peerTls(peer, opts.identity) : null;
+    if (peer.fp && !tls) return { peer, r: { ok: false, reason: 'no identity for tls' } };
+    return { peer, r: await probe(peer.host, peer.port, peer.secret, 'rpc', opts.timeoutMs ?? 2000, tls) };
+  }));
   const peers = results.filter((x) => x.r.ok).map((x) => x.peer);
   const skipped = results.filter((x) => !x.r.ok).map((x) => ({ peer: x.peer, why: (x.r as { reason: string }).reason }));
   return planSplit({ modelBytes: opts.modelBytes, localFreeMb: opts.localFreeMb, localBw: opts.localBw, share: opts.share, peers, skipped });

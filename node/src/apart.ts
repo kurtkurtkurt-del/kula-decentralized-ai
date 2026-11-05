@@ -4,7 +4,9 @@
 // through a local tunnel (gate client on 127.0.0.1). The wire is the worker
 // api: POST /load (sse) once, then POST /chat (sse) per prompt.
 import { Tunnel } from './gate.js';
-import { probePeers, reachable, type Peer } from './peers.js';
+import { RelayTunnel } from './relay.js';
+import { probePeers, reachable, peerTls, type Peer } from './peers.js';
+import type { GateIdentity } from './tls.js';
 import { freePort, startChild } from './children.js';
 import type { LlamaBinaries } from './llama.js';
 
@@ -101,9 +103,18 @@ export function apiChat(dev: Device, messages: Message[], onToken: (t: string) =
   return p;
 }
 
-// A peer as a device: a tunnel to its api channel.
-export async function openPeerDevice(peer: Peer): Promise<Device> {
-  const tunnel = new Tunnel(peer.host, peer.port, peer.secret, 'api');
+// A peer as a device: a tunnel to its api channel, over the lan or, for a peer far
+// away, through its relay (the only channel that crosses one). `identity` is this
+// computer's certificate for v3 peers.
+export async function openPeerDevice(peer: Peer, identity?: GateIdentity): Promise<Device> {
+  const tls = identity ? peerTls(peer, identity) : null;
+  if (peer.relay) {
+    if (!tls) throw new Error('a relayed peer needs this computer\'s certificate');
+    const tunnel = new RelayTunnel(peer.relay, 'api', tls);
+    const port = await tunnel.listen();
+    return { id: peer.id, name: peer.name, local: false, apiPort: port, bw: peer.bw ?? 4, busy: false, tps: null, done: 0, close: () => tunnel.close() };
+  }
+  const tunnel = new Tunnel(peer.host, peer.port, peer.secret, 'api', tls);
   const port = await tunnel.listen();
   return { id: peer.id, name: peer.name, local: false, apiPort: port, bw: peer.bw ?? 4, busy: false, tps: null, done: 0, close: () => tunnel.close() };
 }
@@ -142,11 +153,14 @@ export interface ApartOptions {
   log?: Log;
   startBackend?: (file: string, ctx: number) => Promise<{ port: number; stop(): Promise<void> }>;
   probe?: typeof probePeers;
+  identity?: GateIdentity;  // this computer's certificate: v3 and relayed peers need it
 }
 
 export interface Cluster {
   devices: Device[];
   skipped: { peer: Peer; why: string }[];
+  // the peers as the probe left them (last_ok, a learned fingerprint, a spent pin): for the peer book
+  stamped: Peer[];
   chat(messages: Message[], onToken: (t: string) => void, opts?: { maxTokens?: number; temperature?: number; reset?: boolean; device?: string }): Promise<Reply>;
   batch(prompts: string[], opts?: { maxTokens?: number; temperature?: number; onReply?: (i: number, r: Reply) => void }): Promise<Reply[]>;
   close(): Promise<void>;
@@ -157,7 +171,7 @@ export interface Cluster {
 // device is left.
 export async function openApart(opts: ApartOptions): Promise<Cluster> {
   const log = opts.log ?? (() => {});
-  const probed = await (opts.probe ?? probePeers)(opts.peers, opts.probeMs ?? 2000, ['api']);
+  const probed = await (opts.probe ?? probePeers)(opts.peers, opts.probeMs ?? 2000, ['api'], undefined, opts.identity);
   const skipped: { peer: Peer; why: string }[] = [];
   const live: Peer[] = [];
   for (const r of probed) {
@@ -170,7 +184,7 @@ export async function openApart(opts: ApartOptions): Promise<Cluster> {
     devices.push(dev);
   }
   for (const p of live) {
-    try { devices.push(await openPeerDevice(p)); } catch (e) { skipped.push({ peer: p, why: (e as Error).message }); }
+    try { devices.push(await openPeerDevice(p, opts.identity)); } catch (e) { skipped.push({ peer: p, why: (e as Error).message }); }
   }
   if (!devices.length) throw new Error('no device: every peer was unreachable and this computer did not join');
 
@@ -234,6 +248,7 @@ export async function openApart(opts: ApartOptions): Promise<Cluster> {
   return {
     devices: ready,
     skipped,
+    stamped: probed.map((r) => r.peer),
     chat,
     batch,
     close: async () => { for (const d of ready) await d.close().catch(() => {}); },

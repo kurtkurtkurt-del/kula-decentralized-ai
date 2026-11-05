@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import net from 'node:net';
 import { EventEmitter } from 'node:events';
-import { parsePeerText, peerCode, readPeers, writePeers, upsertPeer, removePeer, findPeer, maskSecret, probePeers, discover, reachable } from '../src/peers.ts';
+import { parsePeerText, peerCode, readPeers, writePeers, upsertPeer, removePeer, findPeer, maskSecret, probePeers, discover, reachable, isRemote, whereIs, afterPaired } from '../src/peers.ts';
 import { startGateServer, Tunnel } from '../src/gate.ts';
 
 const QR = '{"k":"kula-peer","v":2,"id":"7f1c0a2e-1","name":"pixel","host":"192.168.1.33","port":50551,"secret":"0123456789ABCDEF0123456789abcdef","passport":{"ram_mb":7600}}';
@@ -151,4 +151,45 @@ test('discover collects _kula._tcp answers from a (fake) bonjour browser, withou
   assert.equal(found.length, 2);
   assert.deepEqual(found[0], { id: '7f1c0a2e-1', name: 'pixel', host: '192.168.1.33', port: 50551, kind: 'phone', ram: 7600, bw: 12.5, v: 'rpc7' });
   assert.ok(!JSON.stringify(found).includes('secret'));
+});
+
+// v3 codes (gate protocol v2) and peers far away (docs/RELAY.md)
+test('parses a v3 code with fingerprint, pin and relay; a relay code typed by hand; refuses a relayed v2', () => {
+  const fp = 'AB'.repeat(32);
+  const v3 = parsePeerText(JSON.stringify({ k: 'kula-peer', v: 3, id: 'w3', name: 'berlin', host: '10.1.1.1', port: 50551, fp, pin: '0123456789ABCDEF', relay: { url: 'https://relay.example/ws', code: '123456' }, kind: 'phone' }));
+  assert.equal(v3.fp, fp.toLowerCase());
+  assert.equal(v3.pin, '0123456789abcdef');
+  assert.equal(v3.secret, '');
+  assert.deepEqual(v3.relay, { url: 'wss://relay.example/ws', code: '123456' });
+  assert.ok(isRemote(v3));
+  assert.equal(whereIs(v3), 'relay 123456 via relay.example/ws');
+  // the same code without a lan address at all still reads: the relay is the address
+  const far = parsePeerText(JSON.stringify({ k: 'kula-peer', v: 3, id: 'w4', name: 'far', fp, relay: { url: 'wss://r.example', code: '654321' } }));
+  assert.equal(far.host, '');
+  assert.equal(far.port, 0);
+  // a v3 code on the lan, no relay
+  const lan = parsePeerText(JSON.stringify({ k: 'kula-peer', v: 3, id: 'w5', name: 'mac', host: '10.1.1.2', port: 50551, fp, kind: 'pc' }));
+  assert.equal(lan.pin, null);
+  assert.ok(!isRemote(lan));
+  assert.equal(peerCode(lan).length > 40, true);
+  const back = parsePeerText(peerCode(v3));
+  assert.deepEqual(back.relay, v3.relay);
+  assert.equal(back.fp, v3.fp);
+  // typed: six digits, optionally the pairing code, the relay from the flag
+  const typed = parsePeerText('123456 0123456789abcdef', 'wss://relay.example');
+  assert.deepEqual(typed.relay, { url: 'wss://relay.example', code: '123456' });
+  assert.equal(typed.pin, '0123456789abcdef');
+  assert.equal(typed.fp, null, 'the certificate is learned on the first connection');
+  assert.equal(typed.id, 'relay:123456');
+  assert.equal(parsePeerText('123456', 'wss://relay.example').pin, null);
+  assert.throws(() => parsePeerText('123456'), /--relay/);
+  assert.throws(() => parsePeerText(JSON.stringify({ k: 'kula-peer', v: 2, id: 'x', host: 'h', port: 1, secret: 'abcdefabcdefabcd', relay: { url: 'wss://r', code: '123456' } })), /v3/);
+  assert.throws(() => parsePeerText(JSON.stringify({ k: 'kula-peer', v: 3, id: 'x', host: 'h', port: 1, fp: 'short' })), /fingerprint/);
+  assert.throws(() => parsePeerText(JSON.stringify({ k: 'kula-peer', v: 3, id: 'x', fp, relay: { url: 'wss://r', code: '12' } })), /relay/);
+  // what the handshake teaches
+  const learned = afterPaired(typed, fp.toLowerCase());
+  assert.equal(learned.fp, fp.toLowerCase());
+  assert.equal(learned.pin, null);
+  assert.ok(learned.paired_at);
+  assert.equal(maskSecret(''), '-');
 });

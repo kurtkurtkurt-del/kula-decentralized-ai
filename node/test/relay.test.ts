@@ -18,6 +18,9 @@ import { startRelay } from '../relay/src/server.ts';
 import { startRelayWorker, RelayMaster, RelayTunnel, probeRelay, normalizeRelayUrl } from '../src/relay.ts';
 import { apiChat, readSse } from '../src/apart.ts';
 import { serveModel } from '../src/modelserve.ts';
+import { openApart } from '../src/apart.ts';
+import { parsePeerText, REMOTE_NO_SPLIT, type Peer } from '../src/peers.ts';
+import { planWithProbe } from '../src/planner.ts';
 
 const PIECES = ['Guten', ' Morgen', ' aus', ' Berlin'];
 const SECRET_TEXT = 'the bread is fresh';
@@ -195,6 +198,48 @@ test('relay: a code-only peer learns the fingerprint through the pin proof; a wr
     const other = await probeRelay(ref, 'api', { identity: master, fp: 'ab'.repeat(32), pin: null });
     assert.deepEqual(other, { ok: false, reason: 'fingerprint mismatch' });
   } finally {
+    await worker.close();
+    await w.close();
+    await relay.close();
+  }
+});
+
+test('relay: `chat --mode apart` with a far peer (openApart) works and teaches the book; the split planner leaves it out', async () => {
+  const relay = await startRelay({ port: 0, host: '127.0.0.1' });
+  const w = await fakeWorker('cafebabecafebabe');
+  const worker = await startRelayWorker({ url: relay.url, id: 'w6', name: 'berlin', fp: w.identity.fp, gatePort: w.gate.port });
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kula-relay-c-'));
+  const file = path.join(dir, 'tiny.gguf');
+  const bytes = randomBytes(65536);
+  fs.writeFileSync(file, bytes);
+  const served = await serveModel(file, '127.0.0.1', '127.0.0.1');
+  let cluster: Awaited<ReturnType<typeof openApart>> | null = null;
+  try {
+    const me = createIdentity('master-pc');
+    // added by code alone: no address, no certificate yet, the pin read out over the phone
+    const far = parsePeerText(`${worker.code} cafebabecafebabe`, relay.url);
+    const lanDead: Peer = { id: 'dead', name: 'dead', host: '127.0.0.1', port: 1, secret: 'ab'.repeat(8), kind: 'pc', ram: 1, bw: 1, added_at: 't' };
+    cluster = await openApart({
+      model: { url: served.url, sha256: createHash('sha256').update(bytes).digest('hex'), size: bytes.length, name: 'tiny.gguf', ctx: 512 },
+      localModelFile: null, peers: [far, lanDead], probeMs: 1500, identity: me,
+    });
+    assert.deepEqual(cluster.devices.map((d) => d.name), ['berlin'], 'the far peer is a device, named by the relay');
+    assert.deepEqual(cluster.skipped.map((s) => s.peer.id), ['dead']);
+    const r = await cluster.chat([{ role: 'user', content: 'hallo' }], () => {}, { maxTokens: 16 });
+    assert.equal(r.text, PIECES.join(''));
+    const taught = cluster.stamped.find((p) => p.id === far.id)!;
+    assert.equal(taught.fp, w.identity.fp, 'the certificate is learned and pinned');
+    assert.equal(taught.pin, null, 'the pin is spent');
+    assert.equal(taught.name, 'berlin');
+    assert.ok(taught.last_ok);
+    // split: the far peer is skipped before any probe, with the reason the cli prints
+    const plan = await planWithProbe({ modelBytes: 1_000_000, localFreeMb: 8000, localBw: 10, share: true, wanted: [taught], identity: me });
+    assert.deepEqual(plan.used, []);
+    assert.deepEqual(plan.skipped.map((s) => s.why), [REMOTE_NO_SPLIT]);
+  } finally {
+    await cluster?.close();
+    await served.close();
+    fs.rmSync(dir, { recursive: true, force: true });
     await worker.close();
     await w.close();
     await relay.close();
