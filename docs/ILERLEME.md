@@ -3,6 +3,46 @@
 Plan: `~/.claude/plans/memoized-kindling-puddle.md` (4.11.2026). Bu dosya her adımda güncellenir:
 ne yapıldı, ne doğrulandı, ne kaldı. Döndüğünde önce burayı oku.
 
+## 5.11 ölçüm: planlayıcıya gerçek sayılar (`claude/bench`, Mac'te yerel oturum)
+
+Dal: `origin/claude/node-master` + `integrate-night` + `planner-sim` merge'leri (çakışma: bu dosya, ikisi de
+tutuldu; `node/src/planner.ts` planner-sim'in çekirdeğiyle, `Peer` tipi `peers.ts`'den; `split.ts`/`mastercmd`
+artık `model`+`ctx` alıyor, gguf başlığı `node/src/gguf.ts` okuyor). Ayrıntı: `docs/BENCH.md`.
+
+- **Ortak kayıt**: `tools/bench-schema.json`; `app/src/bench/core.ts` (şema denetimi, medyan, `/blob` kuralı,
+  `measuredTps`) = `node/src/benchcore.ts` bayt bayt (test karşılaştırıyor).
+- **`kula-node bench --model <gguf> [--peer …]`**: yerel istem ve üretim tok/s (llama-server `timings`, 3 tur,
+  medyan), ilk token, bellek bant genişliği, kapı gidiş-dönüş, tünel hızı (10 MB `/blob`), eş başına ayrı mod
+  tok/s, ikili + eş varsa bölünmüş yükleme süresi ve token süresi; yoksa `skipped` ile sebebi. Eş yoksa kapı ve
+  tünel kendi kapısına (loopback). `~/.kula-node/bench/<tarih>.json` + tablo.
+- **İşçi API'si**: `GET /blob?mb=N` (N ≤ 64, sıfır baytlar, sabit uzunluk) hem `node/src/api.ts` hem
+  `ApiServer.kt`; uyum testleri (başlıklar ham soketten, kapı tüneli üzerinden 10 MB). **`ApiServer.kt` derlenmedi**
+  (bu Mac'te gradle çalıştırılmadı); `blobMb` TS'deki vakaları elle izliyor.
+- **Uygulama**: ayarlar → "hızı ölç" (`app/src/app/bench.tsx`): native `memBandwidth`, modeli tek başına yükleyip
+  64 token × 3 (`generate`), istem hızı bağlamdan, eşlere `probePeer` süresi ve `apiTunnel` + `/blob` hızı; sonuç
+  kartı, json paylaş (expo-sharing), geçmiş kv-store'da (son 20). Başka bir model/mod yüklüyse dokunmuyor, söylüyor.
+  i18n en/de/tr (`parts/bench.ts`). Telefonda ayrı/bölünmüş mod ölçümü yok (kula-node'un işi).
+- **Planlayıcı**: o cihaz+model için ölçüm varsa `withMeasured` (sim çekirdeği) cihazın `eff`'ini ölçülen tok/s'yi
+  verecek şekilde ayarlıyor → `cluster.planSplit`, `node/planner`, model sayfası tahminleri, `fit.ts` (`fit.measured`,
+  sayfada "ölçüldü"), ayrı mod dağıtıcısının başlangıç hızı (telefon `engine.ts`, bilgisayar `apart.ts`). Ölçüm
+  yoksa eski tahmin.
+- Eski lint hatası (`index.tsx:14`, effect içinde setState) düzeltildi: yönlendirme artık türetiliyor.
+- **Testler**: app `npx jest` 97/97 (yeni `bench.test.ts` 7), `tsc` temiz, `expo lint` 0 hata (8 eski uyarı);
+  node `npm test` 57 (56 geçti, 1 eski atlama; yeni: bench 8, `/blob` uyum 2).
+- **Gerçek ölçüm** (Mac M1 8 GB, Qwen3 0.6B Q8_0, eş yok): üretim **59.1 tok/s** (59.1 / 65.5 / 58.6), istem
+  1202 tok/s (123 token), ilk token 104 ms, bellek 51.0 GB/s, loopback kapı 1 ms, tünel 446 MB/s. Profillerdeki
+  34 tok/s (sohbet uç noktasıyla) bundan düşük; fark henüz açıklanmadı. Bölünmüş/ayrı mod: eş yoktu, atlandı.
+
+### telefonda yapılacak 3 ölçüm
+1. **S25+ tek başına**: `npm run apk` ile derle (ApiServer.kt değişti), ayarlar → hızı ölç, model Gemma 3 1B.
+   Beklenen: bellek ~60 GB/s civarı, üretim tok/s; tahminle (65.9 × 0.6 / 0.75 GB ≈ 50) karşılaştır. "json olarak
+   paylaş" ile kaydı Mac'e gönder.
+2. **Telefon ↔ Mac, aynı wi-fi**: Mac'te `kula-node share`, telefonda QR ile eşle, sonra telefonda hızı ölç: kapı
+   gidiş-dönüş ve tünel MB/s (5 GHz'de 20–30 MB/s beklenir; emülatörde 1.3 idi). Bu sayı bölünmüş modun hızını belirler.
+3. **Mac'ten telefona**: telefonda "telefonu paylaş", Mac'te `kula-node peers add …` ve
+   `kula-node bench --model <gemma gguf> --peer <telefon>`: telefonun ayrı mod tok/s'si ve bölünmüş yükleme süresi +
+   token süresi. Sonra `kula-node chat --mode split` planı ölçülen sayılarla kuruyor mu, logda "measured tok/s" satırı.
+
 ## 5.11 cloud: bilgisayardan küme yönetimi (`claude/node-master`)
 
 `origin/claude/loving-dijkstra-ku8d4t` + `release/local-2026-10-20` üstüne, yalnız `node/` içinde:
