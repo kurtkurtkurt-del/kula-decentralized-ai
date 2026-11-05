@@ -11,8 +11,8 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { openApart, type Cluster, type Message, type ModelRef, type Reply } from '../apart.js';
-import { readPeers, writePeers, parsePeerText, upsertPeer, removePeer, findPeer, probePeers, peersFile, whereIs, type Peer, type PeerProbe } from '../peers.js';
+import { openApart, openPeerDevice, type Cluster, type Message, type ModelRef, type Reply } from '../apart.js';
+import { readPeers, writePeers, parsePeerText, upsertPeer, removePeer, findPeer, probePeers, peersFile, whereIs, discover, type Peer, type PeerProbe, type Found } from '../peers.js';
 import { connectRemote, handshake, peekGate, GateRefused, type GatePeek } from '../gate.js';
 import { Adb, isSerial, stateHelp, NO_ADB_HELP, type CableDevice } from './cable.js';
 import { loadOrCreateIdentity, type GateIdentity } from '../tls.js';
@@ -36,7 +36,13 @@ export interface PeerRow {
   ram: number | null; bw: number | null; gpu: string | null; last_ok: string | null;
   reach: Reach | null; probedAt: number | null;
   cable: { serial: string; plugged: boolean | null } | null;   // on a usb cable; plugged: null until adb was asked
+  holds: string | null;               // the model file the phone has loaded, as its /status said at the last probe
 }
+
+// A kula device that announces itself on this network (mdns _kula._tcp), as the connect sheet
+// lists it. Nothing secret is in an announcement; `paired` is the peer it already is, if any.
+export interface FoundRow { name: string; host: string; port: number; kind: string | null; v: string | null; paired: string | null }
+type BonjourLike = Parameters<typeof discover>[1];
 
 // A phone on the cable as the connect sheet shows it, and what "use" is doing with it.
 export type CableStep = 'forwarding' | 'looking' | 'waiting' | 'code' | 'pairing' | 'paired' | 'error';
@@ -97,6 +103,9 @@ export interface EngineOptions {
   adb?: Adb;                             // phones on a cable; default: adb found on this computer
   cableWaitMs?: number;                  // how long "use" waits for a phone to start sharing; 60 s
   cablePollMs?: number;                  // how often it looks meanwhile; 1 s
+  bonjour?: () => BonjourLike;           // tests: a fake mdns browser for discover
+  discoverMs?: number;                   // how long discover listens; 2.5 s
+  statusMs?: number;                     // how long a probe waits for a phone's /status; 2.5 s
 }
 
 // What a model takes in memory, run whole: the file, the kv cache for ctx, some slack.
@@ -112,12 +121,13 @@ export function defaultModelDirs(): string[] {
   return [...new Set(dirs)];
 }
 
-export function peerRow(p: Peer, probe?: Reach | null, probedAt: number | null = null, plugged: boolean | null = null): PeerRow {
+export function peerRow(p: Peer, probe?: Reach | null, probedAt: number | null = null, plugged: boolean | null = null, holds: string | null = null): PeerRow {
   return {
     id: p.id, name: p.name, kind: p.kind, where: whereIs(p), far: !!p.relay, tls: !!p.fp, waitingPair: !p.fp && !!p.pin,
     ram: p.ram ?? null, bw: p.bw ?? null, gpu: p.gpu ?? null, last_ok: p.last_ok ?? null,
     reach: probe ?? null, probedAt,
     cable: p.cable ? { serial: p.cable.serial, plugged } : null,
+    holds,
   };
 }
 
@@ -143,6 +153,8 @@ export class Engine {
   private seeing: Promise<CableDevice[]> | null = null;
   private installedBy = new Map<string, boolean>();
   private jobs = new Map<string, CableJob>();
+  private held = new Map<string, string | null>();
+  private discovering: Promise<FoundRow[]> | null = null;
   readonly catalog: CatalogEntry[];
 
   constructor(private readonly opts: EngineOptions = {}) {
@@ -171,7 +183,7 @@ export class Engine {
   // ---- peers
 
   peers(): PeerRow[] {
-    return readPeers(this.file()).map((p) => { const x = this.reach.get(p.id); return peerRow(p, x?.r ?? null, x?.at ?? null, this.plugged(p)); });
+    return readPeers(this.file()).map((p) => { const x = this.reach.get(p.id); return peerRow(p, x?.r ?? null, x?.at ?? null, this.plugged(p), this.held.get(p.id) ?? null); });
   }
 
   private plugged(p: Peer): boolean | null {
@@ -196,8 +208,46 @@ export class Engine {
       const at = Date.now();
       for (const r of results) this.reach.set(r.peer.id, { r: r.api as Reach, at });
       this.stamp(results.map((r) => r.peer));
+      // what a reachable phone has loaded: the connect sheet offers that model first
+      const fresh = readPeers(this.file());
+      await Promise.all(results.filter((r) => r.api.ok).map(async (r) => {
+        const p = fresh.find((x) => x.id === r.peer.id);
+        if (p) this.held.set(p.id, await this.holds(p));
+      }));
     }
     return this.peers();
+  }
+
+  // The worker's GET /status through a tunnel to its api channel: the file it has loaded, or
+  // null (nothing loaded, an old worker, no answer in time). The model that this computer
+  // loaded on it counts too.
+  private async holds(p: Peer): Promise<string | null> {
+    const mine = this.loaded && this.cluster?.devices.some((d) => d.id === p.id) ? this.loaded.model.file : null;
+    let dev: Awaited<ReturnType<typeof openPeerDevice>> | null = null;
+    const ms = this.opts.statusMs ?? 2500;
+    try {
+      const open = openPeerDevice(p, this.identity());
+      dev = await Promise.race([open, sleep(ms).then(() => { open.then((d) => d.close()).catch(() => {}); return null; })]);
+      if (!dev) return mine;
+      const r = await fetch(`http://127.0.0.1:${dev.apiPort}/status`, { signal: AbortSignal.timeout(ms) });
+      const st = (await r.json()) as { loaded?: unknown; model?: unknown };
+      return st.loaded === true && typeof st.model === 'string' && st.model ? path.basename(st.model).slice(0, 200) : mine;
+    } catch { return mine; } finally { await dev?.close().catch(() => {}); }
+  }
+
+  // Kula devices announcing themselves on this network (mdns), for the wi-fi steps. One look
+  // at a time however many ask; a device already in the peer book says which peer it is.
+  discover(): Promise<FoundRow[]> {
+    if (this.discovering) return this.discovering;
+    const bonjour = this.opts.bonjour?.();
+    this.discovering = discover(this.opts.discoverMs ?? 2500, bonjour).then((found: Found[]) => {
+      const peers = readPeers(this.file());
+      return found.map((f) => {
+        const p = peers.find((x) => (f.id && x.id === f.id) || (x.host === f.host && x.port === f.port && !x.relay && !x.cable)) ?? null;
+        return { name: String(f.name).slice(0, 60), host: f.host, port: f.port, kind: f.kind, v: f.v, paired: p ? p.id : null };
+      });
+    }).finally(() => { this.discovering = null; });
+    return this.discovering;
   }
 
   // The qr json, its base64url code, host:port:secret, or a relay code (+ pin): parsed by the
@@ -264,6 +314,7 @@ export class Engine {
     if (!removed) return false;
     writePeers(list, file);
     this.reach.delete(removed.id);
+    this.held.delete(removed.id);
     this.note(`forgot ${removed.name}`);
     return true;
   }
@@ -278,8 +329,14 @@ export class Engine {
   // pin proof. The forward's port can change (unplugged, adb restarted), so every connect
   // makes it again. Nothing here says the code back: job lines are plain progress.
 
+  // adb missing is looked for again every few seconds: installing platform-tools (or Android
+  // Studio) while the page is open shows the phone without a restart
+  private adbLooked = 0;
   private adb(): Adb {
-    if (!this.adbTool) this.adbTool = this.opts.adb ?? new Adb();
+    if (!this.adbTool || (!this.opts.adb && !this.adbTool.present && Date.now() - this.adbLooked > 3000)) {
+      this.adbTool = this.opts.adb ?? new Adb();
+      this.adbLooked = Date.now();
+    }
     return this.adbTool;
   }
 

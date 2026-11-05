@@ -62,7 +62,7 @@ const hostPort = (h: string, port: number) => `${h.includes(':') ? `[${h}]` : h}
 const GONE_PAGE = (why: string) => `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>kula chat</title></head><body><p>${why.replace(/[&<>"']/g, '')}</p><p>ask whoever runs kula on that computer for a new qr code.</p></body></html>`;
 
 const TYPES: Record<string, string> = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml' };
-export const UI_STATIC = ['index.html', 'app.js', 'app.css', 'markdown.js'];
+export const UI_STATIC = ['index.html', 'app.js', 'app.css', 'markdown.js', 'wizard.js'];
 // tools/pack.mjs bakes these in: a packed executable has no static folder next to it
 declare const __KULA_UI_STATIC__: Record<string, string> | undefined;
 
@@ -241,6 +241,7 @@ export async function startUi(opts: UiOptions): Promise<UiServer> {
       if (route === 'invite.svg') { const u = inviteUrl(); return u && lan ? send(res, 200, qrSvg(u), TYPES['.svg']) : send(res, 404, 'no invite'); }
       if (route === 'peers') return json(res, 200, engine.peers());
       if (route === 'cable') return json(res, 200, await engine.cable());
+      if (route === 'discover') return json(res, 200, await engine.discover());
       if (route === 'models') return json(res, 200, engine.models());
       if (route === 'settings') return json(res, 200, { openai: { base: openaiBase(), token }, host: hostLabel(), relay: process.env.KULA_RELAY ?? null });
       if (route === 'chats') return json(res, 200, chats.list(query.get('q') ?? undefined));

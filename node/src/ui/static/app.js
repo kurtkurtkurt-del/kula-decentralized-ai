@@ -2,6 +2,7 @@
 // text reaches the DOM only through markdown.js (which escapes everything) or textContent;
 // names that devices give themselves go through textContent too.
 import { renderMarkdown, splitThink, stripThink } from './markdown.js';
+import * as wiz from './wizard.js';
 
 const $ = (id) => document.getElementById(id);
 const base = location.pathname.replace(/[^/]*$/, '');
@@ -83,7 +84,7 @@ function toast(text) {
 
 // ---------- settings (this browser only)
 
-const DEFAULTS = { temperature: 0.7, maxTokens: 1024, ctx: 4096, system: '', theme: 'system', mode: 'phone', model: null, peers: [] };
+const DEFAULTS = { temperature: 0.7, maxTokens: 1024, ctx: 4096, system: '', theme: 'system', mode: 'phone', model: null, peers: [], way: null };
 function readSettings() {
   try { return { ...DEFAULTS, ...JSON.parse(localStorage.getItem('kula.chat.settings') || '{}') }; } catch { return { ...DEFAULTS }; }
 }
@@ -672,6 +673,7 @@ async function refreshCable() {
   cableBusy = true;
   try { S.cable = await getJson('cable'); } catch (e) { S.cable = { adb: true, help: null, error: e.message, devices: [] }; } finally { cableBusy = false; }
   renderCable();
+  wizCable();
   // a cable pulled or plugged in: the device rows below say so too
   const plugged = (S.cable.devices || []).map((d) => `${d.serial}:${d.state}`).join(',');
   if (plugged !== cablePlugged) { cablePlugged = plugged; if (S.peers.some((p) => p.cable)) refreshPeers(false); }
@@ -789,7 +791,8 @@ async function pairCable(serial) {
   refreshCable();
 }
 
-setInterval(() => { if ($('connect').open && !document.hidden) refreshCable(); }, 2000);
+// looked at while the advanced part shows, or while the wizard is on a cable step
+setInterval(() => { if ($('connect').open && !document.hidden && (!$('advanced').hidden || WIZ_CABLE.has(W.step))) refreshCable(); }, 1500);
 
 // ---------- connect: add a device
 
@@ -966,13 +969,13 @@ function setProgress(frac) {
   $('load-bar').style.width = frac == null ? '' : `${Math.round(frac * 100)}%`;
 }
 
-$('load').addEventListener('click', async () => {
-  if (loadRun) return;
-  const body = { model: settings.model, mode: settings.mode, peers: settings.mode === 'here' ? [] : selectedPeers(), ctx: settings.ctx };
-  if (settings.mode === 'phone' && !body.peers.length) return loadMsg('add a phone first', 'bad');
+// One load through the page's api; `show` draws it (the old block below, or the wizard's
+// load step). Resolves true when the model is ready.
+async function runLoad(body, show) {
+  if (loadRun) return false;
   loadRun = true;
-  setProgress(null);
-  loadMsg('starting…');
+  show.progress(null);
+  show.msg('starting…');
   renderLoadState();
   let ok = false;
   try {
@@ -981,41 +984,522 @@ $('load').addEventListener('click', async () => {
       if (ev.done) { ok = true; S.status = ev.status; return; }
       if (ev.line) {
         const frac = ev.total ? ev.got / ev.total : null;
-        setProgress(ev.phase === 'running' || ev.phase === 'checking' ? frac : null);
+        show.progress(ev.phase === 'running' || ev.phase === 'checking' ? frac : null);
         const amount = ev.total && ev.phase === 'running' ? ` ${Math.floor((ev.got / ev.total) * 100)}% of ${gb(ev.total)}` : '';
-        loadMsg(`${ev.device ? `${ev.device}: ` : ''}${ev.line}${amount}`);
+        show.msg(`${ev.device ? `${ev.device}: ` : ''}${ev.line}${amount}`);
       }
     });
     if (!ok) throw new Error('the load ended without an answer');
-    setProgress(1);
-    loadMsg(`${S.status.loaded.model.name} is ready on ${S.status.loaded.devices.map((d) => d.name).join(', ')}.`, 'ok');
-    setTimeout(() => { if ($('connect').open && !loadRun) $('connect').close(); }, 900);
+    show.progress(1);
+    show.msg(`${S.status.loaded.model.name} is ready on ${S.status.loaded.devices.map((d) => d.name).join(', ')}.`, 'ok');
+    return true;
   } catch (e) {
-    $('load-progress').hidden = true;
-    loadMsg(e.message, 'bad');
+    show.progress(false);
+    show.msg(e.message, 'bad');
+    return false;
   } finally {
     loadRun = null;
     await refreshStatus();
     renderLoadState();
     refreshPeers(false);
   }
+}
+
+$('load').addEventListener('click', async () => {
+  if (loadRun) return;
+  const body = { model: settings.model, mode: settings.mode, peers: settings.mode === 'here' ? [] : selectedPeers(), ctx: settings.ctx };
+  if (settings.mode === 'phone' && !body.peers.length) return loadMsg('add a phone first', 'bad');
+  const ok = await runLoad(body, { progress: (f) => (f === false ? ($('load-progress').hidden = true) : setProgress(f)), msg: loadMsg });
+  if (ok) setTimeout(() => { if ($('connect').open && !loadRun) $('connect').close(); }, 900);
 });
 $('load-stop').addEventListener('click', () => postJson('stop').catch(() => {}));
 $('unload').addEventListener('click', async () => { await postJson('unload').catch((e) => toast(e.message)); loadMsg(''); refreshStatus(); });
 
-async function openConnect() {
-  if (isGuest()) return;
-  const d = $('connect');
-  if (!d.open) d.showModal();
-  renderModes();
-  renderPeers();
-  renderModels();
-  renderLoadState();
-  refreshCable();
-  try { S.models = await getJson('models'); } catch {}
-  renderModels();
-  refreshPeers(S.peers.length > 0);
+// ---------- connect: one question at a time (wizard.js decides, this draws)
+// how is the phone connected → the steps of that way → which model → how it runs → loading.
+// The old one-page sheet stays under "advanced".
+
+const WIZ_CABLE = new Set(['cable-plug', 'cable-share', 'cable-code']);
+const PLATFORM_TOOLS = 'https://developer.android.com/tools/releases/platform-tools';
+let W = wiz.initial(settings.way);
+let wizSig = '';
+let wizStepShown = '';
+let wizRun = 0;                         // bumps on every open: answers for an older walk are dropped
+const draft = { code: '', address: '', fp: '' };
+let found = { list: null, looking: false, error: null };   // GET discover
+let wizPairing = false;
+let wizModelsProbed = 0;
+
+function go(ev) {
+  const before = W.step;
+  W = wiz.next(W, ev);
+  if (ev.type === 'way') { settings.way = ev.way; saveSettings(); }
+  renderWiz();
+  if (W.step !== before) enterStep();
 }
+
+// what a step does when it starts
+function enterStep() {
+  const run = wizRun;
+  if (WIZ_CABLE.has(W.step)) refreshCable();
+  if (W.step === 'wifi-list' && !found.looking) lookAround();
+  if (W.step === 'wifi-check') checkFound(run);
+  if (W.step === 'model') {
+    if (!S.models.length) getJson('models').then((m) => { S.models = m; renderWiz(true); }).catch(() => {});
+    if (Date.now() - wizModelsProbed > 20000) {
+      wizModelsProbed = Date.now();
+      postJson('peers/probe').then((list) => { if (run !== wizRun) return; S.peers = list; renderPeers(); renderWiz(true); }).catch(() => {});
+    }
+  }
+  if (W.step === 'load') wizLoad(run);
+  if (W.step === 'done') setTimeout(() => { if ($('connect').open) $('connect').close(); input.focus(); }, 700);
+}
+
+const phoneNow = () => wiz.choosePhone(S.peers, [W.peerId, ...settings.peers].filter(Boolean));
+
+// ---- drawing
+
+function q(text) { const h = el('h3', 'wiz-q', text); h.tabIndex = -1; h.id = 'wiz-q'; return h; }
+function para(text, cls = 'wiz-p') { return el('p', cls, text); }
+function btn(text, cls, onClick) { const b = el('button', cls, text); b.type = 'button'; b.addEventListener('click', onClick); return b; }
+function choice(title, sub, onClick, tag) {
+  const b = el('button', 'choice');
+  b.type = 'button';
+  b.append(el('b', '', title), el('span', '', sub));
+  if (tag) b.appendChild(el('em', 'tag', tag));
+  b.addEventListener('click', onClick);
+  return b;
+}
+function steps(list, ordered = true) { const o = el(ordered ? 'ol' : 'ul', 'wiz-steps'); for (const t of list) o.appendChild(typeof t === 'string' ? el('li', '', t) : t); return o; }
+function waiting(text) { const r = el('p', 'wiz-wait'); r.append(el('span', 'dot busy'), el('span', '', text)); return r; }
+function errLine(text) { const e = el('p', 'msg bad', text); e.setAttribute('role', 'alert'); return e; }
+// a code the phone refused is spent: it shows a new one after stop and start
+function codeError(text) {
+  const out = [errLine(text)];
+  if (/wrong pin|bad (pin )?proof|not paired|no pin/i.test(text)) out.push(para('a code works once: on the phone stop share this phone and start it again, then type the new code.', 'hint'));
+  return out;
+}
+function row(...kids) { const r = el('div', 'row'); r.append(...kids); return r; }
+function field(label, key, attrs = {}) {
+  const l = el('label', `field big${attrs.cls ? ` ${attrs.cls}` : ''}`);
+  l.appendChild(el('span', '', label));
+  const i = el('input');
+  i.id = `wiz-${key}`;
+  i.value = draft[key];
+  i.spellcheck = false;
+  i.autocomplete = 'off';
+  i.setAttribute('autocapitalize', 'off');
+  i.setAttribute('autocorrect', 'off');
+  for (const [k, v] of Object.entries(attrs)) if (k !== 'cls') i.setAttribute(k, v);
+  i.addEventListener('input', () => { draft[key] = i.value; });
+  l.appendChild(i);
+  return [l, i];
+}
+function outLink(text, href) { const a = el('a', '', text); a.href = href; a.target = '_blank'; a.rel = 'noopener noreferrer'; return a; }
+
+const VIEWS = {
+  checking: () => [q('looking for your devices…'), waiting('asking the phones you paired before')],
+
+  how: () => {
+    const last = settings.way;
+    const box = el('div', 'choices');
+    box.append(
+      choice('usb cable', 'the phone plugged into this computer', () => go({ type: 'way', way: 'cable' }), last === 'cable' ? 'last time' : null),
+      choice('same wi-fi', 'or the phone\'s hotspot', () => go({ type: 'way', way: 'wifi' }), last === 'wifi' ? 'last time' : null),
+    );
+    return [q('how is the phone connected?'), box];
+  },
+
+  'cable-plug': () => {
+    const c = wiz.cableState(S.cable, W.serial, W.used);
+    if (c.problem === 'no-adb') {
+      const get = el('li');
+      get.append('get android\'s platform-tools from google\'s page: ', outLink('developer.android.com/tools/releases/platform-tools', PLATFORM_TOOLS));
+      return [q('this computer needs adb first'), para('adb is google\'s small tool that talks to android phones over a cable.'),
+        steps([get, 'unzip it and put the folder on your PATH, then start kula-node ui again (android studio\'s copy is found by itself).',
+          'on the phone, turn on usb debugging: settings → about phone → tap "build number" seven times, then settings → developer options → usb debugging.']),
+        waiting('looking for adb every few seconds')];
+    }
+    if (c.problem === 'unauthorized') return [q('tap allow on the phone'), para(`unlock ${c.name || 'the phone'}: it asks whether to allow usb debugging from this computer. tap allow.`), para('no prompt? unplug the cable and plug it in again.', 'hint'), waiting('waiting for allow')];
+    if (c.problem === 'not-installed') return [q('kula is not on this phone'), para('install the kula app on it first and open it once.'), waiting('looking again every few seconds')];
+    if (c.problem === 'offline' || c.problem === 'adb-error') return [q('the phone is not answering'), para(c.help || (c.error ? `adb: ${c.error}` : 'unplug it and plug it in again.')), waiting('looking again')];
+    const how = el('details', 'wiz-more');
+    how.append(el('summary', '', 'usb debugging is off?'), steps(['settings → about phone → tap "build number" seven times.', 'settings → developer options → turn on usb debugging.', 'plug in again and tap allow.']));
+    return [q('plug the phone in'), para('with a usb cable, into this computer.'), how, waiting('looking for it')];
+  },
+
+  'cable-share': () => {
+    const c = wiz.cableState(S.cable, W.serial, W.used);
+    const out = [q('starting sharing on the phone…')];
+    if (c.name) out.push(para(c.name, 'wiz-name'));
+    if (c.lines?.length) out.push(steps(c.lines.slice(-5), false));
+    if (c.error) out.push(errLine(c.error), row(btn('try again', 'primary big', () => useCableNow(c.serial))));
+    else out.push(waiting('kula opens share this phone on it by itself'));
+    return out;
+  },
+
+  'cable-code': () => {
+    const c = wiz.cableState(S.cable, W.serial, W.used);
+    const where = para('on the phone, under the qr, after "code".', 'hint');
+    where.id = 'wiz-code-where';
+    const [f, i] = field('the code', 'code', { placeholder: '16 letters and digits', maxlength: '40', inputmode: 'text', cls: 'code', 'aria-describedby': 'wiz-code-where' });
+    i.addEventListener('keydown', (e) => { if (e.key === 'Enter') pairCableNow(c.serial); });
+    const out = [q('type the code you see on the phone'), where, f];
+    if (c.error) out.push(...codeError(c.error));
+    const b = btn(c.busy || wizPairing ? 'pairing…' : 'pair', 'primary big', () => pairCableNow(c.serial));
+    b.disabled = !!(c.busy || wizPairing);
+    out.push(row(b));
+    return out;
+  },
+
+  connected: () => {
+    const name = S.peers.find((x) => x.id === W.peerId)?.name ?? 'your phone';
+    return [q(`connected ✓ ${name}`),
+      para(W.way === 'cable' ? 'over the usb cable. keep it plugged in while you chat.' : 'over this network. the phone keeps this computer for next time.'),
+      row(btn('next: pick a model', 'primary big', () => go({ type: 'continue' })))];
+  },
+
+  'wifi-share': () => [
+    q('on the phone: open share this phone and press start'),
+    steps(['open kula on the phone.', 'tap share this phone.', 'press start: it shows a qr, an address and a code.']),
+    para('both on the same wi-fi, or this computer on the phone\'s hotspot.', 'hint'),
+    row(btn('it\'s on', 'primary big', () => go({ type: 'share-on' }))),
+  ],
+
+  'wifi-list': () => {
+    const box = el('div', 'choices found-list');
+    for (const f of found.list ?? []) {
+      const b = choice(f.name, `${f.host}:${f.port}${f.kind ? ` · ${f.kind}` : ''}`, () => go({ type: 'pick', found: f }), f.paired ? 'paired' : null);
+      box.appendChild(b);
+    }
+    if (found.list && !found.list.length && !found.looking) box.appendChild(para(found.error ? 'this computer cannot look for phones here: type the address instead.' : 'none heard yet. is share this phone on?', 'none'));
+    if (found.looking) box.appendChild(waiting('listening for kula phones…'));
+    const r = row();
+    if (!found.looking && !found.error) r.appendChild(btn('look again', 'ghost', lookAround));
+    r.appendChild(btn('not in the list? type its address', 'link', () => go({ type: 'type-address' })));
+    return [q('phones on this network'), box, r];
+  },
+
+  'wifi-code': () => {
+    const out = [q('type the code you see on the phone')];
+    const inputs = [];
+    if (W.found) out.push(para(`${W.found.name} · ${W.found.host}:${W.found.port}`, 'wiz-name'));
+    else {
+      const [a, ai] = field('its address', 'address', { placeholder: '192.168.1.20:50551', inputmode: 'url', cls: 'addr' });
+      out.push(para('the address is under the qr on the phone.', 'hint'), a);
+      inputs.push(ai);
+    }
+    const [f, fi] = field('the code', 'code', { placeholder: '16 letters and digits', maxlength: '40', inputmode: 'text', cls: 'code' });
+    out.push(f);
+    inputs.push(fi);
+    const more = el('details', 'wiz-more');
+    const [fp, fpi] = field('certificate start', 'fp', { placeholder: 'the 16 after "certificate"', maxlength: '64', cls: 'code' });
+    more.append(el('summary', '', 'to be sure: the certificate'), para('optional. the code already proves both sides; this also checks what the phone shows.', 'hint'), fp);
+    if (draft.fp) more.open = true;
+    out.push(more);
+    inputs.push(fpi);
+    for (const x of inputs) x.addEventListener('keydown', (e) => { if (e.key === 'Enter') pairWifiNow(); });
+    if (W.error) out.push(...codeError(W.error));
+    const b = btn(wizPairing ? 'pairing…' : 'pair', 'primary big', pairWifiNow);
+    b.disabled = wizPairing;
+    out.push(row(b));
+    return out;
+  },
+
+  'wifi-check': () => [q(`looking at ${W.found?.name ?? 'the phone'}…`), waiting('it is paired already: checking that it answers')],
+
+  'wifi-apart': () => {
+    const box = el('div', 'choices');
+    box.append(
+      choice('use the cable instead', 'plug the phone into this computer', () => go({ type: 'use-cable' })),
+      choice('try the phone\'s hotspot', 'this computer joins the phone\'s own wi-fi', () => go({ type: 'hotspot' })),
+    );
+    const out = [q('this network keeps devices apart'), para('this computer cannot reach the phone. guest, office and some home wi-fis keep devices from seeing each other (or the address is off).')];
+    if (W.error) out.push(para(W.error, 'hint'));
+    out.push(box);
+    return out;
+  },
+
+  hotspot: () => [
+    q('use the phone\'s hotspot'),
+    steps(['on the phone, turn on its hotspot (settings → hotspot & tethering).', 'join that hotspot\'s wi-fi from this computer.', 'in kula on the phone, stop share this phone and start it again: the address changes.']),
+    para('the phone then downloads models over its mobile data: they are big.', 'hint'),
+    row(btn('this computer is on it', 'primary big', () => go({ type: 'on-hotspot' }))),
+  ],
+
+  model: () => {
+    const phone = phoneNow();
+    const out = [q('which model?')];
+    const sub = el('p', 'wiz-p');
+    sub.append(phone ? `for ${phone.name}. ` : 'no phone answers right now. ');
+    sub.appendChild(btn('connect another device', 'link', () => go({ type: 'another' })));
+    out.push(sub);
+    const l = S.status?.loaded;
+    if (l) {
+      const n = el('p', 'hint');
+      n.append(`${l.model.name} is loaded on ${l.devices.map((d) => d.name).join(', ')}. `);
+      n.appendChild(btn('unload', 'link', async () => { await postJson('unload').catch((e) => toast(e.message)); await refreshStatus(); renderWiz(true); }));
+      out.push(n);
+    }
+    const box = el('div', 'model-list wiz-models');
+    if (!S.models.length) box.appendChild(waiting('getting the list…'));
+    for (const m of wiz.modelRows(S.models, phone)) {
+      const b = el('button', 'model');
+      b.type = 'button';
+      b.setAttribute('aria-pressed', String(settings.model === m.id));
+      b.append(el('b', '', `${m.name}${m.quant ? ` · ${m.quant}` : ''}`), el('span', 'size', gb(m.size)), el('span', 'blurb', m.catalog ? m.blurb : 'a file on this computer: only this computer can run it (here or split)'));
+      const fit = el('span', 'fit');
+      if (m.onPhone) fit.appendChild(el('span', 'yes', `on ${phone.name} now`));
+      if (m.fit) fit.appendChild(el('span', m.fit[0], m.fit[1]));
+      if (m.here) fit.appendChild(el('span', 'info', 'on this computer'));
+      if (fit.children.length) b.appendChild(fit);
+      b.addEventListener('click', () => { settings.model = m.id; saveSettings(); go({ type: 'model', id: m.id }); });
+      box.appendChild(b);
+    }
+    out.push(box);
+    return out;
+  },
+
+  mode: () => {
+    const model = S.models.find((m) => m.id === W.model) ?? null;
+    const out = [q('how should it run?')];
+    if (model) out.push(para(model.name, 'wiz-name'));
+    const box = el('div', 'choices two');
+    for (const c of wiz.modeCards({ model, phone: phoneNow(), peers: S.peers, llama: !!S.status?.llama })) {
+      const b = choice(c.title, c.disabled ? c.why : c.sub, () => { settings.mode = c.mode; saveSettings(); go({ type: 'mode', mode: c.mode }); }, c.recommended && !c.disabled ? 'recommended' : null);
+      if (c.disabled) { b.disabled = true; b.classList.add('off'); }
+      box.appendChild(b);
+    }
+    out.push(box);
+    return out;
+  },
+
+  load: () => {
+    const st = S.status;
+    const name = S.models.find((m) => m.id === W.model)?.name ?? st?.loading?.model ?? 'the model';
+    const bar = el('div', 'progress indeterminate');
+    bar.id = 'wiz-progress';
+    bar.setAttribute('role', 'progressbar');
+    bar.setAttribute('aria-label', `loading ${name}`);
+    const fill = el('div', 'bar');
+    fill.id = 'wiz-bar';
+    bar.appendChild(fill);
+    const msg = el('p', 'msg', st?.loading ? st.loading.line : 'starting…');
+    msg.id = 'wiz-msg';
+    msg.setAttribute('role', 'status');
+    const r = row(btn('stop', 'ghost', () => postJson('stop').catch(() => {})));
+    r.classList.add('end');
+    r.id = 'wiz-load-row';
+    return [q(`loading ${name}`), bar, msg, r];
+  },
+
+  done: () => [q('ready ✓'), para('the composer is yours.')],
+};
+
+function wizSignature() {
+  const c = WIZ_CABLE.has(W.step) ? wiz.cableState(S.cable, W.serial, W.used) : null;
+  return JSON.stringify([W.step, W.error, W.found, wizPairing, settings.way,
+    c && [c.step, c.problem, c.error, c.busy, W.step === 'cable-code' ? null : c.lines, c.name],
+    W.step === 'wifi-list' ? found : null,
+    W.step === 'connected' ? S.peers.find((x) => x.id === W.peerId)?.name : null,
+    W.step === 'model' || W.step === 'mode' ? [S.models.length, S.peers.map((x) => [x.id, x.reach?.ok, x.holds, x.ram]), settings.model, S.status?.loaded?.model?.id, !!S.status?.llama] : null]);
+}
+
+function renderWiz(force = false) {
+  if (W.step === 'load' && wizStepShown === 'load' && !force) return;   // the load draws itself
+  const sig = wizSignature();
+  if (!force && sig === wizSig && wizStepShown === W.step) return;
+  // a field being typed into keeps its focus and caret across a redraw
+  const a = document.activeElement;
+  const active = a && a.tagName === 'INPUT' && a.id.startsWith('wiz-') ? a.id : null;
+  const body = $('wiz-step');
+  const inside = !active && body.contains(a);   // focus inside the step: kept there, on the question
+  wizSig = sig;
+  body.replaceChildren(...(VIEWS[W.step] ?? VIEWS.how)());
+  // the dots: where this question sits
+  const stage = wiz.stageOf(W.step);
+  const dots = $('wiz-dots');
+  dots.replaceChildren(...wiz.STAGES.map((name, i) => { const li = el('li', i < stage ? 'past' : i === stage ? 'now' : ''); if (i === stage) li.setAttribute('aria-current', 'step'); return li; }));
+  dots.setAttribute('aria-label', `step ${stage + 1} of ${wiz.STAGES.length}`);
+  $('wiz-back').hidden = !wiz.back(W) || W.step === 'checking' || W.step === 'done' || (W.step === 'load' && !!loadRun);
+  if (wizStepShown !== W.step) { wizStepShown = W.step; $('wiz-q')?.focus(); }
+  else if (active && $(active)) { const i = $(active); i.focus(); i.setSelectionRange?.(i.value.length, i.value.length); }
+  else if (inside || document.activeElement === document.body) $('wiz-q')?.focus();
+}
+
+// ---- the cable
+
+function wizCable() {
+  if (!$('connect').open || !$('advanced').hidden || !WIZ_CABLE.has(W.step)) return;
+  const c = wiz.cableState(S.cable, W.serial, W.used);
+  if (c.use && c.serial && !W.used.includes(c.serial)) useCableNow(c.serial);
+  const before = W.step;
+  W = wiz.next(W, { type: 'cable', view: S.cable });
+  if (W.step === 'connected' && before !== 'connected') { pickPeer(W.peerId); refreshPeers(false).then(() => renderWiz()); }
+  renderWiz();
+  if (W.step !== before) enterStep();
+}
+
+async function useCableNow(serial) {
+  W = wiz.next(W, { type: 'used', serial });
+  try { await postJson('cable/use', { serial }); } catch (e) { toast(e.message); }
+  refreshCable();
+}
+
+async function pairCableNow(serial) {
+  const code = draft.code.trim();
+  if (!code) { $('wiz-code')?.focus(); return; }
+  if (wizPairing) return;
+  wizPairing = true;
+  renderWiz();
+  try {
+    await postJson('cable/pair', { serial, code });
+    draft.code = '';
+  } catch {} // the job keeps the error; GET cable shows it
+  wizPairing = false;
+  await refreshCable();
+  renderWiz(true);
+}
+
+// ---- wi-fi
+
+async function lookAround() {
+  const run = wizRun;
+  found = { list: found.list, looking: true, error: null };
+  renderWiz();
+  try {
+    const list = await getJson('discover');
+    if (run === wizRun) found = { list, looking: false, error: null };
+  } catch (e) {
+    if (run === wizRun) found = { list: [], looking: false, error: e.message };
+  }
+  renderWiz();
+}
+
+async function pairWifiNow() {
+  if (wizPairing) return;
+  const f = W.found;
+  const address = f ? `${f.host.includes(':') ? `[${f.host}]` : f.host}:${f.port}` : draft.address.trim();
+  if (!address) { $('wiz-address')?.focus(); return; }
+  if (!draft.code.trim()) { $('wiz-code')?.focus(); return; }
+  const run = wizRun;
+  wizPairing = true;
+  W = { ...W, error: null };
+  renderWiz();
+  try {
+    const peer = await postJson('peers/add', { address, pin: draft.code.trim(), fp: draft.fp.trim(), name: f?.name ?? '' });
+    wizPairing = false;
+    if (run !== wizRun) return;
+    draft.code = '';
+    pickPeer(peer.id);
+    await refreshPeers(false);
+    go({ type: 'paired', peerId: peer.id });
+  } catch (e) {
+    wizPairing = false;
+    if (run === wizRun) go({ type: 'pair-failed', error: e.message });
+  }
+}
+
+async function checkFound(run) {
+  const id = W.found?.paired;
+  if (!id) return;
+  try {
+    S.peers = await postJson('peers/probe', { ids: [id] });
+    if (run !== wizRun || W.step !== 'wifi-check') return;
+    const peer = S.peers.find((x) => x.id === id);
+    if (peer?.reach?.ok) { pickPeer(id); go({ type: 'reached', peerId: id }); }
+    else go({ type: 'pair-failed', error: peer?.reach?.reason ?? 'it did not answer' });
+  } catch (e) { if (run === wizRun) go({ type: 'pair-failed', error: e.message }); }
+}
+
+// ---- the load
+
+async function wizLoad(run) {
+  const show = {
+    progress: (f) => {
+      const bar = $('wiz-progress');
+      if (!bar) return;
+      if (f === false) { bar.hidden = true; return; }
+      bar.hidden = false;
+      bar.classList.toggle('indeterminate', f == null);
+      $('wiz-bar').style.width = f == null ? '' : `${Math.round(f * 100)}%`;
+      if (f != null) bar.setAttribute('aria-valuenow', String(Math.round(f * 100))); else bar.removeAttribute('aria-valuenow');
+    },
+    msg: (text, kind = '') => { const m = $('wiz-msg'); if (m) { m.textContent = text; m.className = `msg ${kind}`; } },
+  };
+  // a load that was already running (the page came back to it): its line until it ends
+  if (S.status?.loading && !loadRun) {
+    const t = setInterval(async () => {
+      if (run !== wizRun || W.step !== 'load') return clearInterval(t);
+      await refreshStatus();
+      if (S.status?.loading) show.msg(`${S.status.loading.model}: ${S.status.loading.line}`);
+      else { clearInterval(t); if (S.status?.loaded) go({ type: 'loaded' }); else renderWiz(true); }
+    }, 1000);
+    return;
+  }
+  const mode = W.mode ?? settings.mode;
+  const body = { model: W.model ?? settings.model, mode, peers: wiz.loadPeers(mode, phoneNow(), S.peers), ctx: settings.ctx };
+  if (mode !== 'here') { settings.peers = body.peers; saveSettings(); }
+  $('wiz-back').hidden = true;
+  const ok = await runLoad(body, show);
+  if (run !== wizRun) return;
+  if (ok) { go({ type: 'loaded' }); return; }
+  W = wiz.next(W, { type: 'load-failed', error: $('wiz-msg')?.textContent || 'the load failed' });
+  $('wiz-back').hidden = false;
+  $('wiz-load-row')?.replaceChildren(btn('try again', 'primary big', () => { renderWiz(true); wizLoad(wizRun); }));
+}
+
+// ---- open, advanced
+
+function showAdvanced(on) {
+  $('advanced').hidden = !on;
+  $('wiz').hidden = on;
+  if (on) {
+    renderModes(); renderPeers(); renderModels(); renderLoadState(); refreshCable();
+    getJson('models').then((m) => { S.models = m; renderModels(); }).catch(() => {});
+    refreshPeers(S.peers.length > 0);
+    $('wiz-steps').focus();
+  } else { renderWiz(true); $('wiz-q')?.focus(); }
+}
+$('wiz-advanced').addEventListener('click', () => showAdvanced(true));
+$('wiz-steps').addEventListener('click', () => showAdvanced(false));
+$('wiz-back').addEventListener('click', () => go({ type: 'back' }));
+
+// auto: the page opened it by itself (a model loaded: it stays shut)
+async function openConnect(auto) {
+  if (isGuest()) return;
+  auto = auto === true;
+  const run = ++wizRun;
+  W = wiz.initial(settings.way);
+  wizStepShown = '';
+  found = { list: null, looking: false, error: null };
+  wizPairing = false;
+  wizModelsProbed = 0;
+  getJson('models').then((m) => { S.models = m; if (run === wizRun) renderWiz(); }).catch(() => {});
+  let peers = S.peers;
+  try { peers = S.peers = await getJson('peers'); } catch {}
+  let start = wiz.startStep({ peers, status: S.status, explicit: !auto });
+  if (start === 'done') return;
+  const d = $('connect');
+  const show = (step) => {
+    W = { ...W, step };
+    $('advanced').hidden = true;
+    $('wiz').hidden = false;
+    if (!d.open) d.showModal();
+    renderWiz(true);
+  };
+  if (start !== 'load' && peers.length) {
+    // paired before: is a phone there? (the probe also says which model it has loaded)
+    show('checking');
+    try { peers = S.peers = await postJson('peers/probe'); wizModelsProbed = Date.now(); } catch {}
+    if (run !== wizRun) return;
+    start = wiz.startStep({ peers, status: S.status, explicit: !auto });
+    if (start === 'done') { d.close(); return; }
+  }
+  show(start);
+  enterStep();
+}
+
 $('connect').addEventListener('close', () => { stopScan(); input.focus(); });
 
 // ---------- settings
@@ -1132,7 +1616,9 @@ if (/^[0-9a-f]{8,32}$/.test(fromHash)) openChat(fromHash);
 refreshStatus().then(() => {
   if (isGuest()) return;
   refreshInvite();
-  if (!S.status?.loaded && !S.status?.loading) getJson('peers').then((p) => { S.peers = p; if (!p.length) openConnect(); }).catch(() => {});
+  // nothing loaded: the connect sheet opens by itself, at the model question when a paired
+  // phone answers, else at the first question; a model loaded: no sheet
+  if (!S.status?.loaded && !S.status?.loading) openConnect(true);
 });
 setInterval(() => { if (!document.hidden) refreshStatus(); }, 2500);
 document.addEventListener('visibilitychange', () => { if (!document.hidden) refreshStatus(); });
