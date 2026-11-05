@@ -218,6 +218,14 @@ class KulaLlamaModule : Module() {
         else activity.window?.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
       }
     }
+    /** FLAG_SECURE while a qr with a secret or pairing code is on screen: no screenshots, no screen recording, blank in recents. */
+    AsyncFunction("secureScreen") { on: Boolean ->
+      val activity = appContext.currentActivity
+      activity?.runOnUiThread {
+        if (on) activity.window?.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
+        else activity.window?.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
+      }
+    }
     AsyncFunction("requestBatteryUnrestricted") {
       if (!batteryUnrestricted()) {
         @Suppress("BatteryLife")

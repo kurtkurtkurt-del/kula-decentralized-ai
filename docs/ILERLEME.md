@@ -280,6 +280,29 @@ ekranı, parçalı indirme).
 - `node/README.md` bu dalda integrate-night sürümü; `node-master` birleşince `peers/chat` bölümü kendiliğinden
   gelir, NODE.md ona göre yazıldı.
 - `docs/shots/` görüntüleri kılavuza bağlanmadı (emülatör görüntüleri; gerçek telefon görüntüsü alınınca).
+## güvenlik incelemesi (5.11, cloud oturumu, dal `claude/security-review`)
+
+`origin/claude/gate-tls` + `origin/claude/integrate-night` merge edildi (üç dosyada elle çözüm: `Gate.kt`,
+`gate.ts`, `dev-gate.mjs`; gate-tls yapısı + integrate-night'ın yarım-açık soket/denetçi düzeltmeleri),
+sonra bütün küme yüzeyi saldırgan gözüyle incelendi. Belge: **`docs/SECURITY.md`** (tehdit modeli, 20
+bulgu, kalan riskler). Release/main'e dokunulmadı, PR yok.
+
+- **Yüksek, düzeltildi:** telefonun işçi secret'ı `Math.random`'dan türüyordu → `expo-crypto`
+  (`app/src/llm/random.ts`); `/load name` ile uygulama dizininde keyfi dosya yazma/silme → `ModelName.safe`.
+- **Orta, düzeltildi:** `/load url` SSRF + yönlendirme (URL politikası, çözümlenen adres, 5 atlama); disk
+  doldurma (boyut üst sınırı, 512 MB serbest); ApiServer başlık/gövde sınırları; tek-usta yarışı (`RpcSlot`);
+  yarım açık bağlantı seli (`MAX_HANDSHAKES=32 → NO overloaded`); downgrade (`secret=null → NO no v1`,
+  `kula-node share --tls` artık v1 kapalı); TOFU zehirleme (eşleşme kodu 10 dk, `NO pin expired`).
+- **Düşük, düzeltildi:** JNI uçları yalnız `127.0.0.1` (`isLoopbackEndpoint`), paylaşım ekranı `FLAG_SECURE`,
+  `/load` indirme için sha zorunlu, ret kaydı NO'dan önce.
+- **Açık (karar):** telefon işçisi eski ustalar için v1'i hâlâ kabul ediyor (önerim: v3 ile eşleşince kapat);
+  `kula-node share` varsayılanı hâlâ `--tls`siz; loopback'teki tünel/RPC aynı cihazdaki her uygulamaya açık;
+  kv-store secret'ı yedeklere gidebilir (`allowBackup`); `paired` unutma arayüzü yok.
+- Testler: JVM 36/36 (`GuardTest` 5, `GateSecurityTest` 3 yeni; `audit-jvm`'de proxy 429 yüzünden
+  `gradle test --max-workers=1`), node 42/42 (`security.test.ts` 7 yeni), jest `security.test.ts` 3/3,
+  `tsc` iki tarafta temiz; `expo lint`in tek hatası (`index.tsx` setState) önceden vardı. Android/NDK derlemesi
+  yok: `ApiServer.kt`, `ModelDownloader.kt`, `WorkerService.kt`, `KulaLlamaModule.kt`, `kula_llama.cpp`
+  değişiklikleri **cihaz derlemesinde** görülecek; `FLAG_SECURE` ve pin yenilenmesi emülatörde bakılmalı.
 
 ## bütünleştirme (5.11 sabaha karşı, cloud oturumu, dal `claude/integrate-night`)
 

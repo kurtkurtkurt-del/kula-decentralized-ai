@@ -14,6 +14,10 @@ import kotlin.concurrent.thread
  * Range request after a kill or a lost network, then checks size and SHA-256 and renames.
  * A file that fails the check is deleted: PrivateLM's "Incomplete Model File" problem solved
  * at the source. One thread per download; progress goes to [onProgress] at most 4×/s.
+ *
+ * Limits (docs/SECURITY.md): the url and every redirect must pass [UrlPolicy] (public http(s);
+ * a name that resolves to a private address is refused too), the body may not run past
+ * [expectedSize] when one was given, and the disk keeps [SizePolicy.KEEP_FREE_BYTES].
  */
 class ModelDownloader(private val onProgress: (id: String, got: Long, total: Long, state: String, error: String?) -> Unit) {
   private val cancelled = ConcurrentHashMap.newKeySet<String>()
@@ -47,18 +51,13 @@ class ModelDownloader(private val onProgress: (id: String, got: Long, total: Lon
     var got = part.length()
     var total = expectedSize
     var lastReport = 0L
+    var sinceCheck = 0L
     onProgress(id, got, total, "running", null)
 
     var attempt = 0
     while (true) {
       if (cancelled.contains(id)) { onProgress(id, got, total, "cancelled", null); return }
-      val conn = (URL(url).openConnection() as HttpURLConnection).apply {
-        connectTimeout = 20_000
-        readTimeout = 60_000
-        instanceFollowRedirects = true
-        setRequestProperty("User-Agent", "kula-decentralized-ai")
-        if (got > 0) setRequestProperty("Range", "bytes=$got-")
-      }
+      val conn = open(url, got)
       try {
         val code = conn.responseCode
         when {
@@ -71,10 +70,9 @@ class ModelDownloader(private val onProgress: (id: String, got: Long, total: Lon
         } else {
           conn.contentLengthLong.takeIf { it > 0 }?.let { total = it }
         }
-        if (total > 0) {
-          val free = (dest.parentFile ?: dest).usableSpace
-          if (free < total - got + 64L * 1024 * 1024) throw IllegalStateException("not enough free space")
-        }
+        if (expectedSize > 0 && total > 0 && SizePolicy.overSize(total, expectedSize)) throw IllegalStateException("size mismatch: server says $total bytes, expected $expectedSize")
+        val need = (if (total > 0) total else expectedSize) - got
+        if (need > 0 && (dest.parentFile ?: dest).usableSpace - need < SizePolicy.KEEP_FREE_BYTES) throw IllegalStateException("not enough free space")
         RandomAccessFile(part, "rw").use { raf ->
           raf.seek(got)
           conn.inputStream.use { inp ->
@@ -85,6 +83,13 @@ class ModelDownloader(private val onProgress: (id: String, got: Long, total: Lon
               if (n < 0) break
               raf.write(buf, 0, n)
               got += n
+              if (SizePolicy.overSize(got, expectedSize) || (total > 0 && got > total)) throw IllegalStateException("download ran past ${if (expectedSize > 0) expectedSize else total} bytes")
+              sinceCheck += n
+              if (sinceCheck > 32L * 1024 * 1024) {
+                // a body of unknown length is held by the disk itself
+                sinceCheck = 0
+                if ((dest.parentFile ?: dest).usableSpace < SizePolicy.KEEP_FREE_BYTES) throw IllegalStateException("not enough free space")
+              }
               val now = System.currentTimeMillis()
               if (now - lastReport > 250) { lastReport = now; onProgress(id, got, total, "running", null) }
             }
@@ -93,6 +98,7 @@ class ModelDownloader(private val onProgress: (id: String, got: Long, total: Lon
         break
       } catch (e: java.io.IOException) {
         if (cancelled.contains(id)) { onProgress(id, got, total, "cancelled", null); return }
+        if (e is PolicyException) throw IllegalStateException(e.message)
         attempt++
         if (attempt > 20) throw e
         Log.w(TAG, "download $id: ${e.message}; retry $attempt")
@@ -115,6 +121,38 @@ class ModelDownloader(private val onProgress: (id: String, got: Long, total: Lon
     }
     if (!part.renameTo(dest)) throw IllegalStateException("could not move the file into place")
     onProgress(id, dest.length(), dest.length(), "done", null)
+  }
+
+  /** A url the policy refuses: not retried. */
+  private class PolicyException(msg: String) : java.io.IOException(msg)
+
+  /**
+   * Opens [url] following at most [UrlPolicy.MAX_REDIRECTS] redirects by hand, so each hop
+   * passes the policy and the resolved address is checked: HttpURLConnection would follow a
+   * 302 into the lan on its own.
+   */
+  private fun open(url: String, got: Long): HttpURLConnection {
+    var at = url
+    for (hop in 0..UrlPolicy.MAX_REDIRECTS) {
+      UrlPolicy.problem(at)?.let { throw PolicyException(it) }
+      val u = URL(at)
+      val resolved = runCatching { java.net.InetAddress.getAllByName(u.host) }.getOrElse { throw java.io.IOException("cannot resolve ${u.host}") }
+      if (resolved.any { UrlPolicy.isPrivateAddress(it) }) throw PolicyException("${u.host} resolves to a private address")
+      val conn = (u.openConnection() as HttpURLConnection).apply {
+        connectTimeout = 20_000
+        readTimeout = 60_000
+        instanceFollowRedirects = false
+        setRequestProperty("User-Agent", "kula-decentralized-ai")
+        if (got > 0) setRequestProperty("Range", "bytes=$got-")
+      }
+      val code = conn.responseCode
+      if (code !in 300..399) return conn
+      val location = conn.getHeaderField("Location") ?: return conn
+      conn.disconnect()
+      if (hop == UrlPolicy.MAX_REDIRECTS) throw PolicyException("too many redirects")
+      at = runCatching { u.toURI().resolve(location).toString() }.getOrElse { throw PolicyException("bad redirect") }
+    }
+    throw PolicyException("too many redirects")
   }
 
   companion object {

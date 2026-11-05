@@ -20,7 +20,8 @@ usage:
       --secret <hex>    cluster secret (default: a fresh one each run)
       --lie-ram <MB>    advertise a false amount of free ram (for audit tests)
       --no-qr           print the json payload only
-      --tls             protocol v2: tls between device certificates, qr v3 with a one-time code
+      --tls             protocol v2: tls between device certificates, qr v3 with a one-time code;
+                        v1 is then off unless --secret is given (old phones)
   kula-node probe <host> <port> <secret>   handshake on both channels, print OK/NO
       --fp <hex> [--pin <code>]   probe over tls (v2) against that certificate fingerprint; secret may be "-"
   kula-node ledger [--verify] [--tail N]   print the signed ledger; --verify checks the chain and signatures

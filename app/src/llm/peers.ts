@@ -1,7 +1,7 @@
-import { newId } from '@/lib/offline';
 import { deviceId, lastPassport, linkPassport } from '@/data/passport';
 import type { Passport } from '@/passport/contract';
 import { GATE_PORT, llama } from '@/llm/native';
+import { randomHex } from '@/llm/random';
 import { rememberPeer, saveShare, share, type Peer } from '@/llm/store';
 
 // The peer qr: what a shared phone or a computer shows, and what the master scans. It
@@ -118,11 +118,4 @@ export async function myPeerQr(): Promise<{ qr: string; share: { secret: string;
     passport: p ? ({ ...p, device_id: p.device_id ?? deviceId() } as Passport) : null,
   });
   return { qr, share: s };
-}
-
-function randomHex(bytes: number): string {
-  // newId() gives 20+ random chars; stretch it into hex of the wanted length
-  let out = '';
-  while (out.length < bytes * 2) out += Array.from(newId() + newId(), (c) => c.charCodeAt(0).toString(16).slice(-1)).join('');
-  return out.slice(0, bytes * 2).toLowerCase().replace(/[^0-9a-f]/g, '0');
 }

@@ -14,6 +14,7 @@
 #include <cctype>
 #include <chrono>
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
 #include <ctime>
 #include <fstream>
@@ -170,6 +171,19 @@ static ggml_backend_reg_t loadRpcBackendLocked() { return ggml_backend_reg_by_na
 
 static std::vector<std::string> g_registered_endpoints;
 
+// ggml's rpc protocol has no authentication and can write this process's memory: the
+// server is only ever bound to 127.0.0.1 and a client only ever dials 127.0.0.1 (the
+// gate's tunnel). Anything else is refused here too, whatever the Kotlin side passed.
+static bool isLoopbackEndpoint(const std::string& ep) {
+    const std::string prefix = "127.0.0.1:";
+    if (ep.compare(0, prefix.size(), prefix) != 0) return false;
+    const std::string port = ep.substr(prefix.size());
+    if (port.empty() || port.size() > 5) return false;
+    for (char c : port) if (c < '0' || c > '9') return false;
+    const int n = std::atoi(port.c_str());
+    return n >= 1 && n <= 65535;
+}
+
 static int readBlockCount(const char* model_path) {
     gguf_init_params params = {/* .no_alloc = */ true, /* .ctx = */ nullptr};
     gguf_context* gguf = gguf_init_from_file(model_path, params);
@@ -220,6 +234,9 @@ static std::string planCluster(const char* model_path, const std::vector<std::st
 
     float remote_weight = 0.0f;
     std::vector<float> device_weights;
+    for (size_t i = 0; i < endpoints.size(); i++) {
+        if (!isLoopbackEndpoint(endpoints[i])) return "worker endpoint " + endpoints[i] + " is not on 127.0.0.1";
+    }
     for (size_t i = 0; i < endpoints.size(); i++) {
         ggml_backend_reg_t reg = add_server(endpoints[i].c_str());
         if (!reg) return "worker " + endpoints[i] + " reported no devices";
@@ -706,6 +723,7 @@ static jstring nServe(JNIEnv* env, jclass, jstring lib_dir, jstring endpoint, js
     auto start = reinterpret_cast<start_fn>(ggml_backend_reg_get_proc_address(rpc, "ggml_backend_rpc_start_server"));
     if (!start) return env->NewStringUTF("RPC backend is missing its server");
     const std::string ep = jstr(env, endpoint), cache = jstr(env, cache_dir);
+    if (!isLoopbackEndpoint(ep)) return env->NewStringUTF("refusing to serve rpc anywhere but 127.0.0.1");
     LOGI("worker listening on %s", ep.c_str());
     g_worker_running = true;
     std::thread(radioKeepAwake).detach();

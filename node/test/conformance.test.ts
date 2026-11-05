@@ -51,7 +51,7 @@ test('/status, /load and /chat produce the exact sse lines', async () => {
   const sha = createHash('sha256').update(model).digest('hex');
   const files = await fileServer(model);
   const fake = await fakeLlama(['Hel', 'lo', ' there', '!']);
-  const api = await startApiServer({ models, llama: null, startBackend: async () => ({ port: fake.port, stop: async () => {} }) });
+  const api = await startApiServer({ models, llama: null, allowPrivateUrls: true, startBackend: async () => ({ port: fake.port, stop: async () => {} }) });
   const base = `http://127.0.0.1:${api.port}`;
   try {
     assert.equal(await (await fetch(`${base}/status`)).text(), '{"loaded":false,"model":null,"sha256":null,"tokensUsed":0,"ctx":0,"busy":false}');
@@ -94,7 +94,7 @@ test('/status, /load and /chat produce the exact sse lines', async () => {
 test('/load with a wrong sha256 ends with the checksum error and leaves no file', async () => {
   const models = fs.mkdtempSync(path.join(os.tmpdir(), 'kula-conf-'));
   const files = await fileServer(randomBytes(1000));
-  const api = await startApiServer({ models, llama: null, startBackend: async () => { throw new Error('must not start'); } });
+  const api = await startApiServer({ models, llama: null, allowPrivateUrls: true, startBackend: async () => { throw new Error('must not start'); } });
   try {
     const r = await post(`http://127.0.0.1:${api.port}`, '/load', { url: `http://127.0.0.1:${files.port}/m.gguf`, sha256: 'ab'.repeat(32), size: 1000, name: 'm.gguf' });
     assert.equal(r.text.split('\n\n').at(-2), 'data: {"error":"checksum mismatch; file deleted, load again"}');
@@ -111,7 +111,7 @@ test('/stop cancels a chat in flight', async () => {
   const model = randomBytes(10);
   const files = await fileServer(model);
   const fake = await fakeLlama(['a', 'b'], 5, true);
-  const api = await startApiServer({ models, llama: null, startBackend: async () => ({ port: fake.port, stop: async () => {} }) });
+  const api = await startApiServer({ models, llama: null, allowPrivateUrls: true, startBackend: async () => ({ port: fake.port, stop: async () => {} }) });
   const base = `http://127.0.0.1:${api.port}`;
   try {
     await post(base, '/load', { url: `http://127.0.0.1:${files.port}/m`, sha256: createHash('sha256').update(model).digest('hex'), size: 10, name: 'm' });

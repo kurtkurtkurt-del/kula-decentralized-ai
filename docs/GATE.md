@@ -184,6 +184,9 @@ The wire reply is `NO <reason>`; the same word is the `why` of the ledger's `rej
 | `channel closed` | the channel's local target is not running (no model loaded, the api server not started) |
 | `busy` | another peer is on the `rpc` channel |
 | `target down` | the 127.0.0.1 target refused the connection |
+| `overloaded` | more than 32 connections in the handshake at once (answered at once, before any hello) |
+| `no v1` | the server has no v1 secret (`kula-node share --tls` without `--secret`); a plain hello is refused |
+| `pin expired` | the pairing code is older than 10 minutes; a new one is made then and the next QR carries it |
 
 Client-side errors: `fingerprint mismatch` (the server certificate is not the one in the
 QR; no hello is sent), `tls …` (handshake failure), `server proof wrong`.

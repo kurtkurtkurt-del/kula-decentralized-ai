@@ -86,7 +86,7 @@ Options:
 | `--name <s>` | the name the phone shows (default: hostname) |
 | `--models <dir>` | where downloaded models are kept (default `~/.kula-node/models`) |
 | `--secret <hex>` | reuse a secret instead of a fresh one per run |
-| `--tls` | protocol v2: the gate also speaks TLS 1.3 between device certificates and the QR is v3 (`fp` + one-time `pin`); see below |
+| `--tls` | protocol v2: the gate speaks TLS 1.3 between device certificates and the QR is v3 (`fp` + one-time `pin`, good for 10 minutes); v1 is off unless `--secret` is also given; see below |
 | `--lie-ram <MB>` | advertise a false amount of free memory (for audit tests on the phone side) |
 | `--no-qr` | print the JSON only |
 
@@ -259,8 +259,10 @@ S → C   OK <hmac_s>                      HMAC-SHA256(secret utf8, "nonce_s|non
 ```
 
 Reasons: `bad hello`, `bad channel`, `bad nonce`, `wrong secret`,
-`channel closed`, `busy`, `target down`, `no hello`, `no proof`, and from the
-auditor `replay` and `clock`. The server
+`channel closed`, `busy`, `target down`, `no hello`, `no proof`, `overloaded`
+(more than 32 connections in a handshake at once), `no v1` (`--tls` without
+`--secret`: the gate speaks only TLS), and from the auditor `replay` and `clock`.
+The limits a worker holds a paired phone to are in `docs/SECURITY.md`. The server
 gives a client 5 s per line during the handshake and no timeout afterwards.
 HMACs are compared in constant time. Bytes a client sends right after its
 proof line are kept and forwarded.

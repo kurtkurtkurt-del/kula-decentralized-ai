@@ -42,9 +42,12 @@ export default function ShareScreen() {
     tick();
     const id = setInterval(tick, 2000);
     llama!.info().then((i) => on && setWifi(i.wifiIp)).catch(() => {});
+    // the qr carries the secret (v2) or the pairing code (v3): no screenshots of this screen
+    llama!.secureScreen?.(true).catch(() => {});
     return () => {
       on = false;
       clearInterval(id);
+      llama!.secureScreen?.(false).catch(() => {});
     };
   }, []);
 
