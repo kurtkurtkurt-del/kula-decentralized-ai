@@ -11,6 +11,7 @@ import { ledgerCommand } from './ledgercmd.js';
 import { collectInfo, infoText } from './info.js';
 import { peersCommand, chatCommand } from './mastercmd.js';
 import { benchCommand } from './bench.js';
+import { uiCommand } from './ui/cmd.js';
 
 const HELP = `kula-node: make this computer a worker in a kula cluster
 
@@ -61,6 +62,17 @@ running a cluster from this computer:
       --runs <n> (3)  --tokens <n> (64)  --ctx <n> (2048)  --tunnel-mb <n> (10, at most 64)
       --no-apart  --no-split  --json (print the record)  --out <dir>
 
+the chat page (a model on your phone, the chat on this computer):
+  kula-node ui [--port <n>] [--no-open] [--new-token] [--lan]   http://127.0.0.1:50590/<random>/
+      on the phone: share this phone; on the page: connect, add the phone, pick a model, chat.
+      also an openai-compatible endpoint at http://127.0.0.1:50590/v1 (bearer token printed
+      at start, kept in ~/.kula-node/ui-token; --new-token makes a new one). chats are kept
+      in ~/.kula-node/chats. 127.0.0.1 only, unless:
+      --lan             invite mode: also listen on this computer's wi-fi address and print an
+                        invite qr; any device on that network scans it and chats (plain http on
+                        the lan: others on that wi-fi could read the chat text). the page has
+                        the same switch, and "new invite" ends every guest's session.
+
 the dashboard: while share or chat runs, http://127.0.0.1:50580/<random>/ (the exact
 url is printed) shows this computer, the gate, the peers, the ledger, a chat box
 and the pairing qr. it answers on 127.0.0.1 only.
@@ -69,7 +81,7 @@ files live in ${home()} (KULA_NODE_HOME overrides)
 `;
 
 // flags that never take a value, so `--json host` does not swallow the host
-const BOOLEAN = new Set(['json', 'help', 'check', 'dry-run', 'no-qr', 'no-dashboard', 'verify', 'no-local', 'keep-local', 'code', 'tls', 'no-apart', 'no-split', 'no-bandwidth']);
+const BOOLEAN = new Set(['json', 'help', 'check', 'dry-run', 'no-qr', 'no-dashboard', 'verify', 'no-local', 'keep-local', 'code', 'tls', 'no-apart', 'no-split', 'no-bandwidth', 'no-open', 'new-token', 'lan']);
 
 export function parse(argv: string[]): { cmd: string; flags: Record<string, string | boolean>; rest: string[] } {
   const [cmd = 'help', ...tail] = argv;
@@ -108,7 +120,8 @@ export function menuItems(llamaWhere: string | null): MenuItem[] {
     { key: '1', argv: ['setup'], label: 'setup', note: llamaWhere ? `llama.cpp ${TAG} is here (${llamaWhere})` : `get llama.cpp ${TAG}, needed once; start here` },
     { key: '2', argv: ['share'], label: 'share', note: 'open the gate and pair a phone (shows a qr code)' },
     { key: '3', argv: ['peers', 'list'], label: 'peers', note: 'the workers this computer knows' },
-    { key: '4', argv: ['help'], label: 'help', note: 'every command and flag' },
+    { key: '4', argv: ['ui'], label: 'ui', note: 'the chat page: talk to a model on your phone from here' },
+    { key: '5', argv: ['help'], label: 'help', note: 'every command and flag' },
   ];
 }
 
@@ -134,7 +147,7 @@ async function menu(): Promise<number> {
   const dflt = found ? '2' : '1';
   console.log(menuText(items, dflt));
   if (!process.stdin.isTTY) {
-    console.log('\nrun one of: kula-node setup | kula-node share | kula-node peers list | kula-node help');
+    console.log('\nrun one of: kula-node setup | kula-node share | kula-node peers list | kula-node ui | kula-node help');
     return 0;
   }
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
@@ -199,6 +212,7 @@ export async function main(argv: string[]): Promise<number> {
   if (cmd === 'peers') return peersCommand(rest[0], rest.slice(1), flags);
   if (cmd === 'chat') return chatCommand(flags);
   if (cmd === 'bench') return benchCommand(flags);
+  if (cmd === 'ui') return uiCommand(flags);
 
   if (cmd === 'ledger') {
     return ledgerCommand({ verify: flags.verify === true, tail: flags.tail !== undefined ? num(flags.tail, 20) : undefined });

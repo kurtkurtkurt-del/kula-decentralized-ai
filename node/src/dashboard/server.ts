@@ -63,7 +63,7 @@ export function staticDir(): string {
   return path.join(packageRoot(), 'src', 'dashboard', 'static');
 }
 
-function readJson(req: http.IncomingMessage, limit = 256 * 1024): Promise<any> {
+export function readJson(req: http.IncomingMessage, limit = 256 * 1024): Promise<any> {
   return new Promise((resolve, reject) => {
     const parts: Buffer[] = [];
     let n = 0;
@@ -77,7 +77,7 @@ function readJson(req: http.IncomingMessage, limit = 256 * 1024): Promise<any> {
   });
 }
 
-const BASE_HEADERS = {
+export const BASE_HEADERS = {
   'cache-control': 'no-store',
   'x-content-type-options': 'nosniff',
   'referrer-policy': 'no-referrer',
@@ -91,7 +91,7 @@ function send(res: http.ServerResponse, code: number, body: string | Buffer, typ
 }
 const json = (res: http.ServerResponse, code: number, body: unknown) => send(res, code, JSON.stringify(body), 'application/json; charset=utf-8');
 
-class Sse {
+export class Sse {
   constructor(private readonly res: http.ServerResponse) {
     res.writeHead(200, { ...BASE_HEADERS, 'content-type': 'text/event-stream', connection: 'keep-alive', 'x-accel-buffering': 'no' });
     res.flushHeaders();

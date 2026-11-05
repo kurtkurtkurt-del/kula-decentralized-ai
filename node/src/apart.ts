@@ -155,6 +155,9 @@ export interface ApartOptions {
   probe?: typeof probePeers;
   identity?: GateIdentity;  // this computer's certificate: v3 and relayed peers need it
   measuredTps?: Record<string, number | null | undefined>; // by device id ('local' for this computer), from kula-node bench
+  // every load event of every device (download bytes on a phone, checking, loading): for a page with a bar
+  onProgress?: (device: string, state: string, got: number, total: number) => void;
+  signal?: AbortSignal;     // cancels the loads (a phone mid-download stops when its stream closes)
 }
 
 export interface Cluster {
@@ -162,7 +165,9 @@ export interface Cluster {
   skipped: { peer: Peer; why: string }[];
   // the peers as the probe left them (last_ok, a learned fingerprint, a spent pin): for the peer book
   stamped: Peer[];
-  chat(messages: Message[], onToken: (t: string) => void, opts?: { maxTokens?: number; temperature?: number; reset?: boolean; device?: string }): Promise<Reply>;
+  // `signal`: aborting it asks the device to stop (POST /stop) and keeps what came so far;
+  // a device that does not end its stream within a few seconds is cut off
+  chat(messages: Message[], onToken: (t: string) => void, opts?: { maxTokens?: number; temperature?: number; reset?: boolean; device?: string; signal?: AbortSignal }): Promise<Reply & { stopped?: boolean }>;
   batch(prompts: string[], opts?: { maxTokens?: number; temperature?: number; onReply?: (i: number, r: Reply) => void }): Promise<Reply[]>;
   close(): Promise<void>;
 }
@@ -191,6 +196,7 @@ export async function openApart(opts: ApartOptions): Promise<Cluster> {
 
   // load everywhere at once; the local api is told the file it already holds
   const pathMod = await import('node:path');
+  const failures: string[] = [];
   const loads = devices.map(async (dev) => {
     const ref: ModelRef = dev.local && opts.localModelFile
       ? { ...opts.model, url: 'file://' + opts.localModelFile, name: pathMod.basename(opts.localModelFile) }
@@ -198,19 +204,21 @@ export async function openApart(opts: ApartOptions): Promise<Cluster> {
     let lastState = '';
     try {
       await apiLoad(dev.apiPort, ref, (state, got, total) => {
+        opts.onProgress?.(dev.name, state, got, total);
         if (state !== lastState) { lastState = state; log(`${dev.name}: ${state}${total ? ` (${(total / 1e6).toFixed(0)} MB)` : ''}`); }
-      });
+      }, opts.signal);
       log(`${dev.name}: ready`);
       return true;
     } catch (e) {
       log(`${dev.name}: load failed, ${(e as Error).message}`);
+      failures.push(`${dev.name}: ${(e as Error).message}`);
       return false;
     }
   });
   const ok = await Promise.all(loads);
   const ready = devices.filter((_, i) => ok[i]);
   for (const [i, dev] of devices.entries()) if (!ok[i]) { await dev.close().catch(() => {}); if (!dev.local) skipped.push({ peer: opts.peers.find((p) => p.id === dev.id)!, why: 'load failed' }); }
-  if (!ready.length) throw new Error('no device loaded the model');
+  if (!ready.length) throw new Error(opts.signal?.aborted ? 'stopped' : `no device loaded the model${failures.length ? ` (${failures.join('; ')})` : ''}`);
   // a measured speed (kula-node bench) orders the devices before their first reply does
   for (const d of ready) d.tps = d.tps ?? opts.measuredTps?.[d.id] ?? null;
 
@@ -233,12 +241,30 @@ export async function openApart(opts: ApartOptions): Promise<Cluster> {
 
   const chat: Cluster['chat'] = async (messages, onToken, o = {}) => {
     const dev = await acquire(o.device);
+    let text = '';
+    const t0 = Date.now();
+    let firstMs = 0;
+    let n = 0;
+    let cut: NodeJS.Timeout | null = null;
     try {
-      const r = await apiChat(dev, messages, onToken, { maxTokens: o.maxTokens ?? 256, temperature: o.temperature ?? 0.7, reset: o.reset });
-      if (r.tps) dev.tps = r.tps;
-      dev.done++;
-      return r;
-    } finally { release(dev); }
+      if (o.signal?.aborted) return { text: '', tokens: 0, ms: 0, firstMs: 0, tps: 0, device: dev.name, stopped: true };
+      const p = apiChat(dev, messages, (t) => { if (!firstMs) firstMs = Date.now() - t0; n++; text += t; onToken(t); }, { maxTokens: o.maxTokens ?? 256, temperature: o.temperature ?? 0.7, reset: o.reset });
+      const onAbort = () => {
+        fetch(`http://127.0.0.1:${dev.apiPort}/stop`, { method: 'POST' }).catch(() => {});
+        cut = setTimeout(() => p.stop(), 4000);
+      };
+      o.signal?.addEventListener('abort', onAbort, { once: true });
+      try {
+        const r = await p;
+        if (r.tps && !o.signal?.aborted) dev.tps = r.tps;
+        dev.done++;
+        return o.signal?.aborted ? { ...r, stopped: true } : r;
+      } catch (e) {
+        if (!o.signal?.aborted) throw e;
+        const ms = Date.now() - t0;
+        return { text, tokens: n, ms, firstMs, tps: n ? Math.round((n / Math.max(1, ms - firstMs)) * 10000) / 10 : 0, device: dev.name, stopped: true };
+      } finally { o.signal?.removeEventListener('abort', onAbort); }
+    } finally { if (cut) clearTimeout(cut); release(dev); }
   };
   const batch: Cluster['batch'] = async (prompts, o = {}) => {
     const out: Reply[] = new Array(prompts.length);

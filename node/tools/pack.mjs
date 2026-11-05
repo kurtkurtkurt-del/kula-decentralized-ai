@@ -109,11 +109,14 @@ async function nodeBinary(target, sums, cache) {
   return bin;
 }
 
-// One CommonJS file with everything, the dashboard's static files baked in.
+// One CommonJS file with everything, the dashboard's and the chat page's static files baked in.
 async function bundle(outFile, version) {
   const esbuild = await import('esbuild');
   const staticDir = path.join(NODE_DIR, 'src', 'dashboard', 'static');
   const baked = Object.fromEntries(['index.html', 'app.js', 'app.css'].map((f) => [f, fs.readFileSync(path.join(staticDir, f), 'utf8')]));
+  // the chat page (kula-node ui) the same way; the list is UI_STATIC in src/ui/server.ts
+  const uiDir = path.join(NODE_DIR, 'src', 'ui', 'static');
+  const uiBaked = Object.fromEntries(['index.html', 'app.js', 'app.css', 'markdown.js'].map((f) => [f, fs.readFileSync(path.join(uiDir, f), 'utf8')]));
   const r = await esbuild.build({
     entryPoints: [path.join(NODE_DIR, 'src', 'bin', 'kula-node.ts')],
     outfile: outFile,
@@ -128,6 +131,7 @@ async function bundle(outFile, version) {
       __KULA_NODE_VERSION__: JSON.stringify(version),
       __KULA_PACKED__: 'true',
       __KULA_STATIC__: JSON.stringify(baked),
+      __KULA_UI_STATIC__: JSON.stringify(uiBaked),
     },
     metafile: true,
     logLevel: 'warning',

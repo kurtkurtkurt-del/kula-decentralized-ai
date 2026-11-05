@@ -7,12 +7,13 @@ const pkg = JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.ur
 
 test('the bare menu: setup first until llama.cpp is here, then share', () => {
   const fresh = menuItems(null);
-  assert.deepEqual(fresh.map((i) => i.label), ['setup', 'share', 'peers', 'help']);
+  assert.deepEqual(fresh.map((i) => i.label), ['setup', 'share', 'peers', 'ui', 'help']);
   assert.match(menuText(fresh, '1'), /1\) setup .*start here.*<- enter/);
   assert.deepEqual(pickMenu('', fresh, '1'), ['setup']);
   assert.deepEqual(pickMenu('2', fresh, '1'), ['share']);
   assert.deepEqual(pickMenu(' peers ', fresh, '1'), ['peers', 'list']);
-  assert.deepEqual(pickMenu('4', fresh, '1'), ['help']);
+  assert.deepEqual(pickMenu('4', fresh, '1'), ['ui']);
+  assert.deepEqual(pickMenu('5', fresh, '1'), ['help']);
   assert.equal(pickMenu('q', fresh, '1'), 'quit');
   assert.equal(pickMenu('9', fresh, '1'), null);
   const ready = menuItems('/x/bin');
