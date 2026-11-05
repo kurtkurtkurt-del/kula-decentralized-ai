@@ -51,7 +51,10 @@ export async function startChild(name: string, bin: string, args: string[], port
   };
   proc.stdout?.on('data', onLine);
   proc.stderr?.on('data', onLine);
-  proc.on('exit', (code, sig) => log(`${name} exited (${code ?? sig})`));
+  // kula-node going away (an exception, a parent that relays no signal) takes its children along
+  const orphanGuard = () => { try { proc.kill('SIGKILL'); } catch {} };
+  process.once('exit', orphanGuard);
+  proc.on('exit', (code, sig) => { process.off('exit', orphanGuard); log(`${name} exited (${code ?? sig})`); });
   try {
     await waitForPort(proc, port, readyMs);
   } catch (e) {

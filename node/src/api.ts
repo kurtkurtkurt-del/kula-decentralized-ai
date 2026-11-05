@@ -140,11 +140,15 @@ export async function startApiServer(opts: ApiOptions): Promise<ApiServer> {
     if (!SHA256_RE.test(want)) return json(res, 400, { error: 'sha256 must be 64 hex characters' });
     const sizeWhy = sizeProblem(size);
     if (sizeWhy) return json(res, 400, { error: sizeWhy });
-    const urlWhy = urlProblem(url, opts.allowPrivateUrls);
-    if (urlWhy) return json(res, 400, { error: urlWhy });
     const ctx = Number(body.ctx) > 0 ? Math.min(Math.floor(Number(body.ctx)), 1 << 20) : (opts.defaultCtx ?? 4096);
     let file: string;
     try { file = path.join(opts.models, safeName(name)); } catch (e) { return json(res, 400, { error: (e as Error).message }); }
+    // the url is only fetched when the file is not here yet, so only then must it pass the
+    // policy (as ApiServer.kt does): this computer's own api is told file://<the model it has>
+    if (!fs.existsSync(file)) {
+      const urlWhy = urlProblem(url, opts.allowPrivateUrls);
+      if (urlWhy) return json(res, 400, { error: urlWhy });
+    }
     state.busy = true;
     const sse = new Sse(res);
     const ac = new AbortController();
@@ -220,6 +224,7 @@ export async function startApiServer(opts: ApiOptions): Promise<ApiServer> {
       const dec = new TextDecoder();
       let buf = '';
       let usageTokens = 0;
+      let thinking = false;
       for (;;) {
         const { done, value } = await reader.read();
         if (done) break;
@@ -233,16 +238,28 @@ export async function startApiServer(opts: ApiOptions): Promise<ApiServer> {
           if (data === '[DONE]') continue;
           let obj: any;
           try { obj = JSON.parse(data); } catch { continue; }
-          const piece = obj?.choices?.[0]?.delta?.content;
+          // llama-server hands a thinking model's reasoning over apart (reasoning_content); the
+          // phone's worker streams it inline as <think>…</think>, so this one does too
+          const delta = obj?.choices?.[0]?.delta;
+          const reason = delta?.reasoning_content;
+          if (typeof reason === 'string' && reason.length) {
+            if (!firstMs) firstMs = Date.now() - t0;
+            tokens++;
+            sse.send({ t: thinking ? reason : `<think>${reason}` });
+            thinking = true;
+          }
+          const piece = delta?.content;
           if (typeof piece === 'string' && piece.length) {
             if (!firstMs) firstMs = Date.now() - t0;
             tokens++;
-            sse.send({ t: piece });
+            sse.send({ t: thinking ? `</think>\n\n${piece}` : piece });
+            thinking = false;
           }
           if (obj?.usage?.completion_tokens) usageTokens = obj.usage.completion_tokens;
           if (obj?.timings?.predicted_n) usageTokens = obj.timings.predicted_n;
         }
       }
+      if (thinking) sse.send({ t: '</think>' });
       if (usageTokens) tokens = usageTokens;
       const ms = Date.now() - t0;
       const gen = Math.max(1, ms - firstMs);
