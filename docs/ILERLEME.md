@@ -3,6 +3,32 @@
 Plan: `~/.claude/plans/memoized-kindling-puddle.md` (4.11.2026). Bu dosya her adımda güncellenir:
 ne yapıldı, ne doğrulandı, ne kaldı. Döndüğünde önce burayı oku.
 
+## planlayıcı simülatörü (5.11 gece, cloud oturumu, dal `claude/planner-sim`, `integrate-night` üstüne)
+
+Birleştirilmedi, PR yok. Ayrıntı: `docs/PLANNER.md`.
+
+- **`app/src/llm/sim/`**: saf TS küme simülatörü. `model.ts` (import'suz çekirdek: bellek, tek başına /
+  bölünmüş / ayrı mod maliyeti, `planShares`, `pickDevice`, `simulateApart`), `profiles.ts` (S25+, Pixel 8,
+  orta 6 GB, eski 4 GB, emülatör, Mac M1, Linux 4090; wi-fi 5/2.4, hotspot, emülatör NAT; 9 katalog modelinin
+  katman/hidden/vocab'ı). Ölçülen gerçeklere kalibre: Mac 34 tok/s → 32.6; emülatör↔Mac 415 MB / 335 s → 445 MB /
+  347 s; S25+ Gemma 1B sığar; emülatöre hiçbiri sığmaz (`sim.test.ts`).
+- **`planSplit` yeni kurallar**: ihtiyaç ctx'e göre (dosya×1.05 + kv + 300, fit.ts ile aynı); gömme + çıktı
+  katmanı her zaman yöneticide (eski plan yavaş yöneticiye 0 MB verebiliyordu); aday sayısı token süresiyle
+  seçilir → yavaş ağda daha az cihaz; `aloneFaster` bayrağı 1.15× eşiğiyle. Önce/sonra tablosu PLANNER.md'de.
+  `cluster.ts` artık çekirdeği çağırır, `Plan`'a `est/estAlone/aloneFaster` eklendi; `load()` ctx'i geçirir.
+- **Ayrı mod dağıtıcısı** (`engine.chat`): en-hızlı-boş yerine beklenen bitiş süresi (kuyruk + istem/8·tps +
+  çıktı/tps); kısa istek boş yavaş cihaza, uzun istek hızlıyı bekler; ilk token gelmeden düşen eş 5 dk dışarı,
+  istek bir kez başkasına; ölçülen tps cihaza yazılır. `engine-apart.test.ts` (sahte native + XHR).
+- **Mod sayfası**: üç seçeneğin altındaki tahminler simülatörden (tok/s, "~N sn'de hazır", "wi-fi'de her token
+  ~X ms", paylar, "tek başına daha hızlı olurdu"); paylaş sorusu da sayı gösterir; i18n en/de/tr
+  (`mode.est.*`). Ağ şimdilik 5 GHz varsayımı.
+- **node/**: `src/sim.ts` = `app/src/llm/sim/model.ts` kopyası (test bayt bayt karşılaştırır), `src/planner.ts`
+  node-master'daki kopyanın aynı değişiklikle hâli (`planSplit/planWithProbe/tensorSplit`, `TooBig`).
+  `tools/planner-vectors.json` (10 vektör, `tools/planner-vectors.gen.ts` üretir) iki tarafta da test edilir.
+- Testler: app 90/90 (yeni: sim 18, engine-apart 4), node 35/35; tsc ikisinde temiz; lint: aynı 1 eski hata.
+- Kalmış: telefonda ölçüm listesi PLANNER.md sonunda (telefon `eff`, gerçek wi-fi yükleme, bölünmüş tok/s);
+  mod sayfasına ağ seçimi (5/2.4 GHz) eklenebilir; `node/` tarafındaki `mastercmd` bu dalda yok (node-master'da).
+
 ## bütünleştirme (5.11 sabaha karşı, cloud oturumu, dal `claude/integrate-night`)
 
 Üç gece dalı `origin/release/local-2026-10-20` (`9a2f91f`) üstüne sırayla merge commit'iyle alındı, squash yok,
