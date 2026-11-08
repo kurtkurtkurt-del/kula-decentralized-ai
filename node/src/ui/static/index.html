@@ -97,6 +97,10 @@
         <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M5.5 5.5l9 9M14.5 5.5l-9 9"/></svg>
       </button>
     </div>
+    <div class="btabs" id="btabs" role="tablist" aria-label="what the panel shows">
+      <button type="button" role="tab" data-btab="brain" aria-selected="true" aria-controls="btop">brain</button>
+      <button type="button" role="tab" data-btab="learn" aria-selected="false" aria-controls="blearn">learn</button>
+    </div>
     <div class="btop" id="btop">
     <div class="bgrid" id="bgrid" role="list"></div>
     <div class="bdetail" id="bdetail" hidden>
@@ -110,6 +114,8 @@
       <h3 class="bfeed-h">now <span class="bfeed-pulse" id="bfeed-pulse"></span></h3>
       <ol class="bfeed" id="bfeed" aria-live="polite"></ol>
     </section>
+    <!-- learn (8.11.2026): what to read and watch, three levels of tiles (learn.js) -->
+    <div class="blearn" id="blearn" role="tabpanel" aria-label="learn" hidden></div>
   </aside>
 </div>
 

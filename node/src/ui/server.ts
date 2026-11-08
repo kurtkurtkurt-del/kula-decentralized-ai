@@ -67,7 +67,7 @@ const hostPort = (h: string, port: number) => `${h.includes(':') ? `[${h}]` : h}
 const GONE_PAGE = (why: string) => `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>kula chat</title></head><body><p>${why.replace(/[&<>"']/g, '')}</p><p>ask whoever runs kula on that computer for a new qr code.</p></body></html>`;
 
 const TYPES: Record<string, string> = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml' };
-export const UI_STATIC = ['index.html', 'app.js', 'app.css', 'fonts.css', 'markdown.js', 'wizard.js'];
+export const UI_STATIC = ['index.html', 'app.js', 'app.css', 'fonts.css', 'markdown.js', 'wizard.js', 'learn.js'];
 // tools/pack.mjs bakes these in: a packed executable has no static folder next to it
 declare const __KULA_UI_STATIC__: Record<string, string> | undefined;
 
