@@ -5,8 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>kula — your devices, one local AI</title>
 <meta name="description" content="kula joins your phones, tablets and computers into one local AI cluster that runs open models. Nothing goes to a cloud.">
-<meta name="theme-color" content="#f8faf8" media="(prefers-color-scheme: light)">
-<meta name="theme-color" content="#0a0a0a" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#0a0a0a">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%231d3326'/%3E%3Ccircle cx='11' cy='12' r='3' fill='%236fcf97'/%3E%3Ccircle cx='21' cy='12' r='3' fill='%236fcf97'/%3E%3Ccircle cx='16' cy='21' r='3' fill='%236fcf97'/%3E%3C/svg%3E">
 <link rel="stylesheet" href="site.css">
 </head>
@@ -39,7 +38,7 @@
     <ul class="downloads" aria-label="download kula">
       <li class="dl" data-os="mac">
         <div class="dl-row">
-          <a class="dl-btn" href="https://github.com/kurtkurtkurt-del/kula-decentralized-ai/releases/latest/download/kula-mac-arm64.dmg" download>
+          <a class="dl-btn" href="https://github.com/kurtkurtkurt-del/kula-decentralized-ai/releases/latest/download/kula-mac-arm64.dmg">
             <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="5" width="16" height="11" rx="1.5"/><path d="M2 19h20"/></svg>
             <span class="dl-name">MacBook</span>
             <span class="dl-file">Apple silicon · .dmg</span>
@@ -48,7 +47,7 @@
           <details class="more">
             <summary aria-label="more ways to get kula for Mac"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 10 5 5 5-5"/></svg></summary>
             <div class="menu">
-              <a data-slot="mac-release" href="https://github.com/kurtkurtkurt-del/kula-decentralized-ai/releases/latest/download/kula-mac-arm64.dmg" download><b>GitHub release</b><span>kula-mac-arm64.dmg</span></a>
+              <a data-slot="mac-release" href="https://github.com/kurtkurtkurt-del/kula-decentralized-ai/releases/latest/download/kula-mac-arm64.dmg"><b>GitHub release</b><span>kula-mac-arm64.dmg</span></a>
               <a data-slot="mac-release-page" href="https://github.com/kurtkurtkurt-del/kula-decentralized-ai/releases/latest"><b>release page</b><span>notes, sha256, every file</span></a>
               <a data-slot="mac-build" data-todo><b>build it yourself</b><span>desktop/ · npm run dist:mac</span></a>
               <a data-slot="mac-intel" data-todo><b>Intel Mac</b><span>kula-mac-x64.dmg · not built yet</span></a>
@@ -93,7 +92,7 @@
       </li>
       <li class="dl" data-os="android">
         <div class="dl-row">
-          <a class="dl-btn" href="https://github.com/kurtkurtkurt-del/kula-decentralized-ai/releases/latest/download/kula-android.apk" download>
+          <a class="dl-btn" href="https://github.com/kurtkurtkurt-del/kula-decentralized-ai/releases/latest/download/kula-android.apk">
             <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="2.5" width="12" height="19" rx="2.5"/><path d="M10 5h4"/><circle cx="12" cy="18" r=".6"/></svg>
             <span class="dl-name">Android</span>
             <span class="dl-file">phones &amp; tablets · .apk</span>
@@ -102,7 +101,7 @@
           <details class="more">
             <summary aria-label="more ways to get kula for Android"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 10 5 5 5-5"/></svg></summary>
             <div class="menu">
-              <a data-slot="android-release" href="https://github.com/kurtkurtkurt-del/kula-decentralized-ai/releases/latest/download/kula-android.apk" download><b>GitHub release</b><span>kula-android.apk</span></a>
+              <a data-slot="android-release" href="https://github.com/kurtkurtkurt-del/kula-decentralized-ai/releases/latest/download/kula-android.apk"><b>GitHub release</b><span>kula-android.apk</span></a>
               <a data-slot="android-release-page" href="https://github.com/kurtkurtkurt-del/kula-decentralized-ai/releases/latest"><b>release page</b><span>notes, sha256, every file</span></a>
               <a data-slot="android-build" href="https://github.com/kurtkurtkurt-del/kula-decentralized-ai/blob/main/README.md#build-from-source"><b>build it yourself</b><span>app/ · npm run apk</span></a>
             </div>
@@ -115,10 +114,7 @@
 
   <section class="band">
     <figure class="shot">
-      <picture>
-        <source srcset="chat-dark.webp" media="(prefers-color-scheme: dark)">
-        <img src="chat-light.webp" width="2000" height="1250" alt="The kula chat page on a Mac: a chat with Qwen3 0.6B running on this computer, and the brain panel on the right with its twelve branches.">
-      </picture>
+      <img src="chat-dark.webp" width="2000" height="1250" alt="The kula chat page on a Mac: a chat with Qwen3 0.6B running on this computer, and the brain panel on the right with its twelve branches.">
     </figure>
     <div class="brain wrap" aria-labelledby="brain-h">
       <h2 id="brain-h"><span class="dot" aria-hidden="true"></span>the brain</h2>
