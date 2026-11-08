@@ -97,6 +97,12 @@ export default function PeersScreen() {
         <Pressable onPress={() => { if (take(typed)) setTyped(''); }} accessibilityRole="button" accessibilityLabel={t('peers.add')} style={({ pressed }) => [styles.btn, pressed && styles.pressed]}><Text style={styles.btnText}>{t('peers.add')}</Text></Pressable>
       </View>
       <Text style={styles.hint}>{t('peers.typeHint')}</Text>
+      {/* the other way round: a computer that should use this phone (it scans the computer's code) */}
+      {hasNative() ? (
+        <Pressable onPress={() => router.push('/computers')} hitSlop={8} accessibilityRole="button" accessibilityLabel={t('comp.title')} style={styles.compHit}>
+          <Text style={styles.compLink}>{t('comp.title')} ›</Text>
+        </Pressable>
+      ) : null}
       {note ? <Text style={styles.okText} accessibilityLiveRegion="polite">{note}</Text> : null}
       {err && !scan ? <Text style={styles.offText} accessibilityRole="alert">{err}</Text> : null}
       {nearby.filter((f) => !known.has(f.id ?? '')).length ? (
@@ -130,6 +136,8 @@ function Badge({ verdict, label }: { verdict: keyof typeof VERDICT_COLOR; label:
 }
 
 const styles = StyleSheet.create({
+  compHit: { minHeight: 44, justifyContent: 'center', marginTop: 12 },
+  compLink: { fontFamily: fonts.medium, fontSize: 13, color: colors.spotText },
   badge: { flexDirection: 'row', alignItems: 'center', gap: 5, maxWidth: 92 },
   badgeDot: { width: 7, height: 7, borderRadius: 4 },
   badgeText: { fontFamily: fonts.medium, fontSize: 11, flexShrink: 1 },

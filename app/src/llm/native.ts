@@ -9,7 +9,7 @@ export type LoadResult = { loadMs: number; localLayers: number; layers: number; 
 export type DoneEvent = { id: number; tokens: number; ms: number; firstMs: number; tps: number; stopped: boolean; error: string | null };
 export type DownloadEvent = { id: string; got: number; total: number; state: 'running' | 'retrying' | 'checking' | 'done' | 'error' | 'cancelled'; error: string | null };
 export type PeerFound = { serviceName: string; name: string; host: string | null; port: number; id: string | null; ram: number | null; bw: number | null; kind: string; v: string | null };
-export type WorkerStatus = { state: 'stopped' | 'starting' | 'running' | 'error'; error: string | null; peer: string | null; heldMb: number; ramMb: number; bandwidth: number; throttled: boolean; connects: number; rejects: number; id: string; batteryUnrestricted: boolean; fp?: string | null; pin?: string | null; paired?: number; relay?: { url: string; code: string } | null; relayError?: string | null };
+export type WorkerStatus = { state: 'stopped' | 'starting' | 'running' | 'error'; error: string | null; peer: string | null; heldMb: number; ramMb: number; bandwidth: number; throttled: boolean; connects: number; rejects: number; id: string; batteryUnrestricted: boolean; fp?: string | null; pin?: string | null; paired?: number; relay?: { url: string; code: string } | null; relayError?: string | null; mode?: 'auto' | 'manual' | null; why?: string | null; pairFor?: string | null };
 /**
  * `{fp, pin?}` picks protocol v2 (tls, pinned certificate); null means protocol v1 with the secret.
  * An empty fp means "learn it": a peer added by a relay code alone shows its certificate on
@@ -19,6 +19,18 @@ export type PeerTls = { fp: string; pin?: string | null } | null;
 /** A peer far away: the relay to go through and the worker's code there. */
 export type PeerRelay = { url: string; code: string } | null;
 export type PeerArg = { host: string; port: number; secret: string; weight: number; fp?: string | null; pin?: string | null };
+/** A wi-fi as the phone sees it without a location permission; ssid only when it could be read. */
+export type HomeNet = { subnet: string; gateway: string | null; domain: string | null; ssid: string | null };
+/** A computer added by scanning its chat page's QR: waiting = its one-time code is still open. */
+export type HostEntry = { id: string; name: string; fp: string; paired: number | null; waiting: boolean; exp: number | null };
+/** Why the auto worker runs or not (Auto.decide in Auto.kt). */
+export type AutoDecision = 'start' | 'off' | 'nohome' | 'paused' | 'away' | 'unplugged';
+/** "let my computers use this phone" (Keeper.kt): the switch, the home wi-fi, what is missing. */
+export type AutoStatus = {
+  on: boolean; onlyCharging: boolean; paused: boolean; home: HomeNet | null; now: HomeNet | null; atHome: boolean; charging: boolean;
+  decision: AutoDecision; running: boolean; mode: 'auto' | 'manual' | null; why: string | null;
+  batteryUnrestricted: boolean; notifications: boolean; maker: string; sdk: number; hosts: HostEntry[];
+};
 export type Message = { role: 'system' | 'user' | 'assistant'; content: string };
 
 type Module = {
@@ -59,6 +71,19 @@ type Module = {
   /** FLAG_SECURE: the window cannot be screenshotted or recorded while a qr with a code is shown. */
   secureScreen(on: boolean): Promise<void>;
   requestBatteryUnrestricted(): Promise<boolean>;
+  // "let my computers use this phone" (8.11.2026): all native, so it works with the app closed
+  autoStatus(): Promise<AutoStatus>;
+  /** Turning on remembers the wi-fi the phone is on as home when none is; throws 'nowifi' off wi-fi. */
+  setAuto(on: boolean, onlyCharging: boolean, name: string | null): Promise<AutoStatus>;
+  rememberHome(): Promise<AutoStatus>;
+  /** Lifts a pause and starts the auto worker now; throws 'off' when the switch is off. */
+  startAuto(): Promise<AutoStatus>;
+  /** A computer's QR (k: kula-host); returns its name. Throws notHost | expired | used | nowifi. */
+  addHost(qr: string): Promise<string>;
+  forgetHost(fp: string): Promise<AutoStatus>;
+  /** The auto worker opens no code by itself: one for a new device, for ten minutes. */
+  openPairing(): Promise<void>;
+  openAppSettings(): Promise<void>;
   addListener(event: 'onToken', fn: (e: { id: number; text: string }) => void): EventSubscription;
   addListener(event: 'onDone', fn: (e: DoneEvent) => void): EventSubscription;
   addListener(event: 'onDownload', fn: (e: DownloadEvent) => void): EventSubscription;
