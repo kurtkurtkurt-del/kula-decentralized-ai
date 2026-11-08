@@ -194,9 +194,7 @@ class KulaLlamaModule : Module() {
       if (!relay.isNullOrBlank()) intent.putExtra(WorkerService.EXTRA_RELAY, relay)
       ContextCompat.startForegroundService(context, intent)
     }
-    AsyncFunction("stopWorker") {
-      if (WorkerService.isRunning(context)) context.startService(Intent(context, WorkerService::class.java).setAction(WorkerService.ACTION_STOP))
-    }
+    AsyncFunction("stopWorker") { stopWorkerNow() }
     AsyncFunction("workerStatus") {
       val s = WorkerService.readStatus(context)
       val alive = WorkerService.isRunning(context)
@@ -213,7 +211,78 @@ class KulaLlamaModule : Module() {
         // far away: the relay and the code this worker can be reached by (docs/RELAY.md)
         "relay" to s.optJSONObject("relay")?.takeIf { alive }?.let { mapOf("url" to it.optString("url"), "code" to it.optString("code")) },
         "relayError" to s.optString("relayError").ifEmpty { null }?.takeIf { alive },
+        // auto: "let my computers use this phone" (Keeper.kt); why: the reason it last stopped by itself
+        "mode" to (if (alive) s.optString("mode", "manual") else null), "why" to s.optString("why").ifEmpty { null }?.takeIf { !alive },
+        "pairFor" to s.optString("pairFor").ifEmpty { null }?.takeIf { alive },
       )
+    }
+
+    // --- let my computers use this phone (Keeper.kt, Auto.kt) ------------------------------
+    AsyncFunction("autoStatus") { autoStatus() }
+    /** The switch. Turning it on remembers the wi-fi the phone is on as home when none is ("nowifi" off wi-fi). */
+    AsyncFunction("setAuto") { on: Boolean, onlyCharging: Boolean, name: String? ->
+      val c = Keeper.config(context)
+      if (on) {
+        val home = c.home ?: Keeper.currentNet(context) ?: throw CodedException("nowifi", "nowifi", null)
+        Keeper.save(context, c.copy(on = true, onlyCharging = onlyCharging, home = home, paused = false, name = name?.takeIf { it.isNotBlank() } ?: c.name))
+        Keeper.arm(context)
+        Keeper.check(context, "switch")
+      } else {
+        Keeper.save(context, c.copy(on = false, onlyCharging = onlyCharging, paused = false))
+        Keeper.disarm(context)
+        if (WorkerService.isRunning(context) && WorkerService.readStatus(context).optString("mode") == "auto") stopWorkerNow()
+      }
+      autoStatus()
+    }
+    /** The wi-fi the phone is on now becomes home ("nowifi" off wi-fi). */
+    AsyncFunction("rememberHome") {
+      val now = Keeper.currentNet(context) ?: throw CodedException("nowifi", "nowifi", null)
+      Keeper.save(context, Keeper.config(context).copy(home = now))
+      Keeper.check(context, "home")
+      autoStatus()
+    }
+    /** Ready now: lifts a pause and starts the auto worker (the switch must be on). */
+    AsyncFunction("startAuto") {
+      val c = Keeper.config(context)
+      if (!c.on) throw CodedException("off", "off", null)
+      if (c.paused) Keeper.save(context, c.copy(paused = false))
+      if (!WorkerService.isRunning(context)) Keeper.start(context, "app")
+      autoStatus()
+    }
+    /**
+     * A computer's QR (`{"k":"kula-host","v":1,…}`, its chat page): kept as allowed, its code set
+     * as the gate's one-time code for that certificate only, the switch turned on and the worker
+     * started; the computer then finds this phone over mDNS and pairs. Throws notHost | expired | used | nowifi.
+     */
+    AsyncFunction("addHost") { qr: String ->
+      var c = Keeper.config(context)
+      if (!c.on || c.home == null) {
+        val home = c.home ?: Keeper.currentNet(context) ?: throw CodedException("nowifi", "nowifi", null)
+        c = c.copy(on = true, home = home)
+      }
+      val hosts = Hosts(Keeper.hostsFile(context))
+      hosts.offer(qr, System.currentTimeMillis())?.let { throw CodedException(it, it, null) }
+      Keeper.save(context, c.copy(paused = false))
+      Keeper.arm(context)
+      val intent = Intent(context, WorkerService::class.java).setAction(WorkerService.ACTION_HOST_PIN).putExtra(WorkerService.EXTRA_MODE, WorkerService.MODE_AUTO)
+      if (WorkerService.isRunning(context)) context.startService(intent) else ContextCompat.startForegroundService(context, intent)
+      val fp = runCatching { org.json.JSONObject(qr).optString("fp").lowercase() }.getOrDefault("")
+      hosts.byFp(fp)?.name ?: "computer"
+    }
+    AsyncFunction("forgetHost") { fp: String ->
+      val f = fp.lowercase()
+      Hosts(Keeper.hostsFile(context)).forget(f)
+      Paired(WorkerService.pairedFile(context)).forget(f)
+      if (WorkerService.isRunning(context)) context.startService(Intent(context, WorkerService::class.java).setAction(WorkerService.ACTION_FORGET).putExtra(WorkerService.EXTRA_FP, f))
+      autoStatus()
+    }
+    /** Auto mode opens no pairing code by itself: this one, for a new device, for ten minutes. */
+    AsyncFunction("openPairing") {
+      if (WorkerService.isRunning(context)) context.startService(Intent(context, WorkerService::class.java).setAction(WorkerService.ACTION_OPEN_PIN))
+    }
+    /** The app's own settings page (Samsung's battery list lives under it: battery › unrestricted). */
+    AsyncFunction("openAppSettings") {
+      context.startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:${context.packageName}")).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
     }
     AsyncFunction("gateLedger") { limit: Int -> auditTail(limit) }
     // settings → beyin audit: the same tail under its own name, and the one way to empty the ledger
@@ -255,6 +324,31 @@ class KulaLlamaModule : Module() {
     val ledger = WorkerService.ledgerFile(context)
     if (ledger.exists()) return expo.modules.kulallama.audit.Ledger.tail(ledger, limit)
     return File(context.filesDir, "kula_gate_ledger.jsonl").takeIf { it.exists() }?.readLines()?.takeLast(limit) ?: emptyList()
+  }
+
+  private fun stopWorkerNow() {
+    if (WorkerService.isRunning(context)) context.startService(Intent(context, WorkerService::class.java).setAction(WorkerService.ACTION_STOP))
+  }
+
+  private fun netMap(n: Auto.Net?): Map<String, Any?>? = n?.let { mapOf("subnet" to it.subnet, "gateway" to it.gateway, "domain" to it.domain, "ssid" to it.ssid) }
+
+  private fun autoStatus(): Map<String, Any?> {
+    val c = Keeper.config(context)
+    val now = Keeper.currentNet(context)
+    val alive = WorkerService.isRunning(context)
+    val s = WorkerService.readStatus(context)
+    return mapOf(
+      "on" to c.on, "onlyCharging" to c.onlyCharging, "paused" to c.paused,
+      "home" to netMap(c.home), "now" to netMap(now), "atHome" to (c.home?.matches(now) == true), "charging" to Keeper.charging(context),
+      "decision" to Auto.decide(c, now, Keeper.charging(context)),
+      "running" to alive, "mode" to (if (alive) s.optString("mode", "manual") else null), "why" to s.optString("why").ifEmpty { null }?.takeIf { !alive },
+      "batteryUnrestricted" to batteryUnrestricted(),
+      "notifications" to androidx.core.app.NotificationManagerCompat.from(context).areNotificationsEnabled(),
+      "maker" to Build.MANUFACTURER.lowercase(), "sdk" to Build.VERSION.SDK_INT,
+      "hosts" to Hosts(Keeper.hostsFile(context)).all().map { h ->
+        mapOf("id" to h.id, "name" to h.name, "fp" to h.fp, "paired" to (h.paired?.toDouble()), "waiting" to h.open(System.currentTimeMillis()), "exp" to h.exp?.toDouble())
+      },
+    )
   }
 
   private fun batteryUnrestricted(): Boolean {

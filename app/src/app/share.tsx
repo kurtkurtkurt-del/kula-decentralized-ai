@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import * as Brightness from 'expo-brightness';
-import { useLocalSearchParams } from 'expo-router';
+import { router, useLocalSearchParams } from 'expo-router';
 import QRCode from 'react-native-qrcode-svg';
 import * as Clipboard from 'expo-clipboard';
 import Button from '@/components/Button';
@@ -30,6 +30,9 @@ import { colors, fonts, radius } from '@/theme/tokens';
 // screen over adb when it finds nobody sharing (kula-node ui, "on a cable"); start=1 presses
 // start once, as a person would (a permission prompt it needs still shows). Already sharing:
 // nothing changes.
+// "let my computers use this phone" (8.11.2026, src/app/computers.tsx): the worker may already
+// run in auto mode (started by itself on the home wi-fi, only paired computers get in). Then
+// this screen says so, stop is a pause, and a code for a new device opens only on a press.
 export default function ShareScreen() {
   const params = useLocalSearchParams<{ start?: string }>();
   const autoStart = useRef(params.start === '1');
@@ -58,7 +61,7 @@ export default function ShareScreen() {
         if (!running) startRef.current().catch(() => {});
       }
       llama!.keepScreenOn(running).catch(() => {});
-      if (running && share()) myPeerQr().then((r) => on && setQr(r.qr)).catch(() => {});
+      if (running && (share() || s.mode === 'auto')) myPeerQr().then((r) => on && setQr(r.qr)).catch(() => {});
       else setQr(null);
     };
     tick();
@@ -111,15 +114,16 @@ export default function ShareScreen() {
   const stop = async () => {
     tapSelect();
     await llama!.stopWorker().catch(() => {});
-    saveShare(null); // a new secret next time
+    if (status?.mode !== 'auto') saveShare(null); // a new secret next time (auto mode has none: it is a pause)
     setQr(null);
   };
 
   const state = status?.state ?? 'stopped';
+  const auto = status?.mode === 'auto' && (state === 'running' || state === 'starting');
   // the main device (6.11.2026): the one connected to this worker loads the model and uses
   // this phone. the gate reports only its address; a device this phone also added is named.
   const master = state === 'running' && status?.peer ? (peers().find((p) => p.host === status.peer)?.name ?? status.peer).toLowerCase() : null;
-  const line = state === 'running' && status?.peer ? t('share.state.working', { peer: status.peer }) : state === 'error' ? t('share.state.error', { err: explain(status?.error, tx) }) : t(`share.state.${state === 'starting' ? 'starting' : state === 'running' ? 'running' : 'stopped'}`);
+  const line = state === 'running' && status?.peer ? t('share.state.working', { peer: status.peer }) : auto && state === 'running' ? (status?.pairFor ? t('comp.state.pairing', { name: status.pairFor }) : t('comp.state.ready')) : state === 'error' ? t('share.state.error', { err: explain(status?.error, tx) }) : t(`share.state.${state === 'starting' ? 'starting' : state === 'running' ? 'running' : 'stopped'}`);
 
   return (
     <StaffPage title={t('share.title')}>
@@ -145,7 +149,13 @@ export default function ShareScreen() {
           <Pressable onPress={() => llama!.requestBatteryUnrestricted()} hitSlop={8} accessibilityRole="button" accessibilityLabel={t('share.battery')} style={styles.linkHit}><Text style={styles.link}>{t('share.battery')} ›</Text></Pressable>
         ) : null}
       </View>
-      {qr ? (
+      {auto && !status?.pin ? (
+        <View style={styles.farBox}>
+          <Button label={t('comp.newDevice')} kind="line" onPress={() => { tapSelect(); llama!.openPairing().catch(() => {}); }} />
+          <Text style={styles.hint}>{t('comp.newDevice.hint')}</Text>
+        </View>
+      ) : null}
+      {qr && !(auto && !status?.pin) ? (
         <View style={styles.qrWrap}>
           <View style={styles.qrPaper} accessible accessibilityRole="image" accessibilityLabel={`${t('share.title')} · ${mine?.name ?? ''}`}>
             <QRCode value={qr} size={Math.min(width - 96, 280)} color={colors.paper} backgroundColor={colors.ink} ecl="L" />
@@ -186,8 +196,14 @@ export default function ShareScreen() {
         </View>
       ) : null}
       <View style={styles.actions}>
-        {state === 'running' || state === 'starting' ? <Button label={t('share.stop')} onPress={stop} kind="line" /> : <Button label={t('share.start')} onPress={start} kind="red" />}
+        {state === 'running' || state === 'starting' ? <Button label={auto ? t('comp.pause') : t('share.stop')} onPress={stop} kind="line" /> : <Button label={t('share.start')} onPress={start} kind="red" />}
       </View>
+      {hasNative() ? (
+        <Pressable onPress={() => router.push('/computers')} hitSlop={8} accessibilityRole="button" accessibilityLabel={t('comp.title')} style={styles.linkHit}>
+          <Text style={styles.link}>{t('comp.title')} ›</Text>
+          <Text style={styles.meta}>{t('comp.open.hint')}</Text>
+        </Pressable>
+      ) : null}
     </StaffPage>
   );
 }

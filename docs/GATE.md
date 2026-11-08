@@ -163,6 +163,27 @@ S → C   OK <proof_s>     pin:    HMAC-SHA256(pin, "nonce_s|nonce_c|channel|fp_
 - Vectors: v1 in `vectors`, v2 pin proofs in `v2`, the certificate in `cert`. Both
   implementations test all three.
 
+### only known computers (8.11.2026)
+
+"Let my computers use this phone" (`app/src/app/computers.tsx`, `Keeper.kt`, `Auto.kt`) runs
+the phone's worker by itself on the home wi-fi. In that **auto mode** the gate is the same
+code with less open:
+
+- no v1 secret (`NO no v1` to a plain hello), and **no pairing code** unless the person asks:
+  only certificates already in `paired` get in, an unknown one hears `not paired`;
+- a computer added by scanning the QR of its chat page
+  (`{"k":"kula-host","v":1,"id","name","fp","pin","exp"}`, kept in `files/gate/hosts.json`)
+  gets that `pin` opened until `exp`, **for that `fp` only** (`TlsServer.pinFor`): any other
+  certificate hears `not paired`, even with the right code. The computer pairs with the usual
+  v2 handshake, learning the phone's certificate (`fp` "" + the pin proof, which covers both);
+  a used, replaced or expired code is remembered (sha256) and refused on the phone when
+  scanned again. While such a code is open the mDNS record carries `pair` = the host id, and
+  always `fp` (the phone's certificate) and `auto` = `1`;
+- "code for a new device" on the share page opens one ordinary code for 10 minutes.
+
+The worker by hand ("share this phone") is unchanged; a computer scanned while it runs gets
+its code there too. RPC and the api stay on 127.0.0.1 behind the gate in both modes.
+
 ## refusal reasons
 
 The wire reply is `NO <reason>`; the same word is the `why` of the ledger's `reject` line.
@@ -180,7 +201,7 @@ The wire reply is `NO <reason>`; the same word is the `why` of the ledger's `rej
 | `no tls` | a TLS client reached a server that only speaks v1 (the client sees a TLS error) |
 | `tls` | the TLS handshake did not finish (ledger only; no line can reach the client) |
 | `no client cert` | a v2 client presented no certificate |
-| `not paired` | the client certificate is unknown and there is no open code, or the client sent no code |
+| `not paired` | the client certificate is unknown and there is no open code, or the client sent no code, or the open code was made for another computer's certificate |
 | `wrong pin` | the pairing proof did not match |
 | `bad proof` | a paired client sent something other than `-` |
 | `channel closed` | the channel's local target is not running (no model loaded, the api server not started) |

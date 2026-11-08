@@ -96,7 +96,14 @@ object Gate {
     @Volatile var pin: String? = pin
     /** When [pin] stops working (unix ms); null: no expiry (tests). The owner sets both together. */
     @Volatile var pinExpiresAt: Long? = pinExpiresAt
-    internal fun spend() { pin = null; pinExpiresAt = null; onPinUsed() }
+    /**
+     * The only client certificate [pin] may pair (a computer added by scanning its QR, Hosts in
+     * Auto.kt); null: any certificate that proves the pin. Any other client hears "not paired".
+     */
+    @Volatile var pinFor: String? = null
+    /** Opens a pairing code (null closes it): all three together, so a half-set code never shows. */
+    @Synchronized fun open(pin: String?, expiresAt: Long?, forFp: String?) { this.pin = null; pinFor = forFp; pinExpiresAt = expiresAt; this.pin = pin }
+    internal fun spend() { pin = null; pinExpiresAt = null; pinFor = null; onPinUsed() }
     internal fun expired(now: Long): Boolean = pin != null && (pinExpiresAt?.let { now > it } ?: false)
   }
 
@@ -242,6 +249,9 @@ object Gate {
       }
       val pin = t.pin
       if (!paired && pin == null) return refuse2(channel, "not paired")
+      // a code made for one computer (its QR named the certificate) pairs that computer only
+      val only = t.pinFor
+      if (!paired && only != null && !constantEquals(only, fpC)) return refuse2(channel, "not paired")
       val nonceS = randomHex(16)
       out.write("$nonceS ${if (paired) "paired" else "pin"}\n".toByteArray()); out.flush()
       val proof = readLine(inp).trim()

@@ -6,8 +6,10 @@ import { beforeEach, describe, expect, it, jest } from '@jest/globals';
 
 let mockParams: { start?: string } = {};
 let mockState: 'stopped' | 'running' = 'stopped';
+let mockMode: 'auto' | 'manual' | null = null;
+const mockOpenPairing = jest.fn(async () => {});
 const mockStartWorker = jest.fn(async (..._a: unknown[]) => {});
-const mockWorkerStatus = jest.fn(async () => ({ state: mockState, error: null, peer: null, heldMb: 0, ramMb: 4000, bandwidth: 10, throttled: false, connects: 0, rejects: 0, id: 'x', batteryUnrestricted: true, fp: null, pin: null }));
+const mockWorkerStatus = jest.fn(async () => ({ state: mockState, error: null, peer: null, heldMb: 0, ramMb: 4000, bandwidth: 10, throttled: false, connects: 0, rejects: 0, id: 'x', batteryUnrestricted: true, fp: null, pin: null, mode: mockMode }));
 
 jest.mock('expo-sqlite/kv-store', () => ({ __esModule: true, default: { getItemSync: () => null, setItemSync: () => {}, removeItemSync: () => {} } }));
 jest.mock('expo-router', () => ({ useLocalSearchParams: () => mockParams }));
@@ -36,6 +38,7 @@ jest.mock('@/llm/native', () => ({
     secureScreen: async () => {},
     info: async () => ({ wifiIp: '192.168.1.20' }),
     requestBatteryUnrestricted: async () => true,
+    openPairing: () => mockOpenPairing(),
   },
 }));
 
@@ -51,7 +54,7 @@ async function mount() {
 }
 
 describe('share?start=1', () => {
-  beforeEach(() => { mockStartWorker.mockClear(); mockWorkerStatus.mockClear(); mockState = 'stopped'; mockParams = {}; });
+  beforeEach(() => { mockStartWorker.mockClear(); mockWorkerStatus.mockClear(); mockOpenPairing.mockClear(); mockState = 'stopped'; mockMode = null; mockParams = {}; });
 
   it('starts sharing once when it is not on', async () => {
     mockParams = { start: '1' };
@@ -76,6 +79,27 @@ describe('share?start=1', () => {
     const r = await mount();
     expect(mockWorkerStatus).toHaveBeenCalled();
     expect(mockStartWorker).not.toHaveBeenCalled();
+    act(() => r.unmount());
+  });
+
+  // "let my computers use this phone" (8.11.2026): a worker that started by itself on the home
+  // wi-fi lets in only paired computers; the screen says so and opens a code only on a press
+  it('in auto mode says ready for your computers, pauses, and opens a code on a press', async () => {
+    mockParams = { start: '1' };
+    mockState = 'running';
+    mockMode = 'auto';
+    const r = await mount();
+    // a busy machine: give the first poll time to land before reading the screen
+    for (let i = 0; i < 40 && !JSON.stringify(r.toJSON()).includes('ready for your computers'); i++) {
+      await act(async () => { await new Promise((res) => setTimeout(res, 50)); });
+    }
+    expect(mockStartWorker).not.toHaveBeenCalled();
+    const text = JSON.stringify(r.toJSON());
+    expect(text).toContain('ready for your computers');
+    expect(text).toContain('pause');
+    const btn = r.root.findAll((n) => n.props.accessibilityLabel === 'code for a new device' && typeof n.props.onPress === 'function')[0];
+    await act(async () => { btn.props.onPress(); });
+    expect(mockOpenPairing).toHaveBeenCalledTimes(1);
     act(() => r.unmount());
   });
 });

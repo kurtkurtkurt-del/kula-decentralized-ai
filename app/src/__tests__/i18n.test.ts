@@ -20,9 +20,10 @@ import { modelsui } from '@/i18n/parts/modelsui';
 import { social } from '@/i18n/parts/social';
 import { passportui } from '@/i18n/parts/passportui';
 import { power } from '@/i18n/parts/power';
+import { computers } from '@/i18n/parts/computers';
 import { dict } from '@/i18n/dict';
 
-const parts: Record<string, Record<string, Record<string, string>>> = { common, home, tabs, pages, staff, tips, coops, server, models, audit, ux, brain, bench, voice, tasks, modelsui, social, passportui, power };
+const parts: Record<string, Record<string, Record<string, string>>> = { common, home, tabs, pages, staff, tips, coops, server, models, audit, ux, brain, bench, voice, tasks, modelsui, social, passportui, power, computers };
 
 describe('i18n dict', () => {
   it('has no key in two parts', () => {

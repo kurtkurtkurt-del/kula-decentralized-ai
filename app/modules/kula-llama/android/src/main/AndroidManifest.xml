@@ -8,6 +8,8 @@
   <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
   <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
   <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+  <!-- "let my computers use this phone": the worker starts again after a restart (Keeper.kt) -->
+  <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
   <application>
     <!-- The shared phone (worker). Own process: ggml's RPC server can't be stopped, so
@@ -22,5 +24,26 @@
         android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
         android:value="Lends this device's processor to the user's own AI model running across their devices" />
     </service>
+    <!-- Ready by itself (Keeper.kt): boot and app update start the worker while "let my
+         computers use this phone" is on (both actions are protected: only the system sends them). -->
+    <receiver
+      android:name=".KeeperReceiver"
+      android:enabled="true"
+      android:exported="true">
+      <intent-filter>
+        <action android:name="android.intent.action.BOOT_COMPLETED" />
+        <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+      </intent-filter>
+    </receiver>
+    <!-- the home wi-fi trigger: our own PendingIntent, so not exported -->
+    <receiver
+      android:name=".KeeperNetReceiver"
+      android:enabled="true"
+      android:exported="false" />
+    <!-- the plug trigger and the 15 minute safety net -->
+    <service
+      android:name=".KeeperJob"
+      android:exported="false"
+      android:permission="android.permission.BIND_JOB_SERVICE" />
   </application>
 </manifest>

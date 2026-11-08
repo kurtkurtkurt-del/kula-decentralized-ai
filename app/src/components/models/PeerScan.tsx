@@ -6,6 +6,8 @@ import { linkPassport } from '@/data/passport';
 import { useLang } from '@/i18n';
 import { classify, explain } from '@/llm/errors';
 import { tapDone } from '@/lib/haptics';
+import { hostErr, isHostQr, parseHostQr } from '@/llm/hosts';
+import { hasNative, llama } from '@/llm/native';
 import { isPeerQr, isRelayCode, parseRelayCode, takePeerQr } from '@/llm/peers';
 import { rememberPeer, type Peer } from '@/llm/store';
 import { fonts, radius } from '@/theme/tokens';
@@ -26,6 +28,22 @@ export function usePeerAdd(onAdded?: (p: Peer | null) => void) {
 
   const take = (text: string): boolean => {
     try {
+      // a computer's QR (its chat page, 8.11.2026): the phone keeps it as allowed and opens its
+      // code for that computer; the computer then finds this phone and pairs (src/app/computers.tsx)
+      if (isHostQr(text)) {
+        parseHostQr(text);
+        if (!hasNative()) throw new Error('nonative');
+        llama!.addHost(text).then((name) => {
+          setErr(null);
+          tapDone();
+          setNote(t('comp.added', { name: name.toLowerCase() }));
+        }, (e) => {
+          const k = hostErr(e);
+          setErr(k ? t(`comp.err.${k}` as never) : explain(e, tx));
+        });
+        onAdded?.(null);
+        return true;
+      }
       if (isRelayCode(text)) {
         const p = parseRelayCode(text);
         rememberPeer(p);
@@ -49,6 +67,10 @@ export function usePeerAdd(onAdded?: (p: Peer | null) => void) {
     } catch (e) {
       // the qr codes' own words first (notPeer · self · old), the dictionary for the rest
       const code = (e as Error).message;
+      if (isHostQr(text) && hostErr(e)) {
+        setErr(t(`comp.err.${hostErr(e)!}` as never));
+        return false;
+      }
       const own = tx(`peers.err.${code}`, tx(`devices.err.${code}`, ''));
       setErr(own || (classify(e).kind === 'unknown' ? t('peers.err.notPeer') : explain(e, tx)));
       return false;

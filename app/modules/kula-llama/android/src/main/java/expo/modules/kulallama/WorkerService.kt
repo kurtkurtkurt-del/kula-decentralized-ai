@@ -50,6 +50,12 @@ class WorkerService : Service() {
   @Volatile private var relayCode: String? = null
   @Volatile private var relayError: String? = null
   @Volatile private var running = false
+  /** "let my computers use this phone" (Keeper.kt): no v1 secret, a pairing code only for a computer that was scanned, stops itself away from home. */
+  @Volatile private var auto = false
+  private var hosts: Hosts? = null
+  private var advertisedName: String? = null
+  private var advertisedPort = 0
+  private var advertisedPair: String? = null
   @Volatile private var rpcPort = 0
   private var ramMb = 0L
   private var bandwidth = 0.0
@@ -64,6 +70,18 @@ class WorkerService : Service() {
     const val EXTRA_NAME = "name"
     /** wss:// of a relay to register with, so a master far away can come in by code (docs/RELAY.md). */
     const val EXTRA_RELAY = "relay"
+    /** [MODE_AUTO]: started by Keeper (boot, wi-fi, plug) or the setup screen; no secret needed. */
+    const val EXTRA_MODE = "mode"
+    const val MODE_AUTO = "auto"
+    /** The app scanned a computer's QR (Hosts): open its code on the running gate. */
+    const val ACTION_HOST_PIN = "expo.modules.kulallama.HOST_PIN"
+    /** Auto mode, the person asked for it: one pairing code for a new device, for PIN_TTL_MS. */
+    const val ACTION_OPEN_PIN = "expo.modules.kulallama.OPEN_PIN"
+    /** Forget a paired certificate ([EXTRA_FP]) in the running gate too. */
+    const val ACTION_FORGET = "expo.modules.kulallama.FORGET"
+    const val EXTRA_FP = "fp"
+    /** Away from the home wi-fi or unplugged this long before the auto worker stops: a wi-fi roam or a wobbly cable is not leaving. */
+    private const val LEAVE_GRACE_MS = 20_000L
     const val SERVICE_TYPE = "_kula._tcp."
     const val PROCESS_SUFFIX = ":worker"
     private const val CHANNEL_ID = "kula-worker"
@@ -109,12 +127,38 @@ class WorkerService : Service() {
   override fun onBind(intent: Intent?): IBinder = android.os.Binder()
 
   override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-    if (intent?.action == ACTION_STOP) { shutdown(); return START_NOT_STICKY }
+    when (intent?.action) {
+      ACTION_STOP -> {
+        // in auto mode "stop" is a pause: Keeper leaves it stopped until the app starts it again or the phone restarts
+        if (auto) Keeper.config(this).let { if (it.on) Keeper.save(this, it.copy(paused = true)) }
+        shutdown("stopped"); return START_NOT_STICKY
+      }
+      ACTION_OPEN_PIN -> {
+        if (running) tls?.let { it.open(Gate.newPin(), System.currentTimeMillis() + Gate.PIN_TTL_MS, null); writeStatus("running", peer = gate?.currentPeer, heldMb = residentMb()) }
+        return if (auto) START_STICKY else START_NOT_STICKY
+      }
+      ACTION_FORGET -> {
+        intent?.getStringExtra(EXTRA_FP)?.let { fp -> tls?.paired?.forget(fp); hosts?.reload() }
+        if (running) writeStatus("running", peer = gate?.currentPeer, heldMb = residentMb())
+        return if (auto) START_STICKY else START_NOT_STICKY
+      }
+      ACTION_HOST_PIN -> if (running) {
+        hosts?.reload()
+        tls?.let { nextPin(it, fromHost = true) }
+        writeStatus("running", peer = gate?.currentPeer, heldMb = residentMb())
+        return if (auto) START_STICKY else START_NOT_STICKY
+      }
+    }
+    // a sticky restart (Android killed the process) comes with no intent: only auto mode asks for that
+    val wantAuto = intent?.getStringExtra(EXTRA_MODE) == MODE_AUTO || intent?.action == ACTION_HOST_PIN || intent == null
     startForeground(NOTIFICATION_ID, buildNotification("starting…"))
-    if (running) return START_NOT_STICKY
+    if (running) return if (auto) START_STICKY else START_NOT_STICKY
+    if (wantAuto && !Keeper.config(this).on) { shutdown("off"); return START_NOT_STICKY }
     running = true
+    auto = wantAuto
     val port = intent?.getIntExtra(EXTRA_PORT, Gate.DEFAULT_PORT) ?: Gate.DEFAULT_PORT
-    val secret = intent?.getStringExtra(EXTRA_SECRET) ?: run { writeStatus("error", error = "no secret"); shutdown(); return START_NOT_STICKY }
+    // auto mode has no v1 secret: only certificates in the paired list get in (docs/GATE.md, "only known computers")
+    val secret: String? = if (auto) null else intent?.getStringExtra(EXTRA_SECRET) ?: run { writeStatus("error", error = "no secret"); shutdown(); return START_NOT_STICKY }
     val threads = Native.fastCoreCount()
     acquireLocks()
     writeStatus("starting")
@@ -132,16 +176,20 @@ class WorkerService : Service() {
         // protocol v2 on the same port: our certificate, the paired masters, a one-time code per qr
         // (the code is spent by the master that proves it; the status file carries the next one)
         val identity = GateIdentity.loadOrCreate(gateDir(this), key)
+        hosts = Hosts(Keeper.hostsFile(this))
         // a code lives PIN_TTL_MS: spent by the master that proves it or by time, a new one follows
-        tls = Gate.TlsServer(identity, Paired(pairedFile(this)), Gate.newPin(), {
-          tls?.let { it.pin = Gate.newPin(); it.pinExpiresAt = System.currentTimeMillis() + Gate.PIN_TTL_MS }
+        // (by hand), or the next scanned computer's code, or none at all (auto mode)
+        tls = Gate.TlsServer(identity, Paired(pairedFile(this)), if (auto) null else Gate.newPin(), {
+          tls?.let { nextPin(it, fromHost = false) }
           writeStatus("running", peer = gate?.currentPeer, heldMb = residentMb())
-        }, System.currentTimeMillis() + Gate.PIN_TTL_MS)
+        }, if (auto) null else System.currentTimeMillis() + Gate.PIN_TTL_MS)
+        // a computer scanned before the worker started: its code now
+        tls?.let { t -> hosts?.pending(System.currentTimeMillis())?.let { h -> t.open(h.pin, h.exp, h.fp) } }
         gate = Gate.Server(port, secret, { ch -> if (ch == "rpc") rpcPort else api?.port }, auditor, tls) { ev ->
-          when (ev.kind) { "connect" -> connects++; "reject" -> rejects++ }
+          when (ev.kind) { "connect" -> connects++; "reject" -> rejects++; "pair" -> ev.fp?.let { hosts?.paired(it, System.currentTimeMillis()) } }
         }.also { it.start() }
-        Log.i(TAG, "worker: $threads threads, $ramMb MB free, %.1f GB/s, gate $port".format(bandwidth))
-        val name = intent?.getStringExtra(EXTRA_NAME) ?: Build.MODEL
+        Log.i(TAG, "worker${if (auto) " (auto)" else ""}: $threads threads, $ramMb MB free, %.1f GB/s, gate $port".format(bandwidth))
+        val name = intent?.getStringExtra(EXTRA_NAME) ?: Keeper.config(this).name ?: Build.MODEL
         // far away masters: register with the relay; every relayed stream reaches the gate on
         // 127.0.0.1 and is served like any other (tls end to end, the relay sees ciphertext)
         intent?.getStringExtra(EXTRA_RELAY)?.takeIf { it.isNotBlank() }?.let { url ->
@@ -154,6 +202,7 @@ class WorkerService : Service() {
         }
         advertise(port, name)
         writeStatus("running")
+        if (Keeper.config(this).on) Keeper.arm(this)
         startStatusLoop()
         // blocks for the life of the process
         val error = Native.serve(applicationInfo.nativeLibraryDir, "127.0.0.1:$rpcPort", cacheDir.absolutePath, threads)
@@ -165,7 +214,26 @@ class WorkerService : Service() {
       }
       shutdown()
     }
-    return START_NOT_STICKY
+    return if (auto) START_STICKY else START_NOT_STICKY
+  }
+
+  /**
+   * After a code was spent (paired, or out of time) or a computer was scanned: the newest scanned
+   * computer's code if one is open, else a fresh code when started by hand, else none. The mDNS
+   * record says which computer may pair ("pair" = its id), so its chat page knows this phone.
+   */
+  private fun nextPin(t: Gate.TlsServer, fromHost: Boolean) {
+    val now = System.currentTimeMillis()
+    // the gate added the certificate before it spent the code: the scanned computer is known now
+    hosts?.let { h -> h.all().filter { it.pin != null && t.paired.contains(it.fp) }.forEach { h.paired(it.fp, now) } }
+    val next = hosts?.pending(now)
+    when {
+      next != null -> t.open(next.pin, next.exp, next.fp)
+      fromHost && t.pin != null && t.pinFor == null -> {} // nothing scanned after all: the open code stays
+      auto -> t.open(null, null, null)
+      else -> t.open(Gate.newPin(), now + Gate.PIN_TTL_MS, null)
+    }
+    if (advertisedPair != next?.id) readvertise()
   }
 
   private fun startStatusLoop() {
@@ -173,7 +241,23 @@ class WorkerService : Service() {
       var last = ""
       var lastAudit = 0L
       var lastWarn = ""
+      var leaving: Pair<String, Long>? = null
+      var lastLook = 0L
       while (running) {
+        // auto mode: off the home wi-fi or unplugged ("only while charging") for LEAVE_GRACE_MS, then stop
+        if (auto && System.currentTimeMillis() - lastLook >= 5000) {
+          lastLook = System.currentTimeMillis()
+          val d = runCatching { Keeper.decision(this) }.getOrDefault("start")
+          if (d == "start") leaving = null
+          else if (d == "off" || d == "paused" || d == "nohome") { shutdown(d); return@thread }
+          else {
+            val l = leaving?.takeIf { it.first == d } ?: (d to lastLook).also { leaving = it }
+            if (lastLook - l.second >= LEAVE_GRACE_MS) {
+              if (d == "unplugged") Keeper.armCharging(this)
+              shutdown(d); return@thread
+            }
+          }
+        }
         // a pairing code nobody used in PIN_TTL_MS is replaced here, so the qr on screen never shows a dead one
         tls?.let { if (it.expired(System.currentTimeMillis())) it.spend() }
         val peer = gate?.currentPeer ?: Native.workerPeer()
@@ -192,7 +276,7 @@ class WorkerService : Service() {
             lastAudit = nowMs; lastWarn = warn
           }
         }
-        val text = if (peer != null) "working for $peer · holding %.1f GB".format(held / 1024.0) else "ready · waiting for a device"
+        val text = if (peer != null) "working for $peer · holding %.1f GB".format(held / 1024.0) else if (auto) "ready for your computers" else "ready · waiting for a device"
         if (text != last) { getSystemService(NotificationManager::class.java).notify(NOTIFICATION_ID, buildNotification(text)); last = text }
         Thread.sleep(2000)
       }
@@ -204,13 +288,19 @@ class WorkerService : Service() {
     File("/proc/self/cgroup").readLines().any { it.endsWith("/abnormal") || it.endsWith("cpu:/background") || it.endsWith("cpuset:/background") }
   }.getOrDefault(false)
 
-  private fun writeStatus(state: String, error: String? = null, peer: String? = null, heldMb: Long = 0) {
-    val json = JSONObject().put("state", state).put("ramMb", ramMb).put("bandwidth", bandwidth).put("heldMb", heldMb)
+  private fun writeStatus(state: String, error: String? = null, peer: String? = null, heldMb: Long = 0, why: String? = null) {
+    val json = JSONObject().put("state", state).put("mode", if (auto) "auto" else "manual").put("ramMb", ramMb).put("bandwidth", bandwidth).put("heldMb", heldMb)
       .put("throttled", isThrottled()).put("connects", connects).put("rejects", rejects).put("pid", Process.myPid())
     if (error != null) json.put("error", error)
     if (peer != null) json.put("peer", peer)
-    // what the v3 qr needs: this worker's certificate fingerprint and the open pairing code
-    tls?.let { json.put("fp", it.identity.fp).put("pin", it.pin ?: JSONObject.NULL).put("paired", it.paired.size()) }
+    if (why != null) json.put("why", why)
+    // what the v3 qr needs: this worker's certificate fingerprint and the open pairing code; a
+    // code made for one scanned computer is not shown (no other device could use it)
+    tls?.let { t ->
+      val forHost = t.pinFor
+      json.put("fp", t.identity.fp).put("pin", if (forHost == null) t.pin ?: JSONObject.NULL else JSONObject.NULL).put("paired", t.paired.size())
+      if (forHost != null && t.pin != null) json.put("pairFor", hosts?.byFp(forHost)?.name ?: "computer")
+    }
     // the relay code for the v3 qr (and the "share far away" screen), or why there is none yet
     val url = relayUrl
     val code = relayCode
@@ -234,6 +324,9 @@ class WorkerService : Service() {
     ?.filter { it.isDigit() }?.toLongOrNull()?.div(1024) ?: 0L
 
   private fun advertise(port: Int, name: String) {
+    advertisedName = name; advertisedPort = port
+    val pair = tls?.takeIf { it.pin != null }?.pinFor?.let { fp -> hosts?.byFp(fp)?.id }
+    advertisedPair = pair
     val info = NsdServiceInfo().apply {
       serviceName = "kula $name"
       serviceType = SERVICE_TYPE
@@ -244,6 +337,11 @@ class WorkerService : Service() {
       setAttribute("name", name.take(40))
       setAttribute("kind", "phone")
       setAttribute("v", "rpc7")
+      // the gate's certificate (public: it is in every qr) and, while a scanned computer's
+      // code is open, that computer's id, so its chat page knows which phone to pair with
+      tls?.let { setAttribute("fp", it.identity.fp) }
+      if (auto) setAttribute("auto", "1")
+      if (pair != null) setAttribute("pair", pair.take(64))
     }
     val listener = object : NsdManager.RegistrationListener {
       override fun onServiceRegistered(i: NsdServiceInfo) { Log.i(TAG, "advertised as ${i.serviceName}") }
@@ -256,6 +354,14 @@ class WorkerService : Service() {
     registration = listener
   }
 
+  /** NSD has no update: the record goes and comes back with the new attributes. */
+  private fun readvertise() {
+    val name = advertisedName ?: return
+    try { registration?.let { nsd?.unregisterService(it) } } catch (_: IllegalArgumentException) {}
+    registration = null
+    advertise(advertisedPort, name)
+  }
+
   private fun acquireLocks() {
     val power = getSystemService(Context.POWER_SERVICE) as PowerManager
     wakeLock = power.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "kula:worker").apply { acquire() }
@@ -265,7 +371,7 @@ class WorkerService : Service() {
     wifiLock = wifi.createWifiLock(mode, "kula:worker").apply { acquire() }
   }
 
-  private fun shutdown() {
+  private fun shutdown(why: String? = null) {
     running = false
     relay?.stop()
     gate?.stop(); api?.stop()
@@ -273,7 +379,7 @@ class WorkerService : Service() {
     registration = null
     wifiLock?.takeIf { it.isHeld }?.release()
     wakeLock?.takeIf { it.isHeld }?.release()
-    if (readStatus(this).optString("state") != "error") writeStatus("stopped")
+    if (readStatus(this).optString("state") != "error") writeStatus("stopped", why = why)
     stopForeground(STOP_FOREGROUND_REMOVE)
     stopSelf()
     Process.killProcess(Process.myPid())
@@ -281,12 +387,12 @@ class WorkerService : Service() {
 
   private fun buildNotification(text: String) = NotificationCompat.Builder(this, ensureChannel())
     .setSmallIcon(android.R.drawable.stat_notify_sync)
-    .setContentTitle("kula: this phone is shared")
+    .setContentTitle(if (auto) "kula" else "kula: this phone is shared")
     .setContentText(text)
     .setPriority(NotificationCompat.PRIORITY_LOW)
     .setOngoing(true)
     .setOnlyAlertOnce(true)
-    .addAction(0, "stop", PendingIntent.getService(this, 0, Intent(this, WorkerService::class.java).setAction(ACTION_STOP), PendingIntent.FLAG_IMMUTABLE))
+    .addAction(0, if (auto) "pause" else "stop", PendingIntent.getService(this, 0, Intent(this, WorkerService::class.java).setAction(ACTION_STOP), PendingIntent.FLAG_IMMUTABLE))
     .build()
 
   private fun ensureChannel(): String {
