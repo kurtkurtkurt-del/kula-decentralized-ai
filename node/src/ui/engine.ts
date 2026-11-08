@@ -27,6 +27,7 @@ import { publicName } from '../devicenames.js';
 import { freeRamMB, measureBandwidth } from '../sysinfo.js';
 import { modelUrl, type UiModel } from './catalog.js';
 import { FULL_CATALOG, lineupView, type LineupView } from './lineup.js';
+import { Usage, type Use } from './usage.js';
 
 export type Mode = 'phone' | 'apart' | 'split' | 'here';
 export const MODES: Mode[] = ['phone', 'apart', 'split', 'here'];
@@ -110,6 +111,7 @@ export interface EngineOptions {
   bonjour?: () => BonjourLike;           // tests: a fake mdns browser for discover
   discoverMs?: number;                   // how long discover listens; 2.5 s
   statusMs?: number;                     // how long a probe waits for a phone's /status; 2.5 s
+  usage?: Usage;                         // where answers are counted; default: ~/.kula-node/usage.json
 }
 
 // What a model takes in memory, run whole: the file, the kv cache for ctx, some slack.
@@ -164,9 +166,12 @@ export class Engine {
   // and kept only when the handshake there proves it is that phone
   private heard = new Map<string, { host: string; port: number }>();
   readonly catalog: CatalogEntry[];
+  // every answer counted (usage.ts): tokens, speed, per model, device, mode, use and day
+  readonly usage: Usage;
 
   constructor(private readonly opts: EngineOptions = {}) {
     this.catalog = opts.catalog ?? FULL_CATALOG;
+    this.usage = opts.usage ?? new Usage({ log: (s) => this.log(s) });
     this.ident = opts.identity ?? null;
   }
 
@@ -796,17 +801,28 @@ export class Engine {
 
   loadedModel(): Loaded | null { return this.loaded; }
 
-  async chat(messages: Message[], onToken: (t: string) => void, o: { maxTokens?: number; temperature?: number; signal?: AbortSignal } = {}): Promise<Reply & { stopped?: boolean }> {
+  // `use` says who asked (the page, /v1, a night project, a guest): only for the counts
+  async chat(messages: Message[], onToken: (t: string) => void, o: { maxTokens?: number; temperature?: number; signal?: AbortSignal; use?: Use } = {}): Promise<Reply & { stopped?: boolean }> {
     if (!this.cluster || !this.loaded) throw new Error('no model loaded: open connect and load one');
+    const loaded = this.loaded;
     const ac = new AbortController();
     const relay = () => ac.abort();
     if (o.signal?.aborted) ac.abort();
     o.signal?.addEventListener('abort', relay, { once: true });
     this.chats.add(ac);
+    const t0 = Date.now();
+    let pieces = 0, first = 0;
+    const count = { model: loaded.model.name, mode: loaded.mode, use: o.use ?? 'chat', promptChars: messages.reduce((a, m) => a + String(m.content ?? '').length, 0) } as const;
     try {
-      const r = await this.cluster.chat(messages, onToken, { maxTokens: o.maxTokens, temperature: o.temperature, signal: ac.signal });
+      const r = await this.cluster.chat(messages, (t) => { if (!first) first = Date.now() - t0; pieces++; onToken(t); }, { maxTokens: o.maxTokens, temperature: o.temperature, signal: ac.signal });
       this.note(`${r.device}: ${r.tokens} tokens, ${r.tps} tok/s, first after ${r.firstMs} ms${r.stopped ? ' (stopped)' : ''}`);
+      this.usage.record({ ...count, device: r.device, promptTokens: r.promptTokens, completion: r.tokens || pieces, ms: r.ms, firstMs: r.firstMs, stopped: r.stopped === true });
       return r;
+    } catch (e) {
+      const dev = this.cluster?.devices.find((d) => d.busy)?.name ?? this.cluster?.devices[0]?.name ?? 'unknown device';
+      if (ac.signal.aborted && pieces) this.usage.record({ ...count, device: dev, completion: pieces, ms: Date.now() - t0, firstMs: first, stopped: true });
+      else this.usage.record({ ...count, device: dev, completion: 0, ms: 0, firstMs: 0, failed: true });
+      throw e;
     } finally {
       this.chats.delete(ac);
       o.signal?.removeEventListener('abort', relay);

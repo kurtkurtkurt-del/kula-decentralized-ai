@@ -85,9 +85,16 @@ function toast(text) {
 
 // ---------- settings (this browser only)
 
-const DEFAULTS = { temperature: 0.7, maxTokens: 1024, ctx: 4096, system: '', theme: 'kula', mode: 'phone', model: null, peers: [], way: null };
+const DEFAULTS = { temperature: 0.7, maxTokens: 1024, ctx: 4096, system: '', theme: 'kula', mode: 'phone', model: null, peers: [], way: null,
+  start: 'new', enter: 'enter', name: '', about: '', style: 'default' };
 function readSettings() {
-  try { return { ...DEFAULTS, ...JSON.parse(localStorage.getItem('kula.chat.settings') || '{}') }; } catch { return { ...DEFAULTS }; }
+  let s;
+  try { s = { ...DEFAULTS, ...JSON.parse(localStorage.getItem('kula.chat.settings') || '{}') }; } catch { s = { ...DEFAULTS }; }
+  for (const k of ['system', 'name', 'about']) if (typeof s[k] !== 'string') s[k] = '';
+  if (!['new', 'last'].includes(s.start)) s.start = 'new';
+  if (!['enter', 'mod'].includes(s.enter)) s.enter = 'enter';
+  if (!['default', 'concise', 'detailed', 'friendly', 'formal'].includes(s.style)) s.style = 'default';
+  return s;
 }
 const settings = readSettings();
 function saveSettings() { try { localStorage.setItem('kula.chat.settings', JSON.stringify(settings)); } catch {} }
@@ -533,7 +540,8 @@ $('messages').addEventListener('click', (e) => {
 
 function historyFor(upTo) {
   const msgs = [];
-  if (settings.system.trim()) msgs.push({ role: 'system', content: settings.system.trim() });
+  const sys = systemText();
+  if (sys) msgs.push({ role: 'system', content: sys });
   for (const m of S.chat.messages.slice(0, upTo)) {
     if (m.role === 'assistant') {
       const a = stripThink(m.content);
@@ -606,9 +614,14 @@ const input = $('input');
 function grow(t) { t.style.height = 'auto'; t.style.height = `${Math.min(t.scrollHeight, window.innerHeight * 0.4)}px`; }
 function updateSend() { $('send').disabled = !input.value.trim() || !!S.streaming || input.disabled; }
 input.addEventListener('input', () => { grow(input); updateSend(); });
+// settings → general → sending: enter sends (shift+enter a new line), or ctrl/⌘+enter sends
 input.addEventListener('keydown', (e) => {
-  if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); $('composer').requestSubmit(); }
+  if (e.key !== 'Enter' || e.isComposing) return;
+  const mod = e.ctrlKey || e.metaKey;
+  if (settings.enter === 'mod' ? mod : !e.shiftKey && !mod) { e.preventDefault(); $('composer').requestSubmit(); }
 });
+function composerHint() { $('composer-hint').textContent = settings.enter === 'mod' ? 'ctrl/⌘+enter sends · enter new line' : 'enter sends · shift+enter new line'; }
+composerHint();
 $('composer').addEventListener('submit', (e) => {
   e.preventDefault();
   const text = input.value.trim();
@@ -2080,8 +2093,11 @@ async function openConnect(auto) {
 
 $('connect').addEventListener('close', () => { stopScan(); input.focus(); });
 
-// ---------- settings
+// ---------- settings (8.11.2026: sections on the left, like the big chat apps; only what kula
+// really does). general, personalisation and model are this browser's (localStorage); usage,
+// devices, data controls and developer are the owner's and come from the server.
 
+let tokenVisible = false;
 function snippet(tokenShown) {
   const i = S.info?.openai;
   if (!i) return '';
@@ -2094,7 +2110,14 @@ models:
     apiKey: ${tokenShown}
     roles: [chat, edit, apply]`;
 }
-let tokenVisible = false;
+function curlSnippet(tokenShown) {
+  const i = S.info?.openai;
+  if (!i) return '';
+  return `curl ${i.base}/chat/completions \\
+  -H "authorization: Bearer ${tokenShown}" \\
+  -H "content-type: application/json" \\
+  -d '{"model":"kula","messages":[{"role":"user","content":"hello"}]}'`;
+}
 function renderOpenAi() {
   const i = S.info?.openai;
   if (!i) return;
@@ -2103,26 +2126,304 @@ function renderOpenAi() {
   $('oa-token').textContent = tokenVisible ? i.token : masked;
   $('oa-show').textContent = tokenVisible ? 'hide' : 'show';
   $('oa-snippet').textContent = snippet(tokenVisible ? i.token : masked);
+  $('oa-curl').textContent = curlSnippet(tokenVisible ? i.token : masked);
 }
 $('oa-show').addEventListener('click', () => { tokenVisible = !tokenVisible; renderOpenAi(); });
 for (const b of document.querySelectorAll('[data-copy-from]')) b.addEventListener('click', () => {
   const which = b.dataset.copyFrom;
   const i = S.info?.openai;
   if (!i) return;
-  copyText(which === 'oa-token' ? i.token : which === 'oa-snippet' ? snippet(i.token) : i.base);
+  copyText(which === 'oa-token' ? i.token : which === 'oa-snippet' ? snippet(i.token) : which === 'oa-curl' ? curlSnippet(i.token) : i.base);
 });
 
-async function openSettings() {
+// a segmented control: buttons with data-v, one checked
+function segSet(id, v) { for (const b of document.querySelectorAll(`#${id} button`)) b.setAttribute('aria-checked', String((b.dataset.v ?? b.dataset.theme) === v)); }
+function segOn(id, fn) {
+  for (const b of document.querySelectorAll(`#${id} button`)) b.addEventListener('click', () => { fn(b.dataset.v ?? b.dataset.theme); segSet(id, b.dataset.v ?? b.dataset.theme); });
+}
+
+let setSec = 'general';
+function showSec(sec) {
+  const btn = document.querySelector(`#set-nav [data-sec="${sec}"]`);
+  if (!btn || getComputedStyle(btn).display === 'none') sec = 'general';
+  setSec = sec;
+  for (const b of document.querySelectorAll('#set-nav button')) { b.setAttribute('aria-selected', String(b.dataset.sec === sec)); b.tabIndex = b.dataset.sec === sec ? 0 : -1; }
+  btn?.scrollIntoView?.({ block: 'nearest', inline: 'nearest' });
+  for (const p of document.querySelectorAll('.set-pane')) p.hidden = p.dataset.sec !== sec;
+  $('set-body').scrollTop = 0;
+  if (sec === 'usage') refreshUsage();
+  if (sec === 'devices') renderSetDevices();
+  if (sec === 'about' || sec === 'developer' || sec === 'data') refreshInfo();
+  if (sec === 'model') renderSetModel();
+  if (sec === 'personal') $('set-preview').textContent = systemText() || '(nothing: the model gets only the chat)';
+}
+for (const b of document.querySelectorAll('#set-nav button')) b.addEventListener('click', () => showSec(b.dataset.sec));
+$('set-nav').addEventListener('keydown', (e) => {
+  if (!['ArrowDown', 'ArrowUp', 'ArrowLeft', 'ArrowRight'].includes(e.key)) return;
+  const tabs = [...document.querySelectorAll('#set-nav button')].filter((b) => getComputedStyle(b).display !== 'none');
+  const i = tabs.findIndex((b) => b.dataset.sec === setSec);
+  const next = tabs[(i + (e.key === 'ArrowDown' || e.key === 'ArrowRight' ? 1 : tabs.length - 1)) % tabs.length];
+  e.preventDefault();
+  showSec(next.dataset.sec);
+  next.focus();
+});
+
+async function refreshInfo() {
+  if (isGuest()) return renderAbout();
+  try { S.info = await getJson('settings'); } catch {}
+  renderOpenAi();
+  renderAbout();
+  const n = S.info?.chats;
+  $('set-chat-sum').textContent = n == null ? 'every chat as one json file.' : `${n} chat${n === 1 ? '' : 's'} as one json file (guests' chats stay out).`;
+}
+
+function renderAbout() {
+  const i = S.info;
+  const dl = $('set-about-list');
+  dl.replaceChildren();
+  const add = (list, k, v) => { list.append(el('dt', '', k), el('dd', '', v)); };
+  add(dl, 'kula-node', i?.version ? `version ${i.version}` : 'kula-node');
+  add(dl, 'llama.cpp', `${i?.llamaTag ?? 'b11157'}${i ? (i.llama ? ', set up on this computer' : ', not set up here yet: kula-node setup (split and here need it)') : ''}`);
+  if (i?.node) add(dl, 'node', i.node);
+  if (i?.host) add(dl, 'this computer', i.host);
+  add(dl, 'privacy', 'chats, notes and counts stay on this computer; the page loads nothing from the internet.');
+  const p = $('set-paths');
+  p.replaceChildren();
+  if (!i?.paths) return;
+  const names = { home: 'everything', chats: 'chats', models: 'downloaded models', brain: "the brain's notes", usage: 'usage counts', token: 'the /v1 token' };
+  for (const [k, label] of Object.entries(names)) if (i.paths[k]) {
+    const dd = el('dd', 'path');
+    const c = el('code', '', i.paths[k]);
+    const b = el('button', 'link', 'copy');
+    b.type = 'button';
+    b.addEventListener('click', () => copyText(i.paths[k]));
+    dd.append(c, b);
+    p.append(el('dt', '', label), dd);
+  }
+}
+
+// ---- personalisation: one system message from the pieces
+
+const STYLE_TEXT = {
+  default: '',
+  concise: 'answer briefly: short sentences, no filler, a list only when it helps.',
+  detailed: 'answer thoroughly: explain the reasoning step by step and give examples where they help.',
+  friendly: 'answer in a warm, friendly, plain-spoken way.',
+  formal: 'answer in a formal, precise, professional tone.',
+};
+function systemText() {
+  const parts = [];
+  if (settings.system.trim()) parts.push(settings.system.trim());
+  if (settings.name.trim()) parts.push(`the user's name is ${settings.name.trim()}.`);
+  if (settings.about.trim()) parts.push(`about the user: ${settings.about.trim()}`);
+  if (STYLE_TEXT[settings.style]) parts.push(STYLE_TEXT[settings.style]);
+  return parts.join('\n\n');
+}
+const preview = () => { $('set-preview').textContent = systemText() || '(nothing: the model gets only the chat)'; };
+$('set-system').addEventListener('input', () => { settings.system = $('set-system').value; saveSettings(); preview(); });
+$('set-name').addEventListener('input', () => { settings.name = $('set-name').value; saveSettings(); preview(); });
+$('set-about').addEventListener('input', () => { settings.about = $('set-about').value; saveSettings(); preview(); });
+segOn('set-style', (v) => { settings.style = v; saveSettings(); preview(); });
+
+// ---- general
+
+segOn('set-theme', (v) => { settings.theme = v; saveSettings(); applyTheme(); });
+segOn('set-start', (v) => { settings.start = v; saveSettings(); });
+segOn('set-enter', (v) => { settings.enter = v; saveSettings(); composerHint(); });
+
+// ---- model
+
+const MODE_NOTE = {
+  phone: 'one phone runs the model; this computer carries the chat.',
+  apart: 'every chosen device runs its own copy; a question goes to the fastest free one.',
+  split: 'one model spread over this computer and the phones (needs llama.cpp here).',
+  here: 'this computer alone (needs llama.cpp here).',
+};
+function renderSetModel() {
+  const sel = $('set-model');
+  sel.replaceChildren();
+  if (!S.models.length) sel.append(el('option', '', 'no models listed yet'));
+  for (const m of S.models) { const o = el('option', '', `${m.name}${m.here ? ' · on this computer' : ''}`); o.value = m.id; sel.append(o); }
+  if (settings.model && S.models.some((m) => m.id === settings.model)) sel.value = settings.model;
+  segSet('set-mode', settings.mode);
+  const llama = !!S.status?.llama;
+  for (const b of document.querySelectorAll('#set-mode button')) b.disabled = (b.dataset.v === 'split' || b.dataset.v === 'here') && !llama;
+  $('set-mode-note').textContent = (MODE_NOTE[settings.mode] ?? '') + (llama ? '' : ' split and here need llama.cpp on this computer: kula-node setup.');
+  const l = S.status?.loaded;
+  $('set-loaded').textContent = l ? `loaded now: ${l.model.name} (${MODE_WORD[l.mode] ?? l.mode}, ${l.ctx} tokens of context). a change here is used at the next load.` : 'nothing is loaded now. these are what the next load starts with.';
   $('set-temp').value = String(settings.temperature);
   $('temp-out').textContent = Number(settings.temperature).toFixed(2);
   $('set-max').value = String(settings.maxTokens);
   $('set-ctx').value = String(settings.ctx);
+}
+$('set-model').addEventListener('change', () => { if (!S.models.some((m) => m.id === $('set-model').value)) return; settings.model = $('set-model').value; saveSettings(); renderModels(); });
+segOn('set-mode', (v) => { settings.mode = v; if (v === 'phone' && settings.peers.length > 1) settings.peers = settings.peers.slice(0, 1); saveSettings(); renderModes(); renderSetModel(); });
+$('set-temp').addEventListener('input', () => { settings.temperature = Number($('set-temp').value); $('temp-out').textContent = settings.temperature.toFixed(2); saveSettings(); });
+$('set-max').addEventListener('change', () => { const n = Math.round(Number($('set-max').value)); if (n >= 16) { settings.maxTokens = Math.min(n, 32768); saveSettings(); } $('set-max').value = String(settings.maxTokens); });
+$('set-ctx').addEventListener('change', () => { const n = Math.round(Number($('set-ctx').value)); if (n >= 512) { settings.ctx = Math.min(n, 131072); saveSettings(); } $('set-ctx').value = String(settings.ctx); });
+$('set-reset-model').addEventListener('click', () => { settings.temperature = DEFAULTS.temperature; settings.maxTokens = DEFAULTS.maxTokens; settings.ctx = DEFAULTS.ctx; saveSettings(); renderSetModel(); });
+
+// ---- devices
+
+function renderSetDevices() {
+  const list = $('set-dev-list');
+  list.replaceChildren();
+  const n = S.peers.length;
+  $('set-dev-sum').textContent = n ? `${n} paired; the green dot answered at the last look.` : 'none yet: add a phone on a usb cable or this wi-fi.';
+  for (const p of S.peers) {
+    const li = el('li');
+    const dot = el('span', `dot${p.reach?.ok ? ' ok' : ''}`);
+    li.append(dot, el('b', '', p.name), el('span', '', `${p.cable ? 'usb cable' : p.far ? 'far' : 'wi-fi'}${p.ram ? ` · ${p.ram} MB free` : ''}${p.holds ? ` · has ${p.holds}` : ''}`));
+    list.append(li);
+  }
+  const i = inviteInfo;
+  $('set-inv-sum').textContent = i?.on ? `on: ${i.guests} guest${i.guests === 1 ? '' : 's'} in. guests chat with what is loaded and see only their own chats.` : 'off. a phone on this wi-fi scans a qr code and chats with what is loaded here.';
+}
+$('set-dev-open').addEventListener('click', () => { $('settings').close(); openDevices(); });
+$('set-connect').addEventListener('click', () => { $('settings').close(); openConnect(); });
+$('set-invite').addEventListener('click', () => { $('settings').close(); $('invite').showModal(); refreshInvite(); });
+
+// ---- data controls
+
+function dataMsg(text, bad) { const m = $('set-data-msg'); m.textContent = text; m.className = `msg${bad ? ' bad' : ' ok'}`; }
+$('set-export').href = apiUrl('data/export');
+$('set-del-chats').addEventListener('click', async () => {
+  if (S.streaming) return dataMsg('wait for the answer, or stop it', true);
+  if (!confirm('delete every chat on this computer, the guests\' too? this cannot be undone. export them first if you want to keep them.')) return;
+  try {
+    const r = await postJson('data/delete-chats', { confirm: 'delete' });
+    newChat();
+    await loadChats();
+    renderProjectBanner();
+    dataMsg(`${r.deleted} chat${r.deleted === 1 ? '' : 's'} deleted.`);
+    refreshInfo();
+  } catch (e) { dataMsg(e.message, true); }
+});
+$('set-forget').addEventListener('click', async () => {
+  if (!confirm('clear what the brain learned (speeds, devices seen, its notes)? it starts again from nothing.')) return;
+  try { const r = await postJson('data/forget-brain', { confirm: 'forget' }); dataMsg(`the brain's notes are cleared (${r.forgot} file${r.forgot === 1 ? '' : 's'}).`); } catch (e) { dataMsg(e.message, true); }
+});
+$('set-reset-usage').addEventListener('click', async () => {
+  if (!confirm('reset the usage counts (tokens, answers, speeds)? the chats stay.')) return;
+  try { usage = await postJson('usage/reset', { confirm: 'reset' }); dataMsg('the usage counts start again from zero.'); } catch (e) { dataMsg(e.message, true); }
+});
+$('set-reset-page').addEventListener('click', () => {
+  if (!confirm('put this browser\'s settings back to the start: theme, personalisation, model defaults? chats stay.')) return;
+  const keep = { model: settings.model, mode: settings.mode, peers: settings.peers, way: settings.way };
+  Object.assign(settings, DEFAULTS, keep);
+  saveSettings();
+  applyTheme();
+  fillSettings();
+  dataMsg('this browser\'s settings are back to the start.');
+});
+
+// ---- usage: tokens counted on this computer (GET usage)
+
+let usage = null;
+const USE_NAME = { chat: 'chat page', api: '/v1 api', project: 'night projects', guest: 'guests' };
+const MODE_NAME = { phone: 'one phone', apart: 'apart', split: 'split', here: 'here' };
+const fmt = (n) => (n >= 1e6 ? `${(n / 1e6).toFixed(n >= 1e7 ? 0 : 1)}M` : n >= 1e4 ? `${(n / 1e3).toFixed(n >= 1e5 ? 0 : 1)}k` : String(n).replace(/\B(?=(\d{3})+(?!\d))/g, ' '));
+const full = (n) => String(n).replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
+const dayName = (k) => { const [y, m, d] = k.split('-').map(Number); return new Date(y, m - 1, d).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' }).toLowerCase(); };
+
+async function refreshUsage() {
+  try { usage = await getJson('usage'); } catch (e) { usage = null; $('u-note').textContent = e.message; }
+  renderUsage();
+}
+
+function renderUsage() {
+  const u = usage;
+  const tiles = $('u-tiles');
+  tiles.replaceChildren();
+  if (!u) return;
+  const t = u.total;
+  const last30 = u.days.reduce((a, d) => a + d.tokens, 0);
+  const tile = (k, v, sub) => { const d = el('div', 'u-tile'); d.append(el('span', 'k', k), el('b', '', v), el('span', 's', sub)); tiles.append(d); };
+  tile('tokens', fmt(t.tokens), `${fmt(last30)} in the last 30 days`);
+  tile('answers', fmt(t.answers), t.failed ? `${t.failed} failed · ${t.stopped} stopped` : `${t.stopped} stopped`);
+  tile('speed', t.tps != null ? `${t.tps}` : '–', 'tokens a second, on average');
+  tile('first token', t.firstMs != null ? (t.firstMs >= 1000 ? `${(t.firstMs / 1000).toFixed(1)} s` : `${t.firstMs} ms`) : '–', 'until the answer starts');
+
+  // the chart: one stacked bar a day, a segment per kind of use
+  const legend = $('u-legend');
+  legend.replaceChildren();
+  const used = USES_ORDER.filter((k) => u.days.some((d) => d.uses[k] > 0));
+  for (const k of used.length ? used : ['chat']) { const s = el('span', 'u-key'); s.append(el('i', `u-${k}`), document.createTextNode(USE_NAME[k])); legend.append(s); }
+  const chart = $('u-chart');
+  chart.replaceChildren();
+  const max = Math.max(1, ...u.days.map((d) => d.tokens));
+  chart.setAttribute('aria-label', `tokens a day over the last 30 days; the most was ${full(max)} in a day. the tables below hold the same numbers.`);
+  for (const d of u.days) {
+    const col = el('div', 'u-col');
+    col.tabIndex = d.tokens ? 0 : -1;
+    const bar = el('div', 'u-bar');
+    bar.style.height = d.tokens ? `${Math.max(2, (d.tokens / max) * 100)}%` : '0';
+    for (const k of USES_ORDER) if (d.uses[k] > 0) { const s = el('i', `u-${k}`); s.style.flexGrow = String(d.uses[k]); bar.append(s); }
+    col.append(bar);
+    const tip = el('div', 'u-tip');
+    tip.append(el('b', '', dayName(d.day)), el('span', '', `${full(d.tokens)} tokens · ${d.answers} answer${d.answers === 1 ? '' : 's'}`));
+    for (const k of USES_ORDER) if (d.uses[k] > 0) { const r = el('span', 'u-tip-row'); r.append(el('i', `u-${k}`), document.createTextNode(`${USE_NAME[k]} ${full(d.uses[k])}`)); tip.append(r); }
+    col.append(tip);
+    chart.append(col);
+  }
+  const axis = $('u-axis');
+  axis.replaceChildren(el('span', '', dayName(u.days[0].day)), el('span', '', 'today'));
+
+  // the tables
+  const box = $('u-tables');
+  box.replaceChildren();
+  const table = (title, rows, name) => {
+    const live = rows.filter((r) => r.answers || r.failed);
+    const sec = el('section', 'u-table');
+    sec.append(el('h3', '', title));
+    if (!live.length) { sec.append(el('p', 'hint', 'nothing yet.')); box.append(sec); return; }
+    const wrap = el('div', 'u-scroll');
+    const tb = el('table');
+    const head = el('tr');
+    for (const h of ['', 'answers', 'prompt', 'answer', 'tok/s', 'first']) head.append(el('th', '', h));
+    const thead = el('thead');
+    thead.append(head);
+    tb.append(thead);
+    const body = el('tbody');
+    for (const r of live) {
+      const tr = el('tr');
+      const td0 = el('td', 'n', name(r.name));
+      td0.title = name(r.name);
+      tr.append(td0, el('td', '', full(r.answers)), el('td', '', `${r.estimated ? '≈' : ''}${fmt(r.prompt)}`), el('td', '', fmt(r.completion)), el('td', '', r.tps != null ? String(r.tps) : '–'), el('td', '', r.firstMs != null ? (r.firstMs >= 1000 ? `${(r.firstMs / 1000).toFixed(1)} s` : `${r.firstMs} ms`) : '–'));
+      body.append(tr);
+    }
+    tb.append(body);
+    wrap.append(tb);
+    sec.append(wrap);
+    box.append(sec);
+  };
+  table('by kind of use', u.uses, (k) => USE_NAME[k] ?? k);
+  table('by model', u.models, (k) => k);
+  table('by device', u.devices, (k) => k);
+  table('by mode', u.modes, (k) => MODE_NAME[k] ?? k);
+  const since = u.since ? new Date(u.since).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' }).toLowerCase() : null;
+  $('u-note').textContent = `${since ? `counted on this computer since ${since}. ` : 'nothing counted yet: every answer from now on adds to these. '}answer tokens are what the device reported; prompt tokens (≈) are estimated from the text sent, about 4 characters a token, since no device reports them yet. only counts are kept, never a word of a question or an answer: ${u.file}`;
+}
+const USES_ORDER = ['chat', 'api', 'project', 'guest'];
+
+// ---- open
+
+function fillSettings() {
+  segSet('set-theme', settings.theme);
+  segSet('set-start', settings.start);
+  segSet('set-enter', settings.enter);
+  segSet('set-style', settings.style);
   $('set-system').value = settings.system;
-  for (const b of document.querySelectorAll('#set-theme button')) b.setAttribute('aria-checked', String(b.dataset.theme === settings.theme));
+  $('set-name').value = settings.name;
+  $('set-about').value = settings.about;
+  preview();
+  renderSetModel();
+}
+
+function openSettings(sec) {
+  fillSettings();
   $('settings').showModal();
-  if (isGuest()) return;
-  if (!S.info) { try { S.info = await getJson('settings'); } catch {} }
-  renderOpenAi();
+  showSec(typeof sec === 'string' ? sec : setSec);
 }
 
 // ---------- invite a device (the owner only)
@@ -2167,17 +2468,7 @@ if (window.visualViewport) {
   window.visualViewport.addEventListener('resize', fit);
   fit();
 }
-$('open-settings').addEventListener('click', openSettings);
-$('set-temp').addEventListener('input', () => { settings.temperature = Number($('set-temp').value); $('temp-out').textContent = settings.temperature.toFixed(2); saveSettings(); });
-$('set-max').addEventListener('change', () => { const n = Math.round(Number($('set-max').value)); if (n >= 16) { settings.maxTokens = Math.min(n, 32768); saveSettings(); } });
-$('set-ctx').addEventListener('change', () => { const n = Math.round(Number($('set-ctx').value)); if (n >= 512) { settings.ctx = Math.min(n, 131072); saveSettings(); } });
-$('set-system').addEventListener('input', () => { settings.system = $('set-system').value; saveSettings(); });
-for (const b of document.querySelectorAll('#set-theme button')) b.addEventListener('click', () => {
-  settings.theme = b.dataset.theme;
-  saveSettings();
-  applyTheme();
-  for (const x of document.querySelectorAll('#set-theme button')) x.setAttribute('aria-checked', String(x === b));
-});
+$('open-settings').addEventListener('click', () => openSettings());
 
 // ---------- start
 
@@ -2192,8 +2483,9 @@ newChat();
 try { S.role = (await getJson('me')).role; } catch { S.role = 'guest'; }
 document.body.classList.toggle('guest', isGuest());
 if (isGuest()) { $('input').placeholder = 'message'; $('hello').textContent = 'ask away'; }
-loadChats();
-if (/^[0-9a-f]{8,32}$/.test(fromHash)) openChat(fromHash);
+const opening = /^[0-9a-f]{8,32}$/.test(fromHash);
+loadChats().then(() => { if (!opening && settings.start === 'last' && S.chats[0] && !S.chat?.messages.length) openChat(S.chats[0].id); });
+if (opening) openChat(fromHash);
 refreshStatus().then(() => {
   if (isGuest()) return;
   refreshInvite();

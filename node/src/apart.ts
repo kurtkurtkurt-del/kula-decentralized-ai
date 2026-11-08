@@ -19,6 +19,7 @@ export interface Reply {
   firstMs: number;
   tps: number;
   device: string;
+  promptTokens?: number;   // only when the device reported it (none does yet); the counts estimate it otherwise
 }
 
 export interface Device {
@@ -94,7 +95,7 @@ export function apiChat(dev: Device, messages: Message[], onToken: (t: string) =
     });
     if (error) throw new Error(error);
     if (!last) throw new Error('peer gone');
-    return { text, tokens: last.tokens ?? 0, ms: last.ms ?? 0, firstMs: last.firstMs ?? 0, tps: last.tps ?? 0, device: dev.name };
+    return { text, tokens: last.tokens ?? 0, ms: last.ms ?? 0, firstMs: last.firstMs ?? 0, tps: last.tps ?? 0, device: dev.name, ...(Number(last.promptTokens) > 0 ? { promptTokens: Math.round(Number(last.promptTokens)) } : {}) };
   })() as Promise<Reply> & { stop: () => void };
   p.stop = () => {
     fetch(`http://127.0.0.1:${dev.apiPort}/stop`, { method: 'POST' }).catch(() => {});
