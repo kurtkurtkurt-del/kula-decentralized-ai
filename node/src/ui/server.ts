@@ -23,6 +23,8 @@ import type { Message } from '../apart.js';
 import { Engine, hostLabel, type LoadEvent } from './engine.js';
 import { ChatStore, ID_RE } from './store.js';
 import { ProjectRunner } from './projects.js';
+import { GodsEye } from '../godseye/index.js';
+import { kulaSnapshot } from './godseye-feed.js';
 import { Invite, INVITE_TTL_MS, type Guest } from './invite.js';
 import { qrSvg } from '../dashboard/qr.js';
 import { lanIPv4 } from '../sysinfo.js';
@@ -42,6 +44,7 @@ export interface UiOptions {
   inviteTtlMs?: number;        // an invite (and the sessions it made) lasts this long; 8 h
   onInvite?: (url: string | null) => void; // told every new invite url (null: invites off)
   projects?: ProjectRunner;    // night projects; kula-node ui starts one that watches the clock
+  eye?: GodsEye | false;       // god's eye (src/godseye), the brain; default: one that looks every 5 s, false: none
 }
 
 export interface InviteInfo { on: boolean; url: string | null; host: string | null; expiresAt: number | null; guests: number; error?: string }
@@ -132,6 +135,9 @@ export async function startUi(opts: UiOptions): Promise<UiServer> {
   const store = opts.store ?? new ChatStore();
   // night projects: without one given (tests) the routes answer but nothing watches the clock
   const projects = opts.projects ?? new ProjectRunner(engine, store, undefined, { awake: false });
+  // god's eye, the brain: watches from above, fed copies only (godseye/types.ts, godseye-feed.ts)
+  const eye = opts.eye === false ? null : opts.eye ?? new GodsEye({ snapshot: () => kulaSnapshot(engine, projects), dir: path.join(home(), 'godseye'), log });
+  eye?.start();
   const token = opts.token ?? loadOrCreateToken();
   if (opts.prefix !== undefined && !PREFIX_RE.test(opts.prefix)) throw new Error('the prefix must be 24 hex characters');
   const prefix = opts.prefix ?? randomBytes(12).toString('hex');
@@ -250,6 +256,7 @@ export async function startUi(opts: UiOptions): Promise<UiServer> {
       if (route === 'settings') return json(res, 200, { openai: { base: openaiBase(), token }, host: hostLabel(), relay: process.env.KULA_RELAY ?? null });
       if (route === 'chats') return json(res, 200, chats.list(query.get('q') ?? undefined));
       if (route === 'projects') return json(res, 200, projects.list());
+      if (route === 'brain') return json(res, 200, eye ? eye.view() : { at: 0, branches: [], events: [] });
       const m = /^chats\/([0-9a-f]+)$/.exec(route);
       if (m && ID_RE.test(m[1])) { const c = chats.get(m[1]); return c ? json(res, 200, c) : json(res, 404, { error: 'no such chat' }); }
       return json(res, 404, { error: 'not found' });
@@ -410,6 +417,7 @@ export async function startUi(opts: UiOptions): Promise<UiServer> {
     port, prefix, url, token, openaiBase: openaiBase(),
     invite: { set: setInvite, rotate: rotateInvite, info: () => inviteInfo() },
     close: async () => {
+      eye?.stop();
       projects.stop();
       for (const s of open) s.destroy();
       open.clear();

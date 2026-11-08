@@ -1,0 +1,128 @@
+// god's eye (8.11.2026): the brain of kula, as its own program in waiting. It watches the work
+// from above and never takes part in it: every few seconds it is handed a snapshot (plain data,
+// a copy), each of its twelve branches thinks about it with its own simple rules and keeps its
+// own notes, and anyone may ask for its view. It does not import kula's engine, chat or devices,
+// it never calls them, never touches a phone, never loads or stops a model and sends nothing on
+// the network. Today kula-node feeds it in-process (ui/godseye-feed.ts); later the same snapshot
+// can come over a pipe or a socket and god's eye runs as a program of its own.
+//
+// The twelve branches are the twelve of the brain map (https://claude.ai/artifact/XdUbnR74Y1gTzeBfcZCe7K).
+
+export type BranchId =
+  | 'senses' | 'memory' | 'forecast' | 'learning' | 'connections' | 'planner'
+  | 'executor' | 'trust' | 'limits' | 'models' | 'review' | 'advisor';
+
+export interface BranchMeta { n: number; id: BranchId; name: string; what: string }
+
+/** The map's order, names and the one line on what each branch is for. */
+export const BRANCHES: BranchMeta[] = [
+  { n: 1, id: 'senses', name: 'senses', what: 'it sees every device: is it there, how much memory is free, how fast it answers.' },
+  { n: 2, id: 'memory', name: 'memory', what: 'what happened and why, kept on this computer: the decision log. the phones keep their own signed ledgers.' },
+  { n: 3, id: 'forecast', name: 'forecast', what: 'will guess when each device is free and how fast it will be tonight, from what it saw before.' },
+  { n: 4, id: 'learning', name: 'learning loop', what: 'will compare each guess with what really happened in the morning and tune itself.' },
+  { n: 5, id: 'connections', name: 'connections', what: 'how each device is reached: a usb cable, the wi-fi or a relay. no server outside, no relay by default.' },
+  { n: 6, id: 'planner', name: 'planner', what: 'where the model sits: one phone, a copy on each (apart) or one model across them (split), and why.' },
+  { n: 7, id: 'executor', name: 'executor', what: 'who is answering now and how fast; in apart mode the fastest free device answers.' },
+  { n: 8, id: 'trust', name: 'trust and verification', what: 'every link is tls with the certificate pinned from the qr, pairing takes a one-time code, the model server stays on 127.0.0.1 behind the gate.' },
+  { n: 9, id: 'limits', name: 'limits', what: 'will keep phones cool and charged: heat, battery and energy rules a device may set for itself.' },
+  { n: 10, id: 'models', name: 'models and device care', what: 'which model fits which device, files checked by sha256, what each device holds right now.' },
+  { n: 11, id: 'review', name: 'request review', what: 'will look at a job before it runs: is it allowed, is it safe to send to someone else’s phone.' },
+  { n: 12, id: 'advisor', name: 'advisor', what: 'will suggest: which model, which devices, which night, before you ask.' },
+];
+export const BRANCH_IDS: BranchId[] = BRANCHES.map((b) => b.id);
+
+// ---- the snapshot: everything god's eye may know, as plain data of its own shape
+
+export interface EyeDevice {
+  id: string;
+  name: string;
+  kind: string;                    // phone, pc, …
+  via: 'cable' | 'wifi' | 'relay';
+  where: string;                   // how it is reached, in words (an address, "usb cable", …)
+  reachable: boolean | null;       // null: not looked at yet
+  reachMs: number | null;
+  reason: string | null;           // why not reachable
+  checkedAt: number | null;        // ms, when it was last looked at
+  lastOk: string | null;           // iso time it last answered
+  ramMb: number | null;            // free memory it said it has
+  bwGBs: number | null;            // memory bandwidth it measured
+  gpu: string | null;
+  tls: boolean;                    // tls with a pinned certificate
+  waitingPair: boolean;            // waiting for its one-time code
+  plugged: boolean | null;         // on a cable: is it plugged in now (null: unknown)
+  holds: string | null;            // the model file it has loaded
+}
+
+export interface EyeWork {
+  loaded: null | {
+    mode: string;                  // phone, apart, split, here
+    model: { id: string; name: string; file: string; size: number };
+    ctx: number;
+    since: number;
+    devices: { id: string; name: string; local: boolean; busy: boolean; tps: number | null; done: number }[];
+    parts?: { id: string; name: string; local: boolean; mb: number; layers: number }[];
+  };
+  loading: null | { mode: string; model: string; since: number; line: string };
+  chatting: number;                // answers being written now
+  plan: string[];                  // why the model sits where it sits
+  decisions: { at: number; text: string }[];
+  llama: boolean;                  // this computer can run llama.cpp itself
+}
+
+export interface EyeModel {
+  id: string; name: string; file: string; size: number; quant: string | null; params_b: number | null;
+  catalog: boolean;                // phones can fetch it
+  here: boolean;                   // the file is on this computer
+  needMb: number;                  // what running it whole takes at 4k context
+}
+
+export interface EyeProject {
+  id: string; title: string; request: string; start: number; end: number; state: string;
+  mode: string; model: string; peers: string[]; parts?: number; done?: number; line?: string; error?: string;
+}
+
+export interface Snapshot {
+  at: number;                      // ms, the clock of the computer that took it
+  host: { name: string; freeMb: number | null };
+  devices: EyeDevice[];
+  work: EyeWork;
+  models: EyeModel[];
+  projects: EyeProject[];
+}
+
+// ---- what a branch shows and how it lives
+
+/** A branch's view: a few words for its tile, a 0..100 gauge, and its page. */
+export interface BranchView {
+  built: boolean;                  // false: the tile stays dark
+  stat: string;                    // the tile's line, a few words
+  gauge: number | null;            // 0..100, or null for no bar
+  rows: [string, string][];        // its page: key / value
+  lines: string[];                 // its page: a list, newest or most important first
+  note?: string;                   // its page: one line under the list
+  what?: string;                   // overrides the map's line once the branch says more
+}
+
+/** A line a branch wants in the live feed. */
+export interface BranchEvent { at: number; text: string }
+
+/** One branch: told about every look (now and the one before), asked for its view. Both quick;
+ *  a branch that throws is stopped and shown as broken, the others carry on. */
+export interface Branch {
+  id: BranchId;
+  observe(now: Snapshot, before: Snapshot | null): void;
+  view(): BranchView;
+}
+
+/** What a branch lives on: a clock, its own notes file, the feed, the others' views (read only). */
+export interface BranchCtx {
+  now(): number;
+  load<T>(fallback: T): T;         // <dir>/<id>.json, or the fallback
+  save(data: unknown): void;       // the same file, written whole, mode 600
+  emit(text: string): void;        // a line in the live feed
+  peek(id: BranchId): BranchView | null;
+}
+
+export type BranchMaker = (ctx: BranchCtx) => Branch;
+
+export const dark = (stat = 'not built yet'): BranchView => ({ built: false, stat, gauge: null, rows: [], lines: [] });
