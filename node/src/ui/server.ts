@@ -18,6 +18,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { packageRoot, home } from '../paths.js';
+import { version } from '../build.js';
+import { TAG } from '../llama.js';
 import { readJson, BASE_HEADERS, Sse } from '../dashboard/server.js';
 import type { Message } from '../apart.js';
 import { Engine, hostLabel, type LoadEvent } from './engine.js';
@@ -211,7 +213,7 @@ export async function startUi(opts: UiOptions): Promise<UiServer> {
           res.write(`data: ${JSON.stringify({ id, object: 'chat.completion.chunk', created, model, choices: [{ index: 0, delta, finish_reason: finish }], ...extra })}\n\n`);
         chunk({ role: 'assistant', content: '' }, null);
         try {
-          const r = await engine.chat(messages, (t) => chunk({ content: t }, null), { maxTokens, temperature, signal: ac.signal });
+          const r = await engine.chat(messages, (t) => chunk({ content: t }, null), { maxTokens, temperature, signal: ac.signal, use: 'api' });
           chunk({}, r.tokens >= maxTokens ? 'length' : 'stop');
           if (body.stream_options?.include_usage) res.write(`data: ${JSON.stringify({ id, object: 'chat.completion.chunk', created, model, choices: [], usage: { prompt_tokens: 0, completion_tokens: r.tokens, total_tokens: r.tokens } })}\n\n`);
         } catch (e) {
@@ -222,7 +224,7 @@ export async function startUi(opts: UiOptions): Promise<UiServer> {
         return;
       }
       try {
-        const r = await engine.chat(messages, () => {}, { maxTokens, temperature, signal: ac.signal });
+        const r = await engine.chat(messages, () => {}, { maxTokens, temperature, signal: ac.signal, use: 'api' });
         return json(res, 200, {
           id, object: 'chat.completion', created, model,
           choices: [{ index: 0, message: { role: 'assistant', content: r.text }, finish_reason: r.tokens >= maxTokens ? 'length' : 'stop' }],
@@ -254,7 +256,22 @@ export async function startUi(opts: UiOptions): Promise<UiServer> {
       if (route === 'discover') return json(res, 200, await engine.discover());
       if (route === 'models') return json(res, 200, engine.models());
       if (route === 'lineup') return json(res, 200, engine.lineup());
-      if (route === 'settings') return json(res, 200, { openai: { base: openaiBase(), token }, host: hostLabel(), relay: process.env.KULA_RELAY ?? null });
+      if (route === 'settings') {
+        const h = home();
+        return json(res, 200, {
+          openai: { base: openaiBase(), token }, host: hostLabel(), relay: process.env.KULA_RELAY ?? null,
+          version: version(packageRoot()), llamaTag: TAG, llama: !!engine.status().llama, node: process.versions.node,
+          paths: { home: h, chats: store.dir, models: path.join(h, 'models'), brain: path.join(h, 'godseye'), usage: engine.usage.file(), token: path.join(h, 'ui-token') },
+          chats: store.list().length,
+        });
+      }
+      if (route === 'usage') return json(res, 200, engine.usage.view(30));
+      // every chat of this computer's owner, as one json file (guests' chats stay out)
+      if (route === 'data/export') {
+        const all = store.list().map((r) => store.get(r.id)).filter(Boolean);
+        const day = new Date().toISOString().slice(0, 10);
+        return send(res, 200, JSON.stringify({ kula: 'chats', exported: Date.now(), count: all.length, chats: all }, null, 2), 'application/json; charset=utf-8', { 'content-disposition': `attachment; filename="kula-chats-${day}.json"` });
+      }
       if (route === 'chats') return json(res, 200, chats.list(query.get('q') ?? undefined));
       if (route === 'projects') return json(res, 200, projects.list());
       if (route === 'brain') return json(res, 200, eye ? eye.view() : { at: 0, branches: [], events: [] });
@@ -269,6 +286,27 @@ export async function startUi(opts: UiOptions): Promise<UiServer> {
     const fail = (e: unknown, code = 400) => json(res, code, { error: (e as Error).message });
 
     if (route === 'invite') return json(res, 200, await setInvite(body?.on === true));
+    // data controls: each wants the word typed back, so a stray post cannot wipe anything
+    if (route === 'usage/reset') {
+      if (body?.confirm !== 'reset') return json(res, 400, { error: 'confirm with "reset"' });
+      engine.usage.reset();
+      return json(res, 200, engine.usage.view(30));
+    }
+    if (route === 'data/delete-chats') {
+      if (body?.confirm !== 'delete') return json(res, 400, { error: 'confirm with "delete"' });
+      let n = 0;
+      for (const r of store.list()) if (store.remove(r.id)) n++;
+      // guests' chats too: they live in a folder per session under the chats folder
+      try { fs.rmSync(path.join(store.dir, 'guests'), { recursive: true, force: true }); } catch {}
+      log(`deleted ${n} chat${n === 1 ? '' : 's'} (the page's data controls)`);
+      return json(res, 200, { deleted: n });
+    }
+    if (route === 'data/forget-brain') {
+      if (body?.confirm !== 'forget') return json(res, 400, { error: 'confirm with "forget"' });
+      const n = eye ? eye.forget() : 0;
+      log(`god's eye forgot its notes (${n} file${n === 1 ? '' : 's'})`);
+      return json(res, 200, { forgot: n });
+    }
     if (route === 'invite/new') return json(res, 200, await rotateInvite());
     if (route === 'peers/add') {
       try {
@@ -322,7 +360,7 @@ export async function startUi(opts: UiOptions): Promise<UiServer> {
       const sse = new Sse(res);
       open.add(res);
       try {
-        const r = await engine.chat(messages, (t) => sse.send({ t }), { maxTokens: posNum(body.maxTokens, 1024, 32768), temperature: Number.isFinite(Number(body.temperature)) ? Math.max(0, Math.min(2, Number(body.temperature))) : 0.7, signal: ac.signal });
+        const r = await engine.chat(messages, (t) => sse.send({ t }), { maxTokens: posNum(body.maxTokens, 1024, 32768), temperature: Number.isFinite(Number(body.temperature)) ? Math.max(0, Math.min(2, Number(body.temperature))) : 0.7, signal: ac.signal, use: guest ? 'guest' : 'chat' });
         sse.end({ done: true, tokens: r.tokens, ms: r.ms, firstMs: r.firstMs, tps: r.tps, device: r.device, stopped: r.stopped === true });
       } catch (e) { sse.end({ error: (e as Error).message }); }
       open.delete(res);

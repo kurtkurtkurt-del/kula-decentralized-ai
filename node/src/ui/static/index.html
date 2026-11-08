@@ -289,40 +289,168 @@
   </div>
 </dialog>
 
-<dialog class="sheet narrow" id="settings" aria-labelledby="settings-title">
+<dialog class="sheet settings" id="settings" aria-labelledby="settings-title">
   <form method="dialog" class="sheet-head">
     <h2 id="settings-title">settings</h2>
     <button class="icon" value="close" aria-label="close">
       <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M5.5 5.5l9 9M14.5 5.5l-9 9"/></svg>
     </button>
   </form>
-  <div class="sheet-body">
-    <section class="block">
-      <h3>answers</h3>
-      <label class="field"><span>temperature <output id="temp-out"></output></span><input type="range" id="set-temp" min="0" max="1.5" step="0.05"></label>
-      <label class="field"><span>max tokens</span><input type="number" id="set-max" min="16" max="32768" step="16"></label>
-      <label class="field owner-only"><span>context <em>tokens, used at the next load</em></span><input type="number" id="set-ctx" min="512" max="131072" step="512"></label>
-      <label class="field"><span>system prompt</span><textarea id="set-system" rows="3" placeholder="you are a helpful assistant."></textarea></label>
-    </section>
-    <section class="block">
-      <h3>look</h3>
-      <div class="seg" id="set-theme" role="radiogroup" aria-label="theme">
-        <button type="button" role="radio" data-theme="kula">kula</button>
-        <button type="button" role="radio" data-theme="white">white</button>
-        <button type="button" role="radio" data-theme="dark">dark</button>
-      </div>
-    </section>
-    <section class="block owner-only">
-      <h3>openai-compatible endpoint</h3>
-      <p class="hint">for editors and tools (continue, anythingllm): whatever is loaded here answers. this computer only.</p>
-      <div class="copyrow"><code id="oa-base"></code><button type="button" class="link" data-copy-from="oa-base">copy</button></div>
-      <div class="copyrow"><code id="oa-token" class="secret"></code><button type="button" class="link" id="oa-show">show</button><button type="button" class="link" data-copy-from="oa-token">copy</button></div>
-      <details class="snippet">
-        <summary>continue config</summary>
-        <pre id="oa-snippet"></pre>
-        <button type="button" class="link" data-copy-from="oa-snippet">copy</button>
-      </details>
-    </section>
+  <div class="set-wrap">
+    <nav class="set-nav" id="set-nav" role="tablist" aria-label="settings sections">
+      <button type="button" role="tab" data-sec="general">general</button>
+      <button type="button" role="tab" data-sec="personal">personalisation</button>
+      <button type="button" role="tab" data-sec="model">model</button>
+      <button type="button" role="tab" data-sec="usage" class="owner-only">usage</button>
+      <button type="button" role="tab" data-sec="devices" class="owner-only">devices</button>
+      <button type="button" role="tab" data-sec="data" class="owner-only">data controls</button>
+      <button type="button" role="tab" data-sec="developer" class="owner-only">developer</button>
+      <button type="button" role="tab" data-sec="about">about</button>
+    </nav>
+    <div class="set-body sheet-body" id="set-body">
+
+      <section class="set-pane" data-sec="general" role="tabpanel" aria-label="general">
+        <div class="set-row">
+          <div class="set-label"><b>theme</b><span>kula is the green rail; white and dark are plain.</span></div>
+          <div class="seg" id="set-theme" role="radiogroup" aria-label="theme">
+            <button type="button" role="radio" data-theme="kula">kula</button>
+            <button type="button" role="radio" data-theme="white">white</button>
+            <button type="button" role="radio" data-theme="dark">dark</button>
+          </div>
+        </div>
+        <div class="set-row">
+          <div class="set-label"><b>when the page opens</b><span>a link to a chat always opens that chat.</span></div>
+          <div class="seg" id="set-start" role="radiogroup" aria-label="when the page opens">
+            <button type="button" role="radio" data-v="new">a new chat</button>
+            <button type="button" role="radio" data-v="last">the last chat</button>
+          </div>
+        </div>
+        <div class="set-row">
+          <div class="set-label"><b>sending</b><span>the other one makes a new line.</span></div>
+          <div class="seg" id="set-enter" role="radiogroup" aria-label="which key sends">
+            <button type="button" role="radio" data-v="enter">enter sends</button>
+            <button type="button" role="radio" data-v="mod">ctrl/⌘ + enter</button>
+          </div>
+        </div>
+        <p class="hint">these settings live in this browser only: another browser or device has its own.</p>
+      </section>
+
+      <section class="set-pane" data-sec="personal" role="tabpanel" aria-label="personalisation" hidden>
+        <label class="field"><span>what should kula call you</span><input type="text" id="set-name" maxlength="60" autocomplete="off" placeholder="your name, or leave it empty"></label>
+        <label class="field"><span>anything kula should know about you <em>work, interests, the language you write in</em></span><textarea id="set-about" rows="3" maxlength="1500" placeholder="i write turkish and english; i build apps."></textarea></label>
+        <div class="field"><span>how answers should sound</span>
+          <div class="seg wrap" id="set-style" role="radiogroup" aria-label="how answers should sound">
+            <button type="button" role="radio" data-v="default">default</button>
+            <button type="button" role="radio" data-v="concise">short</button>
+            <button type="button" role="radio" data-v="detailed">detailed</button>
+            <button type="button" role="radio" data-v="friendly">friendly</button>
+            <button type="button" role="radio" data-v="formal">formal</button>
+          </div>
+        </div>
+        <label class="field"><span>custom instructions <em>the system prompt</em></span><textarea id="set-system" rows="4" maxlength="6000" placeholder="you are a helpful assistant."></textarea></label>
+        <details class="snippet">
+          <summary>what the model gets at the start of each chat</summary>
+          <pre id="set-preview"></pre>
+        </details>
+        <p class="hint">sent with every question asked from this browser (the page's chats only, not /v1 or night projects). a small model may follow it loosely.</p>
+      </section>
+
+      <section class="set-pane" data-sec="model" role="tabpanel" aria-label="model" hidden>
+        <p class="hint owner-only" id="set-loaded"></p>
+        <label class="field owner-only"><span>default model <em>the connect sheet starts with it</em></span><select id="set-model"></select></label>
+        <div class="field owner-only"><span>default mode</span>
+          <div class="seg wrap" id="set-mode" role="radiogroup" aria-label="default mode">
+            <button type="button" role="radio" data-v="phone">one phone</button>
+            <button type="button" role="radio" data-v="apart">apart</button>
+            <button type="button" role="radio" data-v="split">split</button>
+            <button type="button" role="radio" data-v="here">here</button>
+          </div>
+          <em id="set-mode-note"></em>
+        </div>
+        <label class="field"><span>temperature <output id="temp-out"></output> <em>low: steady and plain, high: more varied</em></span><input type="range" id="set-temp" min="0" max="1.5" step="0.05"></label>
+        <label class="field"><span>max tokens <em>the longest an answer may get</em></span><input type="number" id="set-max" min="16" max="32768" step="16"></label>
+        <label class="field owner-only"><span>context <em>tokens the model remembers; used at the next load</em></span><input type="number" id="set-ctx" min="512" max="131072" step="512"></label>
+        <div class="row"><button type="button" class="link" id="set-reset-model">back to 0.7, 1024 and 4096</button></div>
+      </section>
+
+      <section class="set-pane owner-only" data-sec="usage" role="tabpanel" aria-label="usage" hidden>
+        <div class="u-tiles" id="u-tiles"></div>
+        <div class="u-chart-head">
+          <h3>tokens a day <span>· last 30 days</span></h3>
+          <div class="u-legend" id="u-legend"></div>
+        </div>
+        <div class="u-chart" id="u-chart" role="img"></div>
+        <div class="u-axis" id="u-axis"></div>
+        <div id="u-tables"></div>
+        <p class="hint" id="u-note"></p>
+      </section>
+
+      <section class="set-pane owner-only" data-sec="devices" role="tabpanel" aria-label="devices" hidden>
+        <div class="set-row">
+          <div class="set-label"><b>paired devices</b><span id="set-dev-sum"></span></div>
+          <button type="button" class="ghost" id="set-dev-open">devices</button>
+        </div>
+        <ul class="set-list" id="set-dev-list"></ul>
+        <div class="set-row">
+          <div class="set-label"><b>load a model</b><span>pick a model and how it runs, step by step.</span></div>
+          <button type="button" class="ghost" id="set-connect">connect</button>
+        </div>
+        <div class="set-row">
+          <div class="set-label"><b>invite on this wi-fi</b><span id="set-inv-sum"></span></div>
+          <button type="button" class="ghost" id="set-invite">invite</button>
+        </div>
+        <p class="hint">devices talk to this computer directly: on a usb cable, this wi-fi or a phone's hotspot. no outside server is in between.</p>
+      </section>
+
+      <section class="set-pane owner-only" data-sec="data" role="tabpanel" aria-label="data controls" hidden>
+        <p class="hint">everything kula keeps is on this computer: chats, the brain's notes, the usage counts. nothing is sent to an outside server.</p>
+        <div class="set-row">
+          <div class="set-label"><b>export chats</b><span id="set-chat-sum">every chat as one json file.</span></div>
+          <a class="ghost" id="set-export" download>export</a>
+        </div>
+        <div class="set-row">
+          <div class="set-label"><b>delete all chats</b><span>yours and the guests'; cannot be undone.</span></div>
+          <button type="button" class="ghost danger" id="set-del-chats">delete all</button>
+        </div>
+        <div class="set-row">
+          <div class="set-label"><b>clear the brain's notes</b><span>what god's eye learned about your devices and speeds; it starts again from nothing.</span></div>
+          <button type="button" class="ghost danger" id="set-forget">clear</button>
+        </div>
+        <div class="set-row">
+          <div class="set-label"><b>reset usage counts</b><span>the token and speed counts under usage.</span></div>
+          <button type="button" class="ghost danger" id="set-reset-usage">reset</button>
+        </div>
+        <div class="set-row">
+          <div class="set-label"><b>this browser's settings</b><span>theme, personalisation, model defaults back to the start.</span></div>
+          <button type="button" class="ghost danger" id="set-reset-page">reset</button>
+        </div>
+        <p class="msg" id="set-data-msg" role="status"></p>
+      </section>
+
+      <section class="set-pane owner-only" data-sec="developer" role="tabpanel" aria-label="developer" hidden>
+        <h3 class="set-h">openai-compatible endpoint</h3>
+        <p class="hint">for editors and tools (continue, anythingllm): whatever is loaded here answers. this computer only.</p>
+        <div class="copyrow"><code id="oa-base"></code><button type="button" class="link" data-copy-from="oa-base">copy</button></div>
+        <div class="copyrow"><code id="oa-token" class="secret"></code><button type="button" class="link" id="oa-show">show</button><button type="button" class="link" data-copy-from="oa-token">copy</button></div>
+        <details class="snippet">
+          <summary>continue config</summary>
+          <pre id="oa-snippet"></pre>
+          <button type="button" class="link" data-copy-from="oa-snippet">copy</button>
+        </details>
+        <details class="snippet">
+          <summary>try it with curl</summary>
+          <pre id="oa-curl"></pre>
+          <button type="button" class="link" data-copy-from="oa-curl">copy</button>
+        </details>
+        <p class="hint">answers given here count under usage as "api". a new token: stop kula-node ui and start it with <code>--new-token</code>; every editor then needs the new one.</p>
+      </section>
+
+      <section class="set-pane" data-sec="about" role="tabpanel" aria-label="about" hidden>
+        <dl class="set-dl" id="set-about-list"></dl>
+        <h3 class="set-h owner-only">where kula keeps things</h3>
+        <dl class="set-dl owner-only" id="set-paths"></dl>
+      </section>
+    </div>
   </div>
 </dialog>
 </body>

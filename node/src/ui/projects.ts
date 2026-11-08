@@ -42,7 +42,7 @@ export interface Project {
 // what the runner needs from the engine (the real one, or a fake in the tests)
 export interface ProjectEngine {
   load(req: { model?: unknown; mode?: unknown; peers?: unknown; ctx?: unknown; all?: unknown }, emit: (e: unknown) => void): Promise<unknown>;
-  chat(messages: { role: 'system' | 'user' | 'assistant'; content: string }[], onToken: (t: string) => void, o?: { maxTokens?: number; temperature?: number; signal?: AbortSignal }): Promise<{ text: string; device: string; tokens: number; tps: number; ms: number; firstMs: number }>;
+  chat(messages: { role: 'system' | 'user' | 'assistant'; content: string }[], onToken: (t: string) => void, o?: { maxTokens?: number; temperature?: number; signal?: AbortSignal; use?: 'project' }): Promise<{ text: string; device: string; tokens: number; tps: number; ms: number; firstMs: number }>;
   unload(quiet?: boolean): Promise<void>;
   peers(): { id: string; name: string; cable: { serial: string } | null }[];
   useCable?(serial: unknown): unknown;
@@ -191,7 +191,7 @@ export class ProjectRunner {
 
   private async ask(prompt: string, maxTokens: number, signal: AbortSignal): Promise<{ text: string; meta: ChatMessage['meta'] }> {
     let text = '';
-    const r = await this.engine.chat([{ role: 'system', content: SYSTEM }, { role: 'user', content: prompt }], (t) => { text += t; }, { maxTokens, temperature: 0.4, signal });
+    const r = await this.engine.chat([{ role: 'system', content: SYSTEM }, { role: 'user', content: prompt }], (t) => { text += t; }, { maxTokens, temperature: 0.4, signal, use: 'project' });
     return { text: noThink(r.text || text), meta: { tokens: r.tokens, tps: r.tps, ms: r.ms, firstMs: r.firstMs, device: r.device } };
   }
 

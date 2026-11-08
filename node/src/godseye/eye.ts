@@ -34,10 +34,33 @@ export class GodsEye {
 
   constructor(private readonly opts: EyeOptions) {
     this.now = opts.now ?? Date.now;
+    this.make();
+  }
+
+  private make(): void {
     for (const id of BRANCH_IDS) {
-      try { this.branches.set(id, (opts.makers?.[id] ?? MAKERS[id])(this.ctx(id))); }
+      try { this.branches.set(id, (this.opts.makers?.[id] ?? MAKERS[id])(this.ctx(id))); }
       catch (e) { this.broken.set(id, (e as Error).message); }
     }
+  }
+
+  /** Forgets every note: each branch's file in `dir` and what it learned in memory; the
+   *  branches start again from nothing at the next look. Returns how many files went. */
+  forget(): number {
+    let n = 0;
+    let names: string[] = [];
+    try { names = fs.readdirSync(this.opts.dir); } catch {}
+    for (const f of names) {
+      if (!BRANCH_IDS.some((id) => f === `${id}.json` || (f.startsWith(`${id}.json.`) && f.endsWith('.tmp')))) continue;
+      try { fs.rmSync(path.join(this.opts.dir, f), { force: true }); n++; } catch {}
+    }
+    this.branches.clear();
+    this.broken.clear();
+    this.views.clear();
+    this.events = [];
+    this.before = null;
+    this.make();
+    return n;
   }
 
   private ctx(id: BranchId): BranchCtx {
