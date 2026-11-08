@@ -21,11 +21,35 @@
   "build": {
     "appId": "app.kula.desktop",
     "productName": "kula",
-    "directories": { "output": "release" },
-    "files": ["src/**", "package.json"],
-    "extraResources": [{ "from": "build/kula-node", "to": "kula-node" }],
-    "mac": { "category": "public.app-category.productivity", "identity": null, "target": ["dmg"] },
-    "win": { "target": ["nsis"] },
-    "nsis": { "oneClick": true, "perMachine": false }
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "src/**",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "build/kula-node",
+        "to": "kula-node"
+      }
+    ],
+    "mac": {
+      "category": "public.app-category.productivity",
+      "identity": null,
+      "target": [
+        "dmg"
+      ]
+    },
+    "win": {
+      "target": [
+        "nsis"
+      ]
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false
+    },
+    "afterPack": "tools/after-pack.cjs"
   }
 }
