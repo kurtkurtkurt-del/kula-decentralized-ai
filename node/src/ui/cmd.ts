@@ -161,7 +161,7 @@ export async function uiCommand(flags: Flags, deps: UiDeps = {}): Promise<number
   };
   if (await already()) return 0;
 
-  const engine = new Engine({ peersFile: typeof flags.file === 'string' ? flags.file : undefined, log });
+  const engine = new Engine({ peersFile: typeof flags.file === 'string' ? flags.file : undefined, log, watch: true });
   const token = loadOrCreateToken(flags['new-token'] === true);
   let ui;
   try {

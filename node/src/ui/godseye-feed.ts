@@ -8,7 +8,8 @@ import type { ProjectRunner } from './projects.js';
 import type { EyeDevice, Snapshot } from '../godseye/index.js';
 import { freeRamMB } from '../sysinfo.js';
 
-const via = (p: PeerRow): EyeDevice['via'] => (p.cable ? 'cable' : p.far ? 'relay' : 'wifi');
+// the way the device is reached now (one device is one row: engine.peers, devices.ts)
+const via = (p: PeerRow): EyeDevice['via'] => p.via ?? (p.cable ? 'cable' : p.far ? 'relay' : 'wifi');
 
 export function deviceOf(p: PeerRow): EyeDevice {
   return {

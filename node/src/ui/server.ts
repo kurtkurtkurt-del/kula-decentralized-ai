@@ -4,7 +4,8 @@
 // rebinding) refused, a POST only from this very origin. Next to it, outside the prefix, an
 // OpenAI-compatible endpoint (/v1/models, /v1/chat/completions) for editors and tools; it wants
 // the bearer token printed at start. Peer secrets and pins never leave the process: peers go
-// out as `peerRow`s. The /v1 token is the one value the page is given (its settings show it).
+// out as `peerRow`s. The /v1 token is the one value the page is given (its settings show it);
+// this computer's pairing code leaves only inside its qr image (GET hostpair.svg).
 //
 // Invite mode (off by default; `--lan` or the page's toggle): a second listener on this
 // computer's lan address, same port, for guests who scanned the invite qr (invite.ts). Who is
@@ -242,6 +243,8 @@ export async function startUi(opts: UiOptions): Promise<UiServer> {
     const chats = guest ? guest.store : store;
     const isChats = route === 'chats' || route.startsWith('chats/');
     if (route === 'me' && req.method === 'GET') return json(res, 200, { role: who.role });
+    // the owner's page is open: the engine keeps listening on mdns for devices (engine.touch)
+    if (who.role === 'owner') engine.touch();
     // a guest chats and keeps its own chats; everything else is the owner's
     if (guest && !(isChats || route === 'chat' || (route === 'status' && req.method === 'GET'))) return json(res, 403, { error: 'only the owner of this computer can do that' });
     if (req.method === 'GET') {
@@ -254,6 +257,10 @@ export async function startUi(opts: UiOptions): Promise<UiServer> {
       if (route === 'peers') return json(res, 200, engine.peers());
       if (route === 'cable') return json(res, 200, await engine.cable());
       if (route === 'discover') return json(res, 200, await engine.discover());
+      // what the background look heard, and this computer's qr (a phone pairs by scanning it)
+      if (route === 'nearby') return json(res, 200, engine.nearby());
+      if (route === 'hostpair') return json(res, 200, engine.hostPair());
+      if (route === 'hostpair.svg') { const t = engine.hostPairPayload(); return t ? send(res, 200, qrSvg(t), TYPES['.svg'], { 'cache-control': 'no-store' }) : send(res, 404, 'no qr open'); }
       if (route === 'models') return json(res, 200, engine.models());
       if (route === 'lineup') return json(res, 200, engine.lineup());
       if (route === 'settings') {
@@ -319,6 +326,10 @@ export async function startUi(opts: UiOptions): Promise<UiServer> {
     // "pair" takes the code from the phone's share screen. The code never comes back.
     if (route === 'cable/use') { try { return json(res, 200, engine.useCable(body?.serial)); } catch (e) { return fail(e); } }
     if (route === 'cable/pair') { try { return json(res, 200, await engine.pairCable(body?.serial, body?.code)); } catch (e) { return fail(e); } }
+    if (route === 'hostpair/new') return json(res, 200, engine.openHostPair());
+    if (route === 'hostpair/close') return json(res, 200, engine.closeHostPair());
+    if (route === 'nearby/look') { try { return json(res, 200, await engine.look()); } catch (e) { return fail(e, 500); } }
+    if (route === 'nearby/pair') { try { return json(res, 200, await engine.pairNearby(body ?? {})); } catch (e) { return fail(e); } }
     if (route === 'peers/rename') {
       try { return engine.renamePeer(String(body?.id ?? ''), String(body?.name ?? '')) ? json(res, 200, { ok: true }) : json(res, 404, { error: 'no such device' }); } catch (e) { return fail(e, 400); }
     }

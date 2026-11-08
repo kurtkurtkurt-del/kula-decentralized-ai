@@ -12,7 +12,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { openApart, openPeerDevice, type Cluster, type Message, type ModelRef, type Reply } from '../apart.js';
-import { readPeers, writePeers, parsePeerText, upsertPeer, removePeer, findPeer, probePeers, peersFile, whereIs, discover, type Peer, type PeerProbe, type Found } from '../peers.js';
+import { readPeers, writePeers, parsePeerText, upsertPeer, findPeer, probePeers, peersFile, whereIs, discover, type Peer, type PeerProbe, type Found, type PeerKind } from '../peers.js';
 import { connectRemote, handshake, peekGate, GateRefused, type GatePeek } from '../gate.js';
 import { Adb, isSerial, stateHelp, NO_ADB_HELP, type CableDevice } from './cable.js';
 import { loadOrCreateIdentity, type GateIdentity } from '../tls.js';
@@ -28,6 +28,7 @@ import { freeRamMB, measureBandwidth } from '../sysinfo.js';
 import { modelUrl, type UiModel } from './catalog.js';
 import { FULL_CATALOG, lineupView, type LineupView } from './lineup.js';
 import { Usage, type Use } from './usage.js';
+import { groupPeers, groupOf, bestRoute, viaOf, hostQr, newHostPin, HOST_PIN_TTL_MS, type Via, type RouteState } from './devices.js';
 
 export type Mode = 'phone' | 'apart' | 'split' | 'here';
 export const MODES: Mode[] = ['phone', 'apart', 'split', 'here'];
@@ -40,7 +41,41 @@ export interface PeerRow {
   reach: Reach | null; probedAt: number | null;
   cable: { serial: string; plugged: boolean | null } | null;   // on a usb cable; plugged: null until adb was asked
   holds: string | null;               // the model file the phone has loaded, as its /status said at the last probe
+  // one device, one row (devices.ts): every way it is reached side by side, the one used now
+  // (`via`, whose address and reach the fields above are), its records' ids, and when mdns
+  // last heard it on this network
+  via: Via;
+  ways: Ways;
+  routes: string[];
+  heardAt: number | null;
 }
+export interface Way { id: string; where: string; ok: boolean | null; ms: number | null; reason: string | null }
+export interface Ways {
+  cable: (Way & { serial: string; plugged: boolean | null }) | null;
+  wifi: Way | null;
+  relay: Way | null;
+}
+
+// What the background look heard on this network (mdns), each with what it is to this computer:
+//   ready    paired, and its wi-fi answered the handshake just now
+//   paired   paired, but its wi-fi did not answer (yet)
+//   code     a kula phone with a pairing code open, not paired here: scan this computer's qr,
+//            or type its code
+//   knows    it says it trusts this computer, but this computer has no record of it
+//   new      a kula device that does not know this computer
+//   silent   announced, but nothing answers at its address
+export type NearState = 'ready' | 'paired' | 'code' | 'knows' | 'new' | 'silent';
+export interface NearbyRow { name: string; host: string; port: number; kind: string | null; state: NearState; peer: string | null }
+export interface HostPairView {
+  open: boolean;                     // a qr is up and its code unused
+  exp: number | null; left: number;  // when it stops (ms epoch), ms left
+  expired: boolean;
+  name: string;                      // this computer, as the qr names it
+  fp: string;                        // the start of this computer's certificate, to compare on the phone
+  paired: { id: string; name: string } | null;   // the device that paired with this qr
+}
+export interface NearbyView { at: number | null; looking: boolean; list: NearbyRow[]; pair: HostPairView }
+export interface WakeRow { id: string; name: string; via: Via | null; where: string | null; why: string | null }
 
 // A kula device that announces itself on this network (mdns _kula._tcp), as the connect sheet
 // lists it. Nothing secret is in an announcement; `paired` is the peer it already is, if any.
@@ -111,6 +146,12 @@ export interface EngineOptions {
   bonjour?: () => BonjourLike;           // tests: a fake mdns browser for discover
   discoverMs?: number;                   // how long discover listens; 2.5 s
   statusMs?: number;                     // how long a probe waits for a phone's /status; 2.5 s
+  watch?: boolean;                       // look on mdns in the background while the page is open (kula-node ui); off in tests
+  lookMs?: number;                       // how often that look is; 12 s (2.5 s while this computer's qr is up)
+  watchIdleMs?: number;                  // the page silent this long: the looking stops; 45 s
+  peekMs?: number;                       // how long a look at an unknown device's gate waits; 2 s
+  hostId?: string;                       // the id in this computer's qr; default: the device key's id
+  now?: () => number;                    // tests: the clock the qr's code expires by
   usage?: Usage;                         // where answers are counted; default: ~/.kula-node/usage.json
 }
 
@@ -134,8 +175,12 @@ export function peerRow(p: Peer, probe?: Reach | null, probedAt: number | null =
     reach: probe ?? null, probedAt,
     cable: p.cable ? { serial: p.cable.serial, plugged } : null,
     holds,
+    via: viaOf(p), ways: { cable: null, wifi: null, relay: null }, routes: [p.id], heardAt: null,
   };
 }
+
+const VIA_WORDS: Record<Via, string> = { cable: 'the usb cable', wifi: 'wi-fi', relay: 'the relay' };
+export const viaWords = (via: Via, where?: string | null): string => (via === 'cable' ? `on ${VIA_WORDS.cable}` : via === 'wifi' ? `over wi-fi${where ? ` (${where})` : ''}` : `through ${VIA_WORDS.relay}`);
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 export const UNPLUGGED = 'unplugged: plug the cable in';
@@ -165,6 +210,19 @@ export class Engine {
   // new ip on this network): tried by the next probe when the saved address does not answer,
   // and kept only when the handshake there proves it is that phone
   private heard = new Map<string, { host: string; port: number }>();
+  // when mdns last heard each record's device, by record id
+  private heardAt = new Map<string, number>();
+  // the background look (look()): what it heard, its timer, and gate looks at unknown devices
+  private near: { at: number | null; list: NearbyRow[] } = { at: null, list: [] };
+  private looking: Promise<NearbyView> | null = null;
+  private hearing: Promise<Found[]> | null = null;
+  private watchTimer: NodeJS.Timeout | null = null;
+  private watchedAt = 0;
+  private closed = false;
+  private peeks = new Map<string, { at: number; peek: GatePeek }>();
+  // this computer's qr (kula-host v1): its one-time code, until when, and who paired with it
+  private hostPin: { pin: string; exp: number; peerId: string | null; tried: Set<string> } | null = null;
+  private hostIdCache: string | null = null;
   readonly catalog: CatalogEntry[];
   // every answer counted (usage.ts): tokens, speed, per model, device, mode, use and day
   readonly usage: Usage;
@@ -193,10 +251,68 @@ export class Engine {
   private file(): string { return this.opts.peersFile ?? peersFile(); }
   private dirs(): string[] { return this.opts.modelDirs ?? defaultModelDirs(); }
 
-  // ---- peers
+  // ---- peers: one row per device (devices.ts), its ways side by side
 
   peers(): PeerRow[] {
-    return readPeers(this.file()).map((p) => { const x = this.reach.get(p.id); return peerRow(p, x?.r ?? null, x?.at ?? null, this.plugged(p), this.held.get(p.id) ?? null); });
+    return groupPeers(readPeers(this.file())).map((g) => this.deviceRow(g));
+  }
+
+  private routeState = (p: Peer): RouteState => {
+    const x = this.reach.get(p.id);
+    return { plugged: this.plugged(p), ok: x ? x.r.ok : null, at: x?.at ?? null };
+  };
+
+  // the device a record belongs to, by its id (the device's first record): what the page knows
+  groupId(id: string): string {
+    const g = groupOf(groupPeers(readPeers(this.file())), id);
+    return g ? g[0].id : id;
+  }
+
+  private deviceRow(g: Peer[]): PeerRow {
+    const best = bestRoute(g, this.routeState);
+    const x = this.reach.get(best.id);
+    const pick = (list: Peer[]) => (list.length ? bestRoute(list, this.routeState) : null);
+    const cab = pick(g.filter((p) => p.cable));
+    const wifi = pick(g.filter((p) => !p.cable && !p.relay));
+    const relay = pick(g.filter((p) => p.relay));
+    const way = (p: Peer): Way => {
+      const s = this.reach.get(p.id);
+      return { id: p.id, where: whereIs(p), ok: s ? s.r.ok : null, ms: s?.r.ms ?? null, reason: s && !s.r.ok ? s.r.reason ?? null : null };
+    };
+    const row = peerRow(best, x?.r ?? null, x?.at ?? null, cab ? this.plugged(cab) : null, null);
+    const named = g.find((p) => p.named);
+    const first = g[0];
+    const known = <T>(f: (p: Peer) => T | null | undefined): T | null => { const b = f(best); if (b != null) return b; for (const p of g) { const v = f(p); if (v != null) return v; } return null; };
+    const lastOk = g.map((p) => p.last_ok ?? '').sort().pop() || null;
+    const heardAt = Math.max(0, ...g.map((p) => this.heardAt.get(p.id) ?? 0)) || null;
+    return {
+      ...row,
+      id: first.id,
+      name: named ? named.name : first.named ? first.name : publicName(first.name),
+      kind: first.kind,
+      tls: !!best.fp,
+      waitingPair: g.some((p) => !p.fp && !!p.pin),
+      ram: known((p) => p.ram), bw: known((p) => p.bw), gpu: known((p) => p.gpu),
+      last_ok: lastOk,
+      cable: cab ? { serial: cab.cable!.serial, plugged: this.plugged(cab) } : null,
+      holds: g.map((p) => this.held.get(p.id)).find((h) => !!h) ?? null,
+      via: viaOf(best),
+      ways: {
+        cable: cab ? { ...way(cab), serial: cab.cable!.serial, plugged: this.plugged(cab) } : null,
+        wifi: wifi ? way(wifi) : null,
+        relay: relay ? way(relay) : null,
+      },
+      routes: g.map((p) => p.id),
+      heardAt,
+    };
+  }
+
+  // a device's ids (any of its records', or its name) as the ids of all its records
+  private expand(ids?: string[]): string[] | undefined {
+    if (!ids?.length) return ids;
+    const all = readPeers(this.file());
+    const gs = groupPeers(all);
+    return [...new Set(ids.flatMap((id) => { const p = findPeer(all, id); const g = p ? groupOf(gs, p.id) : null; return g ? g.map((x) => x.id) : [id]; }))];
   }
 
   private plugged(p: Peer): boolean | null {
@@ -210,8 +326,15 @@ export class Engine {
     writePeers(readPeers(file).map((p) => stamped.find((s) => s.id === p.id) ?? p), file);
   }
 
-  // The api channel of every peer (or the ones named), 2 s each; a v3 peer pairs here.
+  // The api channel of every device (or the ones named: every way of each), 2 s each; a v3
+  // peer pairs here.
   async probe(ids?: string[]): Promise<PeerRow[]> {
+    await this.probeExact(this.expand(ids));
+    return this.peers();
+  }
+
+  // the probe of exactly these records (all: none named)
+  private async probeExact(ids?: string[]): Promise<void> {
     let all = readPeers(this.file());
     const asked = (p: Peer) => !ids?.length || ids.includes(p.id);
     if (all.some((p) => p.cable && asked(p))) all = await this.refreshCables(all.filter(asked));
@@ -242,7 +365,6 @@ export class Engine {
         if (p) this.held.set(p.id, await this.holds(p));
       }));
     }
-    return this.peers();
   }
 
   // The worker's GET /status through a tunnel to its api channel: the file it has loaded, or
@@ -266,16 +388,45 @@ export class Engine {
   // at a time however many ask; a device already in the peer book says which peer it is.
   discover(): Promise<FoundRow[]> {
     if (this.discovering) return this.discovering;
-    const bonjour = this.opts.bonjour?.();
-    this.discovering = discover(this.opts.discoverMs ?? 2500, bonjour).then((found: Found[]) => {
+    this.discovering = this.hear().then((found: Found[]) => {
       const peers = readPeers(this.file());
+      const gs = groupPeers(peers);
       return found.map((f) => {
-        const p = peers.find((x) => (f.id && x.id === f.id) || (x.host === f.host && x.port === f.port && !x.relay && !x.cable)) ?? null;
-        if (p && !p.relay && !p.cable && (p.host !== f.host || p.port !== f.port)) this.heard.set(p.id, { host: f.host, port: f.port });
-        return { name: String(f.name).slice(0, 60), host: f.host, port: f.port, kind: f.kind, v: f.v, paired: p ? p.id : null };
+        const p = this.matchFound(peers, f);
+        const g = p ? groupOf(gs, p.id) : null;
+        return { name: String(f.name).slice(0, 60), host: f.host, port: f.port, kind: f.kind, v: f.v, paired: g ? g[0].id : null };
       });
     }).finally(() => { this.discovering = null; });
     return this.discovering;
+  }
+
+  // One mdns listen however many ask (discover, the background look). A paired device heard
+  // at another address than its wi-fi record has is noted for the next probe (`heard`).
+  private hear(): Promise<Found[]> {
+    if (this.hearing) return this.hearing;
+    const bonjour = this.opts.bonjour?.();
+    this.hearing = discover(this.opts.discoverMs ?? 2500, bonjour).then((found) => {
+      const peers = readPeers(this.file());
+      const gs = groupPeers(peers);
+      const now = Date.now();
+      for (const f of found) {
+        const p = this.matchFound(peers, f);
+        const g = p ? groupOf(gs, p.id) : null;
+        if (!g) continue;
+        for (const x of g) this.heardAt.set(x.id, now);
+        const w = g.find((x) => !x.relay && !x.cable);
+        if (w && (w.host !== f.host || w.port !== f.port)) this.heard.set(w.id, { host: f.host, port: f.port });
+      }
+      return found;
+    }).finally(() => { this.hearing = null; });
+    return this.hearing;
+  }
+
+  // which record an announcement is: its worker id (a record's id, or the id it learned), else
+  // the address of a wi-fi record. Only a hint: the handshake decides (pinned certificate).
+  private matchFound(peers: Peer[], f: Found): Peer | null {
+    return (f.id ? peers.find((x) => x.id === f.id || x.wid === f.id) : undefined)
+      ?? peers.find((x) => x.host === f.host && x.port === f.port && !x.relay && !x.cable) ?? null;
   }
 
   // The qr json, its base64url code, host:port:secret, or a relay code (+ pin): parsed by the
@@ -288,7 +439,7 @@ export class Engine {
     writePeers(list, file);
     this.note(`${added ? 'added' : 'updated'} ${peer.name} (${whereIs(peer)})`);
     await this.probe([peer.id]).catch(() => {});
-    return this.peers().find((p) => p.id === peer.id)!;
+    return this.rowOf(peer.id);
   }
 
   // What a phone's share screen prints under its qr: the address (192.168.1.20:50551) and the
@@ -317,7 +468,7 @@ export class Engine {
     writePeers(list, file);
     this.reach.set(peer.id, { r: { ok: true }, at: Date.now() });
     this.note(`paired with ${peer.name} at ${host}:${port}`);
-    return this.peers().find((p) => p.id === peer.id)!;
+    return this.rowOf(peer.id);
   }
 
   // One handshake with the one-time code: learns the phone's certificate (the code's proof
@@ -337,31 +488,339 @@ export class Engine {
   }
 
   // A name the person chose for a device (6.11.2026). Kept as typed (trimmed, at most 40
-  // characters) and marked, so the public model name never replaces it.
+  // characters) and marked, so the public model name never replaces it. Every way of the
+  // device gets it.
   renamePeer(id: string, name: string): boolean {
     const clean = String(name ?? '').replace(/[\u0000-\u001f]/g, '').trim().slice(0, 40);
     if (!clean) throw new Error('give it a name');
     const file = this.file();
     const list = readPeers(file);
-    const p = list.find((x) => x.id === id);
-    if (!p) return false;
-    const was = p.named ? p.name : publicName(p.name);
-    p.name = clean;
-    p.named = true;
+    const hit = findPeer(list, id);
+    const g = hit ? groupOf(groupPeers(list), hit.id) : null;
+    if (!g) return false;
+    const p = g[0];
+    const was = (g.find((x) => x.named) ?? p).named ? (g.find((x) => x.named) ?? p).name : publicName(p.name);
+    for (const x of g) { x.name = clean; x.named = true; }
     writePeers(list, file);
     this.note(`renamed ${was} to ${clean}`);
     return true;
   }
 
+  // Forgets a device: every way of it (the cable record and the wi-fi record both).
   removePeer(id: string): boolean {
     const file = this.file();
-    const { list, removed } = removePeer(readPeers(file), id);
-    if (!removed) return false;
-    writePeers(list, file);
-    this.reach.delete(removed.id);
-    this.held.delete(removed.id);
-    this.note(`forgot ${removed.name}`);
+    const list = readPeers(file);
+    const hit = findPeer(list, id);
+    const g = hit ? groupOf(groupPeers(list), hit.id) : null;
+    if (!g) return false;
+    const row = this.deviceRow(g);
+    writePeers(list.filter((p) => !g.includes(p)), file);
+    for (const p of g) {
+      this.reach.delete(p.id); this.held.delete(p.id); this.heard.delete(p.id); this.heardAt.delete(p.id);
+      if (p.cable) this.jobs.delete(p.cable.serial);
+    }
+    const ways = [row.ways.cable && 'cable', row.ways.wifi && 'wi-fi', row.ways.relay && 'relay'].filter(Boolean);
+    this.note(`forgot ${row.name}${ways.length > 1 ? ` (${ways.join(' and ')})` : ''}`);
     return true;
+  }
+
+  // the row of the device a record belongs to
+  private rowOf(id: string): PeerRow {
+    const g = groupOf(groupPeers(readPeers(this.file())), id);
+    if (!g) throw new Error(`no such device: ${id}`);
+    return this.deviceRow(g);
+  }
+
+  private now(): number { return this.opts.now ? this.opts.now() : Date.now(); }
+  private hostId(): string {
+    if (!this.hostIdCache) this.hostIdCache = this.opts.hostId ?? loadDeviceKey().id;
+    return this.hostIdCache;
+  }
+
+  // ---- this computer's qr: a phone pairs by scanning it (devices.ts, kula-host v1)
+  //
+  // "add a device → same wi-fi" shows it. The phone sets the code as its gate's one-time code
+  // and starts sharing; the look below hears it on mdns, sees a gate with a code open, and
+  // pairs with this code: the usual v3 handshake, whose proof covers both certificates. One
+  // code per qr (a new qr makes a new code and the old one is dead), ten minutes, spent by
+  // the first pairing. The code leaves this process only inside the qr image.
+
+  openHostPair(): HostPairView {
+    const now = this.now();
+    this.hostPin = { pin: newHostPin(), exp: now + HOST_PIN_TTL_MS, peerId: null, tried: new Set() };
+    this.log('this computer\'s qr is up: a phone that scans it in the next 10 minutes pairs by itself');
+    this.touch(true);
+    return this.hostPair();
+  }
+
+  closeHostPair(): HostPairView {
+    if (this.hostPin && !this.hostPin.peerId) this.hostPin = null;
+    return this.hostPair();
+  }
+
+  private pinOpen(): boolean {
+    const h = this.hostPin;
+    return !!h && !h.peerId && this.now() < h.exp;
+  }
+
+  // the qr's json, while its code is open; null otherwise
+  hostPairPayload(): string | null {
+    const h = this.hostPin;
+    if (!h || !this.pinOpen()) return null;
+    return JSON.stringify(hostQr({ id: this.hostId(), name: hostLabel(), fp: this.identity().fp, pin: h.pin, exp: h.exp }));
+  }
+
+  hostPair(): HostPairView {
+    const h = this.hostPin;
+    const now = this.now();
+    let paired: HostPairView['paired'] = null;
+    if (h?.peerId) { try { const r = this.rowOf(h.peerId); paired = { id: r.id, name: r.name }; } catch {} }
+    return {
+      open: this.pinOpen(), exp: h?.exp ?? null, left: h && !h.peerId ? Math.max(0, h.exp - now) : 0,
+      expired: !!h && !h.peerId && now >= h.exp, name: hostLabel(), fp: this.identity().fp.slice(0, 16), paired,
+    };
+  }
+
+  // A phone that scanned the qr, by its address: paired with the qr's code now (the look does
+  // the same by itself once mdns hears it; this is for a network where mdns does not carry).
+  async pairNearby(input: { host?: unknown; port?: unknown; address?: unknown }): Promise<PeerRow> {
+    let host = typeof input.host === 'string' ? input.host.trim() : '';
+    let port = Number(input.port);
+    if (typeof input.address === 'string' && input.address.trim()) {
+      const m = HOST_PORT.exec(input.address.trim());
+      if (!m) throw new Error('address must look like 192.168.1.20:50551');
+      host = m[1].replace(/^\[|\]$/g, ''); port = Number(m[2]);
+    }
+    if (!host || !/^[0-9A-Za-z.:-]{1,253}$/.test(host)) throw new Error('bad address');
+    if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('bad port');
+    if (!this.pinOpen()) throw new Error('show this computer\'s qr first (devices → add → same wi-fi) and scan it with the phone, or type the phone\'s code');
+    const f = this.near.list.find((r) => r.host === host && r.port === port);
+    const peer = await this.pairFound({ id: null, name: f?.name ?? `phone ${host}`, host, port, kind: f?.kind ?? 'phone', ram: null, bw: null, v: null }, this.hostPin!.pin);
+    this.spend(peer);
+    return this.rowOf(peer.id);
+  }
+
+  // one handshake with the qr's code at a heard address; kept like a phone paired by its code
+  private async pairFound(f: Found, pin: string): Promise<Peer> {
+    const fp = await this.pinPair(f.host, f.port, pin);
+    const file = this.file();
+    const list = readPeers(file);
+    const now = new Date().toISOString();
+    const same = groupPeers(list).find((g) => g.some((p) => p.fp === fp)) ?? null;
+    const base = same?.[0] ?? null;
+    const taken = (id: string) => list.some((p) => p.id === id && p.fp !== fp);
+    const id = f.id && !taken(f.id) ? f.id : !taken(`${f.host}:${f.port}`) ? `${f.host}:${f.port}` : `wifi:${fp.slice(0, 12)}`;
+    const kind: PeerKind = f.kind === 'tablet' || f.kind === 'pc' ? f.kind : 'phone';
+    const peer: Peer = {
+      id, wid: f.id ?? null, name: (base ? base.name : f.name || `phone ${f.host}`).slice(0, 60), ...(base?.named ? { named: true } : {}),
+      host: f.host, port: f.port, secret: '', fp, pin: null, paired_at: now, relay: null, kind,
+      ram: f.ram ?? base?.ram ?? null, bw: f.bw ?? base?.bw ?? null, gpu: base?.gpu ?? null, vram: base?.vram ?? null, passport: null, added_at: now, last_ok: now,
+    };
+    writePeers(upsertPeer(list, peer).list, file);
+    this.reach.set(peer.id, { r: { ok: true }, at: Date.now() });
+    this.heardAt.set(peer.id, Date.now());
+    return peer;
+  }
+
+  private spend(peer: Peer) {
+    if (this.hostPin) this.hostPin.peerId = peer.id;
+    this.note(`paired with ${peer.named ? peer.name : publicName(peer.name)} over wi-fi (${peer.host}:${peer.port}): it scanned this computer's qr`);
+  }
+
+  // ---- the background look (8.11.2026)
+  //
+  // While the page is open (every request of the owner's page calls touch), mdns is listened
+  // to every 12 s, 2.5 s each time. What it hears:
+  //   a paired device: noted as heard; its wi-fi is probed when its last answer is old or its
+  //     address changed (the probe tries the new address, the pinned certificate decides), so
+  //     it shows "ready" without a click;
+  //   an unknown one: its gate is looked at (tls: the certificate it proves, and whether it
+  //     knows this computer). The certificate of a device paired another way (the cable) makes
+  //     this its wi-fi too, one device with both ways. A gate with a code open while this
+  //     computer's qr is up is tried with the qr's code: the phone that scanned it pairs. The
+  //     rest is "nearby, not paired".
+  // Nothing here leaves this network: mdns and the gates of devices on it.
+
+  touch(soon = false): void {
+    this.watchedAt = Date.now();
+    if (this.closed || this.opts.watch !== true) return;
+    if (this.watchTimer && !soon) return;
+    if (this.watchTimer) clearTimeout(this.watchTimer);
+    const every = this.opts.lookMs ?? 12_000;
+    const due = soon || this.near.at === null ? 100 : Math.max(100, this.near.at + every - Date.now());
+    this.later(due);
+  }
+
+  private later(ms: number) {
+    this.watchTimer = setTimeout(() => { void this.tickWatch(); }, ms);
+    this.watchTimer.unref?.();
+  }
+
+  private async tickWatch(): Promise<void> {
+    this.watchTimer = null;
+    if (this.closed) return;
+    if (Date.now() - this.watchedAt > (this.opts.watchIdleMs ?? 45_000) && !this.pinOpen()) return;
+    try { await this.look(); } catch (e) { this.log(`look: ${(e as Error).message}`); }
+    if (!this.closed && !this.watchTimer) this.later(this.pinOpen() ? Math.min(2500, this.opts.lookMs ?? 12_000) : this.opts.lookMs ?? 12_000);
+  }
+
+  // what the last look heard (and this computer's qr), for GET nearby
+  nearby(): NearbyView {
+    return { at: this.near.at, looking: !!this.looking, list: this.near.list.map((r) => ({ ...r })), pair: this.hostPair() };
+  }
+
+  look(): Promise<NearbyView> {
+    if (this.looking) return this.looking;
+    this.looking = this.lookOnce().finally(() => { this.looking = null; });
+    return this.looking;
+  }
+
+  private inUse(id: string): boolean { return !!this.cluster?.devices.some((d) => d.id === id); }
+
+  private async peekFound(f: Found): Promise<GatePeek> {
+    const key = `${f.host}:${f.port}`;
+    const c = this.peeks.get(key);
+    if (c && !this.pinOpen() && Date.now() - c.at < 30_000) return c.peek;
+    const peek = await peekGate(f.host, f.port, this.identity(), this.opts.peekMs ?? 2000).catch((e): GatePeek => ({ up: false, reason: (e as Error).message }));
+    this.peeks.set(key, { at: Date.now(), peek });
+    if (this.peeks.size > 64) this.peeks.delete(this.peeks.keys().next().value!);
+    return peek;
+  }
+
+  private async lookOnce(): Promise<NearbyView> {
+    const found = await this.hear();
+    const now = Date.now();
+    const wifiOf = (g: Peer[]) => g.find((p) => !p.cable && !p.relay) ?? null;
+    // the gates of what is not a paired device's wi-fi yet, all at once
+    const first = readPeers(this.file());
+    const firstGroups = groupPeers(first);
+    const needPeek = found.filter((f) => { const p = this.matchFound(first, f); const g = p ? groupOf(firstGroups, p.id) : null; return !g || !wifiOf(g); });
+    const peeked = new Map<Found, GatePeek>();
+    await Promise.all(needPeek.map(async (f) => { peeked.set(f, await this.peekFound(f)); }));
+
+    const rows: NearbyRow[] = [];
+    const toProbe = new Set<string>();
+    for (const f of found) {
+      const list = readPeers(this.file());
+      const gs = groupPeers(list);
+      const m = this.matchFound(list, f);
+      let g = m ? groupOf(gs, m.id) : null;
+      let state: NearState = 'new';
+      const pk = peeked.get(f);
+      if (pk?.up) {
+        const same = gs.find((x) => x.some((p) => !!p.fp && p.fp === pk.fp)) ?? null;
+        if (same) { this.learnWifi(same, f, pk); g = groupOf(groupPeers(readPeers(this.file())), same[0].id); }
+        else if (!g && pk.state === 'pin' && this.pinOpen() && !this.hostPin!.tried.has(pk.fp)) {
+          try {
+            const peer = await this.pairFound(f, this.hostPin!.pin);
+            this.spend(peer);
+            g = groupOf(groupPeers(readPeers(this.file())), peer.id);
+          } catch (e) {
+            this.hostPin?.tried.add(pk.fp);
+            this.log(`${f.name} at ${f.host}:${f.port} did not take this computer's code: ${(e as Error).message}`);
+          }
+        }
+        if (!g) state = pk.state === 'pin' ? 'code' : pk.state === 'paired' ? 'knows' : 'new';
+      } else if (pk && !g) state = 'silent';
+      if (g) {
+        for (const p of g) this.heardAt.set(p.id, now);
+        const w = wifiOf(g);
+        if (w && !this.inUse(w.id)) {
+          const r = this.reach.get(w.id);
+          if (!r || !r.r.ok || now - r.at > 30_000 || this.heard.has(w.id)) toProbe.add(w.id);
+        }
+      }
+      rows.push({ name: String(f.name).slice(0, 60), host: f.host, port: f.port, kind: f.kind, state: g ? 'paired' : state, peer: g ? g[0].id : null });
+    }
+    if (toProbe.size) {
+      const before = new Map([...toProbe].map((id) => [id, this.reach.get(id)?.r.ok ?? null]));
+      await this.probeExact([...toProbe]).catch((e) => this.log(`look: ${(e as Error).message}`));
+      for (const [id, was] of before) {
+        const ok = this.reach.get(id)?.r.ok ?? null;
+        if (ok && was !== true) { try { const r = this.rowOf(id); this.note(`${r.name} is ready over wi-fi (${r.ways.wifi?.where ?? ''})`); } catch {} }
+      }
+    }
+    const devices = new Map(this.peers().map((r) => [r.id, r]));
+    for (const r of rows) if (r.peer) r.state = devices.get(r.peer)?.ways.wifi?.ok ? 'ready' : 'paired';
+    this.near = { at: now, list: rows };
+    return this.nearby();
+  }
+
+  // A device paired another way (the cable) answered on this wi-fi with the same certificate
+  // (tls proves it): its worker id is noted on every record, and it gets a wi-fi record when
+  // its gate says it trusts this computer, or its wi-fi record the heard address.
+  private learnWifi(g: Peer[], f: Found, pk: Extract<GatePeek, { up: true }>) {
+    const file = this.file();
+    const list = readPeers(file);
+    const ids = new Set(g.map((p) => p.id));
+    let changed = false;
+    if (f.id) for (const p of list) if (ids.has(p.id) && p.wid !== f.id) { p.wid = f.id; changed = true; }
+    const w = list.find((p) => ids.has(p.id) && !p.cable && !p.relay);
+    if (w) {
+      if (w.host !== f.host || w.port !== f.port) this.heard.set(w.id, { host: f.host, port: f.port });
+    } else if (pk.state === 'paired') {
+      const first = list.find((p) => p.id === g[0].id) ?? g[0];
+      const free = (id: string) => !list.some((p) => p.id === id);
+      const id = f.id && free(f.id) ? f.id : free(`${f.host}:${f.port}`) ? `${f.host}:${f.port}` : `wifi:${pk.fp.slice(0, 12)}`;
+      const now = new Date().toISOString();
+      list.push({
+        id, wid: f.id ?? null, name: first.name, ...(first.named ? { named: true } : {}), host: f.host, port: f.port, secret: '', fp: pk.fp, pin: null,
+        paired_at: first.paired_at ?? now, relay: null, kind: first.kind, ram: f.ram ?? first.ram, bw: f.bw ?? first.bw, gpu: first.gpu ?? null, vram: first.vram ?? null,
+        passport: null, added_at: now, last_ok: null,
+      });
+      changed = true;
+      this.note(`${first.named ? first.name : publicName(first.name)} answered on this wi-fi too (${f.host}:${f.port}): the same phone as on the cable, now reachable both ways`);
+    }
+    if (changed) writePeers(list, file);
+  }
+
+  // ---- waking the devices for a night project: each by the way that works now
+  //
+  // A device on a plugged-in cable: "use" on it (its share screen opened again if it slept).
+  // Else its wi-fi: mdns listened to once if it was not heard lately (a new address), then the
+  // handshake. Else a relay. Says which way each was reached; the load picks the same way.
+  async wake(ids: string[] = []): Promise<WakeRow[]> {
+    const all = readPeers(this.file());
+    const gs = groupPeers(all);
+    const want = ids.length ? [...new Set(ids.map((id) => { const p = findPeer(all, id); return p ? groupOf(gs, p.id) : null; }))].filter((g): g is Peer[] => !!g) : gs;
+    const out: WakeRow[] = [];
+    let listened = false;
+    for (const g of want) {
+      const row = this.deviceRow(g);
+      const tried: string[] = [];
+      let got: WakeRow | null = null;
+      const cab = g.find((p) => p.cable);
+      if (cab) {
+        const devs = await this.cableDevices(true);
+        const d = devs.find((x) => x.serial === cab.cable!.serial);
+        if (d?.state === 'device') {
+          try {
+            this.useCable(cab.cable!.serial);
+            const v = await this.cableSettled(cab.cable!.serial);
+            if (v?.step === 'paired') got = { id: row.id, name: row.name, via: 'cable', where: null, why: null };
+            else tried.push(`cable: ${v?.error ?? 'did not connect'}`);
+          } catch (e) { tried.push(`cable: ${(e as Error).message}`); }
+        } else tried.push('cable: unplugged');
+      }
+      const w = g.find((p) => !p.cable && !p.relay);
+      if (!got && w) {
+        if (!listened && Date.now() - (this.heardAt.get(w.id) ?? 0) > 60_000) { listened = true; await this.hear().catch(() => []); }
+        await this.probeExact([w.id]).catch(() => {});
+        const r = this.reach.get(w.id)?.r;
+        if (r?.ok) { const fresh = readPeers(this.file()).find((p) => p.id === w.id) ?? w; got = { id: row.id, name: row.name, via: 'wifi', where: whereIs(fresh), why: null }; }
+        else tried.push(`wi-fi: ${r?.reason ?? 'no answer'}`);
+      }
+      const rl = g.find((p) => p.relay);
+      if (!got && rl) {
+        await this.probeExact([rl.id]).catch(() => {});
+        const r = this.reach.get(rl.id)?.r;
+        if (r?.ok) got = { id: row.id, name: row.name, via: 'relay', where: null, why: null };
+        else tried.push(`relay: ${r?.reason ?? 'no answer'}`);
+      }
+      out.push(got ?? { id: row.id, name: row.name, via: null, where: null, why: tried.join('; ') || 'no way to reach it' });
+    }
+    for (const r of out) this.note(r.via ? `${r.name} reached ${viaWords(r.via, r.where)}` : `${r.name} not reached: ${r.why}`);
+    return out;
   }
 
   // ---- phones on a usb cable (cable.ts)
@@ -409,6 +868,9 @@ export class Engine {
     if (!adb.present) return { adb: false, help: NO_ADB_HELP, error: null, devices: [] };
     const list = await this.cableDevices();
     const peers = readPeers(this.file());
+    const gs = groupPeers(peers);
+    // a cable record is shown as its device (the id and name the devices list has)
+    const dev = (p: Peer) => { const g = groupOf(gs, p.id) ?? [p]; const n = g.find((x) => x.named) ?? g[0]; return { id: g[0].id, name: n.named ? n.name : publicName(n.name) }; };
     const rows: CableRow[] = [];
     for (const d of list) {
       if (d.state === 'device' && !this.installedBy.has(d.serial)) {
@@ -417,14 +879,14 @@ export class Engine {
       const p = peers.find((x) => x.cable?.serial === d.serial);
       const installed = this.installedBy.get(d.serial) ?? null;
       rows.push({
-        serial: d.serial, name: p ? (p.named ? p.name : publicName(p.name)) : d.model ? publicName(d.model) : `phone ${d.serial.slice(-4)}`, model: d.model, state: d.state,
+        serial: d.serial, name: p ? dev(p).name : d.model ? publicName(d.model) : `phone ${d.serial.slice(-4)}`, model: d.model, state: d.state,
         help: stateHelp(d.state) ?? (installed === false ? NOT_INSTALLED : null),
-        installed, peer: p ? { id: p.id, name: p.named ? p.name : publicName(p.name) } : null, job: this.jobView(this.jobs.get(d.serial)),
+        installed, peer: p ? dev(p) : null, job: this.jobView(this.jobs.get(d.serial)),
       });
     }
     for (const p of peers) {
       if (!p.cable || list.some((d) => d.serial === p.cable!.serial)) continue;
-      rows.push({ serial: p.cable.serial, name: p.named ? p.name : publicName(p.name), model: null, state: 'unplugged', help: 'plug the cable in to use it', installed: null, peer: { id: p.id, name: p.named ? p.name : publicName(p.name) }, job: this.jobView(this.jobs.get(p.cable.serial)) });
+      rows.push({ serial: p.cable.serial, name: dev(p).name, model: null, state: 'unplugged', help: 'plug the cable in to use it', installed: null, peer: dev(p), job: this.jobView(this.jobs.get(p.cable.serial)) });
     }
     return { adb: true, help: null, error: this.seen?.error ?? null, devices: rows };
   }
@@ -497,7 +959,7 @@ export class Engine {
       const same = mine ?? peers.find((p) => p.fp === found.fp && (p.host === '127.0.0.1' || p.host === 'localhost') && !p.relay && !p.cable) ?? null;
       const peer = this.keepCable(same, job.serial, port, found.fp, dev.model);
       this.reach.set(peer.id, { r: { ok: true }, at: Date.now() });
-      job.peerId = peer.id;
+      job.peerId = this.groupId(peer.id);
       say('paired', same ? `connected to ${peer.name} over the cable` : `${peer.name} already knew this computer: connected over the cable`);
       this.note(`${peer.name} on the cable (127.0.0.1:${port})`);
       return;
@@ -540,11 +1002,11 @@ export class Engine {
       const mine = readPeers(this.file()).find((p) => p.cable?.serial === serial) ?? null;
       const peer = this.keepCable(mine, serial, port, fp, dev.model);
       this.reach.set(peer.id, { r: { ok: true }, at: Date.now() });
-      job.peerId = peer.id;
+      job.peerId = this.groupId(peer.id);
       job.step = 'paired';
       job.lines.push(`paired with ${peer.name} over the cable`);
       this.note(`paired with ${peer.name} over the cable`);
-      return { peer: this.peers().find((p) => p.id === peer.id)!, job: this.jobView(job)! };
+      return { peer: this.rowOf(peer.id), job: this.jobView(job)! };
     } catch (e) {
       job.step = 'code';
       job.error = (e as Error).message;
@@ -647,10 +1109,19 @@ export class Engine {
     return dest;
   }
 
-  private resolvePeers(ids: unknown): Peer[] {
+  // The devices asked for (by any of their records' ids, or a name), each once; none: all.
+  private groupsFor(ids: unknown): Peer[][] {
     const all = readPeers(this.file());
-    if (!Array.isArray(ids) || !ids.length) return all;
-    return ids.map((r) => { const p = findPeer(all, String(r)); if (!p) throw new Error(`no such device: ${r}`); return p; });
+    const gs = groupPeers(all);
+    if (!Array.isArray(ids) || !ids.length) return gs;
+    const out: Peer[][] = [];
+    for (const r of ids) {
+      const p = findPeer(all, String(r));
+      const g = p ? groupOf(gs, p.id) : null;
+      if (!g) throw new Error(`no such device: ${r}`);
+      if (!out.includes(g)) out.push(g);
+    }
+    return out;
   }
 
   async load(req: { model?: unknown; mode?: unknown; peers?: unknown; ctx?: unknown; all?: unknown }, emit: (e: LoadEvent) => void): Promise<Status> {
@@ -673,22 +1144,25 @@ export class Engine {
     const llama = this.llama();
     if ((mode === 'split' || mode === 'here') && !llama && !this.opts.startBackend) throw new Error(`${mode} needs llama.cpp on this computer: run kula-node setup (or pick "phone")`);
 
+    // each device by the way that works now (devices.ts): its cable while it is plugged in
+    // (the forward made again first: the port may have changed), else its wi-fi, else a relay
     let peers: Peer[] = [];
+    const reached: string[] = [];
     if (mode !== 'here') {
-      // a phone on the cable: its forward made again first (the port may have changed)
-      const asked = this.resolvePeers(req.peers);
+      const asked = this.groupsFor(req.peers);
       const use = mode === 'phone' ? asked.slice(0, 1) : asked;
-      if (use.some((p) => p.cable)) {
-        await this.refreshCables(use);
-        const off = use.find((p) => p.cable && this.reach.get(p.id)?.r.reason === UNPLUGGED);
-        if (mode === 'phone' && off) throw new Error(`${off.name} is ${UNPLUGGED}`);
+      if (mode === 'phone' && !use.length) throw new Error('no paired device yet: add one in connect');
+      const cabled = use.flat().filter((p) => p.cable);
+      if (cabled.length) await this.refreshCables(cabled);
+      const fresh = groupPeers(readPeers(this.file()));
+      peers = use.map((g) => bestRoute(groupOf(fresh, g[0].id) ?? g, this.routeState));
+      const off = peers.find((p) => p.cable && this.reach.get(p.id)?.r.reason === UNPLUGGED);
+      if (mode === 'phone' && off) throw new Error(`${off.name} is ${UNPLUGGED}`);
+      for (const p of peers) {
+        const g = groupOf(fresh, p.id) ?? [p];
+        if (g.length > 1) reached.push(`${p.named ? p.name : publicName(p.name)} ${viaWords(viaOf(p), p.cable ? null : whereIs(p))}`);
       }
     }
-    if (mode === 'phone') {
-      const list = this.resolvePeers(req.peers);
-      if (!list.length) throw new Error('no paired device yet: add one in connect');
-      peers = [list[0]];
-    } else if (mode === 'apart' || mode === 'split') peers = this.resolvePeers(req.peers);
 
     const ac = new AbortController();
     this.loadAbort = ac;
@@ -698,6 +1172,7 @@ export class Engine {
     const plan: string[] = [];
     try {
       await this.unload(true);
+      if (reached.length) plan.push(`reached ${reached.join(', ')}.`);
       say({ phase: 'probe', line: peers.length ? `looking for ${peers.map((p) => p.name).join(', ')}` : 'starting here' });
       const lastPct = new Map<string, number>();
       const onProgress = (device: string, state: string, got: number, total: number) => {
@@ -838,6 +1313,9 @@ export class Engine {
   }
 
   async close(): Promise<void> {
+    this.closed = true;
+    if (this.watchTimer) clearTimeout(this.watchTimer);
+    this.watchTimer = null;
     await this.unload(true);
     await this.adbTool?.close().catch(() => {});
   }

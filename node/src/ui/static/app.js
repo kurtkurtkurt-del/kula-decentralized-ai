@@ -784,7 +784,7 @@ const sparkSvg = (series) => {
 function gaugeOf(id) {
   const st = S.status, L = st?.loaded;
   switch (id) {
-    case 'senses': return sparkSvg(S.peers.filter((p) => PINGS.get(p.id)?.length).slice(0, 3).map((p) => ({ v: PINGS.get(p.id), c: p.cable ? VIA_HEX.cable : VIA_HEX.wifi })));
+    case 'senses': return sparkSvg(S.peers.filter((p) => PINGS.get(p.id)?.length).slice(0, 3).map((p) => ({ v: PINGS.get(p.id), c: (p.via ?? (p.cable ? 'cable' : 'wifi')) === 'cable' ? VIA_HEX.cable : VIA_HEX.wifi })));
     case 'memory': { const n = Math.min(12, (st?.decisions ?? []).length); return n ? `<span class="blocks">${'<i></i>'.repeat(n)}</span>` : ''; }
     case 'connections': {
       const g = deviceGroups().slice(0, 3);
@@ -941,7 +941,7 @@ async function refreshPeers(probe) {
     const tls = S.peers.filter((p) => p.tls && p.reach?.ok).length;
     if (ok.length) feed('trust', `${tls} of ${ok.length} answering links are tls with the pinned certificate`);
   }
-  for (const p of S.peers) if (before.size && !before.has(p.id)) feed('connections', `paired with ${p.name} (${p.cable ? 'cable' : p.far ? 'relay' : 'wi-fi'})`);
+  for (const p of S.peers) if (before.size && !before.has(p.id)) feed('connections', `paired with ${p.name} (${(p.via ?? (p.cable ? 'cable' : p.far ? 'relay' : 'wifi')) === 'wifi' ? 'wi-fi' : p.via ?? 'cable'})`);
   if (probe) for (const p of S.peers) if (p.reach?.ok && p.reach.ms) { const h = PINGS.get(p.id) ?? []; h.push(p.reach.ms); PINGS.set(p.id, h.slice(-16)); }
   const fresh = before.size ? S.peers.filter((p) => !before.has(p.id)).map((p) => p.id) : [];
   if (fresh.length && settings.peers.length && settings.mode !== 'phone') { settings.peers = [...new Set([...settings.peers, ...fresh])]; saveSettings(); }
@@ -978,28 +978,32 @@ function activeRoles() {
   return m;
 }
 
+// One device, one row (8.11.2026): the server merges a phone's cable record and its wi-fi
+// record by its certificate (GET peers: `ways`, `via`, `routes`). Here a phone adb sees on the
+// cable joins its paired row by serial; one not paired yet joins a row of the same name.
 function deviceGroups() {
   const groups = [];
+  const roles = activeRoles();
   for (const d of S.cable?.adb === false ? [] : S.cable?.devices || []) groups.push({ key: devKey(d.name), name: d.name, cable: d, peers: [] });
   for (const p of S.peers) {
     let g = groups.find((x) => x.cable && (x.cable.peer?.id === p.id || (p.cable && p.cable.serial === x.cable.serial)))
-      ?? groups.find((x) => x.key && x.key === devKey(p.name));
+      ?? groups.find((x) => x.cable && !x.cable.peer && !x.peers.length && x.key && x.key === devKey(p.name));
     if (!g) { g = { key: devKey(p.name), name: p.name, cable: null, peers: [] }; groups.push(g); }
     g.peers.push(p);
   }
   for (const g of groups) {
-    const cablePeer = g.peers.find((p) => p.cable) ?? null;
-    const wifiPeer = g.peers.find((p) => !p.cable) ?? null;
+    const p = g.peers[0] ?? null;
+    const w = p?.ways ?? { cable: null, wifi: null, relay: null };
+    g.ways = w;
+    g.cablePeer = w.cable ? p : null;
     g.cableOn = !!g.cable && g.cable.state === 'device';
-    g.wifiOn = !!wifiPeer?.reach?.ok;
-    g.active = g.cableOn || g.wifiOn;
-    g.via = g.cableOn ? 'cable' : g.wifiOn ? 'wifi' : g.cable || cablePeer ? 'cable' : 'wifi';
-    g.cablePeer = cablePeer;
-    g.wifiPeer = wifiPeer;
-    const roles = activeRoles();
-    const inUse = g.peers.find((p) => roles.has(p.id));
-    g.role = inUse ? roles.get(inUse.id) : null;
-    if (!g.cable && cablePeer) g.name = cablePeer.name;
+    g.wifiOn = !!w.wifi?.ok;
+    g.relayOn = !!w.relay?.ok;
+    g.active = g.cableOn || g.wifiOn || g.relayOn;
+    g.via = g.cableOn ? 'cable' : g.wifiOn || g.relayOn ? 'wifi' : g.cable || w.cable ? 'cable' : 'wifi';
+    const inUse = g.peers.find((x) => (x.routes ?? [x.id]).some((id) => roles.has(id)));
+    g.role = inUse ? roles.get((inUse.routes ?? [inUse.id]).find((id) => roles.has(id))) : null;
+    if (p) g.name = p.name;
   }
   return groups.sort((a, b) => Number(!!b.role) - Number(!!a.role) || Number(b.active) - Number(a.active) || a.name.localeCompare(b.name));
 }
@@ -1049,17 +1053,24 @@ function renderDevices() {
     if (g.role) name.appendChild(el('small', 'active-tag', 'active'));
     who.appendChild(name);
     if (g.role) who.appendChild(el('span', 'role', g.role));
+    // its ways side by side, lit when they work now
+    const w = g.ways;
+    const badges = el('i', 'ways');
+    if (g.cable || w.cable) badges.appendChild(el('i', `way cable${g.cableOn ? ' on' : ''}`, 'cable'));
+    if (w.wifi) badges.appendChild(el('i', `way wifi${g.wifiOn ? ' on' : ''}`, 'wi-fi'));
+    if (w.relay) badges.appendChild(el('i', `way relay${g.relayOn ? ' on' : ''}`, 'relay'));
+    if (badges.childNodes.length) name.appendChild(badges);
     const lines = [];
-    if (g.cable || g.cablePeer) {
+    const fresh = g.peers[0]?.heardAt && Date.now() - g.peers[0].heardAt < 60000;
+    if (g.cable || w.cable) {
       const st = g.cable ? (STATE_WORDS[g.cable.state] || g.cable.state) : 'unplugged';
-      const reach = g.cablePeer?.reach ? (g.cablePeer.reach.ok ? ` · reachable${g.cablePeer.reach.ms ? ` (${g.cablePeer.reach.ms} ms)` : ''}` : '') : '';
-      const paired = g.cablePeer ? '' : g.cable?.installed === false ? ' · kula is not installed' : ' · not paired yet';
+      const reach = w.cable?.ok ? ` · reachable${w.cable.ms ? ` (${w.cable.ms} ms)` : ''}` : '';
+      const paired = w.cable ? '' : g.cable?.installed === false ? ' · kula is not installed' : ' · not paired yet';
       lines.push(`cable · ${st}${reach}${paired}`);
     }
-    if (g.wifiPeer) {
-      const r = g.wifiPeer.reach;
-      lines.push(`${g.wifiPeer.far ? 'relay' : 'wi-fi'} · ${g.wifiPeer.where} · ${r ? (r.ok ? `reachable${r.ms ? ` (${r.ms} ms)` : ''}` : 'not reachable') : 'not checked'}`);
-    }
+    if (w.wifi) lines.push(`wi-fi · ${w.wifi.where} · ${w.wifi.ok ? `ready${w.wifi.ms ? ` (${w.wifi.ms} ms)` : ''}` : w.wifi.ok === false ? (fresh ? 'heard here, not answering' : 'not reachable') : fresh ? 'heard on this wi-fi' : 'not checked'}`);
+    if (w.relay) lines.push(`relay · ${w.relay.where} · ${w.relay.ok ? 'reachable' : w.relay.ok === false ? 'not reachable' : 'not checked'}`);
+    if ([g.cableOn, g.wifiOn, g.relayOn].filter(Boolean).length > 1) lines.push(`talks over ${g.via === 'cable' ? 'the cable' : 'wi-fi'} now`);
     const p0 = g.peers[0];
     const extra = [];
     if (p0?.ram) extra.push(`${(p0.ram / 1024).toFixed(1)} GB free`);
@@ -1090,9 +1101,10 @@ function renderDevices() {
       x.title = 'forget';
       x.appendChild(svg(ICON.x));
       x.addEventListener('click', async () => {
-        if (!confirm(`forget ${g.name}? you would pair it again to use it.`)) return;
+        const both = [w.cable && 'cable', w.wifi && 'wi-fi', w.relay && 'relay'].filter(Boolean);
+        if (!confirm(`forget ${g.name}?${both.length > 1 ? ` every way (${both.join(' and ')}) is forgotten.` : ''} you would pair it again to use it.`)) return;
         for (const p of g.peers) await postJson('peers/remove', { id: p.id }).catch((err) => toast(err.message));
-        const gone = new Set(g.peers.map((p) => p.id));
+        const gone = new Set(g.peers.flatMap((p) => p.routes ?? [p.id]));
         settings.peers = settings.peers.filter((id) => !gone.has(id));
         saveSettings();
         refreshPeers(false);
@@ -1105,7 +1117,55 @@ function renderDevices() {
   }
   box.replaceChildren(...rows);
   if (!rows.length) { box.appendChild(el('p', 'none', 'no device yet. plug a phone in, or add one below.')); $('add').open = true; }
+  renderNearby();
 }
+
+// ---------- nearby (8.11.2026): while the page is open this computer listens on mdns by itself
+// (every 12 s). Paired phones show ready the moment they answer, with no click; kula phones on
+// this wi-fi that are not paired show here with a pair button: it shows this computer's qr.
+let NEAR = { at: null, list: [], pair: null };
+const NEAR_WORDS = { code: 'nearby, a code open, not paired', knows: 'nearby, knows this computer, not in the list', new: 'nearby, not paired', silent: 'nearby, not answering' };
+function renderNearby() {
+  const box = $('near-list');
+  if (!box) return;
+  const list = (NEAR.list || []).filter((r) => !r.peer && r.state !== 'paired' && r.state !== 'ready');
+  box.hidden = !list.length;
+  const rows = list.map((r) => {
+    const row = el('div', 'near');
+    const who = el('div', 'who');
+    who.append(el('b', '', r.name), el('span', '', `${r.host}:${r.port} · ${NEAR_WORDS[r.state] || 'nearby'}`));
+    const b = el('button', 'pill', 'pair');
+    b.type = 'button';
+    b.addEventListener('click', () => { $('add').open = true; showTab('host'); addMsg(`on ${r.name}: open kula → scan a computer, and point it at this code.`); });
+    row.append(el('span', 'dot no'), who, b);
+    return row;
+  });
+  box.replaceChildren(...(rows.length ? [el('h4', '', 'nearby, not paired'), ...rows] : []));
+}
+
+let nearBusy = false;
+async function refreshNearby() {
+  if (isGuest() || nearBusy) return;
+  nearBusy = true;
+  try {
+    const v = await getJson('nearby');
+    const was = NEAR;
+    NEAR = v;
+    if (v.at && v.at !== was.at) {
+      const before = new Map((was.list || []).map((r) => [`${r.host}:${r.port}`, r.state]));
+      for (const r of v.list) {
+        const old = before.get(`${r.host}:${r.port}`);
+        if (r.state === 'ready' && old !== 'ready') feed('senses', `${r.name} is ready over wi-fi (${r.host})`);
+        else if (!r.peer && !old && r.state !== 'silent') feed('connections', `${r.name} is on this wi-fi, not paired`);
+      }
+      await refreshPeers(false);
+    }
+    if (v.pair) renderHostPair(v.pair);
+  } catch {} finally { nearBusy = false; }
+  renderNearby();
+}
+setInterval(() => { if (!document.hidden) refreshNearby(); }, 5000);
+refreshNearby();
 
 // ---------- connect: a refresh (6.11.2026): asks again for the status, probes every device,
 // reads the cable list. Each device row says how it is reached (viaTag).
@@ -1130,7 +1190,7 @@ async function refreshAll() {
   }
 }
 $('connect-refresh').addEventListener('click', refreshAll);
-function openDevices() { const d = $('devices'); if (d.open) return d.close(); d.showModal(); renderPeers(); renderCable(); refreshAll(); }
+function openDevices() { const d = $('devices'); if (d.open) return d.close(); d.showModal(); renderPeers(); renderCable(); refreshAll(); refreshNearby(); if ($('add').open && document.querySelector('.tab[aria-selected="true"]')?.dataset.tab === 'host') showHostPair(); }
 $('open-devices').addEventListener('click', openDevices);
 $('devices').addEventListener('click', (e) => { if (e.target === $('devices')) $('devices').close(); }); // a click on the backdrop
 $('devices').addEventListener('close', () => stopScan());
@@ -1286,11 +1346,68 @@ function showTab(name) {
   for (const t of document.querySelectorAll('.tab')) t.setAttribute('aria-selected', String(t.dataset.tab === name));
   for (const b of document.querySelectorAll('.tab-body')) b.hidden = b.dataset.body !== name;
   if (name !== 'scan') stopScan();
+  if (name === 'host') { if ($('devices').open && $('add').open) showHostPair(); } else hideHostPair();
 }
 for (const t of document.querySelectorAll('.tab')) t.addEventListener('click', () => showTab(t.dataset.tab));
 const canScan = 'BarcodeDetector' in window;
 $('tab-scan').hidden = !canScan;
-showTab(canScan ? 'scan' : 'type');
+
+// ---------- add a device → same wi-fi (8.11.2026): the phone scans this computer. The qr holds
+// this computer's certificate and a one-time code for ten minutes (kula-host v1); the phone sets
+// that code on its gate and starts sharing, this computer hears it on mdns and pairs with the
+// code by itself. Nothing is typed. A new qr makes a new code; closing the bubble drops it.
+let hostShown = false;
+let hostExp = null;
+let hostPairedSeen = null;
+async function showHostPair(fresh = false) {
+  hostShown = true;
+  try {
+    let v = await getJson('hostpair');
+    if (fresh || !v.open) v = await postJson('hostpair/new');
+    renderHostPair(v);
+  } catch (e) { $('host-line').textContent = e.message; }
+}
+function hideHostPair() {
+  if (!hostShown) return;
+  hostShown = false;
+  hostExp = null;
+  postJson('hostpair/close').catch(() => {});
+}
+function renderHostPair(v) {
+  if (!hostShown || !v) return;
+  const img = $('host-qr');
+  if (v.paired && v.paired.id !== hostPairedSeen) {
+    hostPairedSeen = v.paired.id;
+    addMsg(`paired with ${v.paired.name} over wi-fi: it scanned this computer.`, 'ok');
+    feed('connections', `paired with ${v.paired.name} (wi-fi, it scanned this computer's qr)`);
+    if (settings.mode === 'phone' || !settings.peers.length) settings.peers = [v.paired.id];
+    else if (!settings.peers.includes(v.paired.id)) settings.peers.push(v.paired.id);
+    saveSettings();
+    refreshPeers(false);
+  }
+  if (v.open) {
+    if (hostExp !== v.exp) { hostExp = v.exp; img.src = `${apiUrl('hostpair.svg')}?t=${encodeURIComponent(String(v.exp))}`; }
+    img.hidden = false;
+    const min = Math.max(1, Math.ceil(v.left / 60000));
+    $('host-line').textContent = `${v.name} · certificate ${v.fp.match(/.{4}/g).join(' ')} · works once, ${min} more minute${min === 1 ? '' : 's'}`;
+  } else {
+    img.hidden = true;
+    hostExp = null;
+    $('host-line').textContent = v.paired ? `${v.paired.name} paired with it. a new code for the next phone:` : v.expired ? 'this code ran out: make a new one.' : '';
+  }
+  $('host-new').hidden = v.open;
+}
+$('host-new').addEventListener('click', () => showHostPair(true));
+$('host-pair').addEventListener('click', async () => {
+  const address = $('host-address').value.trim();
+  if (!address) return $('host-address').focus();
+  addMsg('pairing with the code of this qr…');
+  try { const row = await postJson('nearby/pair', { address }); hostPairedSeen = row.id; $('host-address').value = ''; await added(row); } catch (e) { addMsg(e.message, 'bad'); }
+});
+setInterval(() => { if (hostShown && !document.hidden && $('devices').open && $('add').open) getJson('hostpair').then(renderHostPair).catch(() => {}); }, 2000);
+$('add').addEventListener('toggle', () => { if ($('add').open && $('devices').open) showTab(document.querySelector('.tab[aria-selected="true"]')?.dataset.tab || 'host'); else hideHostPair(); });
+$('devices').addEventListener('close', () => hideHostPair());
+showTab('host');
 
 function addMsg(text, kind = '') { const m = $('add-msg'); m.textContent = text; m.className = `msg ${kind}`; }
 

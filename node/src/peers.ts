@@ -34,6 +34,9 @@ export interface Peer {
   // on a usb cable: reached through an adb forward to this phone (ui/cable.ts). host is
   // 127.0.0.1 and port is the forward's local port, made again on every connect.
   cable?: { serial: string } | null;
+  // the phone's worker id (its mdns `id`), learned once a handshake proved this certificate:
+  // the cable record and the wi-fi record of one phone share it (ui/devices.ts)
+  wid?: string | null;
   added_at: string;
   last_ok?: string | null;
 }
