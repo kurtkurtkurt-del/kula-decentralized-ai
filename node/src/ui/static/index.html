@@ -188,16 +188,31 @@
   <div class="sheet-body">
     <section class="block">
       <div id="dev-list" class="dev-list" aria-live="polite"></div>
+      <div id="near-list" class="near-list" aria-live="polite" hidden></div>
       <p class="hint" id="cable-help"></p>
       <details class="add" id="add">
         <summary>add a device</summary>
-        <p class="hint">on the phone: kula → share this phone. it shows a qr code, its address and a one-time code.</p>
         <div class="tabs" role="tablist">
+          <button type="button" role="tab" class="tab" data-tab="host">same wi-fi</button>
           <button type="button" role="tab" class="tab" data-tab="scan" id="tab-scan" hidden>scan the qr</button>
           <button type="button" role="tab" class="tab" data-tab="type">type it</button>
           <button type="button" role="tab" class="tab" data-tab="paste">paste a code</button>
         </div>
+        <!-- the phone scans this computer (kula-host v1): it pairs by itself, nothing typed -->
+        <div class="tab-body" data-body="host" hidden>
+          <p class="hint">on the phone: open kula → scan a computer, and point it at this code. both on the same wi-fi (or this computer on the phone's hotspot). it pairs by itself.</p>
+          <img id="host-qr" class="invite-qr host-qr" alt="this computer's pairing qr code" hidden>
+          <p class="hint" id="host-line"></p>
+          <button type="button" class="pill" id="host-new" hidden>new code</button>
+          <details class="host-more">
+            <summary>scanned, but nothing happens?</summary>
+            <p class="hint">some wi-fis hide phones from each other's announcements. type the address the phone shows after the scan:</p>
+            <div class="row"><label class="field"><span>address</span><input id="host-address" placeholder="192.168.1.20:50551" inputmode="url" spellcheck="false"></label>
+            <button type="button" class="primary" id="host-pair">pair</button></div>
+          </details>
+        </div>
         <div class="tab-body" data-body="scan" hidden>
+          <p class="hint">the other way round: on the phone, kula → share this phone shows its own qr, address and code.</p>
           <video id="scan-video" class="scan-video" muted playsinline></video>
           <div class="row">
             <button type="button" class="pill" id="scan-start">use the camera</button>
@@ -206,6 +221,7 @@
           <p class="hint">hold the phone's qr up to this computer's camera.</p>
         </div>
         <div class="tab-body" data-body="type" hidden>
+          <p class="hint">on the phone: kula → share this phone. it shows its address and a one-time code.</p>
           <label class="field"><span>address</span><input id="add-address" placeholder="192.168.1.20:50551" inputmode="url" spellcheck="false"></label>
           <label class="field"><span>code</span><input id="add-pin" placeholder="16 letters and digits after “code”" spellcheck="false"></label>
           <label class="field"><span>certificate <em>optional</em></span><input id="add-fp" placeholder="the 16 after “certificate”, to be sure" spellcheck="false"></label>

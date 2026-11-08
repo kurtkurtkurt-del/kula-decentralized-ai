@@ -1,7 +1,9 @@
 // Night projects on the chat page (6.11.2026). You plan one: what it should do, from when until
 // when, which model, how it runs (on the phone, apart, split, here) and on which devices. It
 // gets its own chat, which stays closed for new messages until it has run. At the start time
-// this computer reconnects the phones on their cables, loads the model on them, splits the job
+// this computer reaches the devices (a phone on a plugged-in cable through it, else over this
+// wi-fi, found again on mdns if its address changed; 8.11.2026), says in the chat which way each
+// was reached, loads the model on them, splits the job
 // into a few parts, works through them until the end time, and writes a morning report into
 // that chat. Everything stays here: ~/.kula-node/projects.json (600) and the chat's own file.
 //
@@ -47,6 +49,8 @@ export interface ProjectEngine {
   peers(): { id: string; name: string; cable: { serial: string } | null }[];
   useCable?(serial: unknown): unknown;
   cableSettled?(serial: string): Promise<{ step: string; error: string | null } | null>;
+  // each device by the way that works now (engine.wake): cable, wi-fi, relay, or why not
+  wake?(ids: string[]): Promise<{ id: string; name: string; via: 'cable' | 'wifi' | 'relay' | null; where: string | null; why: string | null }[]>;
   status(): { loading: unknown };
 }
 
@@ -204,13 +208,21 @@ export class ProjectRunner {
     const p = this.update(id, { state: 'running', startedAt: this.now(), line: 'waking the devices' })!;
     this.log(`project ${p.title}: started`);
     try {
-      // phones on a cable: their share screen opened again and connected (they may have slept)
-      const rows = this.engine.peers();
-      for (const pid of p.peers) {
-        const row = rows.find((r) => r.id === pid);
-        if (!row?.cable || !this.engine.useCable || !this.engine.cableSettled) continue;
-        this.update(id, { line: `connecting ${row.name}` });
-        try { this.engine.useCable(row.cable.serial); const v = await this.engine.cableSettled(row.cable.serial); if (v?.error) this.note(p, `${row.name}: ${v.error}`); } catch (e) { this.note(p, `${row.name}: ${(e as Error).message}`); }
+      if (this.engine.wake && p.mode !== 'here') {
+        // every device by the way that works now: the cable if it is plugged in, else this wi-fi
+        this.update(id, { line: 'reaching the devices' });
+        const woke = await this.engine.wake(p.peers);
+        const way = (w: (typeof woke)[number]) => (w.via === 'cable' ? `${w.name} on the usb cable` : w.via === 'wifi' ? `${w.name} over wi-fi${w.where ? ` (${w.where})` : ''}` : w.via === 'relay' ? `${w.name} through the relay` : `${w.name} not reached (${w.why ?? 'no answer'})`);
+        if (woke.length) this.say(p, `reached ${woke.map(way).join(', ')}.`);
+      } else {
+        // phones on a cable: their share screen opened again and connected (they may have slept)
+        const rows = this.engine.peers();
+        for (const pid of p.peers) {
+          const row = rows.find((r) => r.id === pid);
+          if (!row?.cable || !this.engine.useCable || !this.engine.cableSettled) continue;
+          this.update(id, { line: `connecting ${row.name}` });
+          try { this.engine.useCable(row.cable.serial); const v = await this.engine.cableSettled(row.cable.serial); if (v?.error) this.note(p, `${row.name}: ${v.error}`); } catch (e) { this.note(p, `${row.name}: ${(e as Error).message}`); }
+        }
       }
       if (ac.signal.aborted) throw new Error('cancelled');
       this.update(id, { line: 'loading the model' });
