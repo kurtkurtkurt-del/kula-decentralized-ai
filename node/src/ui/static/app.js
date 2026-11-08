@@ -85,7 +85,7 @@ function toast(text) {
 
 // ---------- settings (this browser only)
 
-const DEFAULTS = { temperature: 0.7, maxTokens: 1024, ctx: 4096, system: '', theme: 'kula', mode: 'phone', model: null, peers: [], way: null,
+const DEFAULTS = { temperature: 0.7, maxTokens: 1024, ctx: 4096, system: '', theme: 'kula', mode: 'phone', model: null, peers: [], way: null, pick: {},
   start: 'new', enter: 'enter', name: '', about: '', style: 'default' };
 function readSettings() {
   let s;
@@ -94,6 +94,7 @@ function readSettings() {
   if (!['new', 'last'].includes(s.start)) s.start = 'new';
   if (!['enter', 'mod'].includes(s.enter)) s.enter = 'enter';
   if (!['default', 'concise', 'detailed', 'friendly', 'formal'].includes(s.style)) s.style = 'default';
+  if (!s.pick || typeof s.pick !== 'object' || Array.isArray(s.pick)) s.pick = {};
   return s;
 }
 const settings = readSettings();
@@ -1655,12 +1656,21 @@ function enterStep() {
       postJson('peers/probe').then((list) => { if (run !== wizRun) return; S.peers = list; renderPeers(); renderWiz(true); }).catch(() => {});
     }
   }
-  if (W.step === 'pick') { wizPick = null; renderWiz(true); }
+  if (W.step === 'pick') {
+    // readiness is checked again every time: the ticks follow what answers now
+    wizPick = null; wizPickTouched = false; wizPickChecking = true; renderWiz(true);
+    if (!S.lineup) getJson('lineup').then((l) => { S.lineup = l; if (W.step === 'pick') renderWiz(true); }).catch(() => {});
+    postJson('peers/probe').then((list) => { if (run !== wizRun) return; S.peers = list; wizModelsProbed = Date.now(); renderPeers(); })
+      .catch(() => {})
+      .finally(() => { if (run !== wizRun || W.step !== 'pick') return; wizPickChecking = false; if (!wizPickTouched) wizPick = null; renderWiz(true); });
+  }
   if (W.step === 'load') wizLoad(run);
   if (W.step === 'done') setTimeout(() => { if ($('connect').open) $('connect').close(); input.focus(); }, 700);
 }
 
-let wizPick = null; // the split pick step's ticked devices
+let wizPick = null;            // the devices step's ticked rows (ids), null: not drawn yet
+let wizPickTouched = false;    // the user ticked or unticked something: a late probe keeps their ticks
+let wizPickChecking = false;   // the step's probe is out
 let pickAt = { maker: null, series: null };   // where the model step's picker is
 
 // What the devices could hold together: this computer's memory × 0.7 and every paired device's
@@ -1948,33 +1958,48 @@ const VIEWS = {
     return out;
   },
 
-  // split: which devices hold a part. every device ticked here gets one, even where the
-  // planner would have used fewer (that is slower, and the page says so)
+  // which devices (8.11.2026): every mode but "this computer". This computer plus each device
+  // once (a phone on a cable and on the wi-fi is one row), each with its state, how it is
+  // reached, its free memory and whether the model fits. The ready ones come ticked.
   pick: () => {
-    const cands = S.peers.filter((p) => !p.far);
-    if (!wizPick) wizPick = new Set(cands.filter((p) => p.reach?.ok).map((p) => p.id));
-    const out = [q('which devices hold a part?'), para('this computer always keeps the first and the last layers. tick every device that should take some of the rest.')];
+    const mode = W.mode;
+    const model = S.models.find((m) => m.id === W.model) ?? null;
+    const rows = pickRowsNow();
+    if (!wizPick) wizPick = wiz.preselect(mode, rows, model, settings.pick?.[mode] ?? {}, [W.peerId].filter(Boolean));
+    // a device whose answering route changed (cable ↔ wi-fi) keeps its tick
+    wizPick = [...new Set(wizPick.map((id) => rows.find((r) => r.ids.includes(id))?.id).filter(Boolean))];
+    const Q = { phone: 'which device runs it?', apart: 'which devices answer?', split: 'which devices hold a part?' };
+    const P = {
+      phone: 'one device runs the whole model; this computer only carries the words.',
+      apart: 'every ticked device runs its own copy; each prompt goes to the fastest free one.',
+      split: 'this computer always keeps the first and the last layers. every ticked device takes some of the rest.',
+    };
+    const out = [q(Q[mode] ?? 'which devices?')];
+    if (model) out.push(para(model.name, 'wiz-name'));
+    out.push(para(P[mode] ?? ''));
+    if (wizPickChecking) out.push(waiting('checking which devices answer…'));
     const box = el('div', 'pick-list');
-    const me = el('label', 'pick on fixed');
-    me.append(el('input'), el('b', '', 'this computer'), el('span', 'via cable', 'main device'));
-    me.firstChild.type = 'checkbox'; me.firstChild.checked = true; me.firstChild.disabled = true;
-    box.appendChild(me);
-    for (const p of cands) {
-      const l = el('label', `pick${wizPick.has(p.id) ? ' on' : ''}${p.reach?.ok ? '' : ' off'}`);
-      const c = el('input');
-      c.type = 'checkbox';
-      c.checked = wizPick.has(p.id);
-      c.disabled = !p.reach?.ok;
-      c.addEventListener('change', () => { c.checked ? wizPick.add(p.id) : wizPick.delete(p.id); renderWiz(true); });
-      l.append(c, el('b', '', p.name), viaTag(p), el('span', 'sub', p.reach?.ok ? `${p.ram ? `${(p.ram / 1024).toFixed(1)} GB free · ` : ''}reachable${p.reach.ms ? ` (${p.reach.ms} ms)` : ''}` : 'not reachable now'));
-      box.appendChild(l);
-    }
+    box.setAttribute('role', mode === 'phone' ? 'radiogroup' : 'group');
+    box.setAttribute('aria-label', Q[mode] ?? 'devices');
+    for (const r of rows) box.appendChild(pickRow(mode, model, r));
+    if (!rows.length) box.appendChild(para('no device paired yet: add one from the devices bubble.', 'none'));
     out.push(box);
-    const n = [...wizPick].filter((id) => cands.some((p) => p.id === id && p.reach?.ok)).length;
-    const go1 = btn(n ? `split over ${n + 1} devices` : 'pick at least one', 'primary big', () => go({ type: 'picked', ids: [...wizPick] }));
-    go1.disabled = !n;
+    const check = wiz.pickCheck({ mode, model, rows, picked: wizPick, hereFreeMb: S.lineup?.hereFreeMb ?? null });
+    if (check.warn.length) {
+      const w = el('ul', 'wiz-warn');
+      w.setAttribute('role', 'status');
+      for (const t of check.warn) w.appendChild(el('li', '', t));
+      out.push(w);
+    }
+    const go1 = btn(wiz.pickGo(mode, wizPick), 'primary big', () => {
+      settings.pick = { ...settings.pick, [mode]: wiz.remember(mode, rows, wizPick) };
+      saveSettings();
+      go({ type: 'picked', ids: [...wizPick] });
+    });
+    go1.disabled = !check.ok;
     out.push(row(go1));
-    if (n > 1) out.push(para('more devices = more room for a big model; for a small one every extra hop makes each word a little slower.', 'hint'));
+    if (check.block) out.push(para(check.block, 'hint'));
+    else if (mode === 'split' && wizPick.length > 2) out.push(para('more devices = more room for a big model; for a small one every extra hop makes each word a little slower.', 'hint'));
     return out;
   },
 
@@ -2000,12 +2025,44 @@ const VIEWS = {
   done: () => [q('ready ✓'), para('the composer is yours.')],
 };
 
+const STATE_TAG = { ready: 'ready', off: 'not answering', busy: 'busy', unknown: 'not checked' };
+function pickRowsNow() {
+  const model = S.models.find((m) => m.id === W.model) ?? null;
+  return wiz.pickRows({ mode: W.mode, peers: S.peers, model, llama: !!S.status?.llama, freeMb: S.lineup?.hereFreeMb ?? null });
+}
+function pickRow(mode, model, r) {
+  const on = wizPick.includes(r.id);
+  const l = el('label', `pick${on ? ' on' : ''}${r.fixed ? ' fixed' : ''}${r.blocked || (r.local && r.state !== 'ready') ? ' off' : ''}`);
+  const c = el('input');
+  c.type = mode === 'phone' ? 'radio' : 'checkbox';
+  if (mode === 'phone') c.name = 'wiz-pick-one';
+  c.checked = on;
+  c.disabled = !!(r.fixed || r.blocked);
+  c.addEventListener('change', () => { wizPick = wiz.toggle(mode, wizPick, r); wizPickTouched = true; renderWiz(true); });
+  const tags = el('span', 'tags');
+  for (const v of r.via) tags.appendChild(el('small', `via${v === 'cable' ? ' cable' : ''}`, v));
+  tags.appendChild(el('small', `state ${r.state}`, r.fixed ? 'always' : r.local && r.state !== 'ready' ? 'cannot join' : STATE_TAG[r.state] ?? r.state));
+  const sub = [];
+  if (r.state === 'ready' && r.ms) sub.push(`answers in ${r.ms} ms`);
+  if (r.state !== 'ready' && r.reason) sub.push(r.reason);
+  if (r.ram) sub.push(`${(r.ram / 1024).toFixed(1)} GB free`);
+  else if (!r.local) sub.push('free memory not told yet');
+  if (r.holds) sub.push(`has ${r.holds} loaded`);
+  const fit = wiz.fitOf(mode, model, r);
+  const s = el('span', 'sub');
+  s.append(sub.join(' · '));
+  if (fit) { s.append(sub.length ? ' · ' : ''); s.appendChild(el('span', `fitw ${fit[0]}`, fit[0] === 'yes' ? 'the model fits' : fit[0] === 'tight' ? 'the model fits, tight' : 'the model is too big for it')); }
+  l.append(c, el('b', '', r.name), tags, s);
+  return l;
+}
+
 function wizSignature() {
   const c = WIZ_CABLE.has(W.step) ? wiz.cableState(S.cable, W.serial, W.used) : null;
   return JSON.stringify([W.step, W.error, W.found, wizPairing, settings.way,
     c && [c.step, c.problem, c.error, c.busy, W.step === 'cable-code' ? null : c.lines, c.name],
     W.step === 'wifi-list' ? found : null,
     W.step === 'connected' ? S.peers.find((x) => x.id === W.peerId)?.name : null,
+    W.step === 'pick' ? [wizPick, wizPickChecking] : null,
     W.step === 'model' || W.step === 'mode' || W.step === 'pick' ? [S.models.length, S.peers.map((x) => [x.id, x.reach?.ok, x.holds, x.ram]), settings.model, S.status?.loaded?.model?.id, !!S.status?.llama, !!S.lineup, pickAt] : null]);
 }
 
@@ -2021,7 +2078,7 @@ function renderWiz(force = false) {
   wizSig = sig;
   body.replaceChildren(...(VIEWS[W.step] ?? VIEWS.how)());
   // the dots: where this question sits
-  const first = W.chat ? 3 : 0; // start a chat: model · mode · load
+  const first = W.chat ? 3 : 0; // start a chat: model · mode · devices · load
   const stage = Math.max(0, wiz.stageOf(W.step) - first);
   const names = wiz.STAGES.slice(first);
   const dots = $('wiz-dots');
@@ -2144,9 +2201,10 @@ async function wizLoad(run) {
     return;
   }
   const mode = W.mode ?? settings.mode;
-  const picked = mode === 'split' && W.picked?.length ? W.picked : null;
-  const body = { model: W.model ?? settings.model, mode, peers: picked ?? wiz.loadPeers(mode, phoneNow(), S.peers), ctx: settings.ctx, ...(picked ? { all: true } : {}) };
-  if (mode !== 'here') { settings.peers = body.peers; saveSettings(); }
+  // exactly the ticked devices (the devices step); without one, the old guess
+  const picked = wiz.PICK_MODES.has(mode) && W.picked?.length ? W.picked : null;
+  const body = { model: W.model ?? settings.model, mode, ctx: settings.ctx, ...(picked ? wiz.pickBody(mode, picked) : { peers: wiz.loadPeers(mode, phoneNow(), S.peers) }) };
+  if (mode !== 'here' && body.peers.length) { settings.peers = body.peers; saveSettings(); }
   $('wiz-back').hidden = true;
   const ok = await runLoad(body, show);
   if (run !== wizRun) return;
