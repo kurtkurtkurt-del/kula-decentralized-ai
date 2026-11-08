@@ -11,8 +11,13 @@ const NODE_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 const { LEVELS, LEARN_COUNT } = await import('../src/ui/static/learn.js');
 const { UI_STATIC } = await import('../src/ui/server.ts');
 
-test('learn: three levels, beginner to advanced, many links of known kinds', () => {
-  assert.deepEqual(LEVELS.map((l: any) => l.id), ['beginner', 'intermediate', 'advanced']);
+test('learn: three levels, beginner to advanced, then a smaller marked aside; many links of known kinds', () => {
+  assert.deepEqual(LEVELS.map((l: any) => l.id), ['beginner', 'intermediate', 'advanced', 'also']);
+  assert.deepEqual(LEVELS.map((l: any) => !!l.side), [false, false, false, true]);
+  const core = LEVELS.filter((l: any) => !l.side).reduce((n: number, l: any) => n + l.topics.length, 0);
+  assert.ok(LEVELS[3].topics.length < core, 'the aside is the smaller part');
+  // the general basics are only the beginner foundation
+  for (const l of LEVELS) for (const t of l.topics) if (t.base) assert.equal(l.id, 'beginner', t.id);
   const items = LEVELS.flatMap((l: any) => l.topics.flatMap((t: any) => t.items));
   assert.equal(items.length, LEARN_COUNT);
   assert.ok(LEARN_COUNT >= 60, `${LEARN_COUNT} links`);
@@ -34,7 +39,7 @@ test('learn: three levels, beginner to advanced, many links of known kinds', () 
     }
   }
   assert.ok(items.filter((i: any) => i.k === 'video').length >= 20);
-  assert.ok(items.filter((i: any) => i.k === 'paper').length >= 40);
+  assert.ok(items.filter((i: any) => i.k === 'paper').length >= 60);
 });
 
 test('learn: the page imports it, and the packed binary bakes every file the page serves', () => {
