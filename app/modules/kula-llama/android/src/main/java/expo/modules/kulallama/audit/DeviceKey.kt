@@ -41,7 +41,23 @@ interface DeviceKey {
       else -> throw IllegalArgumentException("unknown key algorithm $alg")
     }
 
-    fun ed25519Available(): Boolean = runCatching { KeyPairGenerator.getInstance("Ed25519") }.isSuccess
+    /**
+     * Ed25519 that really works here: a key made, a line signed and checked. 8.11.2026: on
+     * Android 15 the only Ed25519 KeyPairGenerator in an app process is AndroidKeyStore's, which
+     * throws "Not initialized" without a keystore spec, and no provider signs with a software
+     * Ed25519 key; asking getInstance() alone said yes, so a fresh install could not make its
+     * device key and share this phone failed. Asked once per process.
+     */
+    fun ed25519Available(): Boolean = ed25519Works
+
+    private val ed25519Works: Boolean by lazy {
+      runCatching {
+        val kp = KeyPairGenerator.getInstance("Ed25519").generateKeyPair()
+        val msg = "kula".toByteArray()
+        val sig = java.security.Signature.getInstance("Ed25519").apply { initSign(kp.private); update(msg) }.sign()
+        java.security.Signature.getInstance("Ed25519").apply { initVerify(kp.public); update(msg) }.verify(sig)
+      }.getOrDefault(false)
+    }
 
     fun decodePublic(alg: String, publicKey: ByteArray): PublicKey =
       KeyFactory.getInstance(jcaNames(alg).second).generatePublic(X509EncodedKeySpec(publicKey))
@@ -77,7 +93,8 @@ class SoftwareKey private constructor(override val alg: String, private val pair
     /** A fresh key: Ed25519 when the JVM has it, else P-256. */
     fun generate(preferEd25519: Boolean = true): SoftwareKey {
       if (preferEd25519 && DeviceKey.ed25519Available()) {
-        return SoftwareKey(DeviceKey.ED25519, KeyPairGenerator.getInstance("Ed25519").generateKeyPair())
+        runCatching { KeyPairGenerator.getInstance("Ed25519").generateKeyPair() }.getOrNull()
+          ?.let { return SoftwareKey(DeviceKey.ED25519, it) }
       }
       val g = KeyPairGenerator.getInstance("EC").apply { initialize(ECGenParameterSpec("secp256r1")) }
       return SoftwareKey(DeviceKey.P256, g.generateKeyPair())

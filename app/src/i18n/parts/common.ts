@@ -22,6 +22,9 @@ export const common = {
   'word.signin': { en: 'sign in', de: 'anmelden', tr: 'giriş yap' },
   'word.signout': { en: 'sign out', de: 'abmelden', tr: 'çıkış yap' },
   'word.save': { en: 'save', de: 'speichern', tr: 'kaydet' },
+  // 8.11.2026: a part that is not out yet (components/NotPublished.tsx: connect, the coops)
+  'soon.title': { en: 'not published yet', de: 'noch nicht veröffentlicht', tr: 'henüz yayında değil' },
+  'soon.body': { en: 'this part of kula is not out yet. it comes in a later version; models, the brain, projects and your passport work now.', de: 'dieser teil von kula ist noch nicht draußen. er kommt in einer späteren version; modelle, das gehirn, projekte und dein pass funktionieren schon.', tr: 'kula’nın bu kısmı henüz yayında değil. sonraki bir sürümde gelecek; modeller, the brain, projeler ve pasaportun şimdiden çalışıyor.' },
   'word.cancel': { en: 'cancel', de: 'abbrechen', tr: 'vazgeç' },
   'word.on': { en: 'on', de: 'an', tr: 'açık' },
   'word.off': { en: 'off', de: 'aus', tr: 'kapalı' },

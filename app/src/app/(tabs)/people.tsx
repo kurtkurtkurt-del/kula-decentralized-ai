@@ -8,6 +8,7 @@ import Avatar from '@/components/Avatar';
 import { useTabBarSpace } from '@/components/TabBar';
 import Messages from '@/components/connect/Messages';
 import YourPeople from '@/components/connect/YourPeople';
+import NotPublished from '@/components/NotPublished';
 import { useAuth } from '@/auth/AuthContext';
 import { callInbox, type CallInvite } from '@/data/calls';
 import { COOP_COLORS, myCoops, type CoopRow } from '@/data/coops';
@@ -177,6 +178,8 @@ export default function ConnectScreen() {
         </>
         ) : null}
       </PullDownScroll>
+      {/* 8.11.2026: connect (people, messages, coops, calls) is not published yet */}
+      <NotPublished />
     </View>
   );
 }

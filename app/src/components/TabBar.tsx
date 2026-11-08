@@ -25,7 +25,7 @@ export function useTabBarSpace() {
 
 type ItemProps = PressableProps & { icon: IconName; isFocused?: boolean };
 
-export function TabItem({ icon, isFocused, onPress, ...props }: ItemProps) {
+export function TabItem({ icon, isFocused, onPress, soon, ...props }: ItemProps & { soon?: boolean }) {
   const { tx } = useLang();
   return (
     <Pressable
@@ -40,7 +40,10 @@ export function TabItem({ icon, isFocused, onPress, ...props }: ItemProps) {
       accessibilityState={{ selected: !!isFocused }}
       style={({ pressed }) => [styles.item, pressed && styles.pressed]}
     >
-      <Icon name={icon} size={26} color={colors.paper} filled={!!isFocused} strokeWidth={1.7} />
+      {/* soon: a tab whose part is not published yet, drawn faint */}
+      <View style={soon ? { opacity: 0.32 } : undefined}>
+        <Icon name={icon} size={26} color={colors.paper} filled={!!isFocused} strokeWidth={1.7} />
+      </View>
     </Pressable>
   );
 }

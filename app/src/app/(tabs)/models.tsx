@@ -152,7 +152,9 @@ export default function ModelsScreen() {
   const banner = !hasNative() ? t('models.noNative') : !arm ? t('models.notArm') : !passport ? t('models.noPassport') : null;
   // the ladder shows until every rung is done (or it is hidden); only where models can run at all
   const showSteps = hasNative() && arm && !ux.stepsDone;
-  const smallest = rows.find(({ m }) => !have(m.id) && !dl(m.id))?.m ?? null;
+  // "download the smallest": the smallest file not yet here, by size (8.11.2026: it took the first
+  // row, which is the biggest that fits once a passport exists, or the 7B when nothing fits)
+  const smallest = rows.filter(({ m }) => !have(m.id) && !dl(m.id)).reduce<(typeof rows)[number] | null>((a, r) => (!a || r.m.size < a.m.size ? r : a), null)?.m ?? null;
 
   return (
     <View style={styles.root}>

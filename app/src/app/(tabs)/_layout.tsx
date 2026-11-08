@@ -19,7 +19,7 @@ export default function TabsLayout() {
             <TabItem icon="models" />
           </TabTrigger>
           <TabTrigger name="people" href="/people" asChild>
-            <TabItem icon="people" />
+            <TabItem icon="people" soon />
           </TabTrigger>
           <TabTrigger name="brain" href="/brain" asChild>
             <TabItem icon="brain" />
