@@ -1,0 +1,119 @@
+/* kula's download page. Tokens from the chat page (node/src/ui/static/app.css): the calm
+   white-green ground, the deep green rail, emerald for the one thing to press. Dark follows the
+   chat page's dark look. Inter Tight is the chat page's own (fonts/LICENSE.txt). */
+@font-face { font-family: 'Inter Tight'; font-weight: 400; font-display: swap; src: url(fonts/inter-tight-400.woff2) format('woff2'); }
+@font-face { font-family: 'Inter Tight'; font-weight: 500; font-display: swap; src: url(fonts/inter-tight-500.woff2) format('woff2'); }
+@font-face { font-family: 'Inter Tight'; font-weight: 600; font-display: swap; src: url(fonts/inter-tight-600.woff2) format('woff2'); }
+
+:root {
+  --ground: #f8faf8; --card: #ffffff; --sunk: #eef3ef;
+  --line: rgba(24, 36, 28, 0.10); --line2: rgba(24, 36, 28, 0.18);
+  --words: #18241c; --mute: #5f7266; --meta: #8a9a8f;
+  --accent: #2f8a57; --accent-ink: #ffffff; --accent-soft: rgba(47, 138, 87, 0.12);
+  --rail: #1d3326; --rail-words: #e6efe8; --rail-accent: #6fcf97;
+  --shadow: 0 1px 2px rgba(24, 36, 28, 0.06), 0 8px 24px rgba(24, 36, 28, 0.08);
+  --shot-shadow: 0 2px 4px rgba(24, 36, 28, 0.08), 0 30px 80px -20px rgba(29, 51, 38, 0.45);
+  --sans: "Inter Tight", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, Helvetica, Arial, sans-serif;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --ground: #0a0a0a; --card: #151715; --sunk: #1b1d1b;
+    --line: rgba(255, 255, 255, 0.09); --line2: rgba(255, 255, 255, 0.16);
+    --words: #ededed; --mute: #a3aea6; --meta: #6e7a72;
+    --accent: #5fbf8a; --accent-ink: #0a0a0a; --accent-soft: rgba(95, 191, 138, 0.15);
+    --rail: #12201a;
+    --shadow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 12px 32px rgba(0, 0, 0, 0.5);
+    --shot-shadow: 0 0 0 1px rgba(255, 255, 255, 0.06), 0 30px 80px -20px rgba(95, 191, 138, 0.25);
+    color-scheme: dark;
+  }
+}
+
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body { margin: 0; background: var(--ground); color: var(--words); font: 16px/1.55 var(--sans); -webkit-font-smoothing: antialiased; }
+a { color: var(--accent); text-underline-offset: 3px; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 6px; }
+h1, h2 { font-weight: 500; letter-spacing: -0.02em; margin: 0; }
+b { font-weight: 600; }
+svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; flex: none; }
+
+.wrap { width: 100%; max-width: 1080px; margin: 0 auto; padding: 0 16px; }
+@media (min-width: 720px) { .wrap { padding: 0 32px; } }
+
+/* ---------- top */
+.top { display: flex; align-items: center; justify-content: space-between; height: 64px; }
+.brand { font-size: 24px; font-weight: 500; letter-spacing: -0.02em; color: var(--words); text-decoration: none; }
+.top-links { display: flex; gap: 20px; font-size: 15px; }
+.top-links a { color: var(--mute); text-decoration: none; }
+.top-links a:hover { color: var(--words); }
+
+/* ---------- hero */
+.hero { padding-top: 40px; text-align: center; }
+.kicker { display: inline-flex; align-items: center; gap: 8px; margin: 0 0 20px; padding: 5px 12px; border: 1px solid var(--line2); border-radius: 999px; font-size: 13.5px; color: var(--mute); background: var(--card); }
+.dot { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+h1 { font-size: clamp(40px, 9vw, 76px); line-height: 1.02; letter-spacing: -0.035em; }
+.lede { max-width: 34em; margin: 20px auto 0; font-size: clamp(17px, 2.4vw, 19px); color: var(--mute); }
+
+/* ---------- the four buttons */
+.downloads { list-style: none; margin: 40px 0 0; padding: 0; display: grid; grid-template-columns: 1fr 1fr; gap: 12px; text-align: left; }
+@media (min-width: 880px) { .downloads { grid-template-columns: repeat(4, 1fr); gap: 16px; } }
+.dl { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.dl-btn { position: relative; display: grid; grid-template-columns: auto 1fr; grid-template-rows: auto auto; column-gap: 12px; align-items: center;
+  min-height: 72px; padding: 14px 16px; border: 1px solid var(--line2); border-radius: 14px; background: var(--card); color: var(--words);
+  text-decoration: none; box-shadow: var(--shadow); transition: border-color .15s, transform .15s, background .15s; }
+.dl-btn svg { grid-row: 1 / 3; color: var(--accent); }
+.dl-name { font-size: 18px; font-weight: 600; letter-spacing: -0.01em; line-height: 1.2; }
+.dl-file { font-size: 13px; color: var(--meta); line-height: 1.3; }
+a.dl-btn:hover { border-color: var(--accent); transform: translateY(-1px); }
+a.dl-btn:active { transform: translateY(0); }
+.dl-btn[aria-disabled="true"] { opacity: .55; box-shadow: none; background: var(--sunk); cursor: default; }
+.dl-btn[aria-disabled="true"] svg { color: var(--meta); }
+.dl-how { margin: 0 4px; font-size: 13px; line-height: 1.45; color: var(--mute); }
+.dl-how a { white-space: nowrap; }
+.dl-here { display: none; position: absolute; top: -9px; right: 12px; padding: 1px 8px; border-radius: 999px; font-size: 11.5px; font-weight: 500; background: var(--rail-accent); color: var(--rail); }
+/* the visitor's own platform: filled in the accent */
+.dl.is-here a.dl-btn { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+.dl.is-here a.dl-btn svg, .dl.is-here a.dl-btn .dl-file { color: var(--accent-ink); opacity: .85; }
+.dl.is-here a.dl-btn:hover { filter: brightness(1.06); }
+.dl.is-here .dl-here { display: block; }
+@media (max-width: 879px) { .dl.is-here { grid-column: 1 / -1; order: -1; } }
+@media (max-width: 379px) { .downloads { grid-template-columns: 1fr; } }
+
+/* ---------- the picture */
+.shot { margin: 56px 0 0; padding: 0 16px 48px; background: linear-gradient(to bottom, transparent 0, transparent 30%, var(--rail) 30%, var(--rail) 100%); }
+@media (min-width: 720px) { .shot { margin-top: 72px; padding: 0 32px 64px; } }
+.shot-frame { max-width: 1080px; margin: 0 auto; border-radius: 12px; overflow: hidden; border: 1px solid var(--line2); box-shadow: var(--shot-shadow); background: var(--card); }
+@media (min-width: 720px) { .shot-frame { border-radius: 16px; } }
+.shot img { display: block; width: 100%; height: auto; }
+.shot figcaption { max-width: 1080px; margin: 16px auto 0; text-align: center; font-size: 13.5px; color: rgba(230, 239, 232, 0.72); }
+
+/* ---------- points */
+.points { display: grid; grid-template-columns: 1fr; gap: 28px; padding-top: 56px; padding-bottom: 8px; }
+@media (min-width: 640px) { .points { grid-template-columns: 1fr 1fr; gap: 32px 40px; } }
+@media (min-width: 980px) { .points { grid-template-columns: repeat(4, 1fr); } }
+.point h2 { font-size: 18px; font-weight: 600; letter-spacing: -0.01em; margin-bottom: 6px; }
+.point h2::before { content: ""; display: block; width: 24px; height: 3px; border-radius: 2px; background: var(--accent); margin-bottom: 14px; }
+.point p { margin: 0; color: var(--mute); font-size: 15px; }
+
+.how { padding-top: 48px; }
+.how h2, .models h2 { font-size: 22px; margin-bottom: 10px; }
+.how p { margin: 0; max-width: 46em; color: var(--mute); }
+.how b { color: var(--words); }
+
+/* ---------- models */
+.models { padding-top: 48px; }
+.chips { list-style: none; margin: 4px 0 0; padding: 0; display: flex; flex-wrap: wrap; gap: 8px; }
+.chips a { display: inline-block; padding: 7px 13px; border: 1px solid var(--line2); border-radius: 999px; background: var(--card); color: var(--words); font-size: 14px; text-decoration: none; }
+.chips a:hover { border-color: var(--accent); color: var(--accent); }
+.note { margin: 12px 0 0; font-size: 13.5px; color: var(--meta); }
+
+/* ---------- foot */
+.foot { margin-top: 64px; padding-top: 24px; padding-bottom: 40px; border-top: 1px solid var(--line); }
+.links { display: flex; flex-wrap: wrap; gap: 8px 22px; font-size: 15px; }
+.links a { color: var(--words); text-decoration: none; }
+.links a:hover { color: var(--accent); }
+.small { margin: 16px 0 0; font-size: 13px; color: var(--meta); }
+.small a { color: inherit; }
+
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }

@@ -1,0 +1,152 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>kula — your devices, one local AI</title>
+<meta name="description" content="kula joins your phones, tablets and computers into one local AI cluster that runs open models. Nothing goes to a cloud.">
+<meta name="theme-color" content="#f8faf8" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0a0a0a" media="(prefers-color-scheme: dark)">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%231d3326'/%3E%3Ccircle cx='11' cy='12' r='3' fill='%236fcf97'/%3E%3Ccircle cx='21' cy='12' r='3' fill='%236fcf97'/%3E%3Ccircle cx='16' cy='21' r='3' fill='%236fcf97'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="site.css">
+</head>
+<body>
+<!-- kula's download page (8.11.2026). Plain html + site.css, no build step, nothing fetched
+     from anywhere else. The four buttons point at the newest GitHub release by stable asset
+     names: the release must carry exactly these files. -->
+<header class="top wrap">
+  <a class="brand" href="./" aria-label="kula home">kula</a>
+  <nav class="top-links" aria-label="project">
+    <a href="https://github.com/kurtkurtkurt-del/kula-decentralized-ai/blob/main/docs/GUIDE.en.md">guide</a>
+    <a href="https://github.com/kurtkurtkurt-del/kula-decentralized-ai">GitHub</a>
+  </nav>
+</header>
+
+<main>
+  <section class="hero wrap">
+    <p class="kicker"><span class="dot" aria-hidden="true"></span> open models · on your own devices</p>
+    <h1>Your devices,<br>one local AI.</h1>
+    <p class="lede">kula joins your phones, tablets and computers into one AI cluster that runs open
+      models. They talk to each other directly — nothing goes to a cloud.</p>
+
+    <ul class="downloads" aria-label="download kula">
+      <li class="dl" data-os="mac">
+        <a class="dl-btn" href="https://github.com/kurtkurtkurt-del/kula-decentralized-ai/releases/latest/download/kula-mac-arm64.dmg" download>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="5" width="16" height="11" rx="1.5"/><path d="M2 19h20"/></svg>
+          <span class="dl-name">MacBook</span>
+          <span class="dl-file">Apple silicon · .dmg</span>
+          <span class="dl-here">for this device</span>
+        </a>
+        <p class="dl-how">First open: right-click the app → <b>Open</b>. On macOS 15: System Settings → Privacy &amp; Security → <b>Open Anyway</b>.
+          <a href="https://github.com/kurtkurtkurt-del/kula-decentralized-ai/releases/latest/download/kula-mac-x64.dmg" download>Intel Mac?</a></p>
+      </li>
+      <li class="dl" data-os="windows">
+        <a class="dl-btn" href="https://github.com/kurtkurtkurt-del/kula-decentralized-ai/releases/latest/download/kula-windows-x64.exe" download>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="12" rx="1.5"/><path d="M9 20h6M12 16v4"/></svg>
+          <span class="dl-name">Windows</span>
+          <span class="dl-file">64-bit · .exe</span>
+          <span class="dl-here">for this device</span>
+        </a>
+        <p class="dl-how">If Windows warns: <b>More info</b> → <b>Run anyway</b>.</p>
+      </li>
+      <li class="dl" data-os="ios">
+        <div class="dl-btn" aria-disabled="true">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="7" y="2.5" width="10" height="19" rx="2.5"/><path d="M11 18.5h2"/></svg>
+          <span class="dl-name">iOS</span>
+          <span class="dl-file">coming later</span>
+        </div>
+        <p class="dl-how">The iPhone app does not run models yet. Use a computer or an Android phone for now.</p>
+      </li>
+      <li class="dl" data-os="android">
+        <a class="dl-btn" href="https://github.com/kurtkurtkurt-del/kula-decentralized-ai/releases/latest/download/kula-android.apk" download>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="2.5" width="12" height="19" rx="2.5"/><path d="M10 5h4"/><circle cx="12" cy="18" r=".6"/></svg>
+          <span class="dl-name">Android</span>
+          <span class="dl-file">phones &amp; tablets · .apk</span>
+          <span class="dl-here">for this device</span>
+        </a>
+        <p class="dl-how">Open the apk and <b>allow installing from this source</b> when Android asks.</p>
+      </li>
+    </ul>
+  </section>
+
+  <figure class="shot">
+    <div class="shot-frame">
+      <picture>
+        <source srcset="chat-dark.webp" media="(prefers-color-scheme: dark)">
+        <img src="chat-light.webp" width="2000" height="1250" alt="The kula chat page on a computer: a chat with Qwen3 0.6B running on this computer at 67 tokens a second, and the brain panel on the right with its twelve parts.">
+      </picture>
+    </div>
+    <figcaption>The chat page on a Mac: Qwen3 0.6B answering here, the brain watching on the right.</figcaption>
+  </figure>
+
+  <section class="points wrap" aria-label="what kula is">
+    <div class="point">
+      <h2>One AI from all your devices</h2>
+      <p>A phone joins by scanning a QR code, a computer by running kula. Together they answer as one.</p>
+    </div>
+    <div class="point">
+      <h2>Nothing leaves the room</h2>
+      <p>Open models run on your own phones and computers. No account, no cloud, no outside server.</p>
+    </div>
+    <div class="point">
+      <h2>Apart or split</h2>
+      <p><b>Apart</b>: every device runs its own copy and the speeds add up. <b>Split</b>: one model too big for any one device is spread over several.</p>
+    </div>
+    <div class="point">
+      <h2>The brain watches over it</h2>
+      <p>It measures each device, picks what fits, keeps heat and memory in their limits, and says why.</p>
+    </div>
+  </section>
+
+  <section class="how wrap">
+    <h2>How it works</h2>
+    <p>Install kula on each device → open the chat page on the computer → <b>connect</b> the phones
+      (QR, same wi-fi, hotspot or a USB cable) → pick a model. It downloads once, is checked by
+      sha256, and runs on llama.cpp across the devices.</p>
+  </section>
+
+  <section class="models wrap" aria-labelledby="models-h">
+    <h2 id="models-h">Models it runs today</h2>
+    <ul class="chips">
+      <li><a href="https://huggingface.co/unsloth/Qwen3.8-27B-GGUF">Qwen3.8 27B</a></li>
+      <li><a href="https://huggingface.co/unsloth/Qwen3.5-4B-GGUF">Qwen3.5 4B</a></li>
+      <li><a href="https://huggingface.co/Qwen/Qwen3-0.6B-GGUF">Qwen3 0.6B</a></li>
+      <li><a href="https://huggingface.co/unsloth/gemma-4-E4B-it-GGUF">Gemma 4 E4B</a></li>
+      <li><a href="https://huggingface.co/ggml-org/gemma-3-4b-it-GGUF">Gemma 3 4B</a></li>
+      <li><a href="https://huggingface.co/bartowski/Llama-3.3-70B-Instruct-GGUF">Llama 3.3 70B</a></li>
+      <li><a href="https://huggingface.co/bartowski/Llama-3.2-3B-Instruct-GGUF">Llama 3.2 3B</a></li>
+      <li><a href="https://huggingface.co/bartowski/microsoft_Phi-4-mini-instruct-GGUF">Phi-4 mini</a></li>
+      <li><a href="https://huggingface.co/bartowski/deepseek-ai_DeepSeek-R1-0528-Qwen3-8B-GGUF">DeepSeek R1 Qwen3 8B</a></li>
+      <li><a href="https://huggingface.co/ggml-org/gpt-oss-20b-GGUF">gpt-oss 20B</a></li>
+      <li><a href="https://huggingface.co/bartowski/mistralai_Mistral-Small-3.2-24B-Instruct-2506-GGUF">Mistral Small 3.2</a></li>
+      <li><a href="https://huggingface.co/unsloth/GLM-4.7-Flash-GGUF">GLM 4.7 Flash</a></li>
+    </ul>
+    <p class="note">…and about 40 more in the app's list. Which ones fit depends on your devices' memory; the brain tells you.</p>
+  </section>
+</main>
+
+<footer class="foot wrap">
+  <nav class="links" aria-label="links">
+    <a href="https://github.com/kurtkurtkurt-del/kula-decentralized-ai">GitHub</a>
+    <a href="https://github.com/kurtkurtkurt-del/kula-decentralized-ai/blob/main/README.md">README</a>
+    <a href="https://github.com/kurtkurtkurt-del/kula-decentralized-ai/releases/latest">release notes</a>
+    <a href="https://github.com/kurtkurtkurt-del/kula-decentralized-ai/blob/main/docs/GUIDE.en.md">guide</a>
+    <a href="https://github.com/kurtkurtkurt-del/kula-decentralized-ai/blob/main/docs/GUIDE.tr.md" hreflang="tr">rehber (Türkçe)</a>
+  </nav>
+  <p class="small">kula · runs on <a href="https://github.com/ggml-org/llama.cpp">llama.cpp</a> · type: Inter Tight (SIL OFL)</p>
+</footer>
+
+<script>
+  // highlight the visitor's own platform; an iPad that says "Macintosh" but has touch is iOS
+  (function () {
+    var ua = navigator.userAgent || '', p = (navigator.userAgentData && navigator.userAgentData.platform) || navigator.platform || '';
+    var os = /android/i.test(ua) ? 'android'
+      : /iphone|ipad|ipod/i.test(ua) || (/mac/i.test(p) && navigator.maxTouchPoints > 1) ? 'ios'
+      : /win/i.test(p) || /windows/i.test(ua) ? 'windows'
+      : /mac/i.test(p) || /mac os/i.test(ua) ? 'mac' : '';
+    var li = os && document.querySelector('.dl[data-os="' + os + '"]');
+    if (li) li.classList.add('is-here');
+  })();
+</script>
+</body>
+</html>
