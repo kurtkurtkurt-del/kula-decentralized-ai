@@ -3,6 +3,7 @@
 // names that devices give themselves go through textContent too.
 import { renderMarkdown, splitThink, stripThink } from './markdown.js';
 import * as wiz from './wizard.js';
+import { mountLearn } from './learn.js';
 
 const $ = (id) => document.getElementById(id);
 const base = location.pathname.replace(/[^/]*$/, '');
@@ -848,6 +849,8 @@ function renderBrain() {
 }
 $('bback').addEventListener('click', () => { brainOpen = null; renderBrain(); });
 // (6.11.2026) the tiles no longer fold: the feed scrolls in its own box
+// learn (8.11.2026): a second tab of the brain panel, what to read and watch (learn.js)
+mountLearn({ brain: $('brain'), tabs: $('btabs'), view: $('blearn') });
 
 
 // what changed in the engine since the last look, said in the feed
