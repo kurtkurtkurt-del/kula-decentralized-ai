@@ -42,9 +42,9 @@ test('start: a load running, a model loaded (by itself or opened), a phone that 
   assert.equal(w.way, 'wifi');
 });
 
-test('dots: six stages, every step sits in one', () => {
-  assert.equal(wiz.STAGES.length, 6);
-  for (const [step, stage] of [['how', 0], ['cable-plug', 1], ['wifi-list', 1], ['cable-code', 2], ['wifi-apart', 2], ['connected', 2], ['model', 3], ['mode', 4], ['load', 5]] as const) assert.equal(wiz.stageOf(step), stage, step);
+test('dots: seven stages, every step sits in one', () => {
+  assert.equal(wiz.STAGES.length, 7);
+  for (const [step, stage] of [['how', 0], ['cable-plug', 1], ['wifi-list', 1], ['cable-code', 2], ['wifi-apart', 2], ['connected', 2], ['model', 3], ['mode', 4], ['pick', 5], ['load', 6]] as const) assert.equal(wiz.stageOf(step), stage, step);
 });
 
 // ---------- the cable
@@ -195,9 +195,21 @@ test('back and "connect another device" from the model, mode and load steps', ()
   assert.equal(w.model, 'qwen3-0.6b');
   assert.equal(wiz.back(w), 'model');
   w = wiz.next(w, { type: 'mode', mode: 'phone' });
-  assert.equal(w.step, 'load');
+  assert.equal(w.step, 'pick');
   assert.equal(w.mode, 'phone');
   assert.equal(wiz.back(w), 'mode');
+  // phone takes exactly one device
+  assert.equal(wiz.next(w, { type: 'picked', ids: [] }).step, 'pick');
+  assert.equal(wiz.next(w, { type: 'picked', ids: ['p', 'q'] }).step, 'pick');
+  w = wiz.next(w, { type: 'picked', ids: ['p'] });
+  assert.equal(w.step, 'load');
+  assert.deepEqual(w.picked, ['p']);
+  assert.equal(wiz.back(w), 'pick');
+  // "this computer" asks for no devices
+  const here = wiz.next({ ...w, step: 'mode' }, { type: 'mode', mode: 'here' });
+  assert.equal(here.step, 'load');
+  assert.equal(wiz.back(here), 'mode');
+  for (const m of ['apart', 'split']) assert.equal(wiz.next({ ...w, step: 'mode' }, { type: 'mode', mode: m }).step, 'pick', m);
   assert.equal(wiz.next(w, { type: 'load-failed', error: 'too big' }).step, 'load');
   assert.equal(wiz.next(w, { type: 'loaded' }).step, 'done');
   const again = wiz.next(w, { type: 'another' });
@@ -261,6 +273,143 @@ test('modes: on the phone first and recommended; each card that cannot work says
   assert.equal(wiz.choosePhone([off, other, phone], ['p']).id, 'p');
   assert.equal(wiz.choosePhone([off, other, phone], ['r']).id, 'q');
   assert.equal(wiz.choosePhone([off], []), null);
+});
+
+// ---------- the devices step
+
+const READY = (ms = 40) => ({ ok: true, ms });
+const P = {
+  pixel: { id: 'p1', name: 'pixel 8', far: false, cable: null, ram: 3000, reach: READY(30), holds: null },
+  tabW: { id: 't-wifi', name: 'Galaxy Tab S9', far: false, cable: null, ram: 6000, reach: { ok: false, reason: 'connect timeout' }, holds: null },
+  tabC: { id: 't-cable', name: 'SAMSUNG Galaxy Tab S9', far: false, cable: { serial: 'X', plugged: true }, ram: 6000, reach: READY(8), holds: 'a.gguf' },
+  old: { id: 'o1', name: 'old phone', far: false, cable: null, ram: 500, reach: READY(90), holds: null },
+  far: { id: 'f1', name: 'far phone', far: true, cable: null, ram: 8000, reach: READY(200), holds: null },
+  busy: { id: 'b1', name: 'busy phone', far: false, cable: null, ram: 8000, reach: { ok: false, reason: 'busy: in use by another computer' }, holds: null },
+  never: { id: 'n1', name: 'never checked', far: false, cable: null, ram: null, reach: null, holds: null },
+};
+const ALL = Object.values(P);
+
+test('devices: one entry per physical device; the cable and wi-fi rows of one tablet are one, sent by the route that answers', () => {
+  const e = wiz.deviceEntries(ALL);
+  assert.equal(e.length, 6);
+  const tab = e.find((x: any) => x.ids.includes('t-wifi'));
+  assert.deepEqual(tab.ids.sort(), ['t-cable', 't-wifi']);
+  assert.equal(tab.id, 't-cable');                        // the cable answers: the load uses it
+  assert.deepEqual(tab.via, ['cable', 'wi-fi']);
+  assert.equal(tab.state, 'ready');
+  assert.equal(tab.holds, 'a.gguf');
+  assert.equal(tab.ms, 8);
+  // the cable unplugged, the wi-fi answers: the wi-fi id
+  const t2 = wiz.deviceEntries([{ ...P.tabC, reach: { ok: false, reason: 'unplugged: plug the cable in' } }, { ...P.tabW, reach: READY(50) }])[0];
+  assert.equal(t2.id, 't-wifi');
+  assert.equal(t2.state, 'ready');
+  // neither answers: not answering, with the reason
+  const t3 = wiz.deviceEntries([{ ...P.tabC, reach: { ok: false, reason: 'unplugged: plug the cable in' } }, P.tabW])[0];
+  assert.equal(t3.state, 'off');
+  assert.equal(t3.reason, 'the cable is unplugged');
+  assert.equal(wiz.reasonWords('connect ECONNREFUSED 127.0.0.1:9'), 'nothing answers: is share this phone on?');
+  assert.match(wiz.reasonWords('connect timeout'), /cannot be reached/);
+  // two wi-fi rows of the same name stay two devices
+  assert.equal(wiz.deviceEntries([P.pixel, { ...P.pixel, id: 'p2' }]).length, 2);
+  // a row that already carries its routes (one row per device) is one entry as it is
+  const routed = wiz.deviceEntries([{ id: 'd1', name: 'pixel 9', far: false, cable: null, ram: 4000, reach: READY(9), routes: [{ via: 'wifi', reach: { ok: false, reason: 'timeout' } }, { via: 'cable', reach: READY(9) }] }]);
+  assert.equal(routed.length, 1);
+  assert.deepEqual(routed[0].via, ['cable', 'wi-fi']);
+  assert.equal(routed[0].id, 'd1');
+  // states
+  const by = Object.fromEntries(e.map((x: any) => [x.name, x.state]));
+  assert.equal(by['busy phone'], 'busy');
+  assert.equal(by['never checked'], 'unknown');
+  assert.equal(by['pixel 8'], 'ready');
+});
+
+test('devices: this computer first (never for "phone"), ready ones first; split cannot use a relay; apart needs the file here', () => {
+  const rows = wiz.pickRows({ mode: 'split', peers: ALL, model: MODELS[1], llama: true, freeMb: 8000 });
+  assert.equal(rows[0].id, 'here');
+  assert.equal(rows[0].fixed, true);
+  assert.equal(rows[0].state, 'ready');
+  const far = rows.find((r: any) => r.id === 'f1');
+  assert.equal(far.state, 'off');
+  assert.equal(far.blocked, true);
+  assert.match(far.reason, /relay/);
+  assert.deepEqual(rows.slice(1).map((r: any) => r.state), ['ready', 'ready', 'ready', 'busy', 'unknown', 'off']);
+  assert.ok(!wiz.pickRows({ mode: 'phone', peers: ALL }).some((r: any) => r.local));
+  const ap = wiz.pickRows({ mode: 'apart', peers: [], model: MODELS[0], llama: true });   // a.gguf is not here
+  assert.equal(ap[0].state, 'off');
+  assert.match(ap[0].reason, /not on this computer/);
+  assert.equal(wiz.pickRows({ mode: 'apart', peers: [], model: MODELS[1], llama: true })[0].state, 'ready');
+  assert.match(wiz.pickRows({ mode: 'apart', peers: [], model: MODELS[1], llama: false })[0].reason, /llama/);
+});
+
+test('devices: the ready ones come ticked, the rest not; apart leaves out what does not fit; the last unticks are kept', () => {
+  const ids = (mode: string, model: any, last = {}, prefer: string[] = [], llama = true) => wiz.preselect(mode, wiz.pickRows({ mode, peers: ALL, model, llama, freeMb: 8000 }), model, last, prefer).sort();
+  // split: this computer and every ready nearby device; not the busy, the unchecked, the relay
+  assert.deepEqual(ids('split', MODELS[1]), ['here', 'o1', 'p1', 't-cable']);
+  // apart with B (2.6 GB): the old phone (0.5 GB free) does not fit, so it starts unticked; the relay one may answer
+  assert.deepEqual(ids('apart', MODELS[1]), ['f1', 'here', 'p1', 't-cable']);
+  // apart, this computer cannot (llama.cpp missing): not ticked
+  assert.deepEqual(ids('apart', MODELS[1], {}, [], false), ['f1', 'p1', 't-cable']);
+  // remembered: the pixel unticked last time stays unticked while it answers; this computer left out
+  assert.deepEqual(ids('apart', MODELS[1], { skip: ['p1'], here: false }), ['f1', 't-cable']);
+  // a remembered untick of the tablet's wi-fi id covers the whole tablet
+  assert.deepEqual(ids('split', MODELS[1], { skip: ['t-wifi'] }), ['here', 'o1', 'p1']);
+  // phone: exactly one; the one just connected, else the last, else the first ready that fits
+  assert.deepEqual(ids('phone', MODELS[1], {}, ['p1']), ['p1']);
+  assert.deepEqual(ids('phone', MODELS[1], { id: 't-wifi' }), ['t-cable']);
+  assert.deepEqual(ids('phone', MODELS[1], { id: 'b1' }).length, 1);         // the last one is busy: another ready one
+  assert.deepEqual(wiz.preselect('phone', wiz.pickRows({ mode: 'phone', peers: [P.old, P.pixel], model: MODELS[1] }), MODELS[1], {}), ['p1']);
+  // nothing remembered: where it fits best (the tablet's 6 GB over the pixel's tight 3 GB)
+  assert.deepEqual(wiz.preselect('phone', wiz.pickRows({ mode: 'phone', peers: [P.pixel, P.old, P.tabC] }), MODELS[1], {}), ['t-cable']);
+  assert.deepEqual(wiz.preselect('phone', wiz.pickRows({ mode: 'phone', peers: [P.tabW, P.never] }), MODELS[1], {}), []);
+  // remember: ready rows left unticked (all their ids), this computer for apart, the phone
+  const rows = wiz.pickRows({ mode: 'apart', peers: ALL, model: MODELS[1], llama: true });
+  assert.deepEqual(wiz.remember('apart', rows, ['p1']), { skip: ['t-wifi', 't-cable', 'o1', 'f1'], here: false });
+  assert.deepEqual(wiz.remember('phone', rows, ['p1']), { id: 'p1' });
+});
+
+test('devices: phone keeps exactly one tick, this computer stays in a split, a relay cannot be ticked for split', () => {
+  const rows = wiz.pickRows({ mode: 'split', peers: ALL, model: MODELS[1], llama: true });
+  const r = (id: string) => rows.find((x: any) => x.id === id);
+  assert.deepEqual(wiz.toggle('phone', ['p1'], r('o1')), ['o1']);
+  assert.deepEqual(wiz.toggle('phone', ['p1'], r('p1')), ['p1']);
+  assert.deepEqual(wiz.toggle('split', ['here', 'p1'], r('here')), ['here', 'p1']);
+  assert.deepEqual(wiz.toggle('split', ['here', 'p1'], r('f1')), ['here', 'p1']);
+  assert.deepEqual(wiz.toggle('split', ['here', 'p1'], r('p1')), ['here']);
+  assert.deepEqual(wiz.toggle('apart', ['p1'], r('n1')), ['p1', 'n1']);   // not checked yet: can still be ticked
+});
+
+test('devices: plain words before the load when a ticked device does not fit or does not answer; what the load sends', () => {
+  const rows = wiz.pickRows({ mode: 'apart', peers: ALL, model: MODELS[1], llama: true, freeMb: 8000 });
+  let c = wiz.pickCheck({ mode: 'apart', model: MODELS[1], rows, picked: ['o1', 't-cable', 'n1', 'b1'] });
+  assert.equal(c.ok, true);
+  assert.ok(c.warn.some((t: string) => /B is too big for old phone: it has about 0\.5 GB free, the model needs about 2\.5 GB/.test(t)), c.warn.join('\n'));
+  assert.ok(c.warn.some((t: string) => /never checked has not been checked yet/.test(t)));
+  assert.ok(c.warn.some((t: string) => /busy phone is busy/.test(t)));
+  const offRows = wiz.pickRows({ mode: 'apart', peers: [P.tabW], model: MODELS[1], llama: true });
+  c = wiz.pickCheck({ mode: 'apart', model: MODELS[1], rows: offRows, picked: ['t-wifi'] });
+  assert.match(c.warn[0], /Galaxy Tab S9 does not answer \(cannot be reached from here: is it on this network\?\): it will be left out/);
+  assert.deepEqual(wiz.pickCheck({ mode: 'apart', model: MODELS[1], rows, picked: [] }), { ok: false, block: 'pick at least one device', warn: [] });
+  // the tablet with 6 GB and B (2.6 GB): fits, no words; with 3 GB: tight
+  assert.deepEqual(wiz.pickCheck({ mode: 'apart', model: MODELS[1], rows, picked: ['t-cable'] }).warn, []);
+  assert.match(wiz.pickCheck({ mode: 'phone', model: MODELS[1], rows: wiz.pickRows({ mode: 'phone', peers: [P.pixel] }), picked: ['p1'] }).warn[0], /tight on pixel 8/);
+  // phone: exactly one
+  const ph = wiz.pickRows({ mode: 'phone', peers: ALL });
+  assert.equal(wiz.pickCheck({ mode: 'phone', model: MODELS[0], rows: ph, picked: [] }).ok, false);
+  assert.equal(wiz.pickCheck({ mode: 'phone', model: MODELS[0], rows: ph, picked: ['p1'] }).ok, true);
+  // split: this computer alone is not a split; too little memory together is said
+  const sp = wiz.pickRows({ mode: 'split', peers: ALL, model: MODELS[3], llama: true, freeMb: 4000 });
+  assert.equal(wiz.pickCheck({ mode: 'split', model: MODELS[3], rows: sp, picked: ['here'] }).ok, false);
+  c = wiz.pickCheck({ mode: 'split', model: MODELS[3], rows: sp, picked: ['here', 'p1'], hereFreeMb: 4000 });
+  assert.equal(c.ok, true);
+  assert.ok(c.warn.some((t: string) => /D needs about 9\.6 GB; the ticked devices offer about 4\.9 GB together/.test(t)), c.warn.join('\n'));
+  // the body: exactly these, nothing guessed
+  assert.deepEqual(wiz.pickBody('split', ['here', 'p1', 't-cable']), { peers: ['p1', 't-cable'], all: true });
+  assert.deepEqual(wiz.pickBody('apart', ['p1']), { peers: ['p1'], all: true, here: false });
+  assert.deepEqual(wiz.pickBody('apart', ['here']), { peers: [], all: true, here: true });
+  assert.deepEqual(wiz.pickBody('phone', ['t-cable']), { peers: ['t-cable'], all: true });
+  assert.equal(wiz.pickGo('split', ['here', 'p1']), 'split over 2 devices');
+  assert.equal(wiz.pickGo('apart', ['p1']), 'load on 1 device');
+  assert.equal(wiz.pickGo('phone', []), 'pick one');
 });
 
 // ---------- GET discover

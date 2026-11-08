@@ -437,3 +437,44 @@ test('mode here with a fake llama-server: a catalog model is fetched to this com
     await model.close();
   }
 });
+
+test('picked devices: with all the load uses exactly the ticked ones (none is none), this computer can be left out of apart, and the plan says which', async () => {
+  const pixel = await fakePhone(['a']);
+  const tab = await fakePhone(['b']);
+  const model = await tinyModel();
+  const llama = await fakeLlamaServer(2, ['here']);
+  const { engine, modelsDir } = newEngine({ catalog: [model.entry], startBackend: async () => ({ port: llama.port, stop: async () => {} }) });
+  try {
+    const p = await engine.pairByHand({ address: `127.0.0.1:${pixel.port}`, pin: PIN, name: 'pixel' });
+    const t = await engine.pairByHand({ address: `127.0.0.1:${tab.port}`, pin: PIN, name: 'tab' });
+    // the file is on this computer too, so apart could use it: the page left it out
+    fs.copyFileSync(path.join(model.dir, 'tiny-q8_0.gguf'), path.join(modelsDir, 'tiny-q8_0.gguf'));
+    let st = await engine.load({ model: 'tiny', mode: 'apart', peers: [p.id], all: true, here: false }, () => {});
+    assert.deepEqual(st.loaded?.devices.map((d) => d.name), ['pixel']);
+    assert.deepEqual(tab.loads, [], 'the unticked tablet was not asked');
+    assert.ok(st.plan.includes('you picked pixel: only it is used.'), st.plan.join('\n'));
+    assert.ok(st.plan.includes('this computer sits out: you left it out.'), st.plan.join('\n'));
+    // this computer ticked too
+    st = await engine.load({ model: 'tiny', mode: 'apart', peers: [t.id], all: true, here: true }, () => {});
+    assert.deepEqual(st.loaded?.devices.map((d) => d.name).sort(), ['tab', 'this computer']);
+    assert.ok(st.plan.includes('you picked this computer, tab: only these are used.'), st.plan.join('\n'));
+    // nothing ticked is nothing, not every paired device
+    await assert.rejects(engine.load({ model: 'tiny', mode: 'apart', peers: [], all: true, here: false }, () => {}), /pick at least one device/);
+    await assert.rejects(engine.load({ model: 'tiny', mode: 'phone', peers: [], all: true }, () => {}), /pick the device that runs it/);
+    await assert.rejects(engine.load({ model: 'tiny', mode: 'split', peers: [], all: true }, () => {}), /at least one device besides this computer/);
+    // phone: exactly the ticked one
+    st = await engine.load({ model: 'tiny', mode: 'phone', peers: [t.id], all: true }, () => {});
+    assert.deepEqual(st.loaded?.devices.map((d) => d.name), ['tab']);
+    assert.ok(st.plan.includes('you picked tab: only it is used.'), st.plan.join('\n'));
+    // without all (older pages, the advanced sheet): an empty list still means every paired device
+    st = await engine.load({ model: 'tiny', mode: 'apart', peers: [] }, () => {});
+    assert.deepEqual(st.loaded?.devices.map((d) => d.name).sort(), ['pixel', 'tab', 'this computer']);
+    assert.ok(!st.plan.some((l) => /you picked/.test(l)));
+  } finally {
+    await engine.close();
+    llama.close();
+    await model.close();
+    await pixel.close();
+    await tab.close();
+  }
+});

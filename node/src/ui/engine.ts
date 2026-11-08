@@ -647,13 +647,15 @@ export class Engine {
     return dest;
   }
 
-  private resolvePeers(ids: unknown): Peer[] {
+  // `exact` (the load's `all`): the devices the page picked and no others, so an empty list is
+  // none; without it an empty list means every paired device (older pages, the cli).
+  private resolvePeers(ids: unknown, exact = false): Peer[] {
     const all = readPeers(this.file());
-    if (!Array.isArray(ids) || !ids.length) return all;
+    if (!Array.isArray(ids) || !ids.length) return exact ? [] : all;
     return ids.map((r) => { const p = findPeer(all, String(r)); if (!p) throw new Error(`no such device: ${r}`); return p; });
   }
 
-  async load(req: { model?: unknown; mode?: unknown; peers?: unknown; ctx?: unknown; all?: unknown }, emit: (e: LoadEvent) => void): Promise<Status> {
+  async load(req: { model?: unknown; mode?: unknown; peers?: unknown; ctx?: unknown; all?: unknown; here?: unknown }, emit: (e: LoadEvent) => void): Promise<Status> {
     if (this.loading) throw new Error('already loading: wait, or stop it');
     const mode = String(req.mode ?? 'phone') as Mode;
     if (!MODES.includes(mode)) throw new Error('mode must be phone, apart, split or here');
@@ -674,9 +676,10 @@ export class Engine {
     if ((mode === 'split' || mode === 'here') && !llama && !this.opts.startBackend) throw new Error(`${mode} needs llama.cpp on this computer: run kula-node setup (or pick "phone")`);
 
     let peers: Peer[] = [];
+    const exact = req.all === true;
     if (mode !== 'here') {
       // a phone on the cable: its forward made again first (the port may have changed)
-      const asked = this.resolvePeers(req.peers);
+      const asked = this.resolvePeers(req.peers, exact);
       const use = mode === 'phone' ? asked.slice(0, 1) : asked;
       if (use.some((p) => p.cable)) {
         await this.refreshCables(use);
@@ -685,10 +688,14 @@ export class Engine {
       }
     }
     if (mode === 'phone') {
-      const list = this.resolvePeers(req.peers);
-      if (!list.length) throw new Error('no paired device yet: add one in connect');
+      const list = this.resolvePeers(req.peers, exact);
+      if (!list.length) throw new Error(exact ? 'pick the device that runs it' : 'no paired device yet: add one in connect');
       peers = [list[0]];
-    } else if (mode === 'apart' || mode === 'split') peers = this.resolvePeers(req.peers);
+    } else if (mode === 'apart' || mode === 'split') peers = this.resolvePeers(req.peers, exact);
+    // apart: this computer runs its own copy unless the page left it out
+    const hereToo = !(mode === 'apart' && req.here === false);
+    if (exact && mode === 'apart' && !peers.length && !hereToo) throw new Error('pick at least one device');
+    if (exact && mode === 'split' && !peers.length) throw new Error('split needs at least one device besides this computer: pick one, or load on this computer');
 
     const ac = new AbortController();
     this.loadAbort = ac;
@@ -713,13 +720,18 @@ export class Engine {
       let splitParts: Part[] | undefined;
       let file: string;
       let size: number;
+      // which devices the page picked, in the plan's first words
+      if (exact && mode !== 'here') {
+        const used = [...(mode === 'split' || (mode === 'apart' && hereToo) ? ['this computer'] : []), ...peers.map((p) => p.name)];
+        plan.push(`you picked ${used.join(', ')}: only ${used.length === 1 ? 'it is' : 'these are'} used.`);
+      }
 
       if (mode === 'phone' || mode === 'apart') {
         const m = cat!;
         const ref: ModelRef = { url: m.url ?? modelUrl(m), sha256: m.sha256, size: m.size, name: m.file, ctx };
         const need = needMb(m.size, m.kv_mb_per_1k, ctx);
         // this computer joins apart mode only when it can run the file it already has
-        const localFile = mode === 'apart' && (llama || this.opts.startBackend) ? this.findLocal(m.file) : null;
+        const localFile = mode === 'apart' && hereToo && (llama || this.opts.startBackend) ? this.findLocal(m.file) : null;
         if (mode === 'phone') {
           const p = peers[0];
           plan.push(`the model runs on ${p.name}; this computer only carries the chat to it and back.`);
@@ -727,7 +739,7 @@ export class Engine {
           plan.push(`${p.name} fetches ${m.file} from huggingface itself and checks its sha256; a phone that already has it starts at once.`);
         } else {
           plan.push(`every device runs its own copy of ${m.name}; each prompt goes to the fastest free one (measured tok/s, memory bandwidth before the first answer).`);
-          plan.push(localFile ? 'this computer joins with the file it has.' : (llama || this.opts.startBackend) ? `this computer sits out: ${m.file} is not here (load it once with "here" to fetch it).` : 'this computer sits out: llama.cpp is not set up here.');
+          plan.push(localFile ? 'this computer joins with the file it has.' : !hereToo ? 'this computer sits out: you left it out.' : (llama || this.opts.startBackend) ? `this computer sits out: ${m.file} is not here (load it once with "here" to fetch it).` : 'this computer sits out: llama.cpp is not set up here.');
           for (const p of peers) if (p.ram && p.ram < need) plan.push(`${p.name}: ${p.ram} MB free, the model needs about ${need} MB; it may fail to load.`);
         }
         cluster = await openApart({ ...common, model: ref, peers, localModelFile: localFile, llama, startBackend: this.opts.startBackend });
