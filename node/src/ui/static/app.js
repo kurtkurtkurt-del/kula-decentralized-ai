@@ -1514,7 +1514,9 @@ function enterStep() {
   if (W.step === 'wifi-list' && !found.looking) lookAround();
   if (W.step === 'wifi-check') checkFound(run);
   if (W.step === 'model') {
+    pickAt = { maker: null, series: null };
     if (!S.models.length) getJson('models').then((m) => { S.models = m; renderWiz(true); }).catch(() => {});
+    getJson('lineup').then((l) => { S.lineup = l; renderWiz(true); }).catch(() => {});
     if (Date.now() - wizModelsProbed > 20000) {
       wizModelsProbed = Date.now();
       postJson('peers/probe').then((list) => { if (run !== wizRun) return; S.peers = list; renderPeers(); renderWiz(true); }).catch(() => {});
@@ -1526,6 +1528,55 @@ function enterStep() {
 }
 
 let wizPick = null; // the split pick step's ticked devices
+let pickAt = { maker: null, series: null };   // where the model step's picker is
+
+// What the devices could hold together: this computer's memory × 0.7 and every paired device's
+// advertised free memory × 0.75 (the split planner's shares), MB. `max` counts this computer's
+// whole memory (what it could give with other programs closed), `now` what is free right now.
+function memoryTogether() {
+  const peers = S.peers.reduce((n, p) => n + (p.ram ?? 0) * 0.75, 0);
+  return { max: Math.round((S.lineup?.hereTotalMb ?? 0) * 0.7 + peers), now: Math.round((S.lineup?.hereFreeMb ?? 0) * 0.7 + peers) };
+}
+
+// The lineup with every model joined to its row in GET models (or its reason), plus the files
+// that are only on this computer as their own maker at the end.
+function pickTree(phone) {
+  const cap = memoryTogether();
+  const rows = new Map(wiz.modelRows(S.models, phone).map((m) => [m.id, m]));
+  const join = (m) => {
+    const r = rows.get(m.id);
+    if (m.why || !r) return { ...m, off: m.why ?? 'not offered on this computer' };
+    const gbs = (mb) => (mb / 1024).toFixed(1);
+    const off = r.needMb > cap.max ? `needs about ${gbs(r.needMb)} GB; this computer and your devices have about ${gbs(cap.max)} GB together` : null;
+    const tight = !off && r.needMb > cap.now ? `more than is free right now (about ${gbs(cap.now)} GB): close other programs or add a device` : null;
+    return { ...m, ...r, off, tight };
+  };
+  const tree = S.lineup.makers.map((k) => ({ ...k, series: k.series.map((x) => ({ ...x, models: x.models.map(join) })) }));
+  const local = [...rows.values()].filter((r) => !r.catalog);
+  if (local.length) tree.push({ id: 'local', name: 'on this computer', by: 'files in your models folder', blurb: 'only this computer can run these (here or split): phones fetch models from the internet', series: [{ id: 'local', name: 'files on this computer', blurb: 'gguf files found here', models: local.map((r) => ({ ...r, off: null })) }] });
+  return tree;
+}
+
+function modelButton(m, phone) {
+  const b = el('button', `model${m.off ? ' off' : ''}`);
+  b.type = 'button';
+  b.setAttribute('aria-pressed', String(settings.model === m.id));
+  const size = m.size ? gb(m.size) : '';
+  const params = m.active_b && !/per token/.test(m.blurb ?? '') ? `${m.params_b ? `${m.params_b}B, ` : ''}${m.active_b}B per token` : '';
+  b.append(el('b', '', `${m.name}${m.quant ? ` · ${m.quant}` : ''}`), el('span', 'size', size), el('span', 'blurb', [m.catalog === false ? 'a file on this computer: only this computer can run it (here or split)' : m.blurb, params].filter(Boolean).join(' · ')));
+  const fit = el('span', 'fit');
+  if (m.off) fit.appendChild(el('span', 'no', m.off));
+  else {
+    if (m.onPhone) fit.appendChild(el('span', 'yes', `on ${phone.name} now`));
+    if (m.fit) fit.appendChild(el('span', m.fit[0], m.fit[1]));
+    if (m.here) fit.appendChild(el('span', 'info', 'on this computer'));
+    if (m.tight) fit.appendChild(el('span', 'tight', m.tight));
+  }
+  if (fit.children.length) b.appendChild(fit);
+  if (m.off) b.disabled = true;
+  else b.addEventListener('click', () => { settings.model = m.id; saveSettings(); go({ type: 'model', id: m.id }); });
+  return b;
+}
 const phoneNow = () => wiz.choosePhone(S.peers, [W.peerId, ...settings.peers].filter(Boolean));
 
 // ---- drawing
@@ -1698,31 +1749,54 @@ const VIEWS = {
     row(btn('this computer is on it', 'primary big', () => go({ type: 'on-hotspot' }))),
   ],
 
+  // which model: the makers, then a maker's series, then the models (8.11.2026). A model that
+  // cannot run is dimmed with its reason: one in several files, an architecture llama.cpp does
+  // not know yet, or more memory than this computer and the paired devices have together.
   model: () => {
     const phone = phoneNow();
-    const out = [q('which model?')];
+    const out = [];
     const l = S.status?.loaded;
-    if (l) {
+    const loadedNote = () => {
+      if (!l) return null;
       const n = el('p', 'hint');
       n.append(`${l.model.name} is loaded on ${l.devices.map((d) => d.name).join(', ')}. `);
       n.appendChild(btn('unload', 'link', async () => { await postJson('unload').catch((e) => toast(e.message)); await refreshStatus(); renderWiz(true); }));
-      out.push(n);
+      return n;
+    };
+    if (!S.models.length || !S.lineup) { out.push(q('which model?'), waiting('getting the list…')); return out; }
+    const tree = pickTree(phone);
+    const goTo = (maker, series) => { pickAt = { maker, series }; renderWiz(true); $('wiz-q')?.focus(); };
+    const maker = tree.find((k) => k.id === pickAt.maker) ?? null;
+    const series = maker?.series.find((x) => x.id === pickAt.series) ?? null;
+    const count = (list) => { const n = list.length, k = list.filter((m) => !m.off).length; return `${n} model${n === 1 ? '' : 's'} · ${k ? `${k} can run` : 'none can run yet'}`; };
+    const mark = (list) => (list.some((m) => m.id === l?.model?.id) ? 'loaded' : list.some((m) => m.id === settings.model) ? 'last used' : null);
+    const card = (title, sub, onClick, tag, off) => { const c = choice(title, sub, onClick, tag); if (off) c.classList.add('off'); return c; };
+
+    if (!maker) {
+      out.push(q('which model?'));
+      const note = loadedNote();
+      if (note) out.push(note);
+      const box = el('div', 'choices pick-list');
+      const held = phone?.holds ? S.models.find((m) => m.file === phone.holds) : null;
+      if (held) box.appendChild(card(held.name, `already on ${phone.name}: no download`, () => { settings.model = held.id; saveSettings(); go({ type: 'model', id: held.id }); }, 'on the phone'));
+      for (const k of tree) {
+        const all = k.series.flatMap((x) => x.models);
+        box.appendChild(card(k.name, `${k.by} · ${count(all)}`, () => goTo(k.id, k.series.length === 1 ? k.series[0].id : null), mark(all), all.every((m) => m.off)));
+      }
+      out.push(para('pick a maker, then a series, then the model.', 'hint'), box);
+      return out;
     }
+    const back = (text, onClick) => btn(text, 'link pick-back', onClick);
+    if (!series) {
+      out.push(back('‹ all makers', () => goTo(null, null)), q(maker.name), para(maker.blurb, 'hint'));
+      const box = el('div', 'choices pick-list');
+      for (const x of maker.series) box.appendChild(card(x.name, `${x.blurb} · ${count(x.models)}`, () => goTo(maker.id, x.id), mark(x.models), x.models.every((m) => m.off)));
+      out.push(box);
+      return out;
+    }
+    out.push(back(maker.series.length === 1 ? '‹ all makers' : `‹ ${maker.name}`, () => goTo(maker.series.length === 1 ? null : maker.id, null)), q(series.name), para(series.blurb, 'hint'));
     const box = el('div', 'model-list wiz-models');
-    if (!S.models.length) box.appendChild(waiting('getting the list…'));
-    for (const m of wiz.modelRows(S.models, phone)) {
-      const b = el('button', 'model');
-      b.type = 'button';
-      b.setAttribute('aria-pressed', String(settings.model === m.id));
-      b.append(el('b', '', `${m.name}${m.quant ? ` · ${m.quant}` : ''}`), el('span', 'size', gb(m.size)), el('span', 'blurb', m.catalog ? m.blurb : 'a file on this computer: only this computer can run it (here or split)'));
-      const fit = el('span', 'fit');
-      if (m.onPhone) fit.appendChild(el('span', 'yes', `on ${phone.name} now`));
-      if (m.fit) fit.appendChild(el('span', m.fit[0], m.fit[1]));
-      if (m.here) fit.appendChild(el('span', 'info', 'on this computer'));
-      if (fit.children.length) b.appendChild(fit);
-      b.addEventListener('click', () => { settings.model = m.id; saveSettings(); go({ type: 'model', id: m.id }); });
-      box.appendChild(b);
-    }
+    for (const m of series.models) box.appendChild(modelButton(m, phone));
     out.push(box);
     return out;
   },
@@ -1799,7 +1873,7 @@ function wizSignature() {
     c && [c.step, c.problem, c.error, c.busy, W.step === 'cable-code' ? null : c.lines, c.name],
     W.step === 'wifi-list' ? found : null,
     W.step === 'connected' ? S.peers.find((x) => x.id === W.peerId)?.name : null,
-    W.step === 'model' || W.step === 'mode' || W.step === 'pick' ? [S.models.length, S.peers.map((x) => [x.id, x.reach?.ok, x.holds, x.ram]), settings.model, S.status?.loaded?.model?.id, !!S.status?.llama] : null]);
+    W.step === 'model' || W.step === 'mode' || W.step === 'pick' ? [S.models.length, S.peers.map((x) => [x.id, x.reach?.ok, x.holds, x.ram]), settings.model, S.status?.loaded?.model?.id, !!S.status?.llama, !!S.lineup, pickAt] : null]);
 }
 
 function renderWiz(force = false) {

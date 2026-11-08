@@ -25,7 +25,8 @@ import { TooBig } from '../planner.js';
 import { simModelOf } from '../gguf.js';
 import { publicName } from '../devicenames.js';
 import { freeRamMB, measureBandwidth } from '../sysinfo.js';
-import { UI_CATALOG, modelUrl, type UiModel } from './catalog.js';
+import { modelUrl, type UiModel } from './catalog.js';
+import { FULL_CATALOG, lineupView, type LineupView } from './lineup.js';
 
 export type Mode = 'phone' | 'apart' | 'split' | 'here';
 export const MODES: Mode[] = ['phone', 'apart', 'split', 'here'];
@@ -165,7 +166,7 @@ export class Engine {
   readonly catalog: CatalogEntry[];
 
   constructor(private readonly opts: EngineOptions = {}) {
-    this.catalog = opts.catalog ?? UI_CATALOG;
+    this.catalog = opts.catalog ?? FULL_CATALOG;
     this.ident = opts.identity ?? null;
   }
 
@@ -578,6 +579,9 @@ export class Engine {
     }
     return null;
   }
+
+  // the model picker's tree (makers, series, models), with this computer's free and total memory
+  lineup(): LineupView { return lineupView(freeRamMB(), Math.round(os.totalmem() / MB)); }
 
   models(): ModelRow[] {
     const rows: ModelRow[] = this.catalog.map((m) => ({

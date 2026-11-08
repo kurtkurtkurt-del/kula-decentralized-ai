@@ -253,6 +253,7 @@ export async function startUi(opts: UiOptions): Promise<UiServer> {
       if (route === 'cable') return json(res, 200, await engine.cable());
       if (route === 'discover') return json(res, 200, await engine.discover());
       if (route === 'models') return json(res, 200, engine.models());
+      if (route === 'lineup') return json(res, 200, engine.lineup());
       if (route === 'settings') return json(res, 200, { openai: { base: openaiBase(), token }, host: hostLabel(), relay: process.env.KULA_RELAY ?? null });
       if (route === 'chats') return json(res, 200, chats.list(query.get('q') ?? undefined));
       if (route === 'projects') return json(res, 200, projects.list());
