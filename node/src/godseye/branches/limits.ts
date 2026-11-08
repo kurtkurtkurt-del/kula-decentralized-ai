@@ -8,6 +8,7 @@
 // A feed line is written only when a warning starts or ends, never on every look.
 import type { Branch, BranchCtx, Snapshot } from '../types.js';
 import { gb, hhmm } from './util.js';
+import { masked } from './review.js';   // a project's title may hold personal data: shown masked, as review does
 
 export const TIGHT = 0.8;                       // memory use above this share is tight
 export const REST_AFTER_MS = 20 * 60_000;       // answering longer than this without a break: should rest
@@ -158,10 +159,10 @@ export function create(ctx: BranchCtx): Branch {
         if (p.state !== 'running' || !(at > p.end)) continue;
         const late = Math.round((at - p.end) / 60_000);
         heads.push(0);
-        next.set(`night:${p.id}`, { text: `night project "${p.title}" still running ${late} min past its end at ${hhmm(p.end)}`, ended: `night project "${p.title}" is no longer past its end` });
+        next.set(`night:${p.id}`, { text: `night project "${masked(p.title)}" still running ${late} min past its end at ${hhmm(p.end)}`, ended: `night project "${masked(p.title)}" is no longer past its end` });
         for (const d of l?.devices ?? []) {
           if (d.busy && p.peers.includes(d.id)) {
-            next.set(`window:${d.id}:${p.id}`, { text: `${d.name} still working after the night window of "${p.title}" (ended ${hhmm(p.end)})`, ended: `${d.name} stopped working outside the night window` });
+            next.set(`window:${d.id}:${p.id}`, { text: `${d.name} still working after the night window of "${masked(p.title)}" (ended ${hhmm(p.end)})`, ended: `${d.name} stopped working outside the night window` });
           }
         }
       }

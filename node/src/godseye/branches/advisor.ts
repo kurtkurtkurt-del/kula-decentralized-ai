@@ -13,6 +13,7 @@
 // It may quote forecast, limits and review, but never depends on them.
 import type { Branch, BranchCtx, BranchView, EyeDevice, EyeModel, Snapshot } from '../types.js';
 import { active, gb, hhmm, pct } from './util.js';
+import { masked } from './review.js';   // a project's title may hold personal data: shown masked, as review does
 
 const PHONE_SHARE = 0.75;          // of the memory a device said it has free
 const HOST_SHARE = 0.7;            // of this computer's free memory
@@ -148,7 +149,7 @@ function tips(s: Snapshot, a: Advice): Tip[] {
     else if (waiting.mode === 'here') { if (!s.work.llama) problems.push('this computer cannot run a model itself'); else if (m.needMb > hostCap) problems.push(`${m.name} needs about ${gb(m.needMb)}, this computer has ${gb(hostCap)} to spare`); }
     else if (waiting.mode === 'split') { const sum = caps.reduce((t, c) => t + c.capMb, 0) + (s.work.llama ? hostCap : 0); if (m.needMb > sum) problems.push(`${m.name} needs about ${gb(m.needMb)}, together they offer ${gb(sum)}`); }
     else for (const c of caps) if (m.needMb > c.capMb) problems.push(`${m.name} needs about ${gb(m.needMb)}, ${c.name} offers ${gb(c.capMb)}`);
-    const when = `${waiting.title} at ${hhmm(waiting.start)}`;
+    const when = `${masked(waiting.title)} at ${hhmm(waiting.start)}`;
     if (problems.length) out.push({ pri: 10, key: `night-bad:${waiting.id}:${problems.join('|')}`, stat: `night project: ${problems[0]}`, line: `night project ${when}: ${problems.join('; ')}. fix it before it starts.` });
     else out.push({ pri: 40, key: `night-ok:${waiting.id}`, stat: `night project ready for ${hhmm(waiting.start)}`, line: `night project ${when}: its ${waiting.peers.length || 'no'} device${waiting.peers.length === 1 ? '' : 's'} answer now and ${m!.name} fits.` });
   } else if (!running && !L && !s.work.loading) {
