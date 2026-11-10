@@ -176,7 +176,10 @@ export class GodsEye {
     const branches = BRANCHES.map((m): EyeBranchView => {
       const err = this.broken.get(m.id);
       const v = err ? { ...dark('broken'), error: err } : (this.views.get(m.id) ?? dark('looking…'));
-      return { ...v, n: m.n, id: m.id, name: m.name, what: v.what || m.what };
+      // the forecast's scored hours are for the branches' eyes only (peek): they never ride in a
+      // view, where they would be up to 40 × 200 × 6 numbers on every look
+      const { pairs: _pairs, ...plain } = v;
+      return { ...plain, n: m.n, id: m.id, name: m.name, what: v.what || m.what };
     });
     return { at: this.lastAt, branches, events: [...this.events] };
   }

@@ -81,6 +81,25 @@ test('the snapshot the eye gets is a copy: changing it inside a branch does not 
   assert.equal(source.devices[0].name, 'pixel');
 });
 
+test('the forecast\'s scored hours stay behind peek: not in the eye\'s view, still read by learning', () => {
+  const dir = path.join(HOME, 'eye-pairs');
+  const hour0 = new Date(2026, 10, 8, 22, 0, 0).getTime();
+  const HOUR = 3600_000;
+  let i = 0, checked = 0;
+  const eye = new GodsEye({
+    snapshot: () => snap([dev({ checkedAt: ++checked })], hour0 + Math.floor(i / 12) * HOUR + (i % 12) * 5000),
+    dir,
+    now: () => 0,
+  });
+  for (; i < 6 * 12; i++) eye.tick();                     // six hours of looks: the forecast folds five
+  const v = eye.view();
+  const forecast = v.branches.find((b) => b.id === 'forecast')!;
+  assert.ok(!('pairs' in forecast), 'the pairs are not handed out in the eye\'s view');
+  assert.doesNotMatch(JSON.stringify(v), /"pairs"/, 'nothing of the pairs rides in a view');
+  const learning = v.branches.find((b) => b.id === 'learning')!;
+  assert.equal(learning.rows.find((r) => r[0] === 'forecast scored')![1], '2 hours', 'learning still scores what peek hands it');
+});
+
 test('kula\'s engine turned into the eye\'s snapshot: devices, work, models, projects; no secret', () => {
   const file = path.join(HOME, 'peers.json');
   writePeers([{ id: 'cable:R3C', name: 'SM S936B', host: '127.0.0.1', port: 6000, secret: 'deadbeef'.repeat(4), fp: 'ab'.repeat(32), pin: null, relay: null, kind: 'phone', ram: 3421, bw: 65.9, cable: { serial: 'R3C' }, added_at: new Date().toISOString() } as any], file);
