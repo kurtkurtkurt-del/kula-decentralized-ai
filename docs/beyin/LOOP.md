@@ -87,8 +87,11 @@ Her dal **ayrı bir projedir**:
    olanı söyle), `asama` (v0/v1/v2), `detaylar` (`insa`: ne kuruldu, hangi dosyalar, hangi testler;
    `yontem`: gerçekten kullanılan formül, `$ ` satırlarıyla), kısa bir `notlar` kaydı (`yazan: "claude"`,
    tarih). Yeni düğüm eklersen `ceviri/tr` ve `ceviri/de` girdilerini de yaz. Var olan belgeyi `if_version`
-   ile güncelle. **`durum: karar` ve `senin_kararin` kullanıcınındır: yazma**; bir karar gerekiyorsa düğüme
-   `durum: soru` ve bir not bırak. Desteyi haritayla uyumlu tut (dal bir aşama atladıysa ilgili slayt).
+   ile güncelle. **Yöntem kararını sen verirsin** (aşağıda "araştır ve karar ver"): `detaylar.karar`'a
+   kararı, `kaynaklar`a dayanaklarını yaz, `durum: karar` yap ve bir not bırak ("claude'un kararı, tarih;
+   değiştirebilirsin"). **`senin_kararin` ve `karar_zamani` kullanıcınındır:** onlara yazma; kullanıcı bir
+   düğümde karar vermişse o geçerlidir, kendi kararınla ezme, gerekirse yalnız not düş. Tasarım sınırını
+   aşan kararlar (aşağıda) yine soru olarak kalır. Desteyi haritayla uyumlu tut.
 5. **Dağıt.** Boşalan yerlere sıradaki dalları al: proje dosyasından en önemli işi seç, küçük ve kesin bir
    görev yaz (hangi dosyalar, beklenen davranış, hangi test kanıtlar, neye dokunulmaz) ve işçiyi arka planda
    başlat (`run_in_background`). Zor ya da geniş işte `--pro`. Gereken komutlar için `--allow`.
@@ -96,6 +99,39 @@ Her dal **ayrı bir projedir**:
    ne çalışıyor, ne takıldı).
 7. **Uyku.** İşçiler çalışıyorsa bildirim seni uyandırır; döngü için uzun bir yedek uyanış kur (20–30 dk).
    Bekleyen iş yoksa hemen sıradakine geç.
+
+## bağlantı: bugün kablo ve wi-fi, yarın doğrudan internet
+
+Bugün cihazlar **USB kablo** ve **aynı wi-fi / telefonun hotspot'u** üzerinden doğrudan konuşur (kapı, TLS 1.3,
+pinli sertifikalar; `docs/GATE.md`). **Hedef: ileride cihazlar internet üzerinden de doğrudan bağlanacak**
+(farklı evler, farklı ağlar). Her dalı buna göre tasarla:
+- Bağlantı türü tek bir değer değil, bir boyut olsun (kablo / wi-fi / internet); gecikme, bant genişliği,
+  kopma ve maliyet varsayımları türe göre değişsin (planner, forecast, connections, executor, trust).
+- İnternet yolu için güvenlik baştan düşünülsün: NAT arkasındaki cihazların birbirini bulması, uçtan uca
+  şifreleme, kimlik ve eşleşmenin internette nasıl korunacağı, kötü niyetli uzak cihaz. Bunları araştır,
+  `connections` ve `trust` projelerinde bir tasarım ve karar olarak yaz.
+- **Sınır:** kula'nın temeli "dışarıdaki bir sunucuya bağımlı olmamak". Birbirini bulma (rendezvous), STUN /
+  TURN, aktarıcı gibi üçüncü bir makine gerektiren her seçenek **kullanıcının kararıdır**: seçenekleri ve
+  bedelini haritada `durum: soru` olarak bırak, kendin kurma. Doğrudan yollar (IPv6, kullanıcının kendi
+  makinesi, delik açma) önce gelsin. İnternet bağlantısının kodunu, kullanıcı karar verene kadar yazma; tasarımı,
+  arayüzleri ve testlerini hazırla.
+
+## araştır ve karar ver (her düğüm için)
+
+Her dal projesine başlarken ve her düğümün yöntemini seçmeden önce **internette araştır**, en güncel
+yöntemleri bul (2025–2026 öncelikli), karşılaştır, **karar ver**:
+- Konular: güvenlik ayarları (kimlik, eşleşme, şifreleme, anahtar saklama, iptal, saldırı yüzeyi, uzaktaki
+  kötü niyetli cihaz); LLM denetimi ve gözetimi (bir işin çalışmadan önce incelenmesi, istem enjeksiyonu,
+  çıktının doğrulanması, başkasının cihazında çalışan işin güvenliği, gözetim/izleme, anormallik tespiti);
+  learning loop (tahmin-gerçek karşılaştırması, kalibrasyon, çevrimiçi öğrenme, sapma tespiti, yerel ve
+  gizliliği koruyan öğrenme); tahmin (cihaz müsaitliği, hız, enerji); yerleştirme ve zamanlama; model bakımı.
+- Araçlar: `WebSearch` (yeni ya da niş konuda `extended`), sayfayı okumak için web-fetch alt ajanı. Aynı turda
+  birden çok arama gönder. Sorgulara kullanıcının adını, e-postasını, projenin özel ayrıntılarını koyma.
+- Kaynak kalitesi: makale, standart, büyük projelerin belgeleri, güncel güvenlik kılavuzları; tarihini yaz.
+  Pazarlama yazısına dayanma. Kaynakları `detaylar.kaynaklar`a `{t: başlık, u: adres, n: neden önemli}` olarak koy.
+- Karar kaydı (proje dosyasına ve haritaya): seçenekler, seçilen, neden, bedeli, ne zaman yeniden bakılacağı.
+  Karar kod hâline gelince `insa` ve `asama` güncellenir.
+- Kararın kula'ya uygun olsun: telefonda çalışabilecek kadar hafif, yerel, dışarıya bağımlı olmayan, açıklanabilir.
 
 ## her dal için "güçlendirme" ne demek
 
