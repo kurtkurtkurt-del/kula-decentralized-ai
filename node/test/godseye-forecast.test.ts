@@ -7,7 +7,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-const { create, slotOf, fold, decay, prior, estimate, wilson, tonightSlots } = await import('../src/godseye/branches/forecast.ts');
+const { create, slotOf, fold, decay, prior, estimate, wilson, tonightSlots, dayOf } = await import('../src/godseye/branches/forecast.ts');
 const { GodsEye } = await import('../src/godseye/index.ts');
 
 const HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'kula-eye-forecast-'));
@@ -104,6 +104,14 @@ test('tonightSlots: the nine slots of the night that starts on that day', () => 
   assert.deepEqual(tonightSlots(new Date(2026, 10, 9, 3).getTime()), sunNight);    // after midnight: the night already running
   assert.deepEqual(tonightSlots(new Date(2026, 10, 9, 7).getTime()), [46, 47, 48, 49, 50, 51, 52, 53, 54]); // monday 07:00: a fresh night
   assert.deepEqual(tonightSlots(new Date(2026, 10, 14, 10).getTime()), [166, 167, 0, 1, 2, 3, 4, 5, 6]); // saturday wraps into sunday
+});
+
+test('dayOf: the local calendar day as a whole number, whatever the hour', () => {
+  const d = (day: number, hour: number) => new Date(2026, 10, 8 + day, hour, 0, 0).getTime();
+  assert.equal(dayOf(d(0, 9)), dayOf(d(0, 23)), 'same date, any hour');
+  assert.equal(dayOf(d(1, 0)) - dayOf(d(0, 23)), 1, 'across midnight is one day');
+  assert.equal(dayOf(d(2, 11)) - dayOf(d(0, 23)), 2, '1.5 days later is two calendar days');
+  assert.equal(dayOf(d(0, 9)) - dayOf(d(2, 11)), -2, 'backwards is a negative difference; the caller clamps');
 });
 
 // ---- the branch
@@ -332,7 +340,121 @@ test('a device gone from the snapshot: not counted in the stat, listed after wit
   assert.equal(v.stat, '1 device · tonight 0 likely');             // only galaxy counts
   assert.equal(v.lines[0], 'galaxy · tonight 22–07: unlikely 7% (1–36%)');
   // pixel's data is a day old: p0 = 0.9148 -> 91%, wilson: lo 0.6010 -> 60%, hi 0.9871 -> 99%
-  assert.equal(v.lines[1], 'pixel · tonight 22–07: likely 91% (60–99%), from daytime only · last seen 1 day ago');
+  assert.equal(v.lines[1], 'pixel · tonight 22–07: likely 91% (60–99%), from daytime only · last seen yesterday');
+});
+
+/** notes of a device that is not in the snapshot any more: three folded hours, N = 3, a firm guess.
+ *  Slots 46..48 are not part of a sunday night, so tonight stands on the prior alone:
+ *  p0 = 3.5 / 4 = 0.875, each of the nine slots means 0.875 -> 88%; wilson m = 4:
+ *  lo = 0.556664 -> 56%, hi = 0.975012 -> 98%, and the line says "from daytime only". */
+const goneNotes = (t: number) => ({ v: 2, looks: 9, since: t, lastGood: t, dev: { p1: { name: 'pixel', seen: t, slots: { '46': [1, 1, t], '47': [1, 1, t], '48': [1, 1, t] }, cur: null, tps: {} } } });
+const GONE_LINE = 'pixel · tonight 22–07: likely 88% (56–98%), from daytime only';
+
+test('no present device known but a gone one has a guess: the stat says no known device here now (empty snapshot)', () => {
+  const t0 = hourAt(0, 23);
+  const b = create(fakeCtx(goneNotes(t0)).ctx);
+  b.observe(snap([], t0), null);
+  const v = b.view();
+  assert.equal(v.stat, 'no known device here now');
+  assert.deepEqual(v.lines, [GONE_LINE + ' · last seen today']);
+});
+
+test('no present device known but a gone one has a guess: the stat says no known device here now (only a new device present)', () => {
+  const t0 = hourAt(0, 23);
+  const b = create(fakeCtx(goneNotes(t0)).ctx);
+  b.observe(snap([dev({ id: 'p2', name: 'new one' })], t0), null);
+  const v = b.view();
+  assert.equal(v.stat, 'no known device here now');
+  assert.deepEqual(v.lines, [
+    'new one · tonight 22–07: not enough recent hours yet (0 of 3)',
+    GONE_LINE + ' · last seen today',
+  ]);
+});
+
+test('no present device known but a gone one has a guess: the stat says no known device here now (a present device with one hour)', () => {
+  const t0 = hourAt(0, 23);
+  // p1 gone with three folded hours: a firm guess; p2 present with one: not known
+  const stored = { v: 2, looks: 9, since: t0, lastGood: t0, dev: {
+    p1: { name: 'pixel', seen: t0, slots: { '46': [1, 1, t0], '47': [1, 1, t0], '48': [1, 1, t0] }, cur: null, tps: {} },
+    p2: { name: 'phone', seen: t0, slots: { '49': [1, 1, t0] }, cur: null, tps: {} },
+  } };
+  const b = create(fakeCtx(stored).ctx);
+  b.observe(snap([dev({ id: 'p2', name: 'phone' })], t0), null);
+  const v = b.view();
+  assert.equal(v.stat, 'no known device here now');   // not "still learning: 1 recent hour so far"
+  assert.deepEqual(v.lines, [
+    'phone · tonight 22–07: not enough recent hours yet (1 of 3)',
+    GONE_LINE + ' · last seen today',
+  ]);
+});
+
+test('no present device known but a gone one has a guess: the stat says no known device here now (the first seconds after a restart)', () => {
+  const t0 = hourAt(0, 23);
+  const b = create(fakeCtx(goneNotes(t0)).ctx);   // a restart: the notes come from disk
+  const v = b.view();                             // before the first look
+  assert.equal(v.stat, 'no known device here now');
+  assert.deepEqual(v.lines, [GONE_LINE]);         // no look time yet: no "last seen" suffix
+});
+
+test('last seen: today only on the same local date; 23 hours across midnight is yesterday', () => {
+  const t0 = hourAt(0, 23);                       // sunday 23:00
+  const DAY = 86400_000;
+  // the look is close to lastGood; only seen moves, so the far-forward guard stays out of it
+  const mk = (seen: number) => ({ v: 2, looks: 5, since: seen, lastGood: t0, dev: { p1: { name: 'pixel', seen, slots: { '46': [1, 1, seen] }, cur: null, tps: {} } } });
+  const same = create(fakeCtx(mk(hourAt(0, 9))).ctx);
+  same.observe(snap([], t0), null);               // sunday 09:00 seen, sunday 23:00: the same date -> today
+  assert.equal(same.view().lines[0], 'pixel · tonight 22–07: not enough recent hours yet (1 of 3) · last seen today');
+  const across = create(fakeCtx(mk(t0)).ctx);
+  across.observe(snap([], t0 + 23 * 3600_000), null);   // sunday 23:00 -> monday 22:00: 23 h, the day before -> yesterday
+  assert.equal(across.view().lines[0], 'pixel · tonight 22–07: not enough recent hours yet (1 of 3) · last seen yesterday');
+  const day = create(fakeCtx(mk(t0)).ctx);
+  day.observe(snap([], t0 + DAY), null);          // exactly one whole day: still one calendar day
+  assert.equal(day.view().lines[0], 'pixel · tonight 22–07: not enough recent hours yet (1 of 3) · last seen yesterday');
+  const back = create(fakeCtx(mk(t0)).ctx);
+  back.observe(snap([], t0 - DAY), null);         // a clock that stepped back: no negative days
+  assert.equal(back.view().lines[0], 'pixel · tonight 22–07: not enough recent hours yet (1 of 3) · last seen today');
+});
+
+test('last seen: N days ago counts local calendar days (1.5 days is two), and the cap is past 365', () => {
+  const t0 = hourAt(0, 23);
+  // the look at t0 is close to lastGood; only seen is old, so the far-forward guard stays out of it
+  const mk = (seen: number) => ({ v: 2, looks: 5, since: seen, lastGood: t0, dev: { p1: { name: 'pixel', seen, slots: { '46': [1, 1, seen] }, cur: null, tps: {} } } });
+  const half = create(fakeCtx(mk(t0)).ctx);
+  half.observe(snap([], hourAt(2, 11)), null);    // 36 h later, but sunday -> tuesday: two calendar days
+  assert.equal(half.view().lines[0], 'pixel · tonight 22–07: not enough recent hours yet (1 of 3) · last seen 2 days ago');
+  const edge = create(fakeCtx(mk(hourAt(-365, 23))).ctx);
+  edge.observe(snap([], t0), null);               // exactly 365 local dates is still whole days
+  assert.equal(edge.view().lines[0], 'pixel · tonight 22–07: not enough recent hours yet (0 of 3) · last seen 365 days ago');
+  const past = create(fakeCtx(mk(hourAt(-366, 23))).ctx);
+  past.observe(snap([], t0), null);               // 366: over a year ago
+  assert.equal(past.view().lines[0], 'pixel · tonight 22–07: not enough recent hours yet (0 of 3) · last seen over a year ago');
+});
+
+test('a gone device with hours but no present one: the stat says no known device here now, not "0 recent hours"', () => {
+  const t0 = hourAt(0, 23);
+  // two folded hours: N = 2, shown "2 of 3", under the guess threshold
+  const stored = { v: 2, looks: 9, since: t0, lastGood: t0, dev: { p1: { name: 'pixel', seen: t0, slots: { '46': [1, 1, t0], '47': [1, 1, t0] }, cur: null, tps: {} } } };
+  const b = create(fakeCtx(stored).ctx);
+  b.observe(snap([], t0), null);
+  const v = b.view();
+  assert.equal(v.stat, 'no known device here now');   // not "still learning: 0 recent hours so far"
+  assert.deepEqual(v.lines, ['pixel · tonight 22–07: not enough recent hours yet (2 of 3) · last seen today']);
+});
+
+test('a present device with an hour keeps the present-only count, beside a gone one with two', () => {
+  const t0 = hourAt(0, 23);
+  const stored = { v: 2, looks: 9, since: t0, lastGood: t0, dev: {
+    p1: { name: 'pixel', seen: t0, slots: { '46': [1, 1, t0], '47': [1, 1, t0] }, cur: null, tps: {} },
+    p2: { name: 'phone', seen: t0, slots: { '48': [1, 1, t0] }, cur: null, tps: {} },
+  } };
+  const b = create(fakeCtx(stored).ctx);
+  b.observe(snap([dev({ id: 'p2', name: 'phone' })], t0), null);
+  const v = b.view();
+  assert.equal(v.stat, 'still learning: 1 recent hour so far');   // the stat sums present devices only
+  assert.deepEqual(v.lines, [
+    'phone · tonight 22–07: not enough recent hours yet (1 of 3)',
+    'pixel · tonight 22–07: not enough recent hours yet (2 of 3) · last seen today',
+  ]);
 });
 
 test('view() before the first look: the notes are read at the newest seen, so the decay still applies', () => {
