@@ -56,8 +56,8 @@ function leaked(b: any, c: any): string {
 // ---- the pure parts
 
 test('diff: the very first look has nothing to compare with', () => {
-  assert.deepEqual(diff(snap([dev()], at(0)), null, fresh()), []);
-  assert.deepEqual(diff(snap([dev()], at(0)), null, null), []);
+  assert.deepEqual(diff(snap([dev()], at(0)), fresh()), []);
+  assert.deepEqual(diff(snap([dev()], at(0)), null), []);
 });
 
 test('diff names every device change; an unknown reachable or plug is ignored', () => {
@@ -86,7 +86,7 @@ test('diff names every device change; an unknown reachable or plug is ignored', 
     dev({ id: 'p11', name: 'eleven', holds: null }),
   ], at(5));
 
-  const evs = diff(now, before, null);
+  const evs = diff(now, stateOf(before));
   assert.deepEqual(evs.map((e) => [e.k, e.d, e.n, e.x]), [
     ['down', 'p1', 'one', null],
     ['up', 'p2', 'two', null],
@@ -108,31 +108,31 @@ test('diff names the work changes: loaded, mode, a different file loaded, unload
   const s3 = snap([], at(3), work({ loaded: loaded(model({ id: 'r', name: 'Llama 3', file: 'llama.gguf' }), 'split') }));
   const s4 = snap([], at(4));
 
-  assert.deepEqual(diff(s1, s0, null).map((e) => [e.k, e.x]), [['loaded', 'Qwen3 0.6B · apart']]);
-  assert.deepEqual(diff(s2, s1, null).map((e) => [e.k, e.x]), [['mode', 'apart → split']]);
-  assert.deepEqual(diff(s3, s2, null).map((e) => [e.k, e.x]), [['loaded', 'Llama 3 · split']]);
-  assert.deepEqual(diff(s4, s3, null).map((e) => [e.k, e.x]), [['unloaded', null]]);
-  assert.deepEqual(diff(s1, s0, null).map((e) => [e.d, e.n]), [[null, null]]);
+  assert.deepEqual(diff(s1, stateOf(s0)).map((e) => [e.k, e.x]), [['loaded', 'Qwen3 0.6B · apart']]);
+  assert.deepEqual(diff(s2, stateOf(s1)).map((e) => [e.k, e.x]), [['mode', 'apart → split']]);
+  assert.deepEqual(diff(s3, stateOf(s2)).map((e) => [e.k, e.x]), [['loaded', 'Llama 3 · split']]);
+  assert.deepEqual(diff(s4, stateOf(s3)).map((e) => [e.k, e.x]), [['unloaded', null]]);
+  assert.deepEqual(diff(s1, stateOf(s0)).map((e) => [e.d, e.n]), [[null, null]]);
 });
 
 test('diff a project keeps its id and new state only; its title, request, line and error stay out', () => {
   const p0 = snap([], at(0), work(), [proj({ state: 'running', title: 'OLD TITLE', request: 'OLD REQUEST' })]);
   const p1 = snap([], at(1), work(), [proj({ state: 'done', title: 'SECRET TITLE', request: 'SECRET REQUEST', line: 'SECRET LINE', error: 'SECRET ERROR' })]);
-  const evs = diff(p1, p0, null);
+  const evs = diff(p1, stateOf(p0));
   assert.deepEqual(evs.map((e) => [e.k, e.d, e.n, e.x]), [['project', 'j1', null, 'done']]);
   assert.ok(!/SECRET|OLD/.test(JSON.stringify(evs)));
 
   // a project that appears or leaves is not one of the asked-for events
   const p2 = snap([], at(2), work(), [proj({ state: 'done' }), proj({ id: 'j2', state: 'running' })]);
-  assert.deepEqual(diff(p2, p1, null), []);
+  assert.deepEqual(diff(p2, stateOf(p1)), []);
   const p3 = snap([], at(3), work(), []);
-  assert.deepEqual(diff(p3, p2, null), []);
+  assert.deepEqual(diff(p3, stateOf(p2)), []);
 });
 
 test('diff after a restart compares with what the notes remembered, so a change is a change', () => {
   const remembered = stateOf(snap([dev({ id: 'p1', reachable: true })], at(0)));
   assert.equal(remembered.looked, true);
-  const evs = diff(snap([dev({ id: 'p1', reachable: false })], at(5)), null, remembered);
+  const evs = diff(snap([dev({ id: 'p1', reachable: false })], at(5)), remembered);
   assert.deepEqual(evs.map((e) => [e.k, e.d]), [['down', 'p1']]);
 });
 
@@ -152,6 +152,15 @@ test('newDecisions: only decisions newer than the watermark, text cut to 200, th
   const long = newDecisions(snap([], at(6), work({ decisions: [decision(1, 'x'.repeat(300))] })), null);
   assert.equal(long.events.length, 1);
   assert.equal(long.events[0].x!.length, 200);
+});
+
+test('newDecisions: only the last 30 decisions of a snapshot count, future-stamped ones kept apart', () => {
+  const ds = Array.from({ length: 35 }, (_, i) => decision(T + 400 * DAY + i * 1_000, `f${i}`));
+  const r = newDecisions(snap([], at(5), work({ decisions: ds })), null);
+  assert.equal(r.events.length, 30, 'only the last LOGGED_MAX decisions of the snapshot are read');
+  assert.equal(r.future.length, 30, 'the list of future-stamped ones is capped at 30');
+  assert.deepEqual(r.future.map((x) => x.text), ds.slice(5).map((x) => x.text), 'the five oldest are left out');
+  assert.equal(r.logged.length, 0, 'a decision stamped after the look is not in the ring');
 });
 
 test('prune: drops what is older than 90 days, keeps at most 2000, never changes its input', () => {
@@ -289,6 +298,25 @@ test('the log writes the work changes: loaded, mode, a different model, unloaded
   assert.equal(b.view().lines[4], '23:00  the model loaded: Qwen3 0.6B · apart');
 });
 
+test('an empty model name or mode leaves no gap in the loaded line', () => {
+  const { b, c } = drive([
+    snap([], at(0)),
+    snap([], at(5), work({ loaded: loaded(model({ file: 'a.gguf', name: '' }), 'apart') })),
+    snap([], at(10), work({ loaded: loaded(model({ file: 'b.gguf', name: 'Qwen3 0.6B' }), '') })),
+    snap([], at(15), work({ loaded: loaded(model({ file: 'c.gguf', name: '' }), '') })),
+    snap([], at(75), work({ loaded: loaded(model({ file: 'c.gguf', name: '' }), '') })),   // flush
+  ]);
+  assert.deepEqual((c.stored as any).ev.map((x: any) => [x.k, x.x]), [
+    ['loaded', 'apart'],
+    ['loaded', 'Qwen3 0.6B'],
+    ['loaded', null],
+  ]);
+  const lines = b.view().lines;
+  assert.equal(lines[2], '23:00  the model loaded: apart');
+  assert.equal(lines[1], '23:00  the model loaded: Qwen3 0.6B');
+  assert.equal(lines[0], '23:00  the model loaded');
+});
+
 test('a project state changes; its title, request, line and error reach neither notes, view nor feed', () => {
   const secret = (n: string) => proj({ title: `SECRET TITLE ${n}`, request: `SECRET REQUEST ${n}`, line: `SECRET LINE ${n}`, error: `SECRET ERROR ${n}` });
   const { b, c } = drive([
@@ -328,6 +356,91 @@ test('a decision already logged is not logged again; a new one is; the text is c
   assert.equal(ev[2].x, 'x'.repeat(200));
   assert.deepEqual(b.view().lines.slice(0, 3), [`23:00  ${'x'.repeat(200)}`, '23:00  added pixel', '23:00  started']);
   assert.equal(b.view().stat, '3 events kept · 3 today');
+});
+
+test('after a re-anchor a decision stamped before the first good look is still logged', () => {
+  const far = decision(T + 400 * DAY, 'far');
+  const three = decision(at(3), 'three');
+  const { c } = drive([
+    snap([], at(0), work({ decisions: [] })),
+    snap([], T + 400 * DAY, work({ decisions: [far] })),    // the bad clock: the watermark jumps far ahead
+    snap([], at(5), work({ decisions: [far, three] })),     // the first good look re-anchors
+    snap([], at(75), work({ decisions: [far, three] })),    // flush
+  ]);
+  assert.deepEqual((c.stored as any).ev.map((x: any) => [x.k, x.x, x.t]), [['decision', 'three', at(5)]]);
+  assert.equal((c.stored as any).lastDecisionAt, at(5), 'the watermark re-anchored to the good look');
+  assert.deepEqual((c.stored as any).logged.map((x: any) => x.text), ['far', 'three']);
+});
+
+test('a future-stamped decision never moves the watermark past a real decision that arrives later', () => {
+  const far = decision(T + 400 * DAY, 'far');
+  const seven = decision(at(7), 'seven');
+  const { c } = drive([
+    snap([], at(0), work({ decisions: [] })),
+    snap([], at(5), work({ decisions: [far] })),            // logged, but the watermark must stay at 23:00:05
+    snap([], at(10), work({ decisions: [far] })),
+    snap([], at(15), work({ decisions: [far, seven] })),    // a real one, stamped after look 2
+    snap([], at(75), work({ decisions: [far, seven] })),    // flush
+  ]);
+  assert.deepEqual((c.stored as any).ev.map((x: any) => x.x), ['far', 'seven']);
+});
+
+test('a future-stamped decision first in the list does not hide a real one in the same look', () => {
+  const fut = decision(T + 400 * DAY, 'fut');
+  const real = decision(at(1), 'real');
+  const { c } = drive([
+    snap([], at(5), work({ decisions: [fut, real] })),   // first decisions: the future one comes first
+  ]);
+  assert.deepEqual((c.stored as any).ev.map((x: any) => x.x), ['fut', 'real']);
+});
+
+test('a decision stamped before a clock step back is not hidden by the future-stamped one before it', () => {
+  const five = decision(T + 5_000, 'C');
+  const a = decision(T + 8_000, 'A');       // stamped 1 s ahead of the look at T+7 s
+  const b = decision(T + 6_500, 'B');       // stamped after the clock stepped back 2 s
+  const { c } = drive([
+    snap([], T, work({ decisions: [] })),
+    snap([], T + 5_000, work({ decisions: [five] })),               // the watermark is at T+5 s
+    snap([], T + 7_000, work({ decisions: [five, a, b] })),
+    snap([], T + 75_000, work({ decisions: [five, a, b] })),        // flush the save
+  ]);
+  assert.deepEqual((c.stored as any).ev.map((x: any) => x.x), ['C', 'A', 'B']);
+  assert.equal((c.stored as any).lastDecisionAt, T + 7_000);
+});
+
+test('a future-stamped decision is logged once and never again, even after 80 later decisions', () => {
+  const far = decision(T + 400 * DAY, 'far');
+  const series = Array.from({ length: 80 }, (_, i) => decision(at(i + 1), `d${i + 1}`));
+  const look = (i: number) => [...series.slice(0, i), far];      // newest last, as the engine writes them
+  const snaps = [snap([], at(0), work({ decisions: [] }))];
+  for (let i = 1; i <= 80; i++) snaps.push(snap([], at(i), work({ decisions: look(i) })));
+  snaps.push(snap([], at(200), work({ decisions: look(80) })));  // flush the save
+  const { c, ctx } = drive(snaps);
+
+  const ev = (c.stored as any).ev;
+  assert.equal(ev.length, 81, 'the one future-stamped decision and the eighty real ones');
+  assert.equal(ev.filter((x: any) => x.x === 'far').length, 1, 'the future-stamped one never comes back');
+  assert.equal(new Set(ev.map((x: any) => x.x)).size, 81, 'every decision is logged once');
+  assert.deepEqual((c.stored as any).future.map((x: any) => x.text), ['far'], 'the future-stamped one is remembered');
+
+  const again = create(ctx);
+  c.t = at(300);
+  again.observe(snap([], at(300), work({ decisions: look(80) })), null);   // a restart, all 81 still in the snapshot
+  assert.equal((c.stored as any).ev.length, 81, 'nothing new, nothing re-logged after the restart');
+  assert.equal(again.view().stat, '81 events kept · 81 today');
+});
+
+test('a snapshot with more future-stamped decisions than the list holds does not grow the log', () => {
+  const fs = Array.from({ length: 35 }, (_, i) => decision(T + 400 * DAY + i * 1_000, `f${i}`));
+  const snaps = [snap([], at(0), work({ decisions: [] }))];
+  for (let i = 1; i <= 41; i++) snaps.push(snap([], at(i), work({ decisions: fs })));
+  snaps.push(snap([], at(200), work({ decisions: fs })));   // flush the save
+  const { c } = drive(snaps);
+
+  const ev = (c.stored as any).ev;
+  assert.equal(ev.length, 30, 'the log does not grow on the later looks');
+  assert.equal(ev.filter((x: any) => x.k === 'decision').length, 30);
+  assert.equal((c.stored as any).future.length, 30);
 });
 
 test('after a restart a change is still a change, not an appearance', () => {
@@ -389,6 +502,7 @@ test('notes of the wrong shape or with a bad time give fresh notes, never a thro
     { v: 1, ev: [], lastDecisionAt: -5, state: goodState },
     { v: 1, ev: [], lastDecisionAt: 1e300, state: goodState },
     { v: 1, ev: [], lastDecisionAt: null, state: { looked: true, devices: 'x', work: { loaded: null }, projects: [] } },
+    { v: 1, ev: [{ t: at(1), k: 'appeared', d: 'p1', n: 'pixel', x: null }], lastDecisionAt: null, logged: [], future: [{ at: Number.NaN, text: 'x' }], state: goodState },
   ];
   for (const bad of bads) {
     const { ctx } = fakeCtx(bad);
@@ -401,6 +515,41 @@ test('notes of the wrong shape or with a bad time give fresh notes, never a thro
     assert.equal(b.view().lines.length, 1);
     assert.equal(b.view().lines[0], '23:00  pixel stopped answering');
   }
+});
+
+test('a notes file from before the future list loads; its events and decision ring survive', () => {
+  const started = decision(at(0) - 10_000, 'started');
+  // exactly the shape memory-1 wrote: v, ev, lastDecisionAt, logged, state; no future
+  const merged = {
+    v: 1,
+    ev: [{ t: at(1), k: 'appeared', d: 'p1', n: 'pixel', x: null }],
+    lastDecisionAt: started.at,
+    logged: [{ at: started.at, text: 'started' }],
+    state: {
+      looked: true,
+      devices: [{ id: 'p1', name: 'pixel', reachable: true, plugged: null, via: 'wifi', holds: null }],
+      work: { loaded: null },
+      projects: [],
+    },
+  };
+  const { c, ctx } = fakeCtx(merged);
+  const b = create(ctx);
+  c.t = at(5);
+  b.observe(snap([dev({ id: 'p1', reachable: true })], at(5), work({ decisions: [started] })), null);
+  c.t = at(65);
+  b.observe(snap([dev({ id: 'p1', reachable: false })], at(65), work({ decisions: [started] })), null);   // flush
+
+  const ev = (c.stored as any).ev;
+  assert.deepEqual(ev.map((x: any) => [x.k, x.t]), [['appeared', at(1)], ['down', at(65)]], 'the merged event survived');
+  assert.equal(ev.filter((x: any) => x.k === 'decision').length, 0, 'the logged decision is not logged again');
+  assert.deepEqual((c.stored as any).logged.map((x: any) => x.text), ['started'], 'the decision ring survived');
+  assert.deepEqual((c.stored as any).future, [], 'the missing list loaded empty');
+
+  const again = create(ctx);
+  c.t = at(70);
+  again.observe(snap([dev({ id: 'p1', reachable: false })], at(70), work({ decisions: [started] })), null);
+  assert.equal((c.stored as any).ev.length, 2, 'nothing re-logged after the restart');
+  assert.equal(again.view().stat, '2 events kept · 2 today');
 });
 
 test('a look with no usable at is skipped, and a change in it is caught by the next good look', () => {
@@ -798,6 +947,6 @@ test('a non-string mode, state or file is missing, never [object Object]', () =>
   ]);
   assert.doesNotMatch(JSON.stringify(b.view()), /NaN|undefined|\[object/);
   assert.doesNotMatch(JSON.stringify(c.stored), /NaN|undefined|\[object/);
-  assert.equal(b.view().lines[0], '23:00  the model loaded: 42 · ');
+  assert.equal(b.view().lines[0], '23:00  the model loaded: 42');
   assert.equal((c.stored as any).state.projects.length, 0, 'a project with no state text is not kept');
 });
