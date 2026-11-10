@@ -21,8 +21,12 @@
 //    'unknown' and the line says "not enough recent hours yet (N of 3)".
 //    guess: mean >= 0.6 likely, < 0.4 unlikely, else maybe. When none of tonight's nine slots has
 //    n > 0 the guess stands but the line says ", from daytime only". The stat counts only devices
-//    in the current snapshot; a device gone from it keeps its line with "last seen N days ago"
-//    (whole days, "over a year ago" past 365) and is listed after the present ones.
+//    in the current snapshot, and says "no known device here now" when none of them is known while
+//    a gone one has a guess, or when none of them has a recent hour shown while a gone one has;
+//    a device gone from it keeps its line with "last seen today" (the same local date), "last seen
+//    yesterday" (the day before) or "last seen N days ago" (whole calendar days, "over a year ago"
+//    past 365) and is listed after the present ones. view() before the first look reads the notes
+//    at the newest seen and shows no "last seen" suffix.
 //  - when tonight is read, every slot's n and s decay to the look's time first (same
 //    d = 0.5 ** (dtWeeks / HALF_LIFE_WEEKS), dt never negative) and are not written back, so a
 //    device that went quiet fades from the estimate and from the prior.
@@ -161,6 +165,13 @@ export function tonightSlots(at: number): number[] {
   const day = d.getHours() < 7 ? (d.getDay() + 6) % 7 : d.getDay();
   const next = (day + 1) % 7;
   return [22, 23].map((h) => day * 24 + h).concat([0, 1, 2, 3, 4, 5, 6].map((h) => next * 24 + h));
+}
+
+/** the local calendar day an ms falls on, as a whole day number: Date.UTC of its local year, month
+ *  and date / one day, so the hour does not matter and a 23 or 25 hour DST day still counts once. */
+export function dayOf(ms: number): number {
+  const d = new Date(ms);
+  return Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()) / DAY_MS;
 }
 
 const fresh = (): ForecastNotes => ({ v: 2, looks: 0, since: null, lastGood: null, dev: Object.create(null) });
@@ -435,6 +446,8 @@ export function create(ctx: BranchCtx): Branch {
       const presentRated = rated.filter((r) => present(r.id));
       const likely = presentRated.filter((r) => r.t.guess === 'likely').length;
       const known = presentRated.filter((r) => r.t.guess !== 'unknown').length;
+      // a gone device still on the page with a guess: the stat must not say nothing is known
+      const goneKnown = rated.some((r) => !present(r.id) && r.t.guess !== 'unknown');
       const seen = new Set<number>();
       for (const r of rated) for (const k of Object.keys(r.d.slots)) if (r.d.slots[k][0] >= 1) seen.add(Number(k));
 
@@ -451,14 +464,21 @@ export function create(ctx: BranchCtx): Branch {
         let absent = '';
         if (snap != null && !present(id)) {
           // gone from the snapshot: kept in the list, after the present ones, with its last seen
-          const days = Math.max(0, Math.floor((at - d.seen) / DAY_MS));
-          absent = days > 365 ? ' · last seen over a year ago' : ` · last seen ${days} day${days === 1 ? '' : 's'} ago`;
+          // counted in local calendar days (23 h across midnight is yesterday), never negative
+          const days = Math.max(0, dayOf(at) - dayOf(d.seen));
+          absent = days === 0 ? ' · last seen today'
+            : days === 1 ? ' · last seen yesterday'
+            : days > 365 ? ' · last seen over a year ago'
+            : ` · last seen ${days} days ago`;
         }
         return `${d.name} · ${when}${speed}${absent}`;
       });
 
       const maxN = presentRated.reduce((m, r) => Math.max(m, r.t.N), 0);
       const maxShown = Math.round(maxN * 10) / 10;
+      // the stat sums present devices only: when none of them has a recent hour shown but a gone
+      // device does, "still learning: 0 recent hours" would contradict that device's line
+      const goneHours = maxShown === 0 && rated.some((r) => !present(r.id) && Math.round(r.t.N * 10) / 10 > 0);
       // the scored hours for the learning branch: every device in the notes (at most MAX_DEVICES,
       // a live one never evicted), oldest pair first
       const pairs = Object.keys(notes.dev)
@@ -472,7 +492,7 @@ export function create(ctx: BranchCtx): Branch {
       return {
         built: true,
         stat: known === 0
-          ? `still learning: ${fmtN(maxN)} recent hour${maxShown === 1 ? '' : 's'} so far`
+          ? goneKnown || goneHours ? 'no known device here now' : `still learning: ${fmtN(maxN)} recent hour${maxShown === 1 ? '' : 's'} so far`
           : `${presentRated.length} device${presentRated.length === 1 ? '' : 's'} · tonight ${likely} likely`,
         gauge: Math.round((seen.size / SLOTS) * 100),
         rows: [
