@@ -754,7 +754,13 @@ function photoRow(list) {
 }
 
 $('attach').addEventListener('click', () => $('photo-input').click());
-$('photo-input').addEventListener('change', () => { addShots($('photo-input').files); $('photo-input').value = ''; });
+// the "+" (10.11.2026): after the pick, unless the loaded model sees photos itself, the start a
+// chat sheet asks which model should see it, listing only models that see photos (W.vision)
+$('photo-input').addEventListener('change', () => {
+  const added = addShots($('photo-input').files);
+  $('photo-input').value = '';
+  if (added && !isGuest() && !S.status?.loaded?.sees && !S.streaming) openConnect(false, true);
+});
 input.addEventListener('paste', (e) => { const files = e.clipboardData?.files; if (files?.length && addShots(files)) e.preventDefault(); });
 const composerEl = $('composer');
 composerEl.addEventListener('dragover', (e) => { if ([...(e.dataTransfer?.types ?? [])].includes('Files')) { e.preventDefault(); composerEl.classList.add('drop'); } });
@@ -1084,7 +1090,6 @@ function setSide(open) {
   $('app').classList.toggle('side-hidden', !open);
 }
 function setBrain(open) {
-  if (!open && matchMedia('(min-width: 861px)').matches) open = true; // wide: always open
   $('app').classList.toggle('brain-open', open);
   $('brain-toggle').setAttribute('aria-pressed', String(open));
   try { localStorage.setItem('kula.chat.brain', open ? '1' : '0'); } catch {}
@@ -1913,8 +1918,44 @@ function modelButton(m, phone) {
   }
   if (fit.children.length) b.appendChild(fit);
   if (m.off) b.disabled = true;
+  // for a photo (W.vision) it runs on this computer: only there does the model get the photo itself
+  else if (W.vision) b.addEventListener('click', () => { settings.model = m.id; settings.mode = 'here'; saveSettings(); W = wiz.next(W, { type: 'model', id: m.id }); go({ type: 'mode', mode: 'here' }); });
   else b.addEventListener('click', () => { settings.model = m.id; saveSettings(); go({ type: 'model', id: m.id }); });
   return b;
+}
+// The "+" for a photo (10.11.2026): only the models that see photos, flat, each judged for this
+// computer alone (it runs here, the one place the photo goes straight to the model). None that
+// can run is said plainly; closing the sheet keeps the photo in the message box.
+function visionModelsView(phone, loadedNote) {
+  const out = [q('which model should see the photo?')];
+  const note = loadedNote();
+  if (note) out.push(note);
+  const close = (text) => btn(text, 'ghost', () => $('connect').close());
+  if (!S.status?.llama) {
+    out.push(errLine('no model can see photos here yet: it would run on this computer, and this computer has no llama.cpp. run kula-node setup, then try again.'), para('the photo stays in the message box.', 'hint'), row(close('close')));
+    return out;
+  }
+  const gbs = (mb) => (mb / 1024).toFixed(1);
+  const max = Math.round((S.lineup?.hereTotalMb ?? 0) * 0.7), free = Math.round((S.lineup?.hereFreeMb ?? 0) * 0.7);
+  const seen = new Set();
+  const list = pickTree(phone).flatMap((k) => k.series.flatMap((x) => x.models))
+    .filter((m) => m.vision && !seen.has(m.id) && seen.add(m.id))
+    .map((m) => {
+      const off = m.off ?? (max && m.needMb > max ? `needs about ${gbs(m.needMb)} GB; this computer has about ${gbs(max)} GB for a model` : null);
+      const tight = !off && free && m.needMb > free ? `more than is free right now (about ${gbs(free)} GB): close other programs` : null;
+      return { ...m, off, tight, onPhone: false, fit: m.here || !m.size ? null : ['info', `downloads here first (${gb(m.size)})`] };
+    });
+  if (!list.some((m) => !m.off)) {
+    out.push(errLine(list.length ? 'no model that sees photos fits on this computer right now.' : 'no model that sees photos is offered on this computer.'));
+    if (list.length) { const box = el('div', 'model-list wiz-models'); for (const m of list) box.appendChild(modelButton(m, phone)); out.push(box); }
+    out.push(para('the photo stays in the message box.', 'hint'), row(close('close')));
+    return out;
+  }
+  out.push(para('only models that see photos are listed. it runs on this computer, so the photo goes straight to it.', 'hint'));
+  const box = el('div', 'model-list wiz-models');
+  for (const m of list) box.appendChild(modelButton(m, phone));
+  out.push(box, row(close('not now')));
+  return out;
 }
 const phoneNow = () => wiz.choosePhone(S.peers, [W.peerId, ...settings.peers].filter(Boolean));
 
@@ -2103,6 +2144,7 @@ const VIEWS = {
       return n;
     };
     if (!S.models.length || !S.lineup) { out.push(q('which model?'), waiting('getting the list…')); return out; }
+    if (W.vision) return visionModelsView(phone, loadedNote);
     const tree = pickTree(phone);
     const goTo = (maker, series) => { pickAt = { maker, series }; renderWiz(true); $('wiz-q')?.focus(); };
     const maker = tree.find((k) => k.id === pickAt.maker) ?? null;
@@ -2218,7 +2260,7 @@ const VIEWS = {
     return [q(`loading ${name}`), bar, msg, r];
   },
 
-  done: () => [q('ready ✓'), para('the composer is yours.')],
+  done: () => [q('ready ✓'), para(W.vision ? `${S.models.find((m) => m.id === W.model)?.name ?? 'the model'} sees photos: ask about yours and send.` : 'the composer is yours.')],
 };
 
 const STATE_TAG = { ready: 'ready', off: 'not answering', busy: 'busy', unknown: 'not checked' };
@@ -2427,9 +2469,11 @@ $('wiz-steps').addEventListener('click', () => showAdvanced(false));
 $('wiz-back').addEventListener('click', () => go({ type: 'back' }));
 
 // auto: the page opened it by itself (a model loaded: it stays shut)
-async function openConnect(auto) {
+// vision: opened by the "+" for a photo, so only models that see photos are offered, run here
+async function openConnect(auto, vision) {
   if (isGuest()) return;
   auto = auto === true;
+  vision = vision === true;
   const run = ++wizRun;
   W = wiz.initial(settings.way);
   wizStepShown = '';
@@ -2442,7 +2486,9 @@ async function openConnect(auto) {
   // start a chat (6.11.2026): devices are added in the devices bubble, so this sheet begins at
   // the model (or the load running); the cable and wi-fi steps are reached from "add a device"
   let start = S.status?.loading ? 'load' : 'model';
-  W = { ...W, chat: true };
+  W = { ...W, chat: true, vision };
+  $('connect-title').textContent = vision ? 'a model that sees photos' : 'start a chat';
+  $('wiz-advanced').parentElement.hidden = vision;
   const d = $('connect');
   const show = (step) => {
     W = { ...W, step };
@@ -2902,8 +2948,11 @@ $('open-settings').addEventListener('click', () => openSettings());
 if (matchMedia('(max-width: 860px)').matches) setSide(false);
 // the brain is always open on a wide screen (6.11.2026); on a narrow one it is a drawer
 const WIDE = matchMedia('(min-width: 861px)');
-if (WIDE.matches) setBrain(true);
-WIDE.addEventListener('change', () => setBrain(WIDE.matches));
+// wide: open unless the person closed it (the brain button in the top bar opens and closes it,
+// 10.11.2026); narrow: a drawer, shut until asked for
+const brainShut = () => { try { return localStorage.getItem('kula.chat.brain') === '0'; } catch { return false; } };
+if (WIDE.matches && !brainShut()) setBrain(true);
+WIDE.addEventListener('change', () => { if (!WIDE.matches) { $('app').classList.remove('brain-open'); $('brain-toggle').setAttribute('aria-pressed', 'false'); } else if (!brainShut()) setBrain(true); });
 const fromHash = location.hash.slice(1);
 newChat();
 // who is this: the owner at 127.0.0.1, or a guest who came in with an invite

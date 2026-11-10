@@ -124,6 +124,16 @@ test('cable: an old error is tried again once by itself; a new one waits for "tr
   for (const step of ['cable-plug', 'cable-share', 'cable-code']) assert.equal(wiz.back({ ...wiz.initial(), step }), 'how');
 });
 
+test('the "+" for a photo (W.vision): model, then the load on this computer; back from the load is the model', () => {
+  let w = { ...wiz.initial(), chat: true, vision: true, step: 'model' };
+  w = wiz.next(w, { type: 'model', id: 'smolvlm-500m' });
+  w = wiz.next(w, { type: 'mode', mode: 'here' });
+  assert.equal(w.step, 'load');
+  assert.equal(w.mode, 'here');
+  assert.equal(wiz.back(w), 'model');
+  assert.equal(wiz.back({ ...w, vision: false }), 'mode');
+});
+
 // ---------- wi-fi
 
 const FOUND = { name: 'pixel', host: '192.168.1.33', port: 50551, kind: 'phone', v: 'rpc7', paired: null };
