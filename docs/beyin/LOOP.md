@@ -97,8 +97,29 @@ Her dal **ayrı bir projedir**:
    başlat (`run_in_background`). Zor ya da geniş işte `--pro`. Gereken komutlar için `--allow`.
 6. **Kaydet.** STATE.md ve proje dosyalarını güncelle; kullanıcıya iki üç satırlık durum yaz (ne birleşti,
    ne çalışıyor, ne takıldı).
-7. **Uyku.** İşçiler çalışıyorsa bildirim seni uyandırır; döngü için uzun bir yedek uyanış kur (20–30 dk).
-   Bekleyen iş yoksa hemen sıradakine geç.
+7. **Karar özeti (30 dakikada bir).** Son özetten bu yana 30 dakika geçtiyse (zamanı STATE.md'de tut),
+   aşağıdaki "karar özeti"ni gönder.
+8. **Uyku.** İşçiler çalışıyorsa bildirim seni uyandırır; döngü için yedek uyanışı **en çok 30 dakika**
+   sonraya kur (`ScheduleWakeup`), ki özet aksamasın. Bekleyen iş yoksa hemen sıradakine geç.
+
+## karar özeti: 30 dakikada bir kullanıcıya
+
+Kullanıcı aldığın ana kararları 30 dakikada bir görmek istiyor. Her özet:
+- **Başlık:** `beyin · karar özeti · <saat>` ve bir satırda o arada ne oldu (kaç dal çalıştı, kaç birleştirme,
+  gate durumu).
+- **Ana kararlar** (en önemlisi önce, en çok 8): hangi dal / düğüm, ne karar verildi, bir cümle neden,
+  seçilmeyen ana seçenek, dayandığı kaynak (başlık + adres). Yalnız gerçek kararlar: yöntem seçimi, mimari,
+  güvenlik ayarı, bir eşik ya da formül, bir şeyi yapmama kararı. Rutin ilerleme buraya girmez.
+- **Senin kararını bekleyenler:** haritada `durum: soru` bıraktığın her şey, bir satırda, seçenekleriyle.
+- **Değiştirmek istersen:** haritadaki ilgili düğümün adı (kullanıcı oraya `senin_kararin` yazar ya da not
+  bırakır; bir sonraki turda sen okuyup uyarsın).
+- Yeni karar yoksa tek satır: "bu yarım saatte yeni karar yok; şunlar sürüyor: …".
+
+Gönderiş:
+1. Özeti **sohbete doğrudan yaz** (asıl kanal; kullanıcı telefondan Remote Control ile bakabilir).
+2. Aynı metni `~/.claude/beyin-loop/KARARLAR.md`'nin **en üstüne** ekle (birikimli, en yenisi üstte) ve o
+   dosyayı `SendUserFile` ile `status: "proactive"` gönder.
+3. `PushNotification` aracı varsa kısa bir bildirim: "beyin: N yeni karar, M soru seni bekliyor".
 
 ## bağlantı: bugün kablo ve wi-fi, yarın doğrudan internet
 
@@ -151,7 +172,7 @@ Her dalda sırayla:
 
 - **İzinli:** okumak, worktree ve `beyin/*` dalları açmak, DeepSeek işçisi çalıştırmak, testler, gate,
   yerel commit ve `kula-main`'e yerel birleştirme, beyin haritası ve destede yazmak (yukarıdaki sınırlarla),
-  `~/.claude/beyin-loop/` dosyaları.
+  `~/.claude/beyin-loop/` dosyaları, kullanıcıya karar özeti ve bildirim göndermek.
 - **Yasak:** `git push`, release yayınlamak, siteyi değiştirmek, apk derlemek, bir şey silmek (dal, dosya,
   harita düğümü; gereksiz görünen düğümü `durum: sonra` ve bir notla işaretle), `--no-verify`, guard
   hook'unun etrafından dolaşmak, vendor/llama.cpp ağacı, ödeme/abonelik kodu, internete çıkan bir servis.
