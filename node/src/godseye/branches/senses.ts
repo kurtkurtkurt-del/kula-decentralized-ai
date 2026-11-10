@@ -4,8 +4,10 @@
 // engine probes about every 15 s, the eye looks every 5 s); the last 30 new readings are kept per
 // device. The latency is robust: the median and MAD spot a spike, RFC 6298 smooths the usual
 // range (SRTT ± 4 * RTTVAR, its low end floored at 0, shown as "usually X ms (lo–hi)"), and a
-// Nagios-style weighted count of ups and downs decides flapping with hysteresis. Its notes are
-// one small json (ctx.save), bounded and saved at most once a minute.
+// Nagios-style weighted count of ups and downs decides flapping with hysteresis; a stale line
+// does not say flapping, and ten usual gaps without a new reading clear the flag. Its notes are
+// one small json (ctx.save), bounded and saved at most once a minute; the view lists 40 device
+// lines at most and then how many it left out.
 // Every value taken from the snapshot is checked first: a reading only enters the notes when the
 // ok is a boolean and checkedAt is a usable time, so this branch never writes notes its own
 // read-back would throw away, and no NaN or absurd number reaches the view. A shown number also has
@@ -22,6 +24,7 @@ const FLAP_LOOKS = 21;                   // the flapping window: up to 20 places
 const FLAP_MIN_READINGS = 8;             // fewer readings than this: no flap change yet
 const FLAP_START = 0.30;                 // change at or over this starts flapping
 const FLAP_END = 0.15;                   // change at or under this ends it (hysteresis)
+const FLAP_QUIET_GAPS = 10;              // no new reading for ten usual gaps: not flapping any more
 const GAP_DEFAULT_MS = 15_000;           // the probe gap assumed until three real gaps exist
 const GAP_MIN_MS = 5_000;
 const GAP_MAX_MS = 120_000;
@@ -70,6 +73,14 @@ function usable(d: unknown): d is EyeDevice {
 /** the name in lines, rows and the feed; a device without one goes by its id */
 const shownName = (d: EyeDevice) => (d.name.trim() || d.id).slice(0, NAME_MAX);
 
+/** the feed line for a device whose answer changed: it answers again, or it stopped, with its
+ *  reason cut. called only when reachable is a boolean. */
+function flipLine(d: EyeDevice): string {
+  if (d.reachable === true) return `${shownName(d)} answers again`;
+  const reason = typeof d.reason === 'string' && d.reason ? `: ${d.reason.slice(0, REASON_MAX)}` : '';
+  return `${shownName(d)} stopped answering${reason}`;
+}
+
 /** the reach word, built here from validated values so a bad reachMs or reason cannot reach the
  *  view. good values read exactly as util's reachWord does. withMs is false for a stale device:
  *  its last latency is not a current number. */
@@ -106,8 +117,7 @@ export function rfc6298(srtt: number | null, rttvar: number | null, r: number): 
 
 /** nagios-style flap change over the last 21 readings: the sum of the weights of the places
  *  where ok changed / the sum of the weights of the places that exist. place i (0 = oldest) has
- *  weight 0.8 + 0.4 * i/19, so a recent change weighs more. fewer than 8 readings: null.
- *  change = changed / total, both over the last min(21, n) readings. */
+ *  weight 0.8 + 0.4 * i/19, so a recent change weighs more. fewer than 8 readings: null. */
 export function flapChange(oks: boolean[]): number | null {
   const w = oks.slice(-FLAP_LOOKS);
   if (w.length < FLAP_MIN_READINGS) return null;
@@ -121,20 +131,24 @@ export function flapChange(oks: boolean[]): number | null {
   return total > 0 ? changed / total : null;
 }
 
-/** is the last probe too old? the usual gap is the median of the positive gaps (a clock that
- *  went backwards leaves a negative one, ignored), 15 s until three exist, clamped to 5–120 s.
- *  a device is stale when at - checkedAt > 3 * gap. a time that is not usable means no staleness
- *  is judged, so a null, NaN or absurd clock never invents a silence. */
-export function isStale(at: number | null, checkedAt: number | null, gaps: number[]): boolean {
-  if (!isTime(at) || !isTime(checkedAt)) return false;
+/** the usual probe gap: the median of the positive gaps (a clock that went backwards leaves a
+ *  negative one, ignored), 15 s until three exist, clamped to 5–120 s. */
+export function usualGap(gaps: number[]): number {
   const good = gaps.filter((g) => Number.isFinite(g) && g > 0);
   const m = good.length >= STALE_GAPS ? median(good) : null;
-  const gap = Math.min(GAP_MAX_MS, Math.max(GAP_MIN_MS, m ?? GAP_DEFAULT_MS));
-  return at - checkedAt > STALE_GAPS * gap;
+  return Math.min(GAP_MAX_MS, Math.max(GAP_MIN_MS, m ?? GAP_DEFAULT_MS));
+}
+
+/** is the last probe too old? a device is stale when at - checkedAt > 3 * its usual gap. a time
+ *  that is not usable means no staleness is judged, so a null, NaN or absurd clock never invents
+ *  a silence. */
+export function isStale(at: number | null, checkedAt: number | null, gaps: number[]): boolean {
+  if (!isTime(at) || !isTime(checkedAt)) return false;
+  return at - checkedAt > STALE_GAPS * usualGap(gaps);
 }
 
 /** the gaps between consecutive readings; a backward clock step leaves a negative one, and
- *  isStale is the one place that filters to the positive ones. */
+ *  usualGap is the one place that filters to the positive ones. */
 function gapsOf(r: Reading[]): number[] {
   const out: number[] = [];
   for (let i = 1; i < r.length; i++) out.push(r[i].at - r[i - 1].at);
@@ -142,28 +156,30 @@ function gapsOf(r: Reading[]): number[] {
 }
 
 /** keep 40 devices: those in this look first, then the ones seen last, so a device that is here
- *  never goes in favour of one that is not. returns how many went */
-function trim(dev: Record<string, DevNotes>, present?: Set<string>): number {
+ *  never goes in favour of one that is not. true when something went.
+ *  after a backward clock step every absent device's seen ties, so the cap falls back to
+ *  insertion order. */
+function trim(dev: Record<string, DevNotes>, present?: Set<string>): boolean {
   const ids = Object.keys(dev);
-  if (ids.length <= MAX_DEVICES) return 0;
+  if (ids.length <= MAX_DEVICES) return false;
   const here = (id: string) => (present?.has(id) ? 1 : 0);
   ids.sort((a, b) => here(b) - here(a) || dev[b].seen - dev[a].seen);
   for (const id of ids.slice(MAX_DEVICES)) delete dev[id];
-  return ids.length - MAX_DEVICES;
+  return true;
 }
 
 /** a null prototype: a device id from the snapshot must not reach Object.prototype */
 const fresh = (): SensesNotes => ({ v: 1, dev: Object.create(null) as Record<string, DevNotes> });
 
 function goodReading(x: unknown): x is Reading {
-  const r = x as Reading;
-  return !!r && typeof r === 'object' && isTime(r.at) && typeof r.ok === 'boolean'
-    && (r.ms == null || isMs(r.ms));
+  if (!isObject(x)) return false;
+  return isTime(x.at) && typeof x.ok === 'boolean' && (x.ms == null || isMs(x.ms));
 }
 
 function goodDev(x: unknown): x is DevNotes {
-  const d = x as DevNotes;
-  return !!d && typeof d === 'object' && typeof d.name === 'string' && isTime(d.seen)
+  if (!isObject(x)) return false;
+  const d = x as unknown as DevNotes;
+  return typeof d.name === 'string' && isTime(d.seen)
     && Array.isArray(d.r) && d.r.every(goodReading)
     && (d.srtt == null || isMs(d.srtt)) && (d.rttvar == null || isMs(d.rttvar))
     && typeof d.flapping === 'boolean';
@@ -171,14 +187,15 @@ function goodDev(x: unknown): x is DevNotes {
 
 /** notes read back from disk, or fresh ones when they are not what this file wrote: a wrong
  *  shape or a NaN, negative or absurd number anywhere throws the whole file away (never a throw).
- *  the dev map is rebuilt with a null prototype; long keys are dropped and names cut to 80. */
+ *  the dev map is rebuilt with a null prototype; an empty or long key is dropped and names are
+ *  cut to 80. */
 function sane(raw: unknown): SensesNotes {
   try {
     const n = raw as SensesNotes;
     if (!n || typeof n !== 'object' || n.v !== 1 || !n.dev || typeof n.dev !== 'object' || Array.isArray(n.dev)) return fresh();
     const dev: Record<string, DevNotes> = Object.create(null);
     for (const [id, d] of Object.entries(n.dev)) {
-      if (id.length > DEVICE_MAX) continue;               // a key that long is not one of ours
+      if (id.length === 0 || id.length > DEVICE_MAX) continue;   // no id or too long: not one of ours
       if (!goodDev(d)) return fresh();
       d.name = d.name.slice(0, NAME_MAX);
       if (d.r.length > READINGS_MAX) d.r = d.r.slice(-READINGS_MAX);
@@ -229,9 +246,9 @@ export function create(ctx: BranchCtx): Branch {
     if (!n.flapping && change != null && change >= FLAP_START) {
       n.flapping = true;
       const w = n.r.slice(-FLAP_LOOKS);
-      let ups = 0;
-      for (let i = 1; i < w.length; i++) if (w[i].ok !== w[i - 1].ok) ups++;
-      ctx.emit(`${shownName(dev)} is flapping: its link went up and down ${ups} times in the last ${w.length} looks`);
+      let changes = 0;
+      for (let i = 1; i < w.length; i++) if (w[i].ok !== w[i - 1].ok) changes++;
+      ctx.emit(`${shownName(dev)} is flapping: its link went up and down ${changes} times in the last ${w.length} looks`);
     } else if (n.flapping && change != null && change <= FLAP_END) {
       n.flapping = false;
       ctx.emit(`${shownName(dev)} stopped flapping`);
@@ -241,31 +258,48 @@ export function create(ctx: BranchCtx): Branch {
   return {
     id: 'senses',
     observe(now, before) {
-      snap = now;
-      const at = isTime(now.at) ? now.at : null;           // the look's time, if it has a usable one
+      // a snapshot of null or a string is not a look: no field of it may be read before this check
+      const s: Snapshot | null = isObject(now) ? now : null;
+      snap = s;
+      const at = s && isTime(s.at) ? s.at : null;          // the look's time, if it has a usable one
       let changed = false;
       // a devices field that is null or not an array counts as empty
-      const devices = Array.isArray(now.devices) ? now.devices : [];
+      const devices = s && Array.isArray(s.devices) ? s.devices : [];
       const earlier = before && Array.isArray(before.devices) ? before.devices : [];
+      // one pass over the earlier look: the up/down lines are per device, not a find each time
+      const earlierById = new Map<string, EyeDevice>();
+      for (const x of earlier) {
+        if (isObject(x) && typeof x.id === 'string' && x.id.length > 0 && x.id.length <= DEVICE_MAX && !earlierById.has(x.id)) {
+          earlierById.set(x.id, x as unknown as EyeDevice);
+        }
+      }
       const present = new Set<string>();                   // the ids in this look, for the 40 cap
+      let held = 0;                                        // present devices that already hold notes
       // a device that answered before and does not now (or the other way round) is worth a line
       for (const d of devices) {
         if (!usable(d)) continue;
-        const was = earlier.find((x) => isObject(x) && x.id === d.id);
-        if (was && typeof d.reachable === 'boolean' && was.reachable !== d.reachable) ctx.emit(`${shownName(d)} ${d.reachable ? 'answers again' : `stopped answering${typeof d.reason === 'string' && d.reason ? `: ${d.reason.slice(0, REASON_MAX)}` : ''}`}`);
+        if (!present.has(d.id)) {
+          present.add(d.id);
+          if (notes.dev[d.id]) held++;
+        }
+        const was = earlierById.get(d.id);
+        if (was && typeof d.reachable === 'boolean' && was.reachable !== d.reachable) ctx.emit(flipLine(d));
       }
       for (const d of devices) {
         if (!usable(d)) continue;
-        present.add(d.id);
         // a reading needs a real ok and a usable probe time, or the notes would not survive
         if (typeof d.reachable !== 'boolean' || !isTime(d.checkedAt)) continue;
         const name = shownName(d);
         let n: DevNotes | undefined = notes.dev[d.id];
         if (!n) {
+          // 40 present devices already hold notes: one more would be created and dropped again on
+          // every look, and that drop marks the notes changed and saves every minute
+          if (held >= MAX_DEVICES) continue;
           // no usable at: the probe's own time is a valid time to remember it by
           n = { name, seen: at ?? d.checkedAt, r: [], srtt: null, rttvar: null, flapping: false };
           notes.dev[d.id] = n;
           changed = true;
+          held++;
         } else {
           if (n.name !== name) { n.name = name; changed = true; }
           if (at != null) n.seen = at;                     // for the 40 cap; not worth a save alone
@@ -277,10 +311,29 @@ export function create(ctx: BranchCtx): Branch {
         add(d, n, { at: d.checkedAt, ok: d.reachable, ms });
         changed = true;
       }
-      // a seen ahead of this look came from a clock that ran ahead: bring it back, so a device
-      // that left then does not outrank every one that leaves later
-      if (at != null) for (const id in notes.dev) if (notes.dev[id].seen > at) notes.dev[id].seen = at;
-      if (trim(notes.dev, present) > 0) changed = true;
+      // a seen ahead of this look came from a clock that ran ahead: bring it back and save the
+      // fix, so a device that left then does not outrank every one that leaves later
+      if (at != null) {
+        for (const id in notes.dev) {
+          if (notes.dev[id].seen > at) {
+            notes.dev[id].seen = at;
+            changed = true;
+          }
+        }
+      }
+      if (trim(notes.dev, present)) changed = true;
+      // a link that is no longer probed keeps its last verdict for ever: after ten usual gaps
+      // without a new reading it is not flapping any more, and the feed says so once
+      if (at != null) {
+        for (const id in notes.dev) {
+          const n = notes.dev[id];
+          const last = n.r[n.r.length - 1];
+          if (!n.flapping || !last || at - last.at <= FLAP_QUIET_GAPS * usualGap(gapsOf(n.r))) continue;
+          n.flapping = false;
+          changed = true;
+          ctx.emit(`${n.name} stopped flapping`);
+        }
+      }
       dirty = dirty || changed;
       // data time is the snapshot's; only save pacing uses this computer's clock
       const t = ctx.now();
@@ -288,8 +341,9 @@ export function create(ctx: BranchCtx): Branch {
       if (dirty && t - savedAt >= SAVE_EVERY_MS) { ctx.save(notes); savedAt = t; dirty = false; }
     },
     view() {
-      const at = isTime(snap?.at) ? (snap as Snapshot).at : null;
-      const devs = (snap && Array.isArray(snap.devices) ? snap.devices : []).filter(usable);
+      const s: Snapshot | null = isObject(snap) ? snap : null;
+      const at = s && isTime(s.at) ? s.at : null;
+      const devs = (s && Array.isArray(s.devices) ? s.devices : []).filter(usable);
       const on = devs.filter(active).length;
       const seen = devs.map((d) => {
         const n = notes.dev[d.id] ?? null;
@@ -307,7 +361,7 @@ export function create(ctx: BranchCtx): Branch {
         } else if (!stale && n && n.r.length) {
           bits.push('not enough looks yet');
         }
-        if (n?.flapping) bits.push('flapping');
+        if (n?.flapping && !stale) bits.push('flapping');   // stale readings keep no verdict
         if (stale) {
           const ago = Math.round(((at as number) - (d.checkedAt as number)) / 1000);   // stale: at is past checkedAt
           bits.push(`stale: last looked at ${ago <= AGO_MAX_S ? `${ago} s` : 'over a year'} ago`);
@@ -316,8 +370,10 @@ export function create(ctx: BranchCtx): Branch {
         if (typeof d.bwGBs === 'number' && d.bwGBs >= BW_MIN_GBS && d.bwGBs <= BW_MAX_GBS) bits.push(`${Math.round(d.bwGBs * 100) / 100} GB/s`);
         return { d, n, stale, line: bits.join(' · ') };
       });
-      const flapping = seen.filter((x) => x.n?.flapping).map((x) => shownName(x.d));
+      const flapping = seen.filter((x) => x.n?.flapping && !x.stale).map((x) => shownName(x.d));
       const stale = seen.filter((x) => x.stale).map((x) => shownName(x.d));
+      const lines = seen.slice(0, MAX_DEVICES).map((x) => x.line);
+      if (seen.length > MAX_DEVICES) lines.push(`and ${seen.length - MAX_DEVICES} more`);
       return {
         built: true,
         stat: devs.length ? `${on} of ${devs.length} devices active` : 'no device yet',
@@ -327,7 +383,7 @@ export function create(ctx: BranchCtx): Branch {
           ['flapping', flapping.length ? flapping.join(', ') : 'none'],
           ['stale', stale.length ? stale.join(', ') : 'none'],
         ],
-        lines: seen.map((x) => x.line),
+        lines,
         note: devs.length ? undefined : 'no device yet. devices (top right) adds one.',
         what: 'keeps the last 30 probe readings of every device and says how quickly it usually answers, whether its link is flapping, and whether it has gone quiet.',
       };

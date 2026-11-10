@@ -6,7 +6,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-const { create, median, mad, rfc6298, flapChange, isStale } = await import('../src/godseye/branches/senses.ts');
+const { create, median, mad, rfc6298, flapChange, isStale, usualGap } = await import('../src/godseye/branches/senses.ts');
 
 const dev = (o: Record<string, unknown> = {}) => ({
   id: 'p1', name: 'pixel', kind: 'phone', via: 'wifi', where: '192.168.1.33:50551', reachable: true, reachMs: 12, reason: null,
@@ -89,6 +89,16 @@ test('stale: three usual gaps, the default before, clamped to 5–120 s, no nega
   assert.equal(isStale(1e300, 0, []), false);                              // an absurd at: no staleness judged
   assert.equal(isStale(NaN, 0, []), false);
   assert.equal(isStale(10_000, 1e300, []), false);                         // an absurd checkedAt: the same
+});
+
+test('the usual gap: the median of the positive gaps, 15 s under three, clamped to 5–120 s', () => {
+  assert.equal(usualGap([]), 15_000);                                      // the default
+  assert.equal(usualGap([10_000, 20_000]), 15_000);                        // two gaps: still the default
+  assert.equal(usualGap([10_000, 10_000, 20_000]), 10_000);                // median of 10, 10, 20
+  assert.equal(usualGap([-50_000, 10_000, 20_000, 30_000]), 20_000);       // the negative one is no gap: 10, 20, 30
+  assert.equal(usualGap([NaN, 10_000, 10_000, 10_000]), 10_000);           // neither is a NaN
+  assert.equal(usualGap([1_000, 1_000, 1_000]), 5_000);                    // clamped up
+  assert.equal(usualGap([200_000, 200_000, 200_000]), 120_000);            // clamped down
 });
 
 // ---- the branch
@@ -665,4 +675,176 @@ test('a lasting latency shift is taken in from the third outlier in a row; one o
   // SRTT = 40 - 24.5 * (7/8)^81 = 39.9995; RTTVAR follows that distance down (about twice it,
   // 0.001), so 4 * RTTVAR is far under half a ms: 40 and 40
   assert.equal(b.view().lines[0], 'pixel · reachable · 40 ms · usually 40 ms (40–40) · 3.3 GB free · 60 GB/s');
+});
+
+// ---- the second review: a bad snapshot, the linear pass, the 41st, the view cap, read-back,
+// the clamp, a link that goes quiet, and the other side of a shift
+
+test('a snapshot of null or a string is not a look: observe and view never throw, and a good look records', () => {
+  const { c, ctx } = fakeCtx();
+  const b = create(ctx);
+  assert.doesNotThrow(() => b.view());                       // before any look
+  assert.equal(b.view().stat, 'no device yet');
+  for (const bad of [null, 'x', 42, undefined, {}, { at: 'now', devices: null }]) {
+    assert.doesNotThrow(() => b.observe(bad as any, null), `observe ${JSON.stringify(bad)}`);
+    const v = b.view();                                      // checked while it is the current snapshot
+    assert.equal(v.built, true);
+    assert.equal(v.stat, 'no device yet');
+    assert.deepEqual(v.lines, []);
+    assert.doesNotMatch(JSON.stringify(v), /NaN|undefined|\[object/);
+  }
+  assert.deepEqual(c.feed, []);
+  b.observe(snap([dev({ checkedAt: 1_000 })], 1_000), null);
+  assert.equal(b.view().lines[0], 'pixel · reachable · 12 ms · not enough looks yet · 3.3 GB free · 60 GB/s');
+});
+
+test('the up/down line compares with the first earlier device of that id', () => {
+  const { c, ctx } = fakeCtx();
+  const b = create(ctx);
+  b.observe(snap([dev({ checkedAt: 1_000 })], 1_000), null);
+  const saidUp = { ...snap([], 1_000), devices: [dev({ reachable: true, checkedAt: 1_000 }), dev({ reachable: false, checkedAt: 1_000 })] } as any;
+  b.observe(snap([dev({ reachable: false, reachMs: null, reason: 'gone', checkedAt: 16_000 })], 16_000), saidUp);
+  assert.deepEqual(c.feed, ['pixel stopped answering: gone']);   // the first entry said true
+
+  const { c: c2, ctx: ctx2 } = fakeCtx();
+  const b2 = create(ctx2);
+  b2.observe(snap([dev({ checkedAt: 1_000 })], 1_000), null);
+  const saidDown = { ...snap([], 1_000), devices: [dev({ reachable: false, checkedAt: 1_000 }), dev({ reachable: true, checkedAt: 1_000 })] } as any;
+  b2.observe(snap([dev({ reachable: false, reachMs: null, reason: 'gone', checkedAt: 16_000 })], 16_000), saidDown);
+  assert.deepEqual(c2.feed, [], 'the first entry said false: no change');
+});
+
+test('41 devices present: the 41st gets no notes, so ten minutes save once, and its line still shows', () => {
+  const { c, ctx } = fakeCtx();
+  const b = create(ctx);
+  const forty = Array.from({ length: 40 }, (_, i) => dev({ id: `d${i}`, name: `dev ${i}`, checkedAt: 1_000 }));
+  b.observe(snap(forty, 1_000), null);                      // 40 notes, one save's worth of new
+  let at = 1_000;
+  for (let i = 0; i < 10; i++) {
+    c.t += 60_000;
+    at += 60_000;
+    b.observe(snap([dev({ id: 'extra', name: 'extra', checkedAt: at }), ...forty], at), null);
+  }
+  assert.ok(c.saves <= 1, `${c.saves} saves in ten minutes`);
+  const saved = c.stored as any;
+  assert.equal(Object.keys(saved.dev).length, 40);
+  assert.equal(saved.dev.extra, undefined, 'no notes for the 41st');
+  const v = b.view();
+  assert.equal(v.lines.length, 41);
+  // no notes, but the snapshot still gives its reach, memory and bandwidth
+  assert.equal(v.lines[0], 'extra · reachable · 12 ms · 3.3 GB free · 60 GB/s');
+  assert.equal(v.lines[40], 'and 1 more');
+});
+
+test('the view lists 40 device lines at most, then how many more', () => {
+  const { ctx } = fakeCtx();
+  const b = create(ctx);
+  const ds = Array.from({ length: 42 }, (_, i) => dev({ id: `d${i}`, name: `dev ${i}`, checkedAt: 1_000 }));
+  b.observe(snap(ds, 1_000), null);
+  const v = b.view();
+  assert.equal(v.lines.length, 41);
+  assert.equal(v.lines[0], 'dev 0 · reachable · 12 ms · not enough looks yet · 3.3 GB free · 60 GB/s');
+  assert.equal(v.lines[39], 'dev 39 · reachable · 12 ms · not enough looks yet · 3.3 GB free · 60 GB/s');
+  assert.equal(v.lines[40], 'and 2 more');
+  assert.equal(v.stat, '42 of 42 devices active');
+});
+
+test('an empty device key in the notes is dropped on read-back and holds no slot', () => {
+  const note = (name: string, seen: number) => ({ name, seen, r: [{ at: 1_000, ok: true, ms: 12 }], srtt: 12, rttvar: 6, flapping: false });
+  const all: Record<string, unknown> = { '': note('empty', 9e12) };
+  for (let i = 0; i < 40; i++) all[`d${i}`] = note(`dev ${i}`, i + 1);
+  const { c, ctx } = fakeCtx({ v: 1, dev: all });
+  const b = create(ctx);
+  c.t += 60_000;
+  b.observe(snap([dev({ id: 'd0', name: 'renamed', checkedAt: 2_000 })], 2_000), null);
+  const saved = c.stored as any;
+  assert.equal(Object.keys(saved.dev).length, 40);
+  assert.equal(saved.dev[''], undefined, 'the empty key was dropped on read-back');
+  assert.ok(saved.dev.d1, 'and held no slot: no real device was pushed out');
+  assert.equal(saved.dev.d0.name, 'renamed');
+  assert.equal(saved.dev.d0.r.length, 2, 'd0 kept its reading and took the new one');
+});
+
+test('a seen brought back from a far-forward clock is marked changed and saved', () => {
+  const { c, ctx } = fakeCtx();
+  const b = create(ctx);
+  const far = Date.UTC(2400, 0, 1);
+  b.observe(snap([dev({ id: 'ghost', name: 'ghost', checkedAt: far })], far), null);
+  c.t += 60_000;
+  b.observe(snap([], far), null);                           // the look that saves the far notes
+  assert.equal((c.stored as any).dev.ghost.seen, far);
+  c.t += 60_000;
+  b.observe(snap([], 2_000), null);                         // the clock is right again: only the clamp changes
+  assert.equal((c.stored as any).dev.ghost.seen, 2_000, 'the correction reaches the disk, so a restart keeps it');
+});
+
+test('a stale flapping device does not say flapping, and ten usual gaps of silence clear the flag', () => {
+  const { c, ctx } = fakeCtx();
+  const b = create(ctx);
+  let t = 1_000;
+  for (const ok of [true, false, true, false, true, false, true, false]) {
+    b.observe(snap([dev({ reachable: ok, reachMs: ok ? 12 : null, checkedAt: t })], t), null);
+    t += 15_000;
+  }
+  const last = t - 15_000;                                  // 106 000, the last new reading
+  c.t += 60_000;
+  b.observe(snap([dev({ reachable: false, reachMs: null, checkedAt: last })], last - 56_000), null);   // the clock stepped back: no silence to judge
+  assert.equal(c.feed.length, 1, 'a backward clock does not clear flapping');
+  b.observe(snap([dev({ reachable: false, reachMs: null, checkedAt: last })], last + 45_001), null);   // stale: 45 s > 3 * 15 s
+  assert.equal(row(b.view(), 'stale'), 'pixel');
+  assert.equal(row(b.view(), 'flapping'), 'none');
+  assert.equal(b.view().lines[0], 'pixel · not reachable: no answer · stale: last looked at 45 s ago · 3.3 GB free · 60 GB/s');
+  assert.deepEqual(c.feed, ['pixel is flapping: its link went up and down 7 times in the last 8 looks']);
+  assert.equal((c.stored as any).dev.p1.flapping, true, 'stale alone does not clear the flag');
+
+  c.t += 60_000;
+  b.observe(snap([dev({ reachable: false, reachMs: null, checkedAt: last })], last + 150_000), null);  // exactly ten 15 s gaps
+  assert.equal(c.feed.length, 1, 'exactly ten gaps: still flapping');
+  c.t += 60_000;
+  b.observe(snap([dev({ reachable: false, reachMs: null, checkedAt: last })], last + 150_001), null);  // a hair over
+  assert.deepEqual(c.feed, [
+    'pixel is flapping: its link went up and down 7 times in the last 8 looks',
+    'pixel stopped flapping',
+  ]);
+  assert.equal((c.stored as any).dev.p1.flapping, false, 'the cleared flag is saved');
+  assert.equal(row(b.view(), 'flapping'), 'none');
+});
+
+test('a flapping device that is no longer probed stops flapping after ten usual gaps', () => {
+  const { c, ctx } = fakeCtx();
+  const b = create(ctx);
+  let t = 1_000;
+  for (const ok of [true, false, true, false, true, false, true, false]) {
+    b.observe(snap([dev({ reachable: ok, reachMs: ok ? 12 : null, checkedAt: t })], t), null);
+    t += 15_000;
+  }
+  const last = t - 15_000;
+  c.t += 60_000;
+  b.observe(snap([], last + 150_001), null);                // gone from the snapshot, no new reading
+  assert.deepEqual(c.feed, [
+    'pixel is flapping: its link went up and down 7 times in the last 8 looks',
+    'pixel stopped flapping',
+  ]);
+  assert.equal((c.stored as any).dev.p1.flapping, false, 'the cleared flag is saved');
+  assert.equal(Object.keys((c.stored as any).dev).length, 1, 'the device is still remembered');
+});
+
+test('a third outlier on the other side is still a spike: the usual stays at 50 ms', () => {
+  const { c, ctx } = fakeCtx();
+  const b = create(ctx);
+  const lookAt = (ms: number, at: number) => b.observe(snap([dev({ reachMs: ms, checkedAt: at })], at), null);
+  let t = 1_000;
+  for (let i = 0; i < 10; i++) { lookAt(50, t); t += 15_000; }
+  // ten 50 ms samples: SRTT 50, RTTVAR 25 * (3/4)^9 = 1.8771171569824219,
+  // 4 * RTTVAR = 7.508468627929688: lo 42, hi 58
+  lookAt(90, t); t += 15_000;
+  lookAt(90, t); t += 15_000;
+  assert.equal(b.view().lines[0], 'pixel · reachable · 90 ms · usually 50 ms (42–58) · 3.3 GB free · 60 GB/s');
+  lookAt(10, t);                                            // the third outlier is on the other side, not a shift
+  assert.equal(b.view().lines[0], 'pixel · reachable · 10 ms · usually 50 ms (42–58) · 3.3 GB free · 60 GB/s');
+  c.t += 60_000;
+  b.observe(snap([dev({ reachMs: 10, checkedAt: t })], t + 5_000), null);   // the same probe: only the save follows
+  const saved = c.stored as any;
+  assert.equal(saved.dev.p1.srtt, 50);
+  close(saved.dev.p1.rttvar, 1.8771171569824219);
 });
