@@ -29,7 +29,7 @@ const BURST_P = 0.001;         // a running hour this unlikely is a burst
 const MAX_DEVICES = 40;        // devices kept in the notes
 const ABSURD = 8.64e15;        // ms: a time past this is absurd, nothing is taken in
 const COUNT_MAX = 1e9;         // ledger lines: a count past this is absurd, ignored
-const DAY_CAP = 10_000;        // a day's refusals per reason: past this a reason is dropped
+const DAY_CAP = 10_000;        // a day's refusals per reason: past this a reason is capped
 const PER_ANSWER = 10_000;     // refusals one answer counts into the hour at most
 const K_MAX = 9999;            // the burst K shown at most
 const LAMBDA_MAX = 9999.9;     // the usual rate shown at most
@@ -107,9 +107,11 @@ interface Seen {
   rejTotal: number;             // the last rejectsDay total taken in
   win: { start: number; k: number };  // the running hour: refusals since `start` (the answer that opened it)
   hist: number[];               // the last finished hours' refusals, at most HIST_MAX
+  lastBurst: number;            // the last finished hour's refusals when it was a burst; 0: it was not
+  shorterRestart: boolean;      // the shorter fault was raised while a restart was still unconsumed
 }
 type Notes = Record<string, Seen>;
-const fresh = (): Seen => ({ head: null, verified: 0, since: 0, at: 0, restartSeen: null, fault: null, faultAt: null, faultLine: null, gap: false, held: null, seen: 0, count: 0, shrunkTo: null, rejAt: -1, rejTotal: 0, win: { start: 0, k: 0 }, hist: [] });
+const fresh = (): Seen => ({ head: null, verified: 0, since: 0, at: 0, restartSeen: null, fault: null, faultAt: null, faultLine: null, gap: false, held: null, seen: 0, count: 0, shrunkTo: null, rejAt: -1, rejTotal: 0, win: { start: 0, k: 0 }, hist: [], lastBurst: 0, shorterRestart: false });
 
 /** notes read back from disk, rebuilt as a null-prototype object so a device id like "__proto__"
  *  stays a key and never a prototype, or fresh notes when the file is not what this branch wrote:
@@ -144,6 +146,8 @@ function sane(x: unknown): Notes {
     v.win = w && typeof w === 'object' && !Array.isArray(w) && Number.isFinite(w.start) && Number.isFinite(w.k)
       ? { start: Math.min(Math.max(0, w.start), ABSURD), k: Math.floor(Math.max(0, w.k)) } : { start: 0, k: 0 };
     v.hist = Array.isArray(v.hist) ? v.hist.filter((n) => typeof n === 'number' && Number.isFinite(n) && n >= 0).map(Math.floor).slice(-HIST_MAX) : [];
+    v.lastBurst = Math.floor(Math.min(Math.max(0, nnum(v.lastBurst, 0)), COUNT_MAX));
+    v.shorterRestart = v.shorterRestart === true;
     out[id] = v;
   }
   return out;
@@ -202,6 +206,8 @@ export function create(ctx: BranchCtx): Branch {
     const restartedAt = typeof t.restartedAt === 'number' && Number.isFinite(t.restartedAt) && t.restartedAt >= 0 ? t.restartedAt : null;
     const lines = Array.isArray(t.lines) ? t.lines.filter((l) => typeof l === 'string') : [];   // a missing window is none
     const hashes = lines.map((l) => sha(l));
+    const countIn = typeof t.count === 'number' && Number.isFinite(t.count) && t.count >= 0 && t.count <= COUNT_MAX
+      ? Math.floor(t.count) : null;   // whole lines only: 40.7 is 40; null: this answer carries no usable count
     const restart = restartedAt != null && restartedAt !== s.restartSeen;
     // the "started over" fault is raised only when the verified head is really gone from the lines:
     // a restart flag alone is the device's word and never lowers the remembered count by itself
@@ -219,11 +225,19 @@ export function create(ctx: BranchCtx): Branch {
         const i = hashes.indexOf(s.head);
         if (i >= 0) { start = i + 1; expect = s.head; s.gap = false; }
         else if (startedOver) {
+          // the started-over fault is the alarm for the shorter ledger too: the remembered count
+          // comes down here, to this answer's count when it has one and to nothing when it does
+          // not, so the same restart cannot raise "got shorter" once both faults are accepted.
+          // a restart flag alone never reaches this: startedOver needs the verified head really gone
+          const replacingShorter = s.shorterRestart;
+          s.shorterRestart = false;
           s.fault = `${STARTOVER} at ${hhmm(restartedAt!)} (cleared on the device, or rewritten)`;
           s.faultAt = restartedAt; s.faultLine = null; s.shrunkTo = null; s.held = null;
+          s.count = countIn ?? 0;
           s.verified = 0; s.since = ctx.now();
-          // the verdict-change line tells the feed when the device only turns red now
-          if (said.get(d.id) === 'bad' || !said.has(d.id)) ctx.emit(`${name}: ${s.fault}`);
+          // the verdict-change line tells the feed when the device only turns red now; a started-over
+          // that replaces a shorter fault for the same unconsumed restart was already said once
+          if (!replacingShorter && (said.get(d.id) === 'bad' || !said.has(d.id))) ctx.emit(`${name}: ${s.fault}`);
         } else if (lines.length) s.gap = true;
       }
       if (restartedAt != null) s.restartSeen = restartedAt;
@@ -234,7 +248,7 @@ export function create(ctx: BranchCtx): Branch {
             // the started-over fault stays until the person accepts it; a line fault waits behind it
             if (!s.held) s.held = { h: hashes[i], why };
           } else if (s.faultLine !== hashes[i]) {
-            s.fault = why; s.faultAt = ctx.now(); s.faultLine = hashes[i]; s.shrunkTo = null; ctx.emit(`${name}: its ledger: ${why}`);
+            s.fault = why; s.faultAt = ctx.now(); s.faultLine = hashes[i]; s.shrunkTo = null; s.shorterRestart = false; ctx.emit(`${name}: its ledger: ${why}`);
           }
           lineFault = true;
           break;
@@ -248,16 +262,18 @@ export function create(ctx: BranchCtx): Branch {
     // a ledger that reports fewer lines is the fault itself; only accept, or the one answer whose
     // "started over" fault was really raised, lowers it. an absurd count is ignored rather than
     // remembered, and an unaccepted line fault is kept: the shorter fault waits until it is accepted.
-    if (!lineFault && typeof t.count === 'number' && Number.isFinite(t.count) && t.count >= 0 && t.count <= COUNT_MAX) {
-      const n = Math.floor(t.count);   // whole lines only: 40.7 is 40
-      if (key && startedOver) { s.count = n; s.shrunkTo = null; }   // the raised started-over fault carries the reset
-      else if (n >= s.count) { if (n > s.count) s.count = n; s.shrunkTo = null; }
+    if (!lineFault && countIn !== null) {
+      const n = countIn;
+      if (n >= s.count) { if (n > s.count) s.count = n; s.shrunkTo = null; }
       else if (s.shrunkTo == null && s.faultLine == null) {
         // the fault text keeps the numbers from the moment it was raised: no new feed line per new line
         s.shrunkTo = n;
         const shorter = `its ledger got shorter: ${fmt(s.count)} lines before, ${fmt(n)} now (lines were removed)`;
         if (s.fault !== shorter) {
           s.fault = shorter; s.faultAt = ctx.now(); s.faultLine = null;
+          // no usable key leaves a restart unconsumed: the started-over fault will be about the same
+          // event, so it replaces this text later without a second feed line
+          s.shorterRestart = restart && !key;
           // the verdict-change line already tells the feed when the device only turns red now;
           // a device that was red before needs the line here, so the feed says it once
           if (said.get(d.id) === 'bad' || !said.has(d.id)) ctx.emit(`${name}: ${shorter}`);
@@ -281,10 +297,12 @@ export function create(ctx: BranchCtx): Branch {
     } else if (t.at - prevAt > HOUR || prevAt - t.at > HOUR) {
       // a gap in the looks (the computer was away, the phone asleep, or the clock jumped either
       // way): the refusals in between cannot be placed into any hour; re-anchor only and count
-      // nothing, push nothing to the history
+      // nothing, push nothing to the history. the finished hour before the gap is too old to call
+      // the rate still raised: the burst ends here, and a quiet look after the gap must not be red
       s.rejAt = newest >= 0 ? newest : s.rejAt;
       s.rejTotal = total;
       s.win = { start: t.at, k: 0 };
+      s.lastBurst = 0;
     } else {
       const rolledBack = newest >= 0 && s.rejAt - newest > HOUR;   // the device's clock went back: re-anchor
       // count only entries proven to lie in the running hour: newer than the watermark and not older
@@ -299,8 +317,11 @@ export function create(ctx: BranchCtx): Branch {
         // the hour closed, or the answer's clock went back past its start: re-anchor the window
         const lambda = Math.min(Math.max(0.5, s.hist.length ? medianOf(s.hist) : 0), LAMBDA_MAX);
         // a finished hour that was itself a burst is not learned: it must not teach the baseline.
-        // only once the baseline exists; while it is still learning, a busy hour is real learning
-        if (s.hist.length < HIST_NEED || s.win.k < 3 || poissonTail(s.win.k, lambda) >= BURST_P) {
+        // only once the baseline exists; while it is still learning, a busy hour is real learning.
+        // the burst is remembered instead, so the check stays red until a finished hour is quiet
+        const burst = s.hist.length >= HIST_NEED && s.win.k >= 3 && poissonTail(s.win.k, lambda) < BURST_P;
+        s.lastBurst = burst ? s.win.k : 0;
+        if (!burst) {
           s.hist.push(s.win.k);
           if (s.hist.length > HIST_MAX) s.hist.shift();
         }
@@ -345,13 +366,17 @@ export function create(ctx: BranchCtx): Branch {
       const lambda = Math.min(Math.max(0.5, known ? medianOf(s.hist) : 0), LAMBDA_MAX);
       // the running hour is a burst when it is far into the Poisson tail of the device's own usual
       const burst = known && s.win.k >= 3 && poissonTail(s.win.k, lambda) < BURST_P;
+      // a burst hour just finished: the rate has not been shown to come back down, so stay red
+      const stillBurst = known && !burst && s.lastBurst > 0;
       checks.push(replays > 0
         ? { k: 'refused', ok: false, text: `someone replayed a recorded handshake (${plural(replays, 'time')} today); it was refused` }
         : guesses >= GUESS_LIMIT
           ? { k: 'refused', ok: false, text: `${guesses} wrong codes today: someone may be guessing. all were refused` }
           : burst
             ? { k: 'refused', ok: false, text: `${fmt(Math.min(s.win.k, K_MAX))} refusals in the last hour, it usually sees about ${lambda.toFixed(1)}: unusual. all were refused` }
-            : { k: 'refused', ok: true, text: (refused.length ? `refused today: ${words}` : 'nothing refused today') + (known ? '' : ` (still learning what is usual: ${fmt(s.hist.length)} of ${fmt(HIST_NEED)} hours; a device that already refuses often takes longer to judge)`) });
+            : stillBurst
+              ? { k: 'refused', ok: false, text: `refusals still above its usual: ${fmt(Math.min(s.lastBurst, K_MAX))} in the last finished hour, usually about ${lambda.toFixed(1)}` }
+              : { k: 'refused', ok: true, text: (refused.length ? `refused today: ${words}` : 'nothing refused today') + (known ? '' : ` (still learning what is usual: ${fmt(s.hist.length)} of ${fmt(HIST_NEED)} hours; a device that already refuses often takes longer to judge)`) });
       const hasCount = typeof t!.count === 'number' && Number.isFinite(t!.count) && t!.count >= 0 && t!.count <= COUNT_MAX;
       checks.push(s.fault
         ? { k: 'ledger', ok: false, text: s.fault }
@@ -454,13 +479,13 @@ export function create(ctx: BranchCtx): Branch {
       // the person knows (they cleared the ledger on the phone, say): carry on from here
       if (s.held) {
         // the line fault that was waiting behind the started-over fault comes forward, with its line
-        s.fault = s.held.why; s.faultAt = ctx.now(); s.faultLine = s.held.h; s.held = null;
+        s.fault = s.held.why; s.faultAt = ctx.now(); s.faultLine = s.held.h; s.held = null; s.shorterRestart = false;
         const d = snap?.devices.find((x) => okId(x.id) && x.id === arg);
         ctx.emit(`${d ? devName(d) : arg}: its ledger: ${s.fault}`);
       } else {
         if (s.shrunkTo != null) { s.count = s.shrunkTo; s.shrunkTo = null; }
         if (s.faultLine) s.head = s.faultLine;
-        s.fault = null; s.faultAt = null; s.faultLine = null;
+        s.fault = null; s.faultAt = null; s.faultLine = null; s.shorterRestart = false;
       }
       ctx.save(notes);
       if (snap) report = build(snap);

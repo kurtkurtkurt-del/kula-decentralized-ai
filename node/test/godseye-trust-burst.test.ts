@@ -7,6 +7,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 const { create, poissonTail, medianOf } = await import('../src/godseye/branches/trust.ts');
+const { hhmm } = await import('../src/godseye/branches/util.ts');
 const { generate, publicKeyDer } = await import('../src/audit/key.ts');
 const { makeLine, GENESIS, sha256Hex } = await import('../src/audit/ledger.ts');
 const { selfSigned, newP256, fingerprint } = await import('../src/tls.ts');
@@ -666,4 +667,237 @@ test('the learned hours survive a restart: save, load, and the burst still fires
   r2.b.observe(snap([eyeDev(d, trustOf(d, { at: t0 + 24 * H + 1000, rejectsDay: { 'not paired': 6 }, rejectsLast: [{ t: 1, why: 'not paired', peer: 'x' }] }))]) as any, null);
   assert.equal(r2.b.view().report!.verdict, 'bad');
   assert.equal(check(r2.b.view(), 'refused').text, '6 refusals in the last hour, it usually sees about 0.5: unusual. all were refused');
+});
+
+test('a restart whose new chain faults: accepting both faults never raises a third, shorter-ledger alarm', () => {
+  const d = device();
+  for (let i = 0; i < 40; i++) d.add();
+  const { b, events, notes } = branch();
+  b.observe(snap([eyeDev(d, trustOf(d, { at: 1_000_000 }))]) as any, null);
+  assert.equal(notes().p1.count, 40);
+  // the ledger restarted with five lines whose middle one is missing: a restart and a line fault at once
+  const fresh = device(d.key);
+  for (let i = 0; i < 5; i++) fresh.add();
+  const broken = [fresh.lines[0], fresh.lines[2]];
+  const answer = (at: number, count: number | null) =>
+    snap([eyeDev(fresh, trustOf(fresh, { at, restartedAt: 1_500_000, lines: broken, count }))]) as any;
+  b.observe(answer(2_000_000, 5), null);
+  assert.match(check(b.view(), 'ledger').text, /started over/);
+  b.observe(answer(3_000_000, 5), null);
+  assert.equal(b.act!('accept', 'p1'), 'noted');
+  assert.match(check(b.view(), 'ledger').text, /chain is broken/);
+  assert.equal(b.act!('accept', 'p1'), 'noted');
+  assert.equal(b.view().report!.verdict, 'ok');
+  // the next answer still reports five lines: the started-over fault already said the ledger restarted
+  b.observe(answer(4_000_000, 5), null);
+  assert.equal(b.view().report!.verdict, 'ok');
+  assert.equal(check(b.view(), 'ledger').ok, true);
+  assert.equal(events.filter((e) => /got shorter/.test(e)).length, 0, 'no third alarm after both accepts');
+  assert.equal(notes().p1.count, 5, 'the started-over fault set the new baseline');
+});
+
+test('a restart whose answer has no count: the next smaller count is the new baseline, not a third alarm', () => {
+  const d = device();
+  for (let i = 0; i < 40; i++) d.add();
+  const { b, events, notes } = branch();
+  b.observe(snap([eyeDev(d, trustOf(d, { at: 1_000_000 }))]) as any, null);
+  const fresh = device(d.key);
+  for (let i = 0; i < 5; i++) fresh.add();
+  const broken = [fresh.lines[0], fresh.lines[2]];
+  const answer = (at: number, count: number | null) =>
+    snap([eyeDev(fresh, trustOf(fresh, { at, restartedAt: 1_500_000, lines: broken, count }))]) as any;
+  // the restart answer carries no ledger length: the shorter fault is the one that says it
+  b.observe(answer(2_000_000, null), null);
+  assert.match(check(b.view(), 'ledger').text, /started over/);
+  b.observe(answer(3_000_000, null), null);
+  assert.equal(b.act!('accept', 'p1'), 'noted');
+  assert.equal(b.act!('accept', 'p1'), 'noted');
+  assert.equal(b.view().report!.verdict, 'ok');
+  // the first count after the restart is taken as the new baseline, not held against the old 40
+  b.observe(answer(4_000_000, 5), null);
+  assert.equal(b.view().report!.verdict, 'ok');
+  assert.equal(events.filter((e) => /got shorter/.test(e)).length, 0);
+  assert.equal(notes().p1.count, 5);
+});
+
+test('a rate that stays raised past an hour edge stays red until a finished hour is quiet', () => {
+  const d = device();
+  d.add();
+  const { b, events } = branch();
+  const t0 = 1_000_000_000;
+  b.observe(snap([eyeDev(d, trustOf(d, { at: t0 }))]) as any, null);
+  hourByHour(b, d, t0, 24);
+  // one refusal every ten minutes, six each hour, for three hours; the day total carries the count
+  const start = t0 + 24 * H;
+  const hourOf = (hourStart: number, total: number) => trustOf(d, {
+    at: hourStart + H,
+    rejectsDay: { 'not paired': total },
+    rejectsLast: [5, 15, 25, 35, 45, 55].map((m) => ({ t: hourStart + m * 60_000, why: 'not paired', peer: 'x' })),
+  });
+  b.observe(snap([eyeDev(d, hourOf(start, 6))]) as any, null);
+  assert.equal(b.view().report!.verdict, 'bad');
+  assert.equal(check(b.view(), 'refused').text, '6 refusals in the last hour, it usually sees about 0.5: unusual. all were refused');
+  assert.deepEqual(events, ['pixel: 6 refusals in the last hour, it usually sees about 0.5: unusual. all were refused']);
+  // the next two hours keep the same rate: each finished hour is a burst too, so the check never clears
+  b.observe(snap([eyeDev(d, hourOf(start + H, 12))]) as any, null);
+  b.observe(snap([eyeDev(d, hourOf(start + 2 * H, 18))]) as any, null);
+  assert.equal(b.view().report!.verdict, 'bad');
+  assert.equal(events.filter((e) => /all clear again/.test(e)).length, 0, 'no all clear while the rate goes on');
+  assert.equal(events.length, 1, 'one feed line at the start');
+  // the first quiet hour: its previous finished hour was still a burst, so the check stays red
+  b.observe(snap([eyeDev(d, trustOf(d, { at: start + 4 * H, rejectsDay: { 'not paired': 18 } }))]) as any, null);
+  assert.equal(b.view().report!.verdict, 'bad');
+  assert.equal(check(b.view(), 'refused').text, 'refusals still above its usual: 6 in the last finished hour, usually about 0.5');
+  assert.equal(events.length, 1, 'no new line while it stays red');
+  // a finished quiet hour clears it, once
+  b.observe(snap([eyeDev(d, trustOf(d, { at: start + 5 * H, rejectsDay: { 'not paired': 18 } }))]) as any, null);
+  assert.equal(b.view().report!.verdict, 'ok');
+  assert.equal(events.length, 2);
+  assert.equal(events[1], 'pixel: all clear again');
+});
+
+test('a finished burst hour is remembered across a restart and clears on a finished quiet hour', () => {
+  const d = device();
+  d.add();
+  const t0 = 1_000_000_000;
+  const r1 = branch();
+  r1.b.observe(snap([eyeDev(d, trustOf(d, { at: t0 }))]) as any, null);
+  hourByHour(r1.b, d, t0, 24);
+  const start = t0 + 24 * H;
+  // one raised hour, then the answer that finishes it: red, and the burst is remembered
+  r1.b.observe(snap([eyeDev(d, trustOf(d, { at: start + H, rejectsDay: { 'not paired': 6 } }))]) as any, null);
+  r1.b.observe(snap([eyeDev(d, trustOf(d, { at: start + 2 * H, rejectsDay: { 'not paired': 6 } }))]) as any, null);
+  assert.equal(check(r1.b.view(), 'refused').text, 'refusals still above its usual: 6 in the last finished hour, usually about 0.5');
+  const r2 = branch(r1.notes());
+  // a look inside the next hour: still red from the finished hour the notes remember
+  r2.b.observe(snap([eyeDev(d, trustOf(d, { at: start + 2 * H + 1000, rejectsDay: { 'not paired': 6 } }))]) as any, null);
+  assert.equal(r2.b.view().report!.verdict, 'bad');
+  assert.equal(check(r2.b.view(), 'refused').text, 'refusals still above its usual: 6 in the last finished hour, usually about 0.5');
+  // a finished quiet hour clears it
+  r2.b.observe(snap([eyeDev(d, trustOf(d, { at: start + 3 * H + 1000, rejectsDay: { 'not paired': 6 } }))]) as any, null);
+  assert.equal(r2.b.view().report!.verdict, 'ok');
+});
+
+test('a shorter ledger seen while the restart is unconsumed: the later started-over replaces it without a second line', () => {
+  const d = device();
+  for (let i = 0; i < 40; i++) d.add();
+  const { b, events, notes } = branch();
+  b.observe(snap([eyeDev(d, trustOf(d, { at: 1_000_000 }))]) as any, null);
+  const fresh = device(d.key);
+  for (let i = 0; i < 5; i++) fresh.add();
+  // no usable key: the restart cannot be checked yet, so the smaller count raises the shorter fault
+  b.observe(snap([eyeDev(fresh, trustOf(fresh, { at: 2_000_000, restartedAt: 1_500_000, pub: null, count: 5 }))]) as any, null);
+  assert.equal(check(b.view(), 'ledger').text, 'its ledger got shorter: 40 lines before, 5 now (lines were removed)');
+  assert.deepEqual(events, ['pixel: its ledger got shorter: 40 lines before, 5 now (lines were removed)']);
+  // the next answer can be checked: the started-over fault replaces the text, and the feed stays at one
+  b.observe(snap([eyeDev(fresh, trustOf(fresh, { at: 3_000_000, restartedAt: 1_500_000, count: 5 }))]) as any, null);
+  assert.equal(b.view().report!.verdict, 'bad');
+  assert.equal(check(b.view(), 'ledger').text, `its ledger started over at ${hhmm(1_500_000)} (cleared on the device, or rewritten)`);
+  assert.equal(events.length, 1, 'one line for the one event');
+  assert.equal(notes().p1.count, 5);
+});
+
+test('the shorter fault raised with an unusable key survives a restart: the started-over still replaces it silently', () => {
+  const d = device();
+  for (let i = 0; i < 40; i++) d.add();
+  const fresh = device(d.key);
+  for (let i = 0; i < 5; i++) fresh.add();
+  const r1 = branch();
+  r1.b.observe(snap([eyeDev(d, trustOf(d, { at: 1_000_000 }))]) as any, null);
+  r1.b.observe(snap([eyeDev(fresh, trustOf(fresh, { at: 2_000_000, restartedAt: 1_500_000, pub: null, count: 5 }))]) as any, null);
+  assert.equal(r1.events.length, 1);
+  const r2 = branch(r1.notes());
+  r2.b.observe(snap([eyeDev(fresh, trustOf(fresh, { at: 3_000_000, restartedAt: 1_500_000, count: 5 }))]) as any, null);
+  assert.equal(r2.b.view().report!.verdict, 'bad');
+  assert.match(check(r2.b.view(), 'ledger').text, /started over/);
+  assert.deepEqual(r2.events, [], 'the one event was already said before the restart');
+});
+
+test('a count of 12345 in a line: plain digits, floored, never an exponent', () => {
+  const d = device();
+  d.add();
+  const { b, events, notes } = branch();
+  b.observe(snap([eyeDev(d, trustOf(d, { at: 1_000_000, count: 20000 }))]) as any, null);
+  b.observe(snap([eyeDev(d, trustOf(d, { at: 2_000_000, count: 12345.9 }))]) as any, null);
+  assert.equal(check(b.view(), 'ledger').text, 'its ledger got shorter: 20000 lines before, 12345 now (lines were removed)');
+  assert.equal(events[0], 'pixel: its ledger got shorter: 20000 lines before, 12345 now (lines were removed)');
+  assert.equal(notes().p1.count, 20000, 'the remembered count is a high-water mark');
+  assert.equal(notes().p1.shrunkTo, 12345, 'the count to adopt is whole');
+  assert.doesNotMatch(JSON.stringify(b.view()), /e\+\d/);
+});
+
+test('two reasons each at the day cap: one answer counts 10000 into the hour, never 20000', () => {
+  const d = device();
+  d.add();
+  const { b, notes } = branch();
+  const t0 = 1_000_000_000;
+  b.observe(snap([eyeDev(d, trustOf(d, { at: t0 }))]) as any, null);
+  hourByHour(b, d, t0, 24);
+  b.observe(snap([eyeDev(d, trustOf(d, { at: t0 + 24 * H + 1000, rejectsDay: { 'not paired': 10000, odd: 10000 } }))]) as any, null);
+  assert.equal(notes().p1.win.k, 10000, 'one answer adds at most 10000 to the hour');
+  assert.equal(check(b.view(), 'refused').text, '9999 refusals in the last hour, it usually sees about 0.5: unusual. all were refused');
+  assert.doesNotMatch(JSON.stringify(b.view()), /e\+\d/);
+});
+
+test('a gap in the looks clears a finished burst: one night away is not "still above its usual"', () => {
+  const d = device();
+  d.add();
+  const { b, events } = branch();
+  const t0 = 1_000_000_000;
+  b.observe(snap([eyeDev(d, trustOf(d, { at: t0 }))]) as any, null);
+  hourByHour(b, d, t0, 24);
+  const start = t0 + 24 * H;
+  // a burst hour, then the answer that finishes it: red, and the burst is remembered
+  b.observe(snap([eyeDev(d, trustOf(d, { at: start + 1000, rejectsDay: { 'not paired': 6 } }))]) as any, null);
+  b.observe(snap([eyeDev(d, trustOf(d, { at: start + H + 1000, rejectsDay: { 'not paired': 6 } }))]) as any, null);
+  assert.equal(b.view().report!.verdict, 'bad');
+  assert.equal(check(b.view(), 'refused').text, 'refusals still above its usual: 6 in the last finished hour, usually about 0.5');
+  assert.equal(events.filter((e) => /refusals in the last hour/.test(e)).length, 1);
+  // the computer slept ten hours: the finished hour is far too old to say the rate is still raised
+  b.observe(snap([eyeDev(d, trustOf(d, { at: start + H + 10 * H + 1000, rejectsDay: { 'not paired': 6 } }))]) as any, null);
+  assert.equal(b.view().report!.verdict, 'ok');
+  assert.equal(check(b.view(), 'refused').ok, true);
+  assert.equal(events.filter((e) => /refusals|still above/.test(e)).length, 1, 'no refusal line after the gap');
+  assert.equal(events.at(-1), 'pixel: all clear again');
+});
+
+test('a device that answers every two hours after a burst is not red at every look', () => {
+  const d = device();
+  d.add();
+  const { b } = branch();
+  const t0 = 1_000_000_000;
+  b.observe(snap([eyeDev(d, trustOf(d, { at: t0 }))]) as any, null);
+  hourByHour(b, d, t0, 24);
+  const start = t0 + 24 * H;
+  b.observe(snap([eyeDev(d, trustOf(d, { at: start + 1000, rejectsDay: { 'not paired': 6 } }))]) as any, null);
+  b.observe(snap([eyeDev(d, trustOf(d, { at: start + H + 1000, rejectsDay: { 'not paired': 6 } }))]) as any, null);
+  assert.equal(b.view().report!.verdict, 'bad');
+  // every later look is two hours after the one before: each is a gap, and the burst is not carried
+  for (let i = 1; i <= 3; i++) {
+    b.observe(snap([eyeDev(d, trustOf(d, { at: start + H + 1000 + i * 2 * H, rejectsDay: { 'not paired': 6 } }))]) as any, null);
+    assert.equal(b.view().report!.verdict, 'ok', `look ${i}`);
+    assert.equal(check(b.view(), 'refused').ok, true, `look ${i}`);
+  }
+});
+
+test('a line fault after a shorter fault clears its restart marker: the next started-over reaches the feed', () => {
+  const d = device();
+  for (let i = 0; i < 40; i++) d.add();
+  const { b, events } = branch();
+  b.observe(snap([eyeDev(d, trustOf(d, { at: 1_000_000 }))]) as any, null);
+  const fresh = device(d.key);
+  for (let i = 0; i < 5; i++) fresh.add();
+  // no usable key and a smaller count: the shorter fault is raised while the restart is unconsumed
+  b.observe(snap([eyeDev(fresh, trustOf(fresh, { at: 2_000_000, restartedAt: 1_500_000, pub: null, count: 5 }))]) as any, null);
+  assert.equal(events.filter((e) => /got shorter/.test(e)).length, 1);
+  // a checkable answer whose chain still holds the verified head but breaks after it: a line fault
+  const extra = makeLine(d.key, 5_000, 'connect', '192.168.1.5', {}, GENESIS).line;
+  b.observe(snap([eyeDev(d, trustOf(d, { at: 3_000_000, restartedAt: 1_500_000, count: 5, lines: [...d.lines, extra] }))]) as any, null);
+  assert.match(check(b.view(), 'ledger').text, /chain is broken/);
+  assert.equal(events.filter((e) => /chain is broken/.test(e)).length, 1);
+  // a real restart after that: the started-over fault replaces the line fault and is said, not swallowed
+  b.observe(snap([eyeDev(fresh, trustOf(fresh, { at: 4_000_000, restartedAt: 2_500_000, count: 5 }))]) as any, null);
+  assert.equal(b.view().report!.verdict, 'bad');
+  assert.match(check(b.view(), 'ledger').text, /started over/);
+  assert.equal(events.filter((e) => /started over/.test(e)).length, 1, 'the marker did not linger');
 });
