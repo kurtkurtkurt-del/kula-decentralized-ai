@@ -2,9 +2,10 @@
 // 'cable', 'wifi' and 'relay' exist today, and 'internet' will work the day it appears, with no
 // code change. From each device's probe readings (a reading is new when its checkedAt differs
 // from the last one taken in) the branch keeps, per kind: how many probes, how many answered,
-// and the last MS_MAX answer times. A change of kind is one remembered switch and one feed line,
-// and the view says which kind has been the steadier when a device was seen on more than one. It
-// only says these things: it never switches anything.
+// the last MS_MAX answer times and the look time of the last probe. A change of kind is one
+// remembered switch and one feed line, and the view says which kind has been the steadier when a
+// device was seen on more than one kind probed within a day. It only says these things: it never
+// switches anything.
 //
 // What each kind is expected to be like. Starting assumptions, not measurements, so the planner
 // and forecast can share them later:
@@ -18,13 +19,13 @@
 //
 // Notes are one small json (ctx.save). Bounds: at most MAX_DEVICES devices (a device the current
 // look holds is never evicted), at most MAX_KINDS kinds and MAX_SW switches per device, the last
-// MS_MAX ms values per kind, every name cut to STR_MAX. The notes never hold where, a reason or
-// trust data. Data time is the snapshot's at (finite, 0..8.64e15); ctx.now() only paces saves.
-// A reading with an unusable checkedAt or a reachable that is not a boolean is ignored; an
-// unusable answer time is ignored, the probe still counts. A look far behind a device's
-// remembered times means the remembered ones were a bad clock: the remembered kind is forgotten
-// (no switch, no feed line) and seen re-anchors. Saved at most once a minute and only when
-// something changed.
+// RING_MAX probe outcomes (packed as a string of '0'/'1') and the last MS_MAX ms values per kind,
+// every name cut to STR_MAX. The notes never hold where, a reason or trust data. Data time is
+// the snapshot's at (finite, 0..8.64e15); ctx.now() only paces saves. A reading with an unusable
+// checkedAt or a reachable that is not a boolean is ignored; an unusable answer time is ignored,
+// the probe still counts. A look far behind a device's remembered times means the remembered ones
+// were a bad clock: the remembered kind is forgotten (no switch, no feed line) and seen
+// re-anchors. Saved at most once a minute and only when something changed.
 import type { Branch, BranchCtx, BranchView, EyeDevice, Snapshot } from '../types.js';
 import { reachWord } from './util.js';
 
@@ -38,6 +39,7 @@ const WHERE_MAX = 60;                // an address in a line, cut; the notes and
 const REASON_MAX = 120;              // a reason in a line, cut
 const SAVE_EVERY_MS = 60_000;
 const REANCHOR_MS = 24 * 3600_000;   // a look further back than this means the remembered time was a bad clock
+const RECENT_MS = 24 * 3600_000;     // two kinds are compared only when both were probed this recently
 const SLOWER_X = 3;                  // a kind answered more than 3 times its assumed ms is slower than usual
 const MS_OK_MAX = 3_600_000;         // a probe answer later than an hour is no answer time at all
 const MAX_TIME = 8.64e15;            // the last ms a Date can hold; later is no time at all
@@ -88,10 +90,10 @@ export function steadier(a: { rate: number; ms: number | null }, b: { rate: numb
   return 0;
 }
 
-/** One kind's readings: the last RING_MAX probe outcomes (true: answered) and the last MS_MAX
- *  answer times. The counts and the rate are computed from the ring, so an old era stops
- *  counting. */
-export interface KindStat { ring: boolean[]; ms: number[] }
+/** One kind's readings: the last RING_MAX probe outcomes (true: answered), the last MS_MAX answer
+ *  times, and the look time of the last probe (null in a file written before this field). The
+ *  counts and the rate are computed from the ring, so an old era stops counting. */
+export interface KindStat { ring: boolean[]; ms: number[]; last: number | null }
 /** One change of kind: when it was seen and from what to what. */
 export interface SwitchRec { at: number; from: string; to: string }
 /** What the notes remember of one device. k is a Map of kind -> readings, in first-seen order. */
@@ -109,6 +111,8 @@ export interface ConnectionsNotes { v: 1; dev: Map<string, DevNotes> }
 interface NotesFile { v: 1; dev: unknown[] }
 
 const cut = (s: string): string => s.slice(0, STR_MAX);
+/** A probe ring as the notes hold it: '1' answered, '0' missed, oldest first. */
+const packRing = (ring: boolean[]): string => ring.map((ok) => (ok ? '1' : '0')).join('');
 const isTime = (x: unknown): x is number => typeof x === 'number' && Number.isFinite(x) && x >= 0 && x <= MAX_TIME;
 /** A probe answer time: a finite ms in a plausible range (up to an hour), rounded to a whole ms
  *  so a decayed value never shows a tail in a line. */
@@ -142,11 +146,22 @@ const saneKind = (x: unknown): x is string => typeof x === 'string' && kindOf(x)
 
 function saneStat(x: unknown): KindStat | null {
   const s = objOf(x);
-  if (!s || !Array.isArray(s.ring) || !Array.isArray(s.ms)) return null;
+  if (!s || !Array.isArray(s.ms)) return null;
   const ring: boolean[] = [];
-  for (const r of s.ring.slice(-RING_MAX)) {
-    if (typeof r !== 'boolean') return null;
-    ring.push(r);
+  if (typeof s.ring === 'string') {                // the packed shape: '0'/'1', oldest first
+    const packed = s.ring.slice(-RING_MAX);
+    for (let i = 0; i < packed.length; i++) {
+      const c = packed.charCodeAt(i);
+      if (c !== 48 && c !== 49) return null;       // not a packed ring
+      ring.push(c === 49);
+    }
+  } else if (Array.isArray(s.ring)) {              // a file from before the packing: boolean outcomes
+    for (const r of s.ring.slice(-RING_MAX)) {
+      if (typeof r !== 'boolean') return null;
+      ring.push(r);
+    }
+  } else {
+    return null;
   }
   const ms: number[] = [];
   for (const m of s.ms.slice(-MS_MAX)) {
@@ -154,7 +169,12 @@ function saneStat(x: unknown): KindStat | null {
     if (v === null) return null;
     ms.push(v);
   }
-  return { ring, ms };
+  let last: number | null = null;                  // missing in a file from before this field
+  if (s.last !== undefined && s.last !== null) {
+    if (!isTime(s.last)) return null;
+    last = s.last;
+  }
+  return { ring, ms, last };
 }
 
 function saneDev(x: unknown): [string, DevNotes] | null {
@@ -211,7 +231,7 @@ export function create(ctx: BranchCtx): Branch {
   function save() {
     const dev: [string, unknown][] = [...devs.entries()].map(([id, e]) => [id, {
       name: e.name, seen: e.seen, kind: e.kind, at: e.at,
-      k: [...e.k.entries()].map(([kind, s]) => [kind, { ring: [...s.ring], ms: [...s.ms] }]),
+      k: [...e.k.entries()].map(([kind, s]) => [kind, { ring: packRing(s.ring), ms: [...s.ms], last: s.last }]),
       sw: e.sw.map((s) => ({ ...s })),
     }]);
     ctx.save({ v: 1, dev });
@@ -232,11 +252,17 @@ export function create(ctx: BranchCtx): Branch {
    *  steadier or the deciding numbers cannot be said. Only kinds with at least 10 probes in
    *  their ring count. */
   function bestPath(e: DevNotes): string | null {
+    const lookAt = snap !== null && isTime(snap.at) ? snap.at : null;
+    if (lookAt === null) return null;            // no usable look: nothing to compare it with
     const seen: { kind: string; rate: number; ms: number | null }[] = [];
     for (const [kind, s] of e.k) {
       if (s.ring.length < 10) continue;
+      // a kind last probed another day, or ahead of this look, has a ring from another era:
+      // setting its rate against this one would compare two times without saying so
+      if (s.last === null || s.last > lookAt || lookAt - s.last > RECENT_MS) continue;
       const ok = s.ring.filter((x) => x).length;
-      seen.push({ kind, rate: reachRate(s.ring.length, ok)!, ms: usualMs(s.ms) });
+      // no answer in this ring: the ms list is older than it, so it cannot break a rate tie
+      seen.push({ kind, rate: reachRate(s.ring.length, ok)!, ms: ok > 0 ? usualMs(s.ms) : null });
     }
     if (seen.length < 2) return null;
     let best = seen[0];
@@ -270,7 +296,8 @@ export function create(ctx: BranchCtx): Branch {
     } else {
       const ok = st.ring.filter((x) => x).length;
       line += ` · answers ${pctOf(ok / st.ring.length)}% over ${kind}`;
-      const med = usualMs(st.ms);
+      // only the last ok answer times can be this ring's: earlier answers are another window
+      const med = ok > 0 ? usualMs(st.ms.slice(-ok)) : null;
       if (med !== null) {
         line += ` · usually ${med} ms`;
         const a = ASSUMED_BY_KIND.get(kind);
@@ -326,14 +353,17 @@ export function create(ctx: BranchCtx): Branch {
         let k = e.k.get(via);
         if (!k) {
           if (e.k.size >= MAX_KINDS) {
-            // evict the kind with the fewest probes; a tie keeps the first-seen one
+            // drop the kind with the fewest probes, never the one just switched from: its
+            // history was just named in the feed line. a tie drops the earliest seen of the rest
             let drop: string | null = null;
             for (const [kKind, s] of e.k) {
+              if (kKind === prev) continue;
               if (drop === null || s.ring.length < e.k.get(drop)!.ring.length) drop = kKind;
             }
+            if (drop === null) drop = e.k.keys().next().value ?? null;   // only prev is there: cannot happen with MAX_KINDS > 1
             if (drop !== null) e.k.delete(drop);
           }
-          k = { ring: [], ms: [] };
+          k = { ring: [], ms: [], last: at };
           e.k.set(via, k);
         }
         k.ring.push(reach);
@@ -345,6 +375,7 @@ export function create(ctx: BranchCtx): Branch {
             if (k.ms.length > MS_MAX) k.ms.shift();
           }
         }
+        k.last = at;
         changed = true;
       }
       // the cap: drop vanished devices first, the oldest seen first; never one this look holds
