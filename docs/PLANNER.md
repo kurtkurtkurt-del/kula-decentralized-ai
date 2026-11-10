@@ -32,7 +32,8 @@ Sonuç: eşit hızlı cihazlar arasında paylaşmak zaman kazandırmaz (toplam a
 **Yükleme süresi**: `5 s + işçi_baytları / ağ + yerel_baytlar / 300 MB/s`.
 
 **Uzmanlar karışımı (MoE, 10.11.2026)**: `SimModel.activeShare` = bir token'ın okuduğu ağırlık payı
-(katalogda `active_b / params_b`, ör. Qwen3 30B-A3B için 3.3 / 30.5; kula-node'da gguf'un tensör
+(katalogda önce ölçülen `read_share`: Qwen3 30B-A3B 0.113, Gemma 4 26B-A4B 0.205; yoksa
+`active_b / params_b`, ör. 3.3 / 30.5; yoksa addaki "A3B". kula-node'da gguf'un tensör
 tablosundan: `*_exps` tensörlerinin `expert_used_count / expert_count`'u, gerisi tam). Hız bu payla
 hesaplanır (`readMb = dosya × 1.05 × pay`; bölünmüşte blokların payı `blockShareOf`), bellek ve
 yükleme her zaman tüm dosyayla: her uzman bellekte olmalı. Bölünmüş modda token başına ağ bedeli

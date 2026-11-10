@@ -53,12 +53,13 @@ export interface PlanInput {
 
 /**
  * A model's shape for the planner from what the catalog or a gguf header says. A mixture of
- * experts (params_b and active_b, as in the catalog) reads active ÷ total of its weights per
- * token: the speed follows that share, the memory the whole file (sim.ts activeShare).
+ * experts (read_share, else params_b and active_b, as in the catalog) reads that share of its
+ * weights per token: the speed follows that share, the memory the whole file (sim.ts activeShare).
  */
-export function simModel(m: { id: string; size: number; layers: number; hidden: number; vocab: number; quant: string; kv_mb_per_1k: number; params_b?: number; active_b?: number }): SimModel {
+export function simModel(m: { id: string; size: number; layers: number; hidden: number; vocab: number; quant: string; kv_mb_per_1k: number; params_b?: number; active_b?: number; read_share?: number }): SimModel {
   const bpp = /q8/i.test(m.quant) ? 1 : /q3/i.test(m.quant) ? 0.45 : /f16|bf16/i.test(m.quant) ? 2 : 0.55;
-  const share = m.params_b && m.active_b && m.active_b < m.params_b ? m.active_b / m.params_b : 1;
+  // the catalog's measured bytes share first, as on the phone (fit.ts activeShare)
+  const share = m.read_share && m.read_share > 0 && m.read_share < 1 ? m.read_share : m.params_b && m.active_b && m.active_b < m.params_b ? m.active_b / m.params_b : 1;
   return { id: m.id, fileMb: m.size / MB, layers: m.layers, hidden: m.hidden, vocab: m.vocab, bytesPerParam: bpp, kvMbPer1k: m.kv_mb_per_1k, ...(share < 1 ? { activeShare: share } : {}) };
 }
 

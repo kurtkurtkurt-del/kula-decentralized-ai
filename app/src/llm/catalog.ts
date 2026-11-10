@@ -12,6 +12,11 @@ export type CatalogModel = {
   // mixture of experts (10.11.2026): the parameters one token uses, from the model card. Speed
   // estimates use these (fit.ts activeShare, sim/ activeShare); memory uses the whole file.
   active_b?: number;
+  // the share of the file's bytes one token reads, measured off the file's tensor table (the
+  // routed *_exps tensors at expert_used_count / expert_count, the rest whole; kula-node gguf.ts
+  // activeShareOf). Closer to the bandwidth than active_b / params_b when the experts are
+  // quantized harder than the rest or the embedding is large: the speed estimate prefers it.
+  read_share?: number;
   quant: string;
   repo: string;
   file: string;
@@ -115,7 +120,7 @@ export const CATALOG: CatalogModel[] = [
   // ctx from each file's gguf header (qwen3moe, gemma4: both known to llama.cpp b11157). The
   // ids are the chat page's (node/src/ui/lineup.ts), so a pick there stays the same model.
   {
-    id: 'qwen3-30b-a3b', name: 'Qwen3 30B-A3B', family: 'qwen3moe', params_b: 30.5, active_b: 3.3, quant: 'Q4_K_M',
+    id: 'qwen3-30b-a3b', name: 'Qwen3 30B-A3B', family: 'qwen3moe', params_b: 30.5, active_b: 3.3, read_share: 0.113, quant: 'Q4_K_M',
     repo: 'Qwen/Qwen3-30B-A3B-GGUF', file: 'Qwen3-30B-A3B-Q4_K_M.gguf', size: 18556685824,
     sha256: '0d003f6662faee786ed5da3e31b29c978de5ae5d275c8794c606a7f3c01aa8f5',
     license: 'apache-2.0', license_url: 'https://huggingface.co/Qwen/Qwen3-30B-A3B-GGUF/blob/main/LICENSE', ctx_max: 40960, kv_mb_per_1k: 96,
@@ -124,7 +129,7 @@ export const CATALOG: CatalogModel[] = [
     use: { en: 'a computer with 24 gb or more, or split over phones that hold 18 gb together; quick on one big device, held back by wi-fi when split.', de: 'ein computer mit 24 gb oder mehr, oder geteilt über telefone, die zusammen 18 gb halten; schnell auf einem großen gerät, geteilt bremst das wlan.', tr: '24 gb ya da daha fazla belleği olan bir bilgisayar, ya da birlikte 18 gb tutan telefonlara bölünmüş; tek büyük cihazda hızlı, bölününce wi-fi yavaşlatır.' },
   },
   {
-    id: 'gemma4-26b-a4b', name: 'Gemma 4 26B-A4B', family: 'gemma4', params_b: 25.2, active_b: 3.8, quant: 'UD-Q4_K_M',
+    id: 'gemma4-26b-a4b', name: 'Gemma 4 26B-A4B', family: 'gemma4', params_b: 25.2, active_b: 3.8, read_share: 0.205, quant: 'UD-Q4_K_M',
     repo: 'unsloth/gemma-4-26B-A4B-it-GGUF', file: 'gemma-4-26B-A4B-it-UD-Q4_K_M.gguf', size: 16947541728,
     sha256: 'f2c28b3dc4776931ac6f879e11f203dec637ea0f14267a86ec8f6165f63f293f',
     license: 'apache-2.0', license_url: 'https://ai.google.dev/gemma/docs/gemma_4_license', ctx_max: 262144, kv_mb_per_1k: 420,

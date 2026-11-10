@@ -33,14 +33,30 @@ describe('the catalog’s mixtures of experts', () => {
     // the dense ones stay dense
     expect(activeShare(catalogById('qwen3-4b-q4')!)).toBe(1);
   });
-  it('their simulator shape carries the active share; a dense one has none', () => {
-    expect(modelProfile(catalogById('qwen3-30b-a3b')!).activeShare).toBeCloseTo(3.3 / 30.5, 5);
+  it('their simulator shape carries the measured share; a dense one has none', () => {
+    expect(modelProfile(catalogById('qwen3-30b-a3b')!).activeShare).toBe(0.113);
+    expect(modelProfile(catalogById('gemma4-26b-a4b')!).activeShare).toBe(0.205);
     expect(modelProfile(catalogById('gemma4-26b-a4b')!).layers).toBe(30);
     expect(modelProfile(catalogById('qwen2.5-7b-q4')!).activeShare).toBeUndefined();
   });
 });
 
 describe('active share', () => {
+  it('prefers the measured read_share over active ÷ total (Gemma 4: 0.205, not 3.8 / 25.2)', () => {
+    const g = catalogById('gemma4-26b-a4b')!;
+    expect(g.read_share).toBe(0.205);
+    expect(activeShare(g)).toBe(0.205);
+    expect(activeShare({ params_b: 25.2, active_b: 3.8 })).toBeCloseTo(0.151, 3);
+    expect(activeShare({ params_b: 30, active_b: 3, read_share: 1 })).toBeCloseTo(0.1); // not a share: ignored
+    // the phone's estimate for Gemma 4 reads 0.205 of the file per token, the memory all of it
+    const p = phone();
+    const est = fitOn(p, { size: g.size, kv_mb_per_1k: g.kv_mb_per_1k, ctx: 2048, active: activeShare(g) });
+    const byBytes = fitOn(p, { size: g.size * 0.205, kv_mb_per_1k: g.kv_mb_per_1k, ctx: 2048 });
+    const byParams = fitOn(p, { size: g.size * (3.8 / 25.2), kv_mb_per_1k: g.kv_mb_per_1k, ctx: 2048 });
+    expect(est.tps).toEqual(byBytes.tps);
+    expect(est.tps!.high).toBeLessThan(byParams.tps!.high);
+    expect(est.needMb).toBe(fitOn(p, { size: g.size, kv_mb_per_1k: g.kv_mb_per_1k, ctx: 2048 }).needMb);
+  });
   it('is active ÷ total, 1 when either is missing or not smaller', () => {
     expect(activeShare(moe)).toBeCloseTo(0.1);
     expect(activeShare({ params_b: 7 })).toBe(1);

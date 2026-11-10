@@ -24,11 +24,15 @@ export const OVERHEAD_MB = 300;
 const MB = 1024 * 1024;
 
 /**
- * The share of a model's weights one token reads: active ÷ total parameters for a mixture of
- * experts (Qwen3 30B-A3B: 3.3 / 30.5), 1 for a dense model or when either number is unknown.
- * A file without `active_b` (fetched from Hugging Face before it was kept) is read by its name.
+ * The share of a model's weights one token reads, for a mixture of experts: the measured
+ * `read_share` (bytes, from the file's tensor table) when the catalog has it, else active ÷ total
+ * parameters (Qwen3 30B-A3B: 3.3 / 30.5), else the name's "A3B". 1 for a dense model or when
+ * nothing is known. A file without `active_b` (fetched from Hugging Face before it was kept) is
+ * read by its name.
  */
-export function activeShare(m: { params_b?: number | null; active_b?: number | null; file?: string }): number {
+export function activeShare(m: { params_b?: number | null; active_b?: number | null; read_share?: number | null; file?: string }): number {
+  const read = Number(m.read_share) || 0;
+  if (read > 0 && read < 1) return read;
   const total = Number(m.params_b) || 0;
   const active = Number(m.active_b) || (m.file ? activeParamsOf(m.file) : 0);
   return total > 0 && active > 0 && active < total ? active / total : 1;
@@ -146,7 +150,7 @@ export function factsFromMeta(meta: GgufMeta | null | undefined): MetaFacts | nu
 }
 
 /** A model's fit input with the header's figures over the stored ones, when there is a header. */
-export function fitInput(m: { size: number; kv_mb_per_1k: number; params_b?: number | null; active_b?: number | null }, ctx: number, meta?: GgufMeta | null): FitInput {
+export function fitInput(m: { size: number; kv_mb_per_1k: number; params_b?: number | null; active_b?: number | null; read_share?: number | null }, ctx: number, meta?: GgufMeta | null): FitInput {
   const kv = kvFromMeta(meta);
   return { size: m.size, kv_mb_per_1k: kv ?? m.kv_mb_per_1k, ctx, active: activeShare(m) };
 }

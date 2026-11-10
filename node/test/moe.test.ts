@@ -25,6 +25,8 @@ test('simModel: the catalog’s active ÷ total parameters, none for a dense mod
   assert.equal(moe.activeShare, 0.1);
   assert.equal(dense30.activeShare, undefined);
   assert.equal(simModel({ id: 'x', size: GB, ...shape, params_b: 3, active_b: 3 }).activeShare, undefined);
+  // the measured bytes share first, as on the phone
+  assert.equal(simModel({ id: 'g', size: GB, ...shape, params_b: 25.2, active_b: 3.8, read_share: 0.205 }).activeShare, 0.205);
 });
 
 test('a 30B with 3B active: tok/s like a 3B, memory like a 30B', () => {
@@ -102,6 +104,8 @@ test('the chat page’s lists carry active_b: the phone catalog’s MoE models a
   const g = UI_CATALOG.find((m) => m.id === 'gemma4-26b-a4b')!;
   assert.equal(q.active_b, 3.3);
   assert.equal(g.active_b, 3.8);
+  assert.equal(q.read_share, 0.113);
+  assert.equal(g.read_share, 0.205);
   assert.equal(q.repo, 'Qwen/Qwen3-30B-A3B-GGUF');
   assert.equal(g.repo, 'unsloth/gemma-4-26B-A4B-it-GGUF');
   for (const m of UI_CATALOG) if (m.active_b !== undefined) assert.ok(m.active_b < m.params_b, m.id);

@@ -62,7 +62,7 @@ const bytesPerParam = (quant: string) => (/q8/i.test(quant) ? 1 : /q3/i.test(qua
  * A mixture of experts carries its active share (fit.ts activeShare): the planner's speed reads
  * the active weights, its memory the whole file.
  */
-export function modelProfile(m: Pick<CatalogModel, 'id' | 'size' | 'quant' | 'kv_mb_per_1k'> & { params_b?: number; active_b?: number; file?: string }): SimModel {
+export function modelProfile(m: Pick<CatalogModel, 'id' | 'size' | 'quant' | 'kv_mb_per_1k'> & { params_b?: number; active_b?: number; read_share?: number; file?: string }): SimModel {
   const a = ARCH[m.id];
   const bpp = bytesPerParam(m.quant);
   const params = m.params_b ?? m.size / bpp / 1e9;
