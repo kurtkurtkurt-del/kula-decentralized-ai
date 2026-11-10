@@ -43,6 +43,9 @@
 // models each, one entry per seen hour of the week (168). Notes with v: 1 on disk are not
 // converted: only the tok/s averages are carried over (the availability held a few days of
 // over-counted 5 s looks), the availability starts fresh. Saved at most once a minute.
+//  - every folded hour is scored for the learning branch: just before the fold, what the slot and
+//    the prior said then (decayed to the fold time) against x, kept as the last MAX_PAIRS pairs per
+//    device, only while the device is known (the view's own rule), and handed over in the view.
 // A feed line only when a device's tonight guess flips from likely to unlikely or back.
 import type { Branch, BranchCtx, BranchView, EyeDevice, Snapshot } from '../types.js';
 import { active } from './util.js';
@@ -60,6 +63,7 @@ const MIN_SLOTS = 3;                 // folded hours for a device before it gues
 const ALPHA = 0.3;                   // weight of a new tok/s sample
 const MAX_DEVICES = 40;
 const MAX_MODELS = 8;
+const MAX_PAIRS = 200;             // scored hours kept per device
 const SAVE_EVERY_MS = 60_000;
 const MAX_AT = 8.64e15;              // ms: a snapshot.at beyond this is absurd
 const MAX_TPS = 100_000;             // tok/s beyond this is not a measurement
@@ -75,12 +79,15 @@ type Guess = 'likely' | 'maybe' | 'unlikely' | 'unknown';
 interface Speed { name: string; avg: number; n: number; at: number }
 /** one unfinished hour of the week, folded into its slot only once it is over */
 interface Cur { slot: number; looks: number; there: number; t: number }
+/** one finished hour, scored: what the branch believed just before the fold, against what happened */
+interface Pair { t: number; p: number; lo: number; hi: number; p0: number; x: number }
 interface DevNotes {
   name: string;
   seen: number;                                       // ms, the last look it was in
   slots: Record<string, [number, number, number]>;    // hour of the week -> [n, s, t]
   cur: Cur | null;                                    // the hour being counted now
   tps: Record<string, Speed>;                         // by model file
+  pairs: Pair[];                                      // the last MAX_PAIRS scored hours, oldest first
   last?: 'likely' | 'unlikely';                       // the last firm tonight guess (for the feed)
 }
 export interface ForecastNotes {
@@ -198,7 +205,7 @@ function sane(x: unknown): ForecastNotes {
         if (sp) tps[f] = sp;
       }
       if (Object.keys(tps).length === 0) continue;   // nothing worth keeping
-      dev[id] = { name: typeof d.name === 'string' ? d.name.slice(0, NAME_LEN) : id, seen: okNum(d.seen) && d.seen >= 0 && d.seen <= MAX_AT ? d.seen : 0, slots: Object.create(null), cur: null, tps };
+      dev[id] = { name: typeof d.name === 'string' ? d.name.slice(0, NAME_LEN) : id, seen: okNum(d.seen) && d.seen >= 0 && d.seen <= MAX_AT ? d.seen : 0, slots: Object.create(null), cur: null, tps, pairs: [] };
     }
     return { v: 2, looks: 0, since: null, lastGood: null, dev };
   }
@@ -242,6 +249,17 @@ function okDev(d: any): d is DevNotes {
     if (sp) tps[f] = sp;
   }
   d.tps = tps;
+  const pairs: Pair[] = [];
+  for (const q of Array.isArray(d.pairs) ? d.pairs : []) {
+    if (!q || typeof q !== 'object') continue;
+    if (!okNum(q.t) || q.t < 0 || q.t > MAX_AT) continue;
+    if (!okNum(q.p) || q.p < 0 || q.p > 1 || !okNum(q.lo) || q.lo < 0 || q.lo > 1
+      || !okNum(q.hi) || q.hi < 0 || q.hi > 1 || !okNum(q.p0) || q.p0 < 0 || q.p0 > 1
+      || !okNum(q.x) || q.x < 0 || q.x > 1) continue;
+    if (q.lo > q.hi) continue;
+    pairs.push({ t: q.t, p: q.p, lo: q.lo, hi: q.hi, p0: q.p0, x: q.x });
+  }
+  d.pairs = pairs.slice(-MAX_PAIRS);
   return true;
 }
 
@@ -339,7 +357,7 @@ export function create(ctx: BranchCtx): Branch {
       const slot = slotOf(now.at);
       for (const { id, name, dev } of snapshotDevices(now)) {
         if (typeof dev.reachable !== 'boolean') continue;            // not looked at, or not a real answer
-        const d = (notes.dev[id] ??= { name, seen: now.at, slots: Object.create(null), cur: null, tps: Object.create(null) });
+        const d = (notes.dev[id] ??= { name, seen: now.at, slots: Object.create(null), cur: null, tps: Object.create(null), pairs: [] });
         d.name = name;
         d.seen = now.at;
         const cur = d.cur;
@@ -349,7 +367,18 @@ export function create(ctx: BranchCtx): Branch {
           if (cur.looks >= MIN_HOUR) {
             const key = String(cur.slot);
             const st = d.slots[key] ?? [0, 0, 0];
-            const f = fold({ n: st[0], s: st[1], t: st[2] }, cur.there / cur.looks, now.at);
+            const x = cur.there / cur.looks;
+            // score the guess first: what the slot and the prior said just before, decayed to the
+            // fold time; recorded only while the device is known (the view's own rule), so the
+            // very first folds of a device are not scored
+            const pr = prior(Object.values(d.slots).map(([n, s, t]) => decay({ n, s, t }, now.at)));
+            if (Math.round(pr.N * 10) / 10 >= MIN_SLOTS) {
+              const de = st[0] > 0 ? decay({ n: st[0], s: st[1], t: st[2] }, now.at) : { n: 0, s: 0 };
+              const e = estimate(pr.a, de.s, de.n, PRIOR_K);
+              d.pairs.push({ t: now.at, p: e.mean, lo: e.lo, hi: e.hi, p0: pr.p0, x });
+              if (d.pairs.length > MAX_PAIRS) d.pairs.splice(0, d.pairs.length - MAX_PAIRS);
+            }
+            const f = fold({ n: st[0], s: st[1], t: st[2] }, x, now.at);
             d.slots[key] = [f.n, f.s, f.t];
           }
           d.cur = null;                                // fewer than MIN_HOUR looks: dropped
@@ -379,7 +408,7 @@ export function create(ctx: BranchCtx): Branch {
           const key = `${ld.id}|${L.model.file}`;
           const before = lastDone.get(key);
           if (before === undefined || ld.done > before) {
-            const d = (notes.dev[ld.id] ??= { name: typeof ld.name === 'string' ? ld.name.slice(0, NAME_LEN) : ld.id, seen: now.at, slots: Object.create(null), cur: null, tps: Object.create(null) });
+            const d = (notes.dev[ld.id] ??= { name: typeof ld.name === 'string' ? ld.name.slice(0, NAME_LEN) : ld.id, seen: now.at, slots: Object.create(null), cur: null, tps: Object.create(null), pairs: [] });
             noteSpeed(d, L.model.file, mName, ld.tps, now.at);
           }
           lastDone.set(key, ld.done);
@@ -430,6 +459,16 @@ export function create(ctx: BranchCtx): Branch {
 
       const maxN = presentRated.reduce((m, r) => Math.max(m, r.t.N), 0);
       const maxShown = Math.round(maxN * 10) / 10;
+      // the scored hours for the learning branch: every device in the notes (at most MAX_DEVICES,
+      // a live one never evicted), oldest pair first
+      const pairs = Object.keys(notes.dev)
+        .sort((a, b) => (present(b) ? 1 : 0) - (present(a) ? 1 : 0) || notes.dev[b].seen - notes.dev[a].seen)
+        .slice(0, MAX_DEVICES)
+        .map((id) => ({
+          id,
+          name: notes.dev[id].name,
+          scored: notes.dev[id].pairs.map((q) => [q.t, q.p, q.lo, q.hi, q.p0, q.x] as [number, number, number, number, number, number]),
+        }));
       return {
         built: true,
         stat: known === 0
@@ -448,6 +487,7 @@ export function create(ctx: BranchCtx): Branch {
         lines,
         note: rated.length ? undefined : 'no device seen yet.',
         what: 'guesses when each device is there tonight (22–07) from a decayed beta-binomial over its hours of the week, and how fast it will be from the tok/s it answered with.',
+        pairs,
       };
     },
   };

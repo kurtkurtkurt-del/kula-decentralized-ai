@@ -137,6 +137,7 @@ export interface BranchView {
   note?: string;                   // its page: one line under the list
   what?: string;                   // overrides the map's line once the branch says more
   report?: TrustReport;            // the trust branch's one screen
+  pairs?: { id: string; name: string; scored: [number, number, number, number, number, number][] }[];  // forecast → learning: [t, p, lo, hi, p0, x] per finished hour, oldest first
 }
 
 /** A line a branch wants in the live feed. */
