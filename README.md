@@ -1,5 +1,7 @@
 # kula decentralized ai
 
+**[kula's site: kurtkurtkurt-del.github.io/kula-decentralized-ai](https://kurtkurtkurt-del.github.io/kula-decentralized-ai/) — the download links (Android app, Mac app, kula-node) are there.**
+
 **join your phones, tablets and computers into one local AI cluster that runs open models.**
 
 kula runs a real language model (llama.cpp b11157) on an Android phone, and joins the phones,
