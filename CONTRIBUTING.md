@@ -46,7 +46,7 @@ cd app/modules/kula-llama && node tools/llama-src.mjs --host   # llama.cpp + Mac
 
 Models and the cluster need the apk on an arm64 device or emulator; Expo Go runs the rest
 of the app. The emulator recipe (avd `kula35`, 2.5 GB RAM on an 8 GB Mac) and the
-Mac-as-worker recipe (`tools/dev-gate.mjs`) are in the progress log under "nasıl test edilir".
+Mac-as-worker recipe (`tools/dev-gate.mjs`) are in the progress log under "nasıl test edilir" (how to test).
 
 ## tests and checks
 

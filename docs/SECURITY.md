@@ -1,104 +1,109 @@
-# güvenlik incelemesi — küme yüzeyi (5.11.2026)
+# security review — the cluster surface (5.11.2026)
 
-`claude/security-review` dalı: `origin/claude/gate-tls` + `origin/claude/integrate-night` üstüne,
-bütün küme yüzeyi saldırgan gözüyle. Protokol belgesi `GATE.md`; bu belge tehdit modelini, bulguları,
-yapılan düzeltmeleri ve kalan riskleri tutar. Testler: JVM `GuardTest`, `GateSecurityTest`
-(`audit-jvm/`'de `gradle test --max-workers=1`), node `test/security.test.ts`, jest
-`app/src/__tests__/security.test.ts`.
+Translated from the Turkish original of 5.11.2026; the original is in the git history of this file.
 
-## tehdit modeli
+The `claude/security-review` branch: on top of `origin/claude/gate-tls` + `origin/claude/integrate-night`,
+the whole cluster surface seen with an attacker's eye. The protocol page is `GATE.md`; this page keeps
+the threat model, the findings, the fixes made and the remaining risks. Tests: JVM `GuardTest`,
+`GateSecurityTest` (`gradle test --max-workers=1` in `audit-jvm/`), node `test/security.test.ts`,
+jest `app/src/__tests__/security.test.ts`.
 
-Varlıklar: işçinin belleği ve işlemcisi (ggml RPC uzaktan bellek yazdırır), işçinin diski,
-sohbet içeriği (telefon–telefon arası geçen token'lar), cihaz kimliği (sertifika anahtarı,
-`kula_device_key`), küme gizli anahtarı (v1) ve eşleşme kodu (v2).
+## threat model
 
-| saldırgan | nerede | ne yapabilir |
+Assets: the worker's memory and processor (ggml RPC writes remote memory), the worker's disk,
+the chat content (tokens passing between phone and phone), the device identity (the certificate
+key, `kula_device_key`), the cluster secret (v1) and the pairing code (v2).
+
+| attacker | where | what they can do |
 |---|---|---|
-| **A1 aynı Wi-Fi'de yabancı** | kafe, yurt, iş ağı | kapı portuna bağlanır, mDNS'i okur, trafiği dinler/değiştirir (ARP), QR'ı göremez |
-| **A2 QR'ı görmüş yabancı** | ekran görüntüsü, omuz üstü, fotoğraf | A1 + o anki secret (v2 QR) ya da `fp`+`pin` (v3 QR) |
-| **A3 ele geçmiş eş** | eşleşmiş usta telefonu çalınmış/kötücül | kapıdan geçer; işçiye model indirtir, RPC ile işçi belleğini yazar |
-| **A4 aynı telefondaki başka uygulama** | 127.0.0.1 | tünel ve RPC sunucusu loopback'te; Android UID'ler arası loopback izolasyonu yok |
-| **A5 model sunucusu** | HF ya da `url`'deki host | yönlendirme, uzun gövde, yanlış boyut |
+| **A1 a stranger on the same Wi-Fi** | cafe, dorm, work network | connects to the gate port, reads mDNS, listens to/changes traffic (ARP), cannot see the QR |
+| **A2 a stranger who saw the QR** | screenshot, over the shoulder, photo | A1 + the secret at that moment (v2 QR) or `fp`+`pin` (v3 QR) |
+| **A3 a compromised partner** | the paired master phone is stolen/malicious | passes the gate; makes the worker download a model, writes the worker's memory over RPC |
+| **A4 another app on the same phone** | 127.0.0.1 | the tunnel and the RPC server are on loopback; Android has no loopback isolation between UIDs |
+| **A5 the model server** | HF or the host in `url` | redirects, a long body, a wrong size |
 
-Tasarım sınırı: **eşleşmiş bir usta işçinin işlemci ve belleğine güvenilir erişim alır** (ggml RPC
-budur). Bu belge A3'ü "işçiyi yalnız modele kullanır, telefonun geri kalanına geçemez" sınırına
-çeker; tamamen engellemez.
+Design boundary: **a paired master gets trusted access to the worker's processor and memory** (that
+is ggml RPC). This page pulls A3 to the boundary "it uses the worker only for the model, it cannot
+reach the rest of the phone"; it does not block it completely.
 
-## bulgular
+## findings
 
-Ciddiyet: **Y** yüksek, **O** orta, **D** düşük. Durum: ✅ düzeltildi, ⚠️ açık (karar/cihaz işi), ℹ️ not.
+Severity: **H** high, **M** medium, **L** low. Status: ✅ fixed, ⚠️ open (a decision/device job), ℹ️ note.
 
-| # | yer | bulgu | cid. | yeniden üretme | düzeltme + test | durum |
+| # | where | finding | sev. | reproduction | fix + test | status |
 |---|---|---|---|---|---|---|
-| 1 | `app/src/llm/peers.ts` | Telefonun işçi secret'ı `newId()` (Math.random, xorshift128+) karakter kodlarının son nibble'ından türetiliyordu: CSPRNG değil, bir kaç çıktıdan durum geri çıkarılabilir, dağılım eğik. v1'in tek anahtarı buydu. | **Y** | `randomHex` eski hâli: `newId()` → `charCodeAt().toString(16).slice(-1)` | `app/src/llm/random.ts`: `expo-crypto.getRandomBytes` (SecureRandom). jest `security.test.ts`: 64 hex, tekrarsız, her bayt korunur. | ✅ |
-| 2 | `ApiServer.kt /load` | `name` doğrudan `File(modelsDir, name)`: `../../shared_prefs/x` ile uygulama dizininde keyfi dosyaya yazma; checksum uyuşmazsa `dest.delete()` → **keyfi dosya silme** (`kula_device_key`, `gate_key`, `paired`…). node tarafı zaten `safeName` yapıyordu. | **Y** | `POST /load {name:"../kula_device_key", sha256:"00..", url:…}` | `Guard.kt ModelName.safe`: son segment, `[A-Za-z0-9._-]`, `.part` yasak → `400 bad name`. `GuardTest.modelNamesStayInsideModels`. | ✅ |
-| 3 | `ApiServer.kt`, `ModelDownloader.kt` | `url` sınırsız: işçi LAN içine istek atar (SSRF, `http://192.168.1.1/…`, `169.254.169.254`), `HttpURLConnection` yönlendirmeleri kendi başına izler (dış host → iç host 302). | **O** | `/load {url:"http://192.168.1.1/admin"}` | `UrlPolicy.problem`: yalnız http(s), kimlik bilgisi yok, loopback/link-local/özel/CGNAT/multicast literal ve `.local`/`localhost` yasak; indiricide her atlamada politika + **çözümlenen adres** kontrolü, en çok 5 yönlendirme (`open()`), politika hatası yeniden denenmez. node `policy.ts` + `download.ts` (`lookup` kancası). `GuardTest.urlPolicy…`, node `security.test.ts` (yönlendirme LAN'a, döngü). | ✅ |
-| 4 | `ModelDownloader.kt`, node `download.ts` | Disk doldurma: `size` yalnız ilerleme içindi; sunucu daha büyük gövde ya da sonsuz chunked akış yollayabilir. Kotlin 64 MB pay bırakıyordu, node hiç bakmıyordu. | **O** | `/load {size:1000}` → sunucu 5 GB | Content-Length `size`'ı %2+1 KiB'den fazla aşarsa `size mismatch`; akışta `got > size` → kesilir; bilinmeyen uzunlukta her 32 MiB'de boş alan; diskte en az **512 MB** kalır. `.part` silinmez (devam edilebilir) ama hedef dosya hiç oluşmaz. node `security.test.ts` `/endless`, `/big`. | ✅ |
-| 5 | `ApiServer.kt` | `Content-Length` sınırsız → `CharArray(length)` ile OOM; başlık sayısı/uzunluğu sınırsız (`BufferedReader.readLine`). node 1 MiB sınırı vardı. | **O** | `Content-Length: 2000000000` | `HttpLimits`: satır 8 KiB, 64 başlık, gövde 1 MiB → 413/431; bozuk JSON 400. `GuardTest.httpLimits…`. | ✅ |
-| 6 | `Gate.kt admit` | "tek usta" kuralı check-then-set: `currentPeer` okunup sonra yazılıyordu; iki farklı IP aynı anda gelince ikisi de geçerdi (node'da yuva bağlantıdan önce alınıyordu). | **O** | iki IP'den eşzamanlı `rpc` el sıkışması | `RpcSlot` (`@Synchronized take/release`), yerel bağlantıdan **önce** alınır, `target down`'da bırakılır. `GuardTest.theRpcSlot…` (32 adres aynı anda → 1). | ✅ |
-| 7 | `Gate.kt`, `gate.ts` | Yarım açık bağlantı seli: her bağlantı bir iş parçacığı/promise + 5 s; sınır yok → thread/bellek tükenmesi, meşru usta giremez. | **O** | 500 TCP bağlantısı aç, hello yollama | `MAX_HANDSHAKES = 32`: fazlası **hello beklenmeden** `NO overloaded` alır ve kapanır; yuva OK yazılınca ya da soket kapanınca geri verilir. `GateSecurityTest.pastMaxHandshakes…`, node `security.test.ts`. | ✅ |
-| 8 | `share.ts`, `Gate.kt` | **Downgrade**: v2 (TLS) konuşan sunucu aynı portta v1'i de kabul ediyordu. PC'de `--tls` ile QR'da secret yok ama rastgele bir secret yine de v1'i canlı tutuyordu (gereksiz yüzey, HMAC tahmin denemeleri). Telefonda v3 QR öncesi v2 QR secret gösteriyor. | **O** | `--tls` sunucuya `KULA1 …` | `secret: null` → `NO no v1` (Kotlin ve node). `kula-node share --tls` artık `--secret` verilmedikçe v1 kapalı. Telefon işçisi eski ustalar için v1'i **açık tutuyor** (secret artık güçlü; bkz. kalan riskler). `GateSecurityTest.aServerWithoutASecret…`, node testi. | ✅ / ⚠️ telefon |
-| 9 | `Gate.kt TlsServer`, `share.ts` | **TOFU zehirleme**: eşleşme kodu kullanılana dek süresiz geçerliydi. Paylaşım ekranı açık kaldığı sürece QR'ı fotoğraflayan herkes (A2) günler sonra bile eşleşir. | **O** | QR fotoğrafı, 1 gün sonra `probe --fp --pin` | `PIN_TTL_MS = 10 dk`: süresi geçen kod `NO pin expired` ve anında yenilenir; işçi durum döngüsü de süresi dolan kodu kimse denemese bile yeniler, QR 2 s'de tazelenir. Eşleşmiş ustayı etkilemez. `GateSecurityTest.aPairingCodePastItsTtl…`, node testi. | ✅ |
-| 10 | `app/src/app/share.tsx` | QR (secret/pin) ekranda; ekran görüntüsü, ekran kaydı, "son uygulamalar" küçük resmi. | **D** | ekran görüntüsü al | `secureScreen(true)` = `FLAG_SECURE` paylaşım ekranında. Jest'te doğrulanamaz; cihazda bakılacak. | ✅ (cihazda doğrula) |
-| 11 | `kula_llama.cpp` | JNI `endpoints` dizisi doğrulanmıyordu; Kotlin hep `127.0.0.1:port` veriyor ama JS/Kotlin hatasıyla LAN adresi gelirse RPC istemcisi kimliksiz dışarı bağlanırdı. `nServe` de verilen adrese bağlanıyordu. | **D** | `loadModel(endpoints=["192.168.1.5:50052"])` | `isLoopbackEndpoint`: her uç `127.0.0.1:<1-65535>` değilse `cluster: worker endpoint … is not on 127.0.0.1`; `nServe` loopback dışını reddeder. Kotlin ikizi `Endpoints.isLoopback` (`GuardTest`). | ✅ |
-| 12 | `ApiServer.kt /load` | `sha256` isteğe bağlıydı: indirme doğrulanmadan yüklenebilirdi (node zorunlu tutuyordu). | **D** | `/load {url, name}` sha'sız | İndirme gerekiyorsa `400 sha256 is needed to download`; verilirse 64 hex olmalı; diskte olan dosya için hâlâ isteğe bağlı (yerel dosyaya güven). `ctx` 256..1M. | ✅ |
-| 13 | `AuditorGateTest` / `Gate.refuse` | integrate-night'ın "önce cevap sonra kayıt" sırası ret kaydını istemcinin gördüğü sıranın dışına düşürebiliyordu (test de yakaladı). | **D** | ardışık ret + bağlantı | `audit{}` (runCatching) **NO'dan önce**; defter yazılamazsa NO yine gider. | ✅ |
-| 14 | `Gate.kt`/`gate.ts` zamanlama | HMAC/pin/fp karşılaştırmaları sabit zamanlı (`constantEquals`, `timingSafeEqual`). Uzunluk farkı sızar ama hex uzunluğu sabit. `paired`/`pin` durumu açık metin ama gizli değil. Nonce 16 bayt `SecureRandom`/`randomBytes`. Tekrar: v1'de sunucu nonce'u taze olduğu için kanıt tekrarı zaten imkânsız; hello tekrarı denetçi halkasıyla ayrıca reddediliyor (telefon işçisi her zaman denetçili, node `admit` her zaman bağlı), v2 denetçisiz de kontrol ediyor. | ℹ️ | — | değişiklik yok | ℹ️ |
-| 15 | NSD TXT | `id` (kalıcı UUID), `ram`, `bw`, `name` (Build.MODEL), `kind`, `v`. Gizli yok. Kalıcı `id` ağlar arası takip imkânı. | **D** | `dns-sd -B _kula._tcp` | değişiklik yok; `id` zaten QR'da; isteğe bağlı ağ başına türetilmiş id ileride. | ⚠️ |
-| 16 | release `network-security-config` | Cleartext yalnız `127.0.0.1`/`localhost`; release manifest'te bağlı. Ham soketler (kapı v1) NSC'den etkilenmez — v1'in düz metin olması tasarım gereği (HMAC kimlik, şifreleme yok). | ℹ️ | — | değişiklik yok | ℹ️ |
-| 17 | `WorkerService` | `exported=false`; secret Intent extra'sı aynı uygulamadan; durdurma eylemi `PendingIntent.getService` + `FLAG_IMMUTABLE`, kilit ekranından durdurulabilir (bilgi sızmaz). Durum dosyası (`pin`, `fp`) uygulama özel dizininde. | ℹ️ | — | değişiklik yok | ℹ️ |
-| 18 | `.part` yarışları | Aynı dosya adına iki indirici (ApiServer `load` + uygulamanın kendi indirmesi) aynı `.part`'a yazabilir; `active` haritası id başına. Sonuç: bozuk dosya → sha uyuşmaz → silinir (veri kaybı yok, zaman kaybı). | **D** | aynı anda iki taraftan indir | değişiklik yok | ⚠️ |
-| 19 | JNI `ggml_backend_rpc_add_server` | Uç cevap vermezse süreç **abort** olur (uygulama çöker). Kotlin kapı probe'u yapıyor ama probe ile add_server arasında işçi düşerse/`busy` derse abort. | **D** | probe sonrası işçiyi kapat | değişiklik yok; llama.cpp tarafında abort yerine hata dönüşü gerekir (upstream) | ⚠️ |
-| 20 | kv-store | `llm.peers` (secret, fp, pin) ve `llm.share` (telefonun kendi secret'ı) expo-sqlite kv-store'da, şifresiz, uygulama özel dizininde. `allowBackup` varsayılanı → Android yedekleri bu veriyi taşıyabilir. Log'larda secret yok (`grep` ile doğrulandı: `console.*`, `Log.*` yalnız fp'nin ilk 16 hex'i). | **D** | yedek al | değişiklik yok; `secureStorage.ts` (Keystore) zaten var, `llm.share.secret` oraya taşınabilir; `android:allowBackup=false` ya da backup rules | ⚠️ |
+| 1 | `app/src/llm/peers.ts` | The phone's worker secret was derived from the last nibble of the character codes of `newId()` (Math.random, xorshift128+): not a CSPRNG, the state can be recovered from a few outputs, the distribution is skewed. It was v1's only key. | **H** | `randomHex` old form: `newId()` → `charCodeAt().toString(16).slice(-1)` | `app/src/llm/random.ts`: `expo-crypto.getRandomBytes` (SecureRandom). jest `security.test.ts`: 64 hex, no repeats, every byte kept. | ✅ |
+| 2 | `ApiServer.kt /load` | `name` went straight into `File(modelsDir, name)`: `../../shared_prefs/x` writes to any file in the app directory; if the checksum did not match, `dest.delete()` → **deletes any file** (`kula_device_key`, `gate_key`, `paired`…). The node side already did `safeName`. | **H** | `POST /load {name:"../kula_device_key", sha256:"00..", url:…}` | `Guard.kt ModelName.safe`: the last segment, `[A-Za-z0-9._-]`, `.part` forbidden → `400 bad name`. `GuardTest.modelNamesStayInsideModels`. | ✅ |
+| 3 | `ApiServer.kt`, `ModelDownloader.kt` | `url` was unbounded: the worker sends requests into the LAN (SSRF, `http://192.168.1.1/…`, `169.254.169.254`), `HttpURLConnection` follows redirects on its own (an outside host → an inside host 302). | **M** | `/load {url:"http://192.168.1.1/admin"}` | `UrlPolicy.problem`: only http(s), no credentials, loopback/link-local/private/CGNAT/multicast literals and `.local`/`localhost` forbidden; in the downloader a check of the policy + the **resolved address** at every hop, at most 5 redirects (`open()`), a policy error is not retried. node `policy.ts` + `download.ts` (`lookup` hook). `GuardTest.urlPolicy…`, node `security.test.ts` (a redirect into the LAN, a loop). | ✅ |
+| 4 | `ModelDownloader.kt`, node `download.ts` | Disk filling: `size` was only for progress; the server can send a bigger body or an endless chunked stream. Kotlin left a 64 MB margin, node did not look at all. | **M** | `/load {size:1000}` → the server sends 5 GB | If Content-Length exceeds `size` by more than 2%+1 KiB, `size mismatch`; in the stream `got > size` → cut; with an unknown length a free-space check every 32 MiB; at least **512 MB** stays on disk. `.part` is not deleted (it can resume) but the target file never appears. node `security.test.ts` `/endless`, `/big`. | ✅ |
+| 5 | `ApiServer.kt` | `Content-Length` unbounded → OOM through `CharArray(length)`; the number/length of headers unbounded (`BufferedReader.readLine`). node had a 1 MiB limit. | **M** | `Content-Length: 2000000000` | `HttpLimits`: a line 8 KiB, 64 headers, body 1 MiB → 413/431; broken JSON 400. `GuardTest.httpLimits…`. | ✅ |
+| 6 | `Gate.kt admit` | The "one master" rule was check-then-set: `currentPeer` was read and then written; when two different IPs came at the same time both passed (in node the slot was taken before the connection). | **M** | a `rpc` handshake from two IPs at the same time | `RpcSlot` (`@Synchronized take/release`), taken **before** the local connection, released on `target down`. `GuardTest.theRpcSlot…` (32 addresses at the same time → 1). | ✅ |
+| 7 | `Gate.kt`, `gate.ts` | A flood of half-open connections: every connection is a thread/promise + 5 s; no limit → thread/memory exhaustion, a legitimate master cannot get in. | **M** | open 500 TCP connections, send no hello | `MAX_HANDSHAKES = 32`: the rest get `NO overloaded` **without waiting for a hello** and are closed; the slot is given back when OK is written or the socket closes. `GateSecurityTest.pastMaxHandshakes…`, node `security.test.ts`. | ✅ |
+| 8 | `share.ts`, `Gate.kt` | **Downgrade**: a server speaking v2 (TLS) also accepted v1 on the same port. With `--tls` on the PC there is no secret in the QR, but a random secret still kept v1 alive (needless surface, HMAC guessing attempts). On the phone, before the v3 QR, the v2 QR shows a secret. | **M** | `KULA1 …` to a `--tls` server | `secret: null` → `NO no v1` (Kotlin and node). `kula-node share --tls` now has v1 closed unless `--secret` is given. The phone worker keeps v1 **open** for old masters (the secret is strong now; see the remaining risks). `GateSecurityTest.aServerWithoutASecret…`, node test. | ✅ / ⚠️ phone |
+| 9 | `Gate.kt TlsServer`, `share.ts` | **TOFU poisoning**: the pairing code stayed valid indefinitely until it was used. As long as the share screen stayed open, anyone who photographed the QR (A2) could pair even days later. | **M** | a photo of the QR, `probe --fp --pin` 1 day later | `PIN_TTL_MS = 10 dk` (10 minutes): an expired code gets `NO pin expired` and is renewed at once; the worker's status loop also renews an expired code even if nobody tries it, the QR refreshes in 2 s. A paired master is not affected. `GateSecurityTest.aPairingCodePastItsTtl…`, node test. | ✅ |
+| 10 | `app/src/app/share.tsx` | The QR (secret/pin) is on the screen; a screenshot, a screen recording, the "recent apps" thumbnail. | **L** | take a screenshot | `secureScreen(true)` = `FLAG_SECURE` on the share screen. It cannot be verified in jest; to be looked at on the device. | ✅ (verify on the device) |
+| 11 | `kula_llama.cpp` | The JNI `endpoints` array was not validated; Kotlin always passes `127.0.0.1:port`, but if a LAN address came in through a JS/Kotlin mistake the RPC client would connect outside without authentication. `nServe` also bound to the address it was given. | **L** | `loadModel(endpoints=["192.168.1.5:50052"])` | `isLoopbackEndpoint`: if any endpoint is not `127.0.0.1:<1-65535>`, `cluster: worker endpoint … is not on 127.0.0.1`; `nServe` refuses anything outside loopback. The Kotlin twin `Endpoints.isLoopback` (`GuardTest`). | ✅ |
+| 12 | `ApiServer.kt /load` | `sha256` was optional: a download could be installed without verification (node required it). | **L** | `/load {url, name}` without a sha | If a download is needed, `400 sha256 is needed to download`; if given it must be 64 hex; for a file already on disk it is still optional (trust the local file). `ctx` 256..1M. | ✅ |
+| 13 | `AuditorGateTest` / `Gate.refuse` | integrate-night's "answer first, then record" order could put the refusal record outside the order the client saw (the test caught it too). | **L** | a refusal and a connection back to back | `audit{}` (runCatching) **before the NO**; if the ledger cannot be written the NO still goes out. | ✅ |
+| 14 | `Gate.kt`/`gate.ts` timing | HMAC/pin/fp comparisons are constant time (`constantEquals`, `timingSafeEqual`). A length difference leaks but the hex length is fixed. `paired`/`pin` state is plain text but not secret. The nonce is 16 bytes from `SecureRandom`/`randomBytes`. Replay: in v1 a proof cannot be replayed anyway because the server nonce is fresh; a repeated hello is also refused by the auditor ring (the phone worker always has the auditor, node `admit` is always attached), v2 checks even without an auditor. | ℹ️ | — | no change | ℹ️ |
+| 15 | NSD TXT | `id` (a permanent UUID), `ram`, `bw`, `name` (Build.MODEL), `kind`, `v`. No secret. The permanent `id` allows tracking across networks. | **L** | `dns-sd -B _kula._tcp` | no change; `id` is already in the QR; an optional per-network derived id later. | ⚠️ |
+| 16 | release `network-security-config` | Cleartext only on `127.0.0.1`/`localhost`; attached in the release manifest. Raw sockets (gate v1) are not affected by NSC — v1 being plain text is by design (HMAC identity, no encryption). | ℹ️ | — | no change | ℹ️ |
+| 17 | `WorkerService` | `exported=false`; the secret Intent extra comes from the same app; the stop action is `PendingIntent.getService` + `FLAG_IMMUTABLE`, it can be stopped from the lock screen (no information leaks). The state file (`pin`, `fp`) is in the app's private directory. | ℹ️ | — | no change | ℹ️ |
+| 18 | `.part` races | Two downloaders for the same file name (ApiServer `load` + the app's own download) can write to the same `.part`; the `active` map is per id. Result: a broken file → the sha does not match → it is deleted (no data loss, wasted time). | **L** | download from both sides at the same time | no change | ⚠️ |
+| 19 | JNI `ggml_backend_rpc_add_server` | If the endpoint does not answer the process **aborts** (the app crashes). Kotlin does a gate probe, but if the worker goes down or says `busy` between the probe and add_server, it aborts. | **L** | close the worker after the probe | no change; llama.cpp needs to return an error instead of aborting (upstream) | ⚠️ |
+| 20 | kv-store | `llm.peers` (secret, fp, pin) and `llm.share` (the phone's own secret) are in the expo-sqlite kv-store, unencrypted, in the app's private directory. `allowBackup` default → Android backups can carry this data. There is no secret in the logs (checked with `grep`: `console.*`, `Log.*` only the first 16 hex of the fp). | **L** | take a backup | no change; `secureStorage.ts` (Keystore) already exists, `llm.share.secret` can move there; `android:allowBackup=false` or backup rules | ⚠️ |
 
-## protokol değişiklikleri (uyum)
+## protocol changes (compatibility)
 
-- Yeni ret nedenleri: `overloaded`, `no v1`, `pin expired` (`GATE.md` tablosu). İstemciler bilinmeyen
-  nedeni zaten metin olarak gösterir; davranış değişmez.
-- `Gate.Server(secret: String?)`, `startGateServer({ secret: string | null })`: `null` = v1 kapalı.
-- `TlsServer.pinExpiresAt` (iki tarafta); `null` = süresiz (testler, dev-gate).
-- `/load`: `name` dosya adına indirgenir, `url` politikası, `sha256` indirme için zorunlu, `size`
-  üst sınır. Uygulama zaten `model.file`, `model.sha256`, `model.size` yolluyor; HF'den sha'sız
-  bir model ayrı modda yüklenemez (node'da zaten öyleydi).
-- `dev-gate.mjs` (Mac test kapısı) değişmedi: pin süresi yok, v1 her zaman açık; yalnız test içindir.
+- New refusal reasons: `overloaded`, `no v1`, `pin expired` (`GATE.md` table). Clients already
+  show an unknown reason as text; the behaviour does not change.
+- `Gate.Server(secret: String?)`, `startGateServer({ secret: string | null })`: `null` = v1 closed.
+- `TlsServer.pinExpiresAt` (on both sides); `null` = no expiry (tests, dev-gate).
+- `/load`: `name` is reduced to a file name, `url` policy, `sha256` required for a download, `size`
+  an upper bound. The app already sends `model.file`, `model.sha256`, `model.size`; a model without
+  a sha from HF cannot be loaded in apart mode (it was already so in node).
+- `dev-gate.mjs` (the Mac test gate) did not change: no pin expiry, v1 always open; it is only for tests.
 
-## kalan riskler
+## remaining risks
 
-### telefon ↔ telefon
+### phone ↔ phone
 
-- **v1 açık (bulgu 8).** Telefon işçisi `secret` ile v1'i kabul etmeye devam ediyor ki eski
-  ustaların v2 QR'ı çalışsın. v1 düz metindir: aynı Wi-Fi'deki A1 token akışını ve RPC
-  tensörlerini **okuyabilir** (şifreleme yok), A2 (v2 QR'ı görmüş) usta olur. Karar: bir kez v3
-  ile eşleşmiş işçi v1'i kapatsın mı? (`paired.size() > 0 → secret = null`). Eski usta kaybı
-  pahasına kapatmak öneriliyor; tek satır (`WorkerService`), bu dalda yapılmadı.
-- **A4 loopback.** Usta telefonda tünel `127.0.0.1:<port>`'ta, işçi telefonda ggml RPC
-  `127.0.0.1:<rpcPort>`'ta: aynı telefondaki her uygulama bağlanabilir. Usta tarafında bu,
-  işçinin RPC'sine (bellek yazma) açık kapı demektir. llama.cpp RPC'si Unix soketi bilmediği
-  için ucuz çözüm yok; "sadece kök/debug'sız cihaz" varsayımıyla kalıyor.
-- **A3 ele geçmiş usta.** Eşleşmiş usta işçiye istediği GGUF'u indirtir ve yükletir (gguf
-  ayrıştırıcı güvenilmeyen girdiyle), RPC ile işçi sürecinin belleğini yazar. İşçi ayrı süreçte
-  (`:worker`), uygulama verisine aynı UID'den erişebilir. Sınır: ayrı süreç + bu belgenin
-  dosya/URL/disk kuralları. Daha ötesi: işçi için `isolatedProcess` (ggml'nin dosya/ağ ihtiyacı
-  yüzünden zor) ya da `paired` listesinden **unutma** arayüzü (`Paired.forget` var, UI yok).
-- **Eşleşme anı.** 10 dakikalık pencere içinde QR'ı gören (A2) hâlâ eşleşebilir; eşleşen `fp`
-  deftere ve `paired` dosyasına yazılır, usta ekranı "eşleşti" demeden önce doğrulamaz. Pin 64 bit,
-  kaba kuvvet yok.
-- **Yedekler (20).** `allowBackup` ile secret ve `paired` bulut yedeğine gidebilir.
+- **v1 open (finding 8).** The phone worker keeps accepting v1 with a `secret` so that old
+  masters' v2 QR works. v1 is plain text: A1 on the same Wi-Fi **can read** the token stream and
+  the RPC tensors (no encryption), A2 (who saw the v2 QR) becomes a master. Decision: should a
+  worker that has paired over v3 once close v1? (`paired.size() > 0 → secret = null`). Closing it
+  at the cost of losing old masters is suggested; one line (`WorkerService`), not done in this branch.
+- **A4 loopback.** On the master phone the tunnel is at `127.0.0.1:<port>`, on the worker phone
+  ggml RPC is at `127.0.0.1:<rpcPort>`: any app on the same phone can connect. On the master side
+  this means an open door to the worker's RPC (memory writes). llama.cpp's RPC does not know Unix
+  sockets, so there is no cheap fix; it stays with the assumption "only a device without root/debug".
+- **A3 a compromised master.** A paired master makes the worker download and load any GGUF it
+  wants (the gguf parser with untrusted input), and writes the worker process's memory over RPC.
+  The worker is a separate process (`:worker`), it can reach the app's data from the same UID. The
+  boundary: a separate process + this page's file/URL/disk rules. Beyond that: `isolatedProcess`
+  for the worker (hard because of ggml's file/network needs) or a **forget** interface from the
+  `paired` list (`Paired.forget` exists, no UI).
+- **The moment of pairing.** A2 who sees the QR inside the 10-minute window can still pair; the
+  paired `fp` is written to the ledger and the `paired` file, the master screen does not verify
+  before it says "paired". The pin is 64 bit, no brute force.
+- **Backups (20).** With `allowBackup` the secret and `paired` can go into a cloud backup.
 
-### telefon ↔ pc
+### phone ↔ pc
 
-- `kula-node share` **`--tls`siz** varsayılan hâlâ v1: QR'da secret, trafik düz metin. `--tls`
-  varsayılan yapılmalı (bir bayrak), bu dalda değiştirilmedi.
-- PC tarafı `paired` dosyası `~/.kula/` altında düz metin; PC'de başka kullanıcı/işlem okuyabilir.
-  Sertifika anahtarı da öyle (`gate_key`); KeyStore karşılığı yok.
-- `ggml-rpc-server` PC'de `127.0.0.1`'e bağlı ama PC'deki her süreç bağlanabilir (A4'ün PC hâli).
-- `llama-server` çocuk süreci `--no-webui` ile 127.0.0.1'de; aynı A4.
-- `/load` PC'yi kamu internetine HTTP istemcisi yapar (politikayla yalnız kamu adresleri);
-  indirilen dosya sha ile doğrulanır, yine de usta PC'ye istediği GGUF'u yükletebilir (A3).
+- `kula-node share` **without `--tls`** still defaults to v1: a secret in the QR, plain-text
+  traffic. `--tls` should be made the default (one flag), not changed in this branch.
+- On the PC side the `paired` file is plain text under `~/.kula/`; another user/process on the PC
+  can read it. The certificate key is the same (`gate_key`); there is no KeyStore equivalent.
+- `ggml-rpc-server` is bound to `127.0.0.1` on the PC but any process on the PC can connect (the
+  PC form of A4).
+- The `llama-server` child process is on 127.0.0.1 with `--no-webui`; the same A4.
+- `/load` makes the PC an HTTP client to the public internet (with the policy only public
+  addresses); the downloaded file is verified with a sha, yet the master can make the PC load any
+  GGUF it wants (A3).
 
-### ortak
+### shared
 
-- Sertifika 10 yıl, iptal yok; cihaz kaybında karşı taraf `paired`'den elle silinmeli (`forget`
-  var, arayüz yok).
-- Denetçi defteri (`ledger.jsonl`) yerel; sahte işçi kendi defterini yazar. Bu belge defteri
-  kanıt olarak saymaz.
+- The certificate lasts 10 years, there is no revocation; when a device is lost the other side
+  must be removed from `paired` by hand (`forget` exists, no interface).
+- The auditor's ledger (`ledger.jsonl`) is local; a fake worker writes its own ledger. This page
+  does not count the ledger as proof.
