@@ -406,7 +406,12 @@ the phone does the work, the computer only carries the words.
    collapsible "thinking" block for qwen3's `<think>`, tok/s, first-token time and the device
    under each answer, stop, answer again, edit and resend the last message. **the brain** (the
    icon top right) shows the devices, why the model sits where it sits, and the last decisions;
-   the same icon closes it on a wide window too, and a closed brain stays closed (10.11.2026). Settings: temperature, max tokens, context (next load), a system prompt, light/dark.
+   the same icon closes it on a wide window too, and a closed brain stays closed (10.11.2026). It
+   draws the twelve branches as a map around this computer, coloured by state only (red look at
+   this, gold worth knowing, sage fine, grey quiet: `static/brainmap.js` reads them from the eye's
+   words), then four numbers (answering speed, devices active, reachability, events kept), the
+   branch that needs you most (a tap on a node swaps it, "open" shows its page), the others worth
+   a look, and the feed. Settings: temperature, max tokens, context (next load), a system prompt, light/dark.
 
 6. **Photos** (10.11.2026, as on the phone: [NIGHT.md](NIGHT.md#photos-10112026)). The photo
    button in the composer (or paste, or drop onto it) takes up to three per message; they show

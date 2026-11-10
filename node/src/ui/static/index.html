@@ -89,8 +89,8 @@
   </main>
 
   <aside class="brain" id="brain" aria-label="the brain">
-    <!-- the brain (6.11.2026): the twelve branches of the brain map as tiles, two by six.
-         a lit tile is built and shows what it does now; a dark one is not built yet. -->
+    <!-- the brain (10.11.2026): the twelve branches as a map around this computer, coloured by
+         state; four numbers; the branch that needs you; the feed (brainmap.js, app.js drawMap). -->
     <div class="brain-head">
       <h2>the brain</h2>
       <span class="brain-sub" id="brain-sub"></span>
@@ -107,7 +107,7 @@
       <button type="button" role="tab" data-btab="learn" aria-selected="false" aria-controls="blearn">learn</button>
     </div>
     <div class="btop" id="btop">
-    <div class="bgrid" id="bgrid" role="list"></div>
+    <div class="bmap" id="bgrid"></div>
     <div class="bdetail" id="bdetail" hidden>
       <button type="button" class="link bback" id="bback">‹ all twelve</button>
       <div class="bd-head"><span class="bd-n" id="bd-n"></span><h3 id="bd-title"></h3><span class="bd-state" id="bd-state"></span></div>

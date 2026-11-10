@@ -4,6 +4,7 @@
 import { renderMarkdown, splitThink, stripThink } from './markdown.js';
 import * as wiz from './wizard.js';
 import { mountLearn } from './learn.js';
+import * as bmap from './brainmap.js';
 
 const $ = (id) => document.getElementById(id);
 const base = location.pathname.replace(/[^/]*$/, '');
@@ -944,52 +945,6 @@ const BRANCH_LOOK = {
 const branchColor = (name) => { const b = BRANCHES.find((x) => x.id === name || x.name === name); return b ? BRANCH_LOOK[b.id][0] : 'var(--meta)'; };
 
 
-// ---------- instruments (6.11.2026, design 1 of the board): every tile a small live gauge of
-// its branch: ping lines, the kept notes, the cables, the layers, tok/s, the pinned links.
-const PINGS = new Map(); // peer id → the last round-trip times of its probes, ms
-const SHORT = { trust: 'trust', models: 'models', review: 'review' }; // the full name is on the branch's page
-const VIA_HEX = { cable: '#3d6fb0', wifi: '#3f8a5a' };
-const sparkSvg = (series) => {
-  const all = series.flatMap((x) => x.v);
-  if (!all.length) return '';
-  const lo = Math.min(...all) - 3, hi = Math.max(...all) + 3;
-  const line = ({ v, c }) => { const pts = v.map((y, i) => `${(i / Math.max(1, v.length - 1)) * 150},${26 - ((y - lo) / (hi - lo)) * 26}`); const [lx, ly] = pts.at(-1).split(','); return `<polyline points="${pts.join(' ')}" fill="none" stroke="${c}" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round"/><circle cx="${lx}" cy="${ly}" r="2.6" fill="${c}"/>`; };
-  return `<svg viewBox="0 0 150 26" preserveAspectRatio="none" aria-hidden="true">${series.map(line).join('')}</svg>`;
-};
-function gaugeOf(id) {
-  const st = S.status, L = st?.loaded;
-  switch (id) {
-    case 'senses': return sparkSvg(S.peers.filter((p) => PINGS.get(p.id)?.length).slice(0, 3).map((p) => ({ v: PINGS.get(p.id), c: (p.via ?? (p.cable ? 'cable' : 'wifi')) === 'cable' ? VIA_HEX.cable : VIA_HEX.wifi })));
-    case 'memory': { const n = Math.min(12, (st?.decisions ?? []).length); return n ? `<span class="blocks">${'<i></i>'.repeat(n)}</span>` : ''; }
-    case 'connections': {
-      const g = deviceGroups().slice(0, 3);
-      if (!g.length) return '';
-      const ys = g.length === 1 ? [13] : g.length === 2 ? [7, 19] : [5, 13, 21];
-      return `<svg viewBox="0 0 150 26" aria-hidden="true"><circle cx="9" cy="13" r="5.5" fill="none" stroke="var(--accent)" stroke-width="1.5"/>${g.map((d, i) => { const c = VIA_HEX[d.via]; return `<line x1="15" y1="13" x2="58" y2="${ys[i]}" stroke="${d.active ? c : 'var(--line2)'}" stroke-width="1.4" stroke-dasharray="4 3"/><circle cx="63" cy="${ys[i]}" r="4" fill="${d.active ? c : 'none'}" stroke="${c}"/>`; }).join('')}</svg>`;
-    }
-    case 'planner': {
-      if (!L) return '';
-      const parts = L.parts?.length ? L.parts : [{ name: L.devices?.[0]?.name ?? 'here', layers: 1, local: true }];
-      const tot = parts.reduce((a, p) => a + (p.layers || 1), 0), blues = ['#3d6fb0', '#6f8fb3', '#4f7397', '#8aa6c8'];
-      return `<span class="layers" title="${esc(parts.map((p) => `${p.name} ${p.layers}`).join(' · '))}">${parts.map((p, i) => `<span data-w="${Number((p.layers || 1) / tot) * 100}" data-bg="${p.local ? 'var(--accent)' : blues[(i - 1) % blues.length]}"></span>`).join('')}</span>`;
-    }
-    case 'executor': {
-      const d = L?.devices ?? [], busy = d.some((x) => x.busy), tps = Math.max(0, ...d.map((x) => x.tps || 0));
-      return `<span class="big">${busy ? 'answering' : tps ? tps.toFixed(1) : '—'}${!busy && tps ? '<small>tok/s</small>' : ''}</span><span class="gauge"><span data-w="${busy ? 100 : Math.min(100, (tps / 30) * 100)}"></span></span>`;
-    }
-    case 'trust': {
-      const devs = eyeOf('trust')?.report?.devices;
-      if (devs?.length) return `<span class="marks">${devs.map((d) => `<i class="${d.verdict === 'ok' ? 'ok' : d.verdict === 'bad' ? 'bad' : ''}" title="${esc(d.name)}: ${TRUST_WORD[d.verdict]}"></i>`).join('')}</span>`;
-      return S.peers.length ? `<span class="marks">${S.peers.map((p) => `<i class="${p.tls ? 'ok' : ''}" title="${esc(p.name)}: ${p.tls ? 'tls, certificate pinned' : 'older pairing'}"></i>`).join('')}</span>` : '';
-    }
-    case 'models': return L ? `<span class="big">${esc(L.model.name)}<small>${Math.round(L.model.size / 1e6)} MB</small></span>` : '';
-  }
-  // a branch with no drawing of its own here: the bar god's eye gives it
-  const g = eyeOf(id)?.gauge;
-  if (typeof g === 'number' && Number.isFinite(g)) return `<span class="gauge"><span data-w="${Math.max(0, Math.min(100, g))}"></span></span>`;
-  return '';
-}
-
 function openBranch(id) {
   brainOpen = id;
   const br = $('brain');
@@ -1016,28 +971,86 @@ function renderBrain() {
     $('bd-live').replaceChildren(...(open.built ? open.live() : [el('p', 'bd-note', 'this part of the brain is on the map, not in the code yet.')]));
     return;
   }
-  const tiles = BRANCHES.map((b) => {
-    const t = el('button', `btile ${b.built ? 'on' : 'off'}`);
-    t.type = 'button';
-    t.style.setProperty('--c', BRANCH_LOOK[b.id][0]);
-    const mark = svg(BRANCH_LOOK[b.id][1]);
-    mark.classList.add('bt-mark');
-    t.appendChild(mark);
-    t.title = b.name;
-    t.setAttribute('role', 'listitem');
-    const busy = b.id === 'executor' && (S.status?.loaded?.devices ?? []).some((d) => d.busy) || b.id === 'planner' && !!S.status?.loading;
-    const head = el('span', 'bt-head');
-    head.append(el('span', 'bt-n', String(b.n)), el('b', '', SHORT[b.id] ?? b.name));
-    const viz = el('span', 'bt-viz');
-    t.append(head, el('span', 'bt-stat', b.built ? b.stat() : 'not built yet'));
-    if (b.built) { viz.innerHTML = gaugeOf(b.id); for (const x of viz.querySelectorAll('[data-w]')) { x.style.width = `${x.dataset.w}%`; if (x.dataset.bg) x.style.background = x.dataset.bg; } } 
-    t.title = `${b.name}: ${b.built ? b.stat() : 'not built yet'}`;
-    t.append(viz);
-    if (busy) t.appendChild(el('span', 'dot busy bt-live'));
-    t.addEventListener('click', () => openBranch(b.id));
-    return t;
+  drawMap(grid);
+}
+
+// ---------- the map (10.11.2026, the owner's pick: "the map, then four numbers"): the twelve
+// around this computer, coloured by state only (brainmap.js), then four numbers, the branch that
+// needs you most (a tap on a node swaps it, "open" shows its page), the others worth a look,
+// and the feed below. Every word is the eye's or the engine's; the page only arranges them.
+const SHORT_MAP = { learning: 'learning loop', trust: 'trust', models: 'models', review: 'review' }; // the full name is on the branch's page
+let brainPick = null; // the branch the card shows after a tap on its node; null: the one that needs you most
+const MAP_SVG = (paths) => paths.map((d) => `<path d="${d}"/>`).join('');
+const stateDot = (state) => `<i class="bm-s is-${state}"></i>`;
+function drawMap(box) {
+  const ids = BRANCHES.map((b) => b.id);
+  const list = bmap.statesOf(ids, eyeOf);
+  const stateOf = Object.fromEntries(list.map((x) => [x.id, x.state]));
+  const auto = bmap.firstOpen(list);
+  const pick = ids.includes(brainPick) ? brainPick : auto;
+  const stat = (id) => BRANCHES.find((b) => b.id === id)?.stat() ?? '';
+  const st = S.status, L = st?.loaded;
+  const M = bmap.MAP;
+
+  // the map
+  let spokes = '', nodes = '';
+  BRANCHES.forEach((b, k) => {
+    const p = bmap.nodeAt(k), state = stateOf[b.id], sel = b.id === pick;
+    spokes += `<line class="spoke is-${state}" x1="${M.cx}" y1="${M.cy}" x2="${p.x}" y2="${p.y}"/>`;
+    const label = `${b.n} ${b.name}: ${b.built ? stat(b.id) : 'not built yet'} (${bmap.STATE_WORD[state]})`;
+    nodes += `<g class="node is-${state}${sel ? ' sel' : ''}" data-id="${b.id}" tabindex="0" role="button" aria-pressed="${sel}" aria-label="${esc(label)}"><title>${esc(label)}</title>`
+      + `${sel ? `<circle class="halo" cx="${p.x}" cy="${p.y}" r="${M.r + 5.5}"/>` : ''}<circle class="bm-dot" cx="${p.x}" cy="${p.y}" r="${M.r}"/>`
+      + `<svg class="ic" x="${p.x - 9}" y="${p.y - 9}" width="18" height="18" viewBox="0 0 20 20" aria-hidden="true">${MAP_SVG(BRANCH_LOOK[b.id][1])}</svg>`
+      + `<text x="${p.x}" y="${p.ly}"><tspan class="n">${b.n} </tspan>${esc(SHORT_MAP[b.id] ?? b.name)}</text></g>`;
   });
-  grid.replaceChildren(...tiles);
+  const model = L ? L.model.name : st?.loading ? st.loading.model : 'no model loaded';
+  const under = L ? `loaded · ${Math.round(L.model.size / 1e6)} MB` : st?.loading ? 'loading…' : 'start a chat';
+  const fit = model.length > 15 ? ` textLength="${M.core * 2 - 12}" lengthAdjust="spacingAndGlyphs"` : '';
+  const core = `<g class="core" data-id="models" tabindex="0" role="button" aria-label="this computer: ${esc(model)}, ${esc(under)}"><circle cx="${M.cx}" cy="${M.cy}" r="${M.core}"/>`
+    + `<text class="c1" x="${M.cx}" y="${M.cy - 19}">this computer</text><text class="c2" x="${M.cx}" y="${M.cy + 2}"${fit}>${esc(model)}</text><text class="c3" x="${M.cx}" y="${M.cy + 20}">${esc(under)}</text></g>`;
+  const map = `<svg class="bm-map" viewBox="0 ${M.top} ${M.w} ${M.h}" role="group" aria-label="the twelve branches around this computer"><ellipse class="ring" cx="${M.cx}" cy="${M.cy}" rx="${M.rx}" ry="${M.ry}"/>${spokes}${core}${nodes}</svg>`;
+
+  // the legend: how many in each state
+  const c = bmap.counts(list);
+  const legend = [['look', 'to look at'], ['know', 'worth knowing'], ['fine', 'fine'], ['quiet', 'quiet'], ['off', 'not built']]
+    .filter(([k]) => c[k]).map(([k, w]) => `<span>${stateDot(k)}${c[k]} ${w}</span>`).join('');
+
+  // four numbers: the answering speed, then devices, reachability, memory
+  const d = L?.devices ?? [], busy = d.some((x) => x.busy), tps = Math.max(0, ...d.map((x) => x.tps || 0));
+  const four = bmap.fourNumbers({ senses: stat('senses'), learning: stat('learning'), memory: stat('memory') });
+  const speed = busy ? 'answering' : tps ? `${tps.toFixed(1)}<small>tok/s</small>` : '—';
+  const cell = (id, k, value, sub) => `<button type="button" class="bm-cell is-${stateOf[id]}" data-open="${id}"><span class="k">${k}</span><b>${value}</b><span class="sub">${stateOf[id] === 'know' || stateOf[id] === 'look' ? stateDot(stateOf[id]) : ''}${esc(sub)}</span></button>`;
+  const card = `<div class="bm-kpi">`
+    + `<button type="button" class="bm-speed" data-open="executor"><span class="big">${speed}</span><span class="bm-side"><span class="k">answering speed</span><span class="kstate">${stateDot(stateOf.executor)}${esc(stat('executor'))}</span></span></button>`
+    + `<div class="bm-3">`
+    + cell('senses', 'devices active', four.devices ? `${four.devices.on}<small>of ${four.devices.of}</small>` : '—', four.devices ? 'senses' : stat('senses'))
+    + cell('learning', 'reachability right', four.reach != null ? `${four.reach}<small>%</small>` : '—', four.reach != null ? 'learning loop' : stat('learning'))
+    + cell('memory', 'events kept', four.events ? String(four.events.n) : '—', four.events ? `memory${four.events.today != null ? ` · ${four.events.today} today` : ''}` : stat('memory'))
+    + `</div></div>`;
+
+  // the open card: the branch that needs you most, or the one tapped
+  const b = BRANCHES.find((x) => x.id === pick);
+  const ps = stateOf[pick];
+  const hint = pick === auto && (ps === 'look' || ps === 'know') ? 'shown first: it needs you most. tap any node to swap.' : 'tap any node to swap.';
+  const sel = `<div class="bm-sel is-${ps}"><div class="h"><span class="n">${b.n}</span><b>${esc(b.name)}</b><span class="tag is-${ps}">${bmap.STATE_WORD[ps]}</span></div>`
+    + `<p class="stat">${esc(b.built ? b.stat() : 'not built yet')}</p><div class="f"><span>${hint}</span><button type="button" class="link" data-open="${b.id}">open ›</button></div></div>`;
+
+  // the others worth a look
+  const also = bmap.notices(list, pick).map((x) => { const o = BRANCHES.find((y) => y.id === x.id); return `<button type="button" data-open="${o.id}">${stateDot(x.state)}<span><b>${esc(SHORT_MAP[o.id] ?? o.name)}</b> ${esc(o.stat())}</span><span class="go">›</span></button>`; }).join('');
+
+  box.innerHTML = `${map}<div class="bm-legend">${legend}</div>${card}${sel}${also ? `<div class="bm-also">${also}</div>` : ''}`;
+  const choose = (id) => { brainPick = id === auto ? null : id; renderBrain(); box.querySelector(`.node[data-id="${id}"]`)?.focus(); };
+  for (const n of box.querySelectorAll('.node')) {
+    n.addEventListener('click', () => choose(n.dataset.id));
+    n.addEventListener('dblclick', () => openBranch(n.dataset.id));
+    n.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); choose(n.dataset.id); } });
+  }
+  const coreEl = box.querySelector('.core');
+  // the centre: the models branch, or the steps to load one when nothing is loaded
+  const coreGo = () => (L || st?.loading || isGuest() ? openBranch('models') : openConnect());
+  coreEl.addEventListener('click', coreGo);
+  coreEl.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); coreGo(); } });
+  for (const x of box.querySelectorAll('[data-open]')) x.addEventListener('click', () => openBranch(x.dataset.open));
 }
 $('bback').addEventListener('click', () => { brainOpen = null; renderBrain(); });
 // (6.11.2026) the tiles no longer fold: the feed scrolls in its own box
@@ -1120,7 +1133,6 @@ async function refreshPeers(probe) {
     if (ok.length) feed('trust', `${tls} of ${ok.length} answering links are tls with the pinned certificate`);
   }
   for (const p of S.peers) if (before.size && !before.has(p.id)) feed('connections', `paired with ${p.name} (${(p.via ?? (p.cable ? 'cable' : p.far ? 'relay' : 'wifi')) === 'wifi' ? 'wi-fi' : p.via ?? 'cable'})`);
-  if (probe) for (const p of S.peers) if (p.reach?.ok && p.reach.ms) { const h = PINGS.get(p.id) ?? []; h.push(p.reach.ms); PINGS.set(p.id, h.slice(-16)); }
   const fresh = before.size ? S.peers.filter((p) => !before.has(p.id)).map((p) => p.id) : [];
   if (fresh.length && settings.peers.length && settings.mode !== 'phone') { settings.peers = [...new Set([...settings.peers, ...fresh])]; saveSettings(); }
   renderPeers();
