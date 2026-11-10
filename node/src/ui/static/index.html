@@ -68,8 +68,13 @@
 
     <footer class="composer-wrap">
       <form class="composer" id="composer" autocomplete="off">
+        <div class="shots" id="shots" hidden aria-label="photos to send"></div>
         <textarea id="input" rows="1" placeholder="message kula" aria-label="message"></textarea>
         <div class="composer-row">
+          <input type="file" id="photo-input" accept="image/*" multiple hidden>
+          <button type="button" class="attach" id="attach" aria-label="add a photo" title="add a photo (up to 3; paste or drop works too)">
+            <svg viewBox="0 0 20 20" aria-hidden="true"><rect x="3" y="4.5" width="14" height="11" rx="2"/><circle cx="7.5" cy="8.5" r="1.4"/><path d="M4 14.5l4.2-4 3 2.8 2.3-2 2.5 2.4"/></svg>
+          </button>
           <span class="composer-hint" id="composer-hint">enter sends · shift+enter new line</span>
           <button type="button" class="stop" id="stop" hidden aria-label="stop">
             <svg viewBox="0 0 20 20" aria-hidden="true"><rect x="6" y="6" width="8" height="8" rx="1.5"/></svg>
@@ -382,6 +387,11 @@
             <button type="button" role="radio" data-v="here">here</button>
           </div>
           <em id="set-mode-note"></em>
+        </div>
+        <div class="field owner-only" id="set-vision-box"><span>vision model <em>reads the photos you send, on this computer</em></span>
+          <select id="set-vision" aria-label="vision model"></select>
+          <em id="set-vision-note"></em>
+          <div class="row"><button type="button" class="ghost" id="set-vision-fetch" hidden>fetch</button><span class="hint" id="set-vision-progress"></span></div>
         </div>
         <label class="field"><span>temperature <output id="temp-out"></output> <em>low: steady and plain, high: more varied</em></span><input type="range" id="set-temp" min="0" max="1.5" step="0.05"></label>
         <label class="field"><span>max tokens <em>the longest an answer may get</em></span><input type="number" id="set-max" min="16" max="32768" step="16"></label>

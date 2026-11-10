@@ -297,7 +297,8 @@ export async function startApiServer(opts: ApiOptions): Promise<ApiServer> {
       }
       if (req.method === 'GET' && url === '/blob') return blob(new URLSearchParams((req.url ?? '').split('?')[1] ?? '').get('mb'), res);
       if (req.method === 'POST' && url === '/load') return handleLoad(await readJson(req), res, masterOf(req.socket.remotePort));
-      if (req.method === 'POST' && url === '/chat') return handleChat(await readJson(req), res);
+      // a chat may carry up to three shrunk photos (ui/vision.ts) for this computer's own llama-server
+      if (req.method === 'POST' && url === '/chat') return handleChat(await readJson(req, 4 << 20), res);
       if (req.method === 'POST' && url === '/stop') { current?.abort(); return json(res, 200, { ok: true, wasBusy: state.busy }); }
       if (req.method === 'POST' && url === '/unload') { if (state.busy) return json(res, 409, { error: 'busy' }); await unload(); return json(res, 200, { ok: true }); }
       return json(res, 404, { error: 'not found' });

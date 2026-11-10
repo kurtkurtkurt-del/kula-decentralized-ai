@@ -408,8 +408,37 @@ the phone does the work, the computer only carries the words.
    icon top right) shows the devices, why the model sits where it sits, and the last decisions.
    Settings: temperature, max tokens, context (next load), a system prompt, light/dark.
 
+6. **Photos** (10.11.2026, as on the phone: [NIGHT.md](NIGHT.md#photos-10112026)). The photo
+   button in the composer (or paste, or drop onto it) takes up to three per message; they show
+   as thumbnails, are shrunk in the browser before they leave it (a canvas, jpeg: 768 px on the
+   long side for one photo, 512 for two or three) and go as data urls with the message. Who
+   looks at them (`node/src/ui/vision.ts`, the engine's `chat`):
+   - **seen by** the model itself when a vision model (one with an image encoder, `mmproj`: SmolVLM
+     500M, SmolVLM2 2.2B, Gemma 3 4B) is loaded *here*: loading it fetches the encoder next to the
+     model in `~/.kula-node/models` (sha256-checked like the model) and starts llama-server with
+     `--mmproj`; the photo goes to it as an OpenAI `image_url` part.
+   - **read by** the vision model in every other case (a text model here, a model on a phone,
+     apart, split): it reads the photo on this computer first, in a short-lived second
+     llama-server (`--mmproj`, 127.0.0.1, 2048 tokens of context, stopped right after), with the
+     phone's prompt (a short factual description, any visible text, the person's question); its
+     text goes into the chat model's prompt marked as the vision model's. Only text reaches the
+     phones. When this computer's free memory is less than both need, it says so ("memory is
+     tight") and reads anyway, leaving the loaded model as it is; a vision model that then cannot
+     start says why (unload, or pick a smaller one). One reading at a time.
+   - **none:** no vision model on this computer → "fetch one in settings › model › vision model,
+     or load one from the model list, under *sees photos*"; no llama.cpp → "run kula-node setup".
+
+   Only the newest message's photos are looked at; earlier ones go as the reading kept with
+   them (or "you cannot see it"). **settings › model › vision model** picks which one reads
+   photos (default: the smallest on this computer) and can fetch one without loading it. It is
+   the computer's setting, not the browser's (`~/.kula-node/ui-settings.json`, 600), because
+   `/v1` and guests use it too. Guests may send photos the same way.
+
 Conversations are JSON files in `~/.kula-node/chats/` (600, in a 700 folder); the title is the
-first message until renamed. The catalog copy is regenerated with `npx tsx tools/ui-catalog.ts`
+first message until renamed. A message keeps its photos (as sent: at most three, jpeg/png/webp
+data urls of at most 1 MB each) and the vision model's reading; a chat holds at most 6 MB of
+photos ("start a new chat for more photos"). Bodies: a chat request at most 4 MB, a stored chat
+8 MB; more is answered 413. The catalog copy is regenerated with `npx tsx tools/ui-catalog.ts`
 (in `node/`); `test/ui.test.ts` fails while it is behind the app's.
 
 ### open it with one click
@@ -471,6 +500,12 @@ models:
     roles: [chat, edit, apply]
 ```
 
+Photos: OpenAI `image_url` parts (`{ "type": "image_url", "image_url": { "url": "data:image/jpeg;base64,…" } }`)
+take the same way as the page's (seen by a vision model loaded here, else read by the vision
+model first); only base64 jpeg, png or webp data urls, at most three, 1 MB each: llama-server
+would fetch an http url itself, so a link is refused (400). The answer says how they were seen
+in `kula.photos` (`{ how: "direct" | "describe", by, n }`).
+
 AnythingLLM: LLM provider "Generic OpenAI", base url `http://127.0.0.1:50590/v1`, the token
 as api key, model `kula`. `curl` check:
 
@@ -510,3 +545,6 @@ phone, tablet or laptop on that network scans it and is in the chat, nothing ins
 - Peer secrets and pairing codes never reach the page: devices go out without them.
 - The `/v1` token is the one secret the owner's page is given (to show it in settings).
 - llama.cpp's rpc stays behind the gate as everywhere else; the chat page adds no port to it.
+  The vision model's short-lived llama-server is on 127.0.0.1 only and gets data urls only.
+- Photos reach the page's DOM only as `<img src="data:image/…">` (the stored chat's are checked
+  on the way in); text next to them goes through `textContent` as before.

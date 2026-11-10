@@ -11,7 +11,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { openApart, openPeerDevice, type Cluster, type Message, type ModelRef, type Reply } from '../apart.js';
+import { openApart, openPeerDevice, startLlamaServer, type Cluster, type Message, type ModelRef, type Reply, type StartBackend, type WireMessage } from '../apart.js';
 import { readPeers, writePeers, parsePeerText, upsertPeer, findPeer, probePeers, peersFile, whereIs, discover, type Peer, type PeerProbe, type Found, type PeerKind } from '../peers.js';
 import { connectRemote, handshake, peekGate, GateRefused, type GatePeek } from '../gate.js';
 import { Adb, isSerial, stateHelp, NO_ADB_HELP, type CableDevice } from './cable.js';
@@ -31,6 +31,7 @@ import { serveModel } from '../modelserve.js';
 import { modelUrl, type UiModel } from './catalog.js';
 import { FULL_CATALOG, lineupView, type LineupView } from './lineup.js';
 import { Usage, type Use } from './usage.js';
+import { routePhotos, describePrompt, seenNote, partsOf, checkPhotos, DESCRIBE_CTX, DESCRIBE_TOKENS, type PhotoNote } from './vision.js';
 import { groupPeers, groupOf, bestRoute, viaOf, hostQr, newHostPin, HOST_PIN_TTL_MS, type Via, type RouteState } from './devices.js';
 
 export type Mode = 'phone' | 'apart' | 'split' | 'here';
@@ -161,12 +162,21 @@ export interface ModelRow {
   catalog: boolean;           // phones can fetch it (public url + sha256)
   here: boolean;              // the file is on this computer
   needMb: number;             // about what running it whole takes at ctx 4096
+  vision: boolean;            // it sees photos (it has an image encoder, mmproj, in the catalog)
 }
+
+// The "vision model" setting (settings › model): which model reads photos on this computer.
+export interface VisionRow { id: string; name: string; size: number; here: boolean; mmprojHere: boolean }
+export interface VisionView { setting: string | null; chosen: string | null; list: VisionRow[]; llama: boolean }
+
+export const NO_VISION = 'no model on this computer sees photos: fetch one in settings › model › vision model (SmolVLM 500M is the smallest, 0.5 GB), or load one from the model list, under "sees photos".';
+export const VISION_NEEDS_SETUP = 'reading photos needs llama.cpp on this computer: run kula-node setup, then send the photo again.';
 
 export interface DeviceRow { id: string; name: string; local: boolean; busy: boolean; tps: number | null; done: number }
 // parts: in split mode, who holds which share of the model (this computer first); the phones in it are active
 export interface Part { id: string; name: string; local: boolean; mb: number; layers: number }
-export interface Loaded { mode: Mode; model: { id: string; name: string; file: string; size: number }; ctx: number; devices: DeviceRow[]; since: number; parts?: Part[] }
+// sees: photos go straight to the loaded model (a vision model loaded "here" with its image encoder)
+export interface Loaded { mode: Mode; model: { id: string; name: string; file: string; size: number }; ctx: number; devices: DeviceRow[]; since: number; parts?: Part[]; sees?: boolean }
 export interface Status {
   loaded: Loaded | null;
   loading: { mode: Mode; model: string; since: number; line: string } | null;
@@ -181,7 +191,7 @@ export type LoadEvent =
   | { done: true; status: Status };
 
 // The catalog entry with an optional url instead of Hugging Face (tests serve files locally).
-export type CatalogEntry = UiModel & { url?: string };
+export type CatalogEntry = UiModel & { url?: string; mmprojUrl?: string };
 
 export interface EngineOptions {
   peersFile?: string;
@@ -191,8 +201,12 @@ export interface EngineOptions {
   identity?: GateIdentity;
   probeMs?: number;
   log?: (s: string) => void;
-  // tests: a fake llama-server for 'here'
-  startBackend?: (file: string, ctx: number) => Promise<{ port: number; stop(): Promise<void> }>;
+  // tests: a fake llama-server for 'here' (told the image encoder too, for a vision model)
+  startBackend?: StartBackend;
+  // tests: the short-lived llama-server a vision model reads photos in (model, mmproj, ctx)
+  startVision?: (model: string, mmproj: string, ctx: number) => Promise<{ port: number; stop(): Promise<void> }>;
+  freeMb?: () => number;                 // tests: this computer's free memory; default freeRamMB
+  settingsFile?: string;                 // the computer's chat settings (the vision model); default ~/.kula-node/ui-settings.json
   bandwidth?: () => Promise<number>;
   adb?: Adb;                             // phones on a cable; default: adb found on this computer
   cableWaitMs?: number;                  // how long "use" waits for a phone to start sharing; 60 s
@@ -1165,7 +1179,7 @@ export class Engine {
   models(): ModelRow[] {
     const rows: ModelRow[] = this.catalog.map((m) => ({
       id: m.id, name: m.name, file: m.file, size: m.size, quant: m.quant, params_b: m.params_b, active_b: m.active_b ?? null, blurb: m.blurb,
-      catalog: true, here: !!this.findLocal(m.file), needMb: needMb(m.size, m.kv_mb_per_1k, 4096),
+      catalog: true, here: !!this.findLocal(m.file), needMb: needMb(m.size + (m.mmproj?.size ?? 0), m.kv_mb_per_1k, 4096), vision: !!m.mmproj,
     }));
     const seen = new Set(this.catalog.map((m) => m.file));
     for (const d of this.dirs()) {
@@ -1177,7 +1191,7 @@ export class Engine {
         let size = 0;
         try { size = fs.statSync(path.join(d, n)).size; } catch { continue; }
         const quant = /(q\d_[a-z0-9_]+|q\d_\d|f16|bf16)/i.exec(n)?.[1]?.toUpperCase() ?? null;
-        rows.push({ id: `local:${n}`, name: n.replace(/\.gguf$/, ''), file: n, size, quant, params_b: null, active_b: null, blurb: 'a file on this computer', catalog: false, here: true, needMb: needMb(size, 64, 4096) });
+        rows.push({ id: `local:${n}`, name: n.replace(/\.gguf$/, ''), file: n, size, quant, params_b: null, active_b: null, blurb: 'a file on this computer', catalog: false, here: true, needMb: needMb(size, 64, 4096), vision: false });
       }
     }
     return rows;
@@ -1200,24 +1214,38 @@ export class Engine {
   // ---- load
 
   // A catalog model on this computer: found in a model folder, else downloaded (sha256-checked)
-  // into the first one.
+  // into the first one. A vision model's image encoder comes along separately (ensureMmproj).
   private async ensureLocal(m: CatalogEntry, emit: (e: LoadEvent) => void, signal: AbortSignal): Promise<string> {
     const have = this.findLocal(m.file);
     if (have) return have;
-    const dest = path.join(this.dirs()[0], m.file);
+    return this.fetchChecked(m.file, m.url ?? modelUrl(m), m.size, m.sha256, !!m.url, emit, signal);
+  }
+
+  // The image encoder of a vision model (mmproj), found or fetched (sha256-checked) next to the
+  // models; null for a model that has none. Its url is the model's repo with the encoder's file
+  // name (tests: mmprojUrl).
+  private async ensureMmproj(m: CatalogEntry, emit: (e: LoadEvent) => void, signal: AbortSignal): Promise<string | null> {
+    if (!m.mmproj) return null;
+    const have = this.findLocal(m.mmproj.file);
+    if (have) return have;
+    const url = m.mmprojUrl ?? modelUrl({ repo: m.repo, file: m.mmproj.file });
+    return this.fetchChecked(m.mmproj.file, url, m.mmproj.size, m.mmproj.sha256, !!m.mmprojUrl, emit, signal, 'its image encoder');
+  }
+
+  private async fetchChecked(file: string, url: string, size: number, sha256: string, allowPrivate: boolean, emit: (e: LoadEvent) => void, signal: AbortSignal, what = ''): Promise<string> {
+    const dest = path.join(this.dirs()[0], file);
     fs.mkdirSync(path.dirname(dest), { recursive: true });
-    const url = m.url ?? modelUrl(m);
-    this.note(`this computer fetches ${m.file} (${Math.round(m.size / MB)} MB) from ${new URL(url).host}`);
+    this.note(`this computer fetches ${what ? `${what}, ` : ''}${file} (${Math.round(size / MB)} MB) from ${new URL(url).host}`);
     let last = 0;
     await download(url, dest, (got, total) => {
       const now = Date.now();
       if (now - last < 250 && got < total) return;
       last = now;
-      emit({ phase: 'running', device: 'this computer', got, total: total || m.size, line: 'downloading here' });
-    }, signal, { size: m.size, allowPrivate: !!m.url });
-    emit({ phase: 'checking', device: 'this computer', got: 0, total: m.size, line: 'checking the file' });
+      emit({ phase: 'running', device: 'this computer', got, total: total || size, line: what ? `downloading ${what}` : 'downloading here' });
+    }, signal, { size, allowPrivate });
+    emit({ phase: 'checking', device: 'this computer', got: 0, total: size, line: 'checking the file' });
     const sum = await sha256Of(dest);
-    if (sum !== m.sha256) { fs.rmSync(dest, { force: true }); throw new Error(`${m.file}: checksum mismatch; the file was deleted`); }
+    if (sum !== sha256) { fs.rmSync(dest, { force: true }); throw new Error(`${file}: checksum mismatch; the file was deleted`); }
     return dest;
   }
 
@@ -1310,6 +1338,7 @@ export class Engine {
       let splitParts: Part[] | undefined;
       let file: string;
       let size: number;
+      let mmproj: string | null = null;
       // which devices the page picked, in the plan's first words
       if (exact && mode !== 'here') {
         const used = [...(mode === 'split' || (mode === 'apart' && hereToo) ? ['this computer'] : []), ...peers.map((p) => p.name)];
@@ -1347,12 +1376,21 @@ export class Engine {
       } else {
         file = localOnly ? localOnly.file : await this.ensureLocal(cat!, say, ac.signal);
         size = fs.statSync(file).size;
+        // a vision model brings its image encoder: "here" starts llama-server with it (photos
+        // go straight to the model); split keeps it here for reading photos on this computer
+        if (cat?.mmproj) {
+          try { mmproj = await this.ensureMmproj(cat, say, ac.signal); } catch (e) {
+            if (ac.signal.aborted) throw e;
+            plan.push(`its image encoder (${cat.mmproj.file}) could not be fetched (${(e as Error).message}): it answers text only.`);
+          }
+        }
         say({ phase: 'checking', device: 'this computer', line: 'hashing the file' });
         const sha256 = cat?.sha256 ?? await sha256File(file);
         const ref: ModelRef = { url: 'file://' + file, sha256, size, name: path.basename(file), ctx };
         if (mode === 'here') {
           plan.push(`${modelName} runs on this computer alone (llama-server on 127.0.0.1).`);
-          cluster = await openApart({ ...common, model: ref, peers: [], localModelFile: file, llama, startBackend: this.opts.startBackend });
+          if (mmproj) plan.push(`it sees photos: its image encoder (${path.basename(mmproj)}) is loaded next to it, so a photo goes straight to it.`);
+          cluster = await openApart({ ...common, model: ref, peers: [], localModelFile: file, localMmproj: mmproj, llama, startBackend: this.opts.startBackend });
         } else {
           const bw = await (this.opts.bandwidth ?? (() => measureBandwidth().catch(() => 4)))();
           const near = peers.filter((p) => !p.relay);
@@ -1380,7 +1418,7 @@ export class Engine {
       for (const r of cluster.stamped) this.reach.set(r.id, { r: { ok: !cluster.skipped.some((s) => s.peer?.id === r.id) }, at: Date.now() });
       for (const s of cluster.skipped) if (s.peer) { plan.push(`${s.peer.name} left out: ${s.why}.`); this.reach.set(s.peer.id, { r: { ok: false, reason: s.why }, at: Date.now() }); }
       this.cluster = cluster;
-      this.loaded = { mode, model: { id: cat?.id ?? `local:${localOnly!.name}`, name: modelName, file: path.basename(file), size }, ctx, devices: [], since: Date.now(), ...(splitParts ? { parts: splitParts } : {}) };
+      this.loaded = { mode, model: { id: cat?.id ?? `local:${localOnly!.name}`, name: modelName, file: path.basename(file), size }, ctx, devices: [], since: Date.now(), ...(splitParts ? { parts: splitParts } : {}), sees: mode === 'here' && !!mmproj };
       this.plan = plan;
       this.note(`${modelName} ready on ${cluster.devices.map((d) => d.name).join(', ')} (${mode})`);
       const st = this.status();
@@ -1413,10 +1451,18 @@ export class Engine {
 
   loadedModel(): Loaded | null { return this.loaded; }
 
-  // `use` says who asked (the page, /v1, a night project, a guest): only for the counts
-  async chat(messages: Message[], onToken: (t: string) => void, o: { maxTokens?: number; temperature?: number; signal?: AbortSignal; use?: Use } = {}): Promise<Reply & { stopped?: boolean }> {
+  // `use` says who asked (the page, /v1, a night project, a guest): only for the counts.
+  // `photos`: the newest user message's photos (data urls, ui/vision.ts), answered the way
+  // routePhotos says; `onReading` is told before a vision model reads them. The reply carries
+  // how they were answered (`photos`), with the reading for the page to keep.
+  async chat(messages: Message[], onToken: (t: string) => void, o: { maxTokens?: number; temperature?: number; signal?: AbortSignal; use?: Use; photos?: string[]; onReading?: (r: { by: string; n: number; tight: boolean }) => void } = {}): Promise<Reply & { stopped?: boolean; photos?: PhotoNote }> {
     if (!this.cluster || !this.loaded) throw new Error('no model loaded: open connect and load one');
     const loaded = this.loaded;
+    const photos = checkPhotos(o.photos);
+    // which way the photos go, decided before anything runs: a clear message when nothing can see them
+    const route = photos.length ? routePhotos(!!loaded.sees, this.chosenVision()) : null;
+    if (route?.kind === 'none') throw new Error(NO_VISION);
+    if (route?.kind === 'describe' && !this.canRead()) throw new Error(VISION_NEEDS_SETUP);
     const ac = new AbortController();
     const relay = () => ac.abort();
     if (o.signal?.aborted) ac.abort();
@@ -1424,12 +1470,27 @@ export class Engine {
     this.chats.add(ac);
     const t0 = Date.now();
     let pieces = 0, first = 0;
-    const count = { model: loaded.model.name, mode: loaded.mode, use: o.use ?? 'chat', promptChars: messages.reduce((a, m) => a + String(m.content ?? '').length, 0) } as const;
+    const count = { model: loaded.model.name, mode: loaded.mode, use: o.use ?? 'chat', promptChars: messages.reduce((a, m) => a + String(m.content ?? '').length, 0) };
     try {
-      const r = await this.cluster.chat(messages, (t) => { if (!first) first = Date.now() - t0; pieces++; onToken(t); }, { maxTokens: o.maxTokens, temperature: o.temperature, signal: ac.signal });
+      let wire: WireMessage[] = messages;
+      let note: PhotoNote | undefined;
+      const last = messages.map((m) => m.role).lastIndexOf('user');
+      if (route?.kind === 'direct') {
+        wire = messages.map((m, i) => (i === last ? { role: m.role, content: partsOf(m.content, photos) } : m));
+        note = { how: 'direct', by: loaded.model.name, n: photos.length };
+        this.note(`${photos.length === 1 ? 'a photo goes' : `${photos.length} photos go`} straight to ${loaded.model.name} (it sees photos)`);
+      } else if (route?.kind === 'describe') {
+        const seen = await this.describe(route.by, photos, last >= 0 ? messages[last].content : '', ac.signal, o.onReading);
+        if (!this.cluster || this.loaded !== loaded) throw new Error('the model was unloaded while the photo was read');
+        const text = seenNote(seen);
+        wire = messages.map((m, i) => (i === last ? { role: m.role, content: m.content ? `${m.content}\n\n${text}` : text } : m));
+        count.promptChars += text.length;
+        note = { how: 'describe', by: seen.by, n: seen.n, text: seen.text, ...(seen.tight ? { tight: true } : {}) };
+      }
+      const r = await this.cluster.chat(wire, (t) => { if (!first) first = Date.now() - t0; pieces++; onToken(t); }, { maxTokens: o.maxTokens, temperature: o.temperature, signal: ac.signal });
       this.note(`${r.device}: ${r.tokens} tokens, ${r.tps} tok/s, first after ${r.firstMs} ms${r.stopped ? ' (stopped)' : ''}`);
       this.usage.record({ ...count, device: r.device, promptTokens: r.promptTokens, completion: r.tokens || pieces, ms: r.ms, firstMs: r.firstMs, stopped: r.stopped === true });
-      return r;
+      return note ? { ...r, photos: note } : r;
     } catch (e) {
       const dev = this.cluster?.devices.find((d) => d.busy)?.name ?? this.cluster?.devices[0]?.name ?? 'unknown device';
       if (ac.signal.aborted && pieces) this.usage.record({ ...count, device: dev, completion: pieces, ms: Date.now() - t0, firstMs: first, stopped: true });
@@ -1438,6 +1499,135 @@ export class Engine {
     } finally {
       this.chats.delete(ac);
       o.signal?.removeEventListener('abort', relay);
+    }
+  }
+
+  // ---- photos (10.11.2026, ui/vision.ts): the vision model on this computer and its setting
+
+  private settingsPath(): string { return this.opts.settingsFile ?? path.join(home(), 'ui-settings.json'); }
+  private readSettings(): { visionModel?: string } {
+    try { const o = JSON.parse(fs.readFileSync(this.settingsPath(), 'utf8')); return o && typeof o === 'object' ? o : {}; } catch { return {}; }
+  }
+  private writeSettings(o: { visionModel?: string }): void {
+    const f = this.settingsPath();
+    fs.mkdirSync(path.dirname(f), { recursive: true });
+    const tmp = `${f}.${process.pid}.tmp`;
+    fs.writeFileSync(tmp, JSON.stringify(o, null, 2) + '\n', { mode: 0o600 });
+    fs.renameSync(tmp, f);
+  }
+
+  private visionCatalog(): CatalogEntry[] {
+    return this.catalog.filter((m) => !!m.mmproj).sort((a, b) => a.size + a.mmproj!.size - (b.size + b.mmproj!.size));
+  }
+
+  // The vision model that reads photos: the setting's when its file is on this computer, else
+  // the smallest one that is. A missing image encoder is fetched when it is needed (describe).
+  chosenVision(): CatalogEntry | null {
+    const here = this.visionCatalog().filter((m) => !!this.findLocal(m.file));
+    const want = this.readSettings().visionModel;
+    return here.find((m) => m.id === want) ?? here[0] ?? null;
+  }
+
+  private canRead(): boolean { return !!(this.opts.startVision || this.llama()); }
+
+  visionView(): VisionView {
+    const chosen = this.chosenVision();
+    return {
+      setting: this.readSettings().visionModel ?? null,
+      chosen: chosen?.id ?? null,
+      list: this.visionCatalog().map((m) => ({ id: m.id, name: m.name, size: m.size + m.mmproj!.size, here: !!this.findLocal(m.file), mmprojHere: !!this.findLocal(m.mmproj!.file) })),
+      llama: this.canRead(),
+    };
+  }
+
+  // settings › model › vision model: a vision model of the catalog, or null for "the smallest here"
+  setVision(id: unknown): VisionView {
+    if (id === null || id === '') { const o = this.readSettings(); delete o.visionModel; this.writeSettings(o); return this.visionView(); }
+    const m = this.visionCatalog().find((x) => x.id === id);
+    if (!m) throw new Error('that model does not see photos');
+    this.writeSettings({ ...this.readSettings(), visionModel: m.id });
+    this.note(`photos are read by ${m.name}${this.findLocal(m.file) ? '' : ' once it is on this computer'}`);
+    return this.visionView();
+  }
+
+  // Fetches a vision model and its image encoder into the models folder (sha256-checked), for
+  // reading photos without loading it; it becomes the setting.
+  private fetching: AbortController | null = null;
+  async fetchVision(id: unknown, emit: (e: LoadEvent | { done: true; vision: VisionView }) => void, signal?: AbortSignal): Promise<VisionView> {
+    const m = this.visionCatalog().find((x) => x.id === id);
+    if (!m) throw new Error('that model does not see photos');
+    if (this.fetching) throw new Error('already fetching a vision model');
+    const ac = new AbortController();
+    this.fetching = ac;
+    const relay = () => ac.abort();
+    signal?.addEventListener('abort', relay, { once: true });
+    try {
+      await this.ensureLocal(m, emit, ac.signal);
+      await this.ensureMmproj(m, emit, ac.signal);
+      this.writeSettings({ ...this.readSettings(), visionModel: m.id });
+      this.note(`${m.name} is on this computer: it reads photos`);
+      const v = this.visionView();
+      emit({ done: true, vision: v });
+      return v;
+    } finally {
+      this.fetching = null;
+      signal?.removeEventListener('abort', relay);
+    }
+  }
+
+  // One vision model reading at a time: two chats with photos do not start two of them.
+  private reading: Promise<unknown> = Promise.resolve();
+
+  // The vision model reads the photos, one by one, in a short-lived llama-server of its own
+  // (127.0.0.1, --mmproj), stopped right after. The model that is loaded stays as it is: when
+  // both do not fit in this computer's free memory, the reading is tried anyway, says so, and a
+  // vision model that cannot start says why. Its encoder is fetched first when it is missing.
+  private describe(v: CatalogEntry, photos: string[], question: string, signal: AbortSignal, onReading?: (r: { by: string; n: number; tight: boolean }) => void): Promise<{ text: string; by: string; n: number; tight: boolean }> {
+    const run = this.reading.then(() => this.describeNow(v, photos, question, signal, onReading));
+    this.reading = run.catch(() => {});
+    return run;
+  }
+
+  private async describeNow(v: CatalogEntry, photos: string[], question: string, signal: AbortSignal, onReading?: (r: { by: string; n: number; tight: boolean }) => void) {
+    if (signal.aborted) throw new Error('stopped');
+    const file = this.findLocal(v.file);
+    if (!file) throw new Error(NO_VISION);
+    const mmproj = await this.ensureMmproj(v, () => {}, signal);
+    const need = needMb(v.size + v.mmproj!.size, v.kv_mb_per_1k, DESCRIBE_CTX);
+    const free = (this.opts.freeMb ?? freeRamMB)();
+    const tight = free < need;
+    const chat = this.loaded;
+    if (tight) this.note(`memory is tight: ${v.name} needs about ${need} MB to read the photo, this computer has about ${free} MB free${chat && chat.mode !== 'phone' ? ` next to ${chat.model.name}` : ''}; trying anyway, one after the other`);
+    this.note(`${v.name} reads ${photos.length === 1 ? 'the photo' : `${photos.length} photos`} on this computer${chat && chat.mode !== 'here' ? `; only its text goes to ${chat.mode === 'phone' ? 'the phone' : 'the devices'}` : ''}`);
+    onReading?.({ by: v.name, n: photos.length, tight });
+    const start = this.opts.startVision ?? ((model: string, mm: string, ctx: number) => startLlamaServer(this.llama(), model, ctx, (s) => this.log(s), { mmproj: mm, extra: ['-np', '1'] }));
+    let server: { port: number; stop(): Promise<void> };
+    try { server = await start(file, mmproj!, DESCRIBE_CTX); } catch (e) {
+      throw new Error(tight
+        ? `${v.name} could not start next to the model that is loaded: it needs about ${need} MB, this computer has about ${free} MB free. unload the model or pick a smaller vision model (settings › model), then send again.`
+        : `${v.name} could not start: ${(e as Error).message.split('\n')[0]}`);
+    }
+    const stopIt = () => { void server.stop().catch(() => {}); };
+    signal.addEventListener('abort', stopIt, { once: true });
+    try {
+      const parts: string[] = [];
+      for (let i = 0; i < photos.length; i++) {
+        const r = await fetch(`http://127.0.0.1:${server.port}/v1/chat/completions`, {
+          method: 'POST', headers: { 'content-type': 'application/json' }, signal,
+          body: JSON.stringify({ messages: [{ role: 'user', content: partsOf(describePrompt(question), [photos[i]]) }], max_tokens: DESCRIBE_TOKENS, temperature: 0.2, stream: false, cache_prompt: false }),
+        });
+        const b: any = await r.json().catch(() => null);
+        if (!r.ok) throw new Error(`${v.name} could not read the photo: ${String(b?.error?.message ?? `http ${r.status}`).slice(0, 300)}`);
+        const text = String(b?.choices?.[0]?.message?.content ?? '').trim();
+        parts.push(photos.length > 1 ? `photo ${i + 1}: ${text}` : text);
+      }
+      this.note(`${v.name} read ${photos.length === 1 ? 'the photo' : `${photos.length} photos`}: ${parts.join(' ').length} characters for the chat model`);
+      return { text: parts.join('\n'), by: v.name, n: photos.length, tight };
+    } catch (e) {
+      throw signal.aborted ? new Error('stopped') : e;
+    } finally {
+      signal.removeEventListener('abort', stopIt);
+      await server.stop().catch(() => {});
     }
   }
 

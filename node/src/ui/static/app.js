@@ -127,6 +127,8 @@ const S = {
   role: 'owner',       // 'guest' for a device that came in with an invite
 };
 const isGuest = () => S.role === 'guest';
+const shots = [];                   // photos waiting in the composer: { file, url }
+let sending = false;                // shrinking them before a send
 
 // ---------- the chat list
 
@@ -429,10 +431,10 @@ function userEl(m, i) {
     send.type = 'button';
     send.addEventListener('click', () => {
       const text = ta.value.trim();
-      if (!text) return;
+      if (!text && !m.photos?.length) return;
       S.editing = -1;
       S.chat.messages = S.chat.messages.slice(0, i);
-      ask(text);
+      ask(text, m.photos);
     });
     ta.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); send.click(); } if (e.key === 'Escape') cancel.click(); });
     row.append(cancel, send);
@@ -442,9 +444,10 @@ function userEl(m, i) {
     ta.addEventListener('input', () => grow(ta));
     return wrap;
   }
-  wrap.appendChild(el('div', 'bubble', m.content));
+  if (m.photos?.length) wrap.appendChild(photoRow(m.photos));
+  if (m.content) wrap.appendChild(el('div', 'bubble', m.content));
   const tools = el('div', 'tools');
-  tools.appendChild(toolButton('copy', ICON.copy, () => copyText(m.content)));
+  if (m.content) tools.appendChild(toolButton('copy', ICON.copy, () => copyText(m.content)));
   if (i === lastIndex('user') && !S.streaming) tools.appendChild(toolButton('edit and send again', ICON.edit, () => { S.editing = i; renderThread(); }));
   wrap.appendChild(tools);
   return wrap;
@@ -477,6 +480,10 @@ function fillBot(wrap, m, i) {
   }
   const ans = el('div', 'answer');
   if (answer) ans.innerHTML = renderMarkdown(answer); // renderMarkdown escapes every character of model text
+  if (live && !m.content && m.meta?.reading) {
+    const r = m.meta.reading;
+    ans.appendChild(el('p', 'reading', `${r.by} is reading ${r.n === 1 ? 'the photo' : `the ${r.n} photos`} on this computer…${r.tight ? ' memory is tight: it may take a while.' : ''}`));
+  }
   if (live && !m.content) { const w = el('span', 'waiting'); w.append(el('i'), el('i'), el('i')); ans.appendChild(w); }
   else if (live && answer) {
     let tail = ans.lastElementChild;
@@ -490,6 +497,11 @@ function fillBot(wrap, m, i) {
       b.type = 'button';
       b.addEventListener('click', openConnect);
       err.appendChild(b);
+    } else if (/sees photos/.test(m.meta.error) && !isGuest()) {
+      const b = el('button', 'link', 'vision model');
+      b.type = 'button';
+      b.addEventListener('click', () => openSettings('model'));
+      err.appendChild(b);
     }
     ans.appendChild(err);
   }
@@ -502,6 +514,8 @@ function fillBot(wrap, m, i) {
     if (x.firstMs) parts.push(`first token ${x.firstMs} ms`);
     if (x.tokens) parts.push(`${x.tokens} tokens`);
     if (x.device) parts.push(x.device);
+    // photos (10.11.2026): seen by the model itself, or read by a vision model on this computer first
+    if (x.photos) parts.push(`${x.photos.n === 1 ? 'photo' : `${x.photos.n} photos`} ${x.photos.how === 'direct' ? 'seen' : 'read'} by ${x.photos.by}${x.photos.tight ? ' (memory was tight)' : ''}`);
     if (x.stopped) parts.push('stopped');
     parts.forEach((p, k) => { if (k) meta.appendChild(el('span', 'sep', '·')); meta.appendChild(el('span', '', p)); });
     const tools = el('div', 'tools');
@@ -548,15 +562,20 @@ function historyFor(upTo) {
       const a = stripThink(m.content);
       if (!a.trim()) continue; // a failed or empty answer is not history
       msgs.push({ role: 'assistant', content: a });
+    } else if (m.photos?.length) {
+      // the server looks at the newest message's photos only; earlier ones go as their reading
+      msgs.push({ role: m.role, content: m.content, photos: m.photos, ...(m.seen ? { seen: m.seen } : {}) });
     } else msgs.push({ role: m.role, content: m.content });
   }
-  return msgs;
+  // only the newest user message's photos travel: earlier ones only as a count and their reading
+  const last = msgs.map((x) => x.role).lastIndexOf('user');
+  return msgs.map((x, i) => (x.photos && i !== last ? { ...x, photos: x.photos.length } : x));
 }
 
-function ask(text) {
+function ask(text, photos) {
   if (S.streaming) return;
   if (!S.chat) newChat();
-  S.chat.messages.push({ role: 'user', content: text });
+  S.chat.messages.push({ role: 'user', content: text, ...(photos?.length ? { photos } : {}) });
   answer();
 }
 
@@ -583,17 +602,26 @@ async function answer() {
   let first = 0, pieces = 0;
   const said = feed('executor', `question sent to ${MODE_WORD[S.status?.loaded?.mode] ? `the ${MODE_WORD[S.status.loaded.mode]} model` : 'the model'}, waiting for the first word…`, { active: true });
   try {
+    const asker = msgs[index - 1];
     await postSse('chat', { messages: history, maxTokens: settings.maxTokens, temperature: settings.temperature }, (ev) => {
+      if (typeof ev.reading === 'string') { m.meta = { reading: { by: ev.reading, n: ev.n, tight: !!ev.tight } }; feed('executor', `${ev.reading} reads the photo on this computer${ev.tight ? ' (memory is tight)' : ''}…`); paintLive(); }
       if (typeof ev.t === 'string') { if (!first) first = performance.now() - t0; pieces++; m.content += ev.t; paintLive(); }
-      if (ev.done) m.meta = { tokens: ev.tokens, tps: ev.tps, firstMs: ev.firstMs, ms: ev.ms, device: ev.device, ...(ev.stopped ? { stopped: true } : {}) };
+      if (ev.done) {
+        const ph = ev.photos;
+        m.meta = { tokens: ev.tokens, tps: ev.tps, firstMs: ev.firstMs, ms: ev.ms, device: ev.device, ...(ev.stopped ? { stopped: true } : {}), ...(ph ? { photos: { how: ph.how, by: ph.by, n: ph.n, ...(ph.tight ? { tight: true } : {}) } } : {}) };
+        // a vision model's reading stays with the message: later turns get it instead of the photos
+        if (ph?.how === 'describe' && typeof ph.text === 'string' && asker?.role === 'user') asker.seen = { text: ph.text, by: ph.by, n: ph.n };
+      }
       if (ev.error) m.meta = { error: ev.error };
     }, ac.signal);
   } catch (e) {
     if (ac.signal.aborted) {
       const ms = performance.now() - t0;
+      delete m.meta.reading;
       m.meta = { ...m.meta, stopped: true, tokens: m.meta.tokens ?? pieces, firstMs: m.meta.firstMs ?? Math.round(first), device: m.meta.device ?? S.status?.loaded?.devices?.[0]?.name, tps: m.meta.tps ?? (pieces ? Math.round((pieces / Math.max(1, ms - first)) * 10000) / 10 : 0) };
     } else m.meta = { error: e.message };
   } finally {
+    if (m.meta.reading) delete m.meta.reading;
     feedDone(said, m.meta.error ? `the answer failed: ${m.meta.error}` : `${m.meta.stopped ? 'stopped' : 'answered'}${m.meta.device ? ` on ${m.meta.device}` : ''}${m.meta.tokens ? ` · ${m.meta.tokens} tokens` : ''}${m.meta.tps ? ` · ${m.meta.tps} tok/s` : ''}`);
     S.streaming = null;
     setBusy(false);
@@ -613,7 +641,7 @@ function setBusy(on) {
 
 const input = $('input');
 function grow(t) { t.style.height = 'auto'; t.style.height = `${Math.min(t.scrollHeight, window.innerHeight * 0.4)}px`; }
-function updateSend() { $('send').disabled = !input.value.trim() || !!S.streaming || input.disabled; }
+function updateSend() { $('send').disabled = (!input.value.trim() && !shots.length) || !!S.streaming || input.disabled; }
 input.addEventListener('input', () => { grow(input); updateSend(); });
 // settings → general → sending: enter sends (shift+enter a new line), or ctrl/⌘+enter sends
 input.addEventListener('keydown', (e) => {
@@ -623,17 +651,115 @@ input.addEventListener('keydown', (e) => {
 });
 function composerHint() { $('composer-hint').textContent = settings.enter === 'mod' ? 'ctrl/⌘+enter sends · enter new line' : 'enter sends · shift+enter new line'; }
 composerHint();
-$('composer').addEventListener('submit', (e) => {
+$('composer').addEventListener('submit', async (e) => {
   e.preventDefault();
   const text = input.value.trim();
-  if (!text || S.streaming) return;
+  if ((!text && !shots.length) || S.streaming || sending) return;
   const pj = S.chat ? projectOf(S.chat.id) : null;
   if (pj && (pj.state === 'waiting' || pj.state === 'running')) return toast('this chat opens after the night project has run');
+  let photos = [];
+  if (shots.length) {
+    sending = true;
+    try { photos = await shrinkAll(shots.map((x) => x.file)); }
+    catch (err) { toast(err.message); return; }
+    finally { sending = false; }
+    const held = (S.chat?.messages ?? []).reduce((a, m) => a + (m.photos ?? []).reduce((b, u) => b + u.length, 0), 0);
+    if (held + photos.reduce((a, u) => a + u.length, 0) > CHAT_PHOTOS_MAX) return toast('this chat holds as many photos as it can: start a new chat for more');
+    clearShots();
+  }
   input.value = '';
   grow(input);
   updateSend();
-  ask(text);
+  ask(text, photos);
 });
+
+// ---------- photos (10.11.2026): up to three per message, shrunk here before they leave the
+// browser (768 px on the long side for one, 512 for two or three, as the phone does) and sent
+// as jpeg data urls. The server decides who looks at them (ui/vision.ts).
+const MAX_SHOTS = 3;
+const PHOTO_MAX = 1000000;          // characters of one data url, as the server checks
+const CHAT_PHOTOS_MAX = 6000000;    // the photos one stored chat may hold
+const photoSide = (n) => (n <= 1 ? 768 : 512);
+
+function renderShots() {
+  const box = $('shots');
+  box.replaceChildren();
+  box.hidden = !shots.length;
+  shots.forEach((x, i) => {
+    const f = el('figure', 'shot');
+    const img = el('img');
+    img.src = x.url;
+    img.alt = `photo ${i + 1}`;
+    const b = el('button', 'shot-x');
+    b.type = 'button';
+    b.title = 'remove this photo';
+    b.setAttribute('aria-label', `remove photo ${i + 1}`);
+    b.appendChild(svg(ICON.x));
+    b.addEventListener('click', () => { URL.revokeObjectURL(x.url); shots.splice(i, 1); renderShots(); });
+    f.append(img, b);
+    box.appendChild(f);
+  });
+  $('attach').disabled = shots.length >= MAX_SHOTS;
+  updateSend();
+}
+function clearShots() { for (const x of shots) URL.revokeObjectURL(x.url); shots.length = 0; renderShots(); }
+function addShots(files) {
+  const imgs = [...files].filter((f) => /^image\//.test(f.type));
+  if (!imgs.length) return false;
+  const room = MAX_SHOTS - shots.length;
+  if (room <= 0) { toast(`at most ${MAX_SHOTS} photos per message`); return true; }
+  if (imgs.length > room) toast(`at most ${MAX_SHOTS} photos per message: ${imgs.length - room} left out`);
+  for (const f of imgs.slice(0, room)) shots.push({ file: f, url: URL.createObjectURL(f) });
+  renderShots();
+  input.focus();
+  return true;
+}
+// one photo as a jpeg data url, its long side at most `side` px (never larger than it was)
+function shrink(file, side) {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      URL.revokeObjectURL(url);
+      const k = Math.min(1, side / Math.max(img.naturalWidth, img.naturalHeight));
+      const c = document.createElement('canvas');
+      c.width = Math.max(1, Math.round(img.naturalWidth * k));
+      c.height = Math.max(1, Math.round(img.naturalHeight * k));
+      const g = c.getContext('2d');
+      g.fillStyle = '#ffffff';
+      g.fillRect(0, 0, c.width, c.height);
+      g.drawImage(img, 0, 0, c.width, c.height);
+      let out = c.toDataURL('image/jpeg', 0.85);
+      if (out.length > PHOTO_MAX) out = c.toDataURL('image/jpeg', 0.6);
+      if (out.length > PHOTO_MAX) return reject(new Error(`${file.name || 'a photo'} is still too big after shrinking`));
+      resolve(out);
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error(`${file.name || 'that file'} is not a photo this browser can read`)); };
+    img.src = url;
+  });
+}
+const shrinkAll = (files) => Promise.all(files.map((f) => shrink(f, photoSide(files.length))));
+
+function photoRow(list) {
+  const row = el('div', 'photos');
+  list.forEach((u, i) => {
+    if (typeof u !== 'string' || !u.startsWith('data:image/')) return;
+    const img = el('img');
+    img.src = u;
+    img.alt = `photo ${i + 1}`;
+    img.loading = 'lazy';
+    row.appendChild(img);
+  });
+  return row;
+}
+
+$('attach').addEventListener('click', () => $('photo-input').click());
+$('photo-input').addEventListener('change', () => { addShots($('photo-input').files); $('photo-input').value = ''; });
+input.addEventListener('paste', (e) => { const files = e.clipboardData?.files; if (files?.length && addShots(files)) e.preventDefault(); });
+const composerEl = $('composer');
+composerEl.addEventListener('dragover', (e) => { if ([...(e.dataTransfer?.types ?? [])].includes('Files')) { e.preventDefault(); composerEl.classList.add('drop'); } });
+composerEl.addEventListener('dragleave', (e) => { if (!composerEl.contains(e.relatedTarget)) composerEl.classList.remove('drop'); });
+composerEl.addEventListener('drop', (e) => { composerEl.classList.remove('drop'); if (e.dataTransfer?.files?.length) { e.preventDefault(); addShots(e.dataTransfer.files); } });
 $('stop').addEventListener('click', () => S.streaming?.ac.abort());
 document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && S.streaming && !document.querySelector('dialog[open]')) S.streaming.ac.abort(); });
 
@@ -1607,6 +1733,7 @@ function renderModels() {
     b.disabled = off;
     b.append(el('b', '', `${m.name}${m.quant ? ` · ${m.quant}` : ''}`), el('span', 'size', gb(m.size)), el('span', 'blurb', off ? 'a file on this computer: phones only fetch from the public internet, so use here or split for it' : m.blurb));
     const fit = el('span', 'fit');
+    if (m.vision) fit.appendChild(el('span', 'info', 'sees photos'));
     if (forPhones) for (const p of peers) { const f = fitFor(m, p); if (f) fit.appendChild(el('span', f[0], f[1])); }
     if (mode === 'here' || mode === 'split') fit.appendChild(el('span', m.here ? 'yes' : 'info', m.here ? 'on this computer' : `downloads here first (${gb(m.size)})`));
     else if (m.here && mode === 'apart') fit.appendChild(el('span', 'info', 'this computer has it too'));
@@ -1776,6 +1903,7 @@ function modelButton(m, phone) {
   const fit = el('span', 'fit');
   // a mixture of experts (10.11.2026): all of it in memory, only the active part read per token
   if (m.active_b) fit.appendChild(el('span', 'info', `MoE · ${m.active_b}B active${m.params_b ? ` of ${m.params_b}B` : ''}`));
+  if (m.vision) fit.appendChild(el('span', 'info', 'sees photos'));
   if (m.off) fit.appendChild(el('span', 'no', m.off));
   else {
     if (m.onPhone) fit.appendChild(el('span', 'yes', `on ${phone.name} now`));
@@ -2498,7 +2626,63 @@ function renderSetModel() {
   $('temp-out').textContent = Number(settings.temperature).toFixed(2);
   $('set-max').value = String(settings.maxTokens);
   $('set-ctx').value = String(settings.ctx);
+  if (!isGuest()) refreshVision();
 }
+
+// ---- model › vision model: the computer's setting (ui-settings.json), not this browser's:
+// /v1 and guests use it too. Unset, the smallest vision model on this computer reads photos.
+let visionView = null;
+async function refreshVision() {
+  try { visionView = (await getJson('settings')).vision ?? null; } catch { visionView = null; }
+  renderVision();
+}
+function renderVision() {
+  const sel = $('set-vision');
+  const v = visionView;
+  sel.replaceChildren();
+  if (!v) { sel.append(el('option', '', 'not known yet')); sel.disabled = true; return; }
+  sel.disabled = false;
+  const auto = el('option', '', 'the smallest on this computer');
+  auto.value = '';
+  sel.append(auto);
+  for (const m of v.list) {
+    const o = el('option', '', `${m.name} · ${gb(m.size)} · ${m.here ? 'on this computer' : 'not here yet'}`);
+    o.value = m.id;
+    sel.append(o);
+  }
+  sel.value = v.setting && v.list.some((m) => m.id === v.setting) ? v.setting : '';
+  const want = v.list.find((m) => m.id === sel.value) ?? null;
+  const chosen = v.list.find((m) => m.id === v.chosen) ?? null;
+  const fetch = $('set-vision-fetch');
+  fetch.hidden = !want || want.here;
+  if (want && !want.here) fetch.textContent = `fetch ${want.name} (${gb(want.size)})`;
+  $('set-vision-note').textContent = !v.llama
+    ? 'reading photos needs llama.cpp on this computer: kula-node setup.'
+    : chosen
+      ? `${chosen.name} reads photos${want && !want.here ? ' until the one picked is fetched' : ''}. a model that sees photos itself, loaded here, gets them straight.`
+      : 'no model on this computer sees photos yet: pick one and fetch it, or load one from the model list ("sees photos").';
+}
+$('set-vision').addEventListener('change', async () => {
+  try { visionView = await postJson('settings/vision', { id: $('set-vision').value || null }); } catch (e) { toast(e.message); }
+  renderVision();
+});
+$('set-vision-fetch').addEventListener('click', async () => {
+  const id = $('set-vision').value;
+  const b = $('set-vision-fetch');
+  const out = $('set-vision-progress');
+  b.disabled = true;
+  out.textContent = 'starting…';
+  try {
+    await postSse('vision/fetch', { id }, (ev) => {
+      if (ev.error) throw new Error(ev.error);
+      if (ev.vision) { visionView = ev.vision; out.textContent = 'done: it reads photos now.'; }
+      else if (ev.line) out.textContent = `${ev.line}${ev.total ? ` · ${Math.floor(((ev.got ?? 0) / ev.total) * 100)}%` : ''}`;
+    });
+  } catch (e) { out.textContent = e.message; }
+  b.disabled = false;
+  renderVision();
+  getJson('models').then((m) => { S.models = m; renderModels(); }).catch(() => {});
+});
 $('set-model').addEventListener('change', () => { if (!S.models.some((m) => m.id === $('set-model').value)) return; settings.model = $('set-model').value; saveSettings(); renderModels(); });
 segOn('set-mode', (v) => { settings.mode = v; if (v === 'phone' && settings.peers.length > 1) settings.peers = settings.peers.slice(0, 1); saveSettings(); renderModes(); renderSetModel(); });
 $('set-temp').addEventListener('input', () => { settings.temperature = Number($('set-temp').value); $('temp-out').textContent = settings.temperature.toFixed(2); saveSettings(); });

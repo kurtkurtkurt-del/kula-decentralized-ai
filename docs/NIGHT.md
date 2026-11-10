@@ -185,6 +185,18 @@ gets the photo directly (its mmproj loaded next to it, `generateWithImages`); a 
 the vision model's description in the prompt, both in RAM when the passport says they fit,
 else the chat model is unloaded for the reading and loaded again (the chat says so).
 
+The computer's chat page (`kula-node ui`, [NODE.md](NODE.md#the-chat-page)) does the same with
+llama.cpp's own server (`node/src/ui/vision.ts`, the same prompt and the same note): a vision
+model loaded *here* gets its image encoder (`--mmproj`, fetched and sha256-checked next to the
+model) and the photo as an OpenAI `image_url` part ("seen by"); otherwise the vision model
+picked in settings › model › vision model (else the smallest on the computer) reads it in a
+second, short-lived llama-server on 127.0.0.1 and the chat model gets its text ("read by"),
+also when the model runs on a phone: only text goes to the phones. Two differences: the
+computer does not unload the model that is loaded when memory is tight (it says so and reads
+anyway, one after the other), and the setting lives on the computer
+(`~/.kula-node/ui-settings.json`), since `/v1` and guests use it too. The computer's night
+projects do not take photos yet.
+
 ## limits, plainly
 
 - **The night runs while the app is open.** Android's background task API (`expo-background-task`,
