@@ -278,6 +278,9 @@ export interface GateServer {
   port: number;
   server: net.Server;
   close(): Promise<void>;
+  // Ends every open pipe of the client certificate `fp` (its access was just removed);
+  // returns how many there were. Their close events still come.
+  drop(fp: string): number;
 }
 
 function connectLocal(port: number, timeoutMs = 3000): Promise<net.Socket> {
@@ -298,6 +301,19 @@ export async function startGateServer(opts: GateServerOptions): Promise<GateServ
   // v2 checks replays and clocks itself when no admit hook does
   const ring = new ReplayCheck();
   const secureContext = opts.tls ? tls.createSecureContext({ key: opts.tls.identity.keyPem, cert: opts.tls.identity.certPem, minVersion: 'TLSv1.3' }) : null;
+  // open v2 pipes by client certificate, so a removed device can be cut off (drop)
+  const live = new Map<Duplex, { fp: string; target: net.Socket }>();
+  const drop = (fp: string): number => {
+    let n = 0;
+    for (const [s, v] of [...live]) {
+      if (v.fp !== fp) continue;
+      live.delete(s);
+      v.target.destroy();
+      s.destroy();
+      n++;
+    }
+    return n;
+  };
 
   // After the proof: find the target, say OK, pipe until either side closes. `handshakeDone`
   // gives the handshake slot back once the connection is piped.
@@ -319,7 +335,13 @@ export async function startGateServer(opts: GateServerOptions): Promise<GateServ
     const at = Date.now();
     handshakeDone();
     emit({ type: 'open', channel, peer, at, v, fp });
+    if (fp) {
+      live.set(socket, { fp, target });
+      // removed between its handshake and here: the drop for it may already have run
+      if (opts.tls && !opts.tls.paired.has(fp)) drop(fp);
+    }
     const counts = await pipeBoth(socket, target, rest);
+    live.delete(socket);
     if (kept && apiPeers.get(leg!) === plainIp(peer)) apiPeers.delete(leg!);
     letGo();
     emit({ type: 'close', channel, peer, at: Date.now(), ms: Date.now() - at, bytesIn: counts.aToB, bytesOut: counts.bToA, v, fp });
@@ -484,6 +506,7 @@ export async function startGateServer(opts: GateServerOptions): Promise<GateServ
   return {
     port: addr.port,
     server,
+    drop,
     close: () => new Promise<void>((resolve) => {
       server.close(() => resolve());
       for (const s of open) s.destroy();

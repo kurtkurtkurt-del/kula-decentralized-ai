@@ -191,28 +191,80 @@ class GateIdentity(val keyPair: KeyPair, val certDer: ByteArray) {
 
 /**
  * The worker's record of the clients it has paired with (two-way TOFU): one certificate
- * fingerprint per line, with the time. A client on this list connects with its certificate
- * alone; any other needs the one-time pairing code from the qr.
+ * fingerprint per line, with the time it paired and, when known, a name
+ * ("<fp> <unix ms> [name]"). A client on this list connects with its certificate alone; any
+ * other needs the one-time pairing code from the qr.
+ *
+ * Removing a line takes the client's access away (docs/GATE.md, "remove a device's access").
+ * The app process and the ":worker" process each hold a Paired over the same file, so every
+ * read first looks at the file's size and time and reads it again when another process
+ * changed it: a removal in the app is refused by the running gate at the next handshake.
  */
 class Paired(private val file: File?) {
-  private val fps = HashSet<String>()
+  /** One paired client: its certificate fingerprint, when it paired (null: a line without a time), a name if one was given. */
+  data class Entry(val fp: String, val at: Long?, val name: String?)
 
-  init {
-    file?.takeIf { it.exists() }?.readLines()?.forEach { l -> l.trim().split(' ').firstOrNull()?.takeIf { it.length == 64 }?.let { fps.add(it) } }
+  private val entries = LinkedHashMap<String, Entry>()
+  /** The file's (lastModified, length) when it was last read or written here. */
+  private var seen: Pair<Long, Long>? = null
+
+  init { load() }
+
+  private fun stamp(f: File): Pair<Long, Long> = if (f.exists()) f.lastModified() to f.length() else 0L to -1L
+
+  private fun load() {
+    entries.clear()
+    val f = file ?: return
+    if (f.exists()) runCatching { f.readLines() }.getOrDefault(emptyList()).forEach { l ->
+      val p = l.trim().split(' ', limit = 3)
+      val fp = p.firstOrNull()?.lowercase()?.takeIf { it.length == 64 && it.all { c -> c in '0'..'9' || c in 'a'..'f' } } ?: return@forEach
+      entries[fp] = Entry(fp, p.getOrNull(1)?.toLongOrNull()?.takeIf { it > 0 },p.getOrNull(2)?.trim()?.takeIf { it.isNotEmpty() })
+    }
+    seen = stamp(f)
   }
 
-  @Synchronized fun contains(fp: String): Boolean = fp in fps
-  @Synchronized fun size(): Int = fps.size
+  /** Reads the file again when it changed since this object last saw it. True when it did. */
+  @Synchronized
+  fun refresh(): Boolean {
+    val f = file ?: return false
+    if (stamp(f) == seen) return false
+    load()
+    return true
+  }
+
+  @Synchronized fun contains(fp: String): Boolean { refresh(); return fp in entries }
+  @Synchronized fun size(): Int { refresh(); return entries.size }
+  /** Every paired client, oldest first. */
+  @Synchronized fun list(): List<Entry> { refresh(); return entries.values.toList() }
+  /** The paired clients whose fingerprint starts with [prefix] (any case). */
+  @Synchronized fun find(prefix: String): List<Entry> { refresh(); val p = prefix.lowercase(); return entries.values.filter { it.fp.startsWith(p) } }
 
   @Synchronized
   fun add(fp: String, name: String? = null) {
-    if (!fps.add(fp)) return
-    file?.let { f -> f.parentFile?.mkdirs(); f.appendText("$fp ${System.currentTimeMillis()}${name?.let { " $it" } ?: ""}\n") }
+    refresh()
+    if (fp in entries) return
+    val clean = name?.replace(Regex("[\\r\\n]"), " ")?.trim()?.takeIf { it.isNotEmpty() }
+    val e = Entry(fp, System.currentTimeMillis(), clean)
+    entries[fp] = e
+    file?.let { f -> f.parentFile?.mkdirs(); f.appendText(line(e)); seen = stamp(f) }
   }
 
+  /** Takes [fp]'s access away. True when it was paired. The other lines keep their times and names. */
   @Synchronized
-  fun forget(fp: String) {
-    if (!fps.remove(fp)) return
-    file?.let { f -> f.writeText(fps.joinToString("") { "$it\n" }) }
+  fun remove(fp: String): Boolean {
+    refresh()
+    if (entries.remove(fp) == null) return false
+    file?.let { f ->
+      f.parentFile?.mkdirs()
+      val tmp = File(f.parentFile, f.name + ".tmp")
+      tmp.writeText(entries.values.joinToString("") { line(it) })
+      if (!tmp.renameTo(f)) { f.writeText(entries.values.joinToString("") { line(it) }); tmp.delete() }
+      seen = stamp(f)
+    }
+    return true
   }
+
+  fun forget(fp: String) { remove(fp) }
+
+  private fun line(e: Entry) = "${e.fp}${e.at?.let { " $it" } ?: if (e.name != null) " 0" else ""}${e.name?.let { " $it" } ?: ""}\n"
 }

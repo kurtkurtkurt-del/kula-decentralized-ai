@@ -52,6 +52,10 @@ class WorkerService : Service() {
   /** "let my computers use this phone" (Keeper.kt): no v1 secret, a pairing code only for a computer that was scanned, stops itself away from home. */
   @Volatile private var auto = false
   private var hosts: Hosts? = null
+  /** When each paired master was last here (Unpair.kt): the app's list of devices that can use this phone. */
+  private var seen: Seen? = null
+  /** The paired fingerprints as the status loop last saw them: one gone means its access was removed. */
+  private var pairedSeen: Set<String> = emptySet()
   private var advertisedName: String? = null
   private var advertisedPort = 0
   private var advertisedPair: String? = null
@@ -98,6 +102,8 @@ class WorkerService : Service() {
     /** Protocol v2: the gate's P-256 key + certificate (shared by both processes) and the masters this worker paired with. */
     fun gateDir(context: Context) = File(context.filesDir, "gate")
     fun pairedFile(context: Context) = File(gateDir(context), "paired")
+    /** When each paired master was last here (Seen in Unpair.kt). */
+    fun seenFile(context: Context) = File(gateDir(context), "seen")
     fun modelsDir(context: Context) = File(context.filesDir, "models")
 
     /** Lasting worker id, in a file so both processes agree. */
@@ -141,7 +147,9 @@ class WorkerService : Service() {
         return if (auto) START_STICKY else START_NOT_STICKY
       }
       ACTION_FORGET -> {
-        intent?.getStringExtra(EXTRA_FP)?.let { fp -> tls?.paired?.forget(fp); hosts?.reload() }
+        // the app took this master's access away (Unpair.remove): the gate re-reads the paired
+        // file by itself; here its open connections are cut as well
+        intent?.getStringExtra(EXTRA_FP)?.let { fp -> tls?.paired?.forget(fp); hosts?.reload(); seen?.reload(); dropRemoved() }
         if (running) writeStatus("running", peer = gate?.currentPeer, heldMb = residentMb())
         return if (auto) START_STICKY else START_NOT_STICKY
       }
@@ -187,6 +195,7 @@ class WorkerService : Service() {
         // (the code is spent by the master that proves it; the status file carries the next one)
         val identity = KeyStoreVault.gateIdentity(gateDir(this), held)
         hosts = Hosts(Keeper.hostsFile(this))
+        seen = Seen(seenFile(this))
         // a code lives PIN_TTL_MS: spent by the master that proves it or by time, a new one follows
         // (by hand), or the next scanned computer's code, or none at all (auto mode)
         tls = Gate.TlsServer(identity, Paired(pairedFile(this)), if (auto) null else Gate.newPin(), {
@@ -195,8 +204,13 @@ class WorkerService : Service() {
         }, if (auto) null else System.currentTimeMillis() + Gate.PIN_TTL_MS)
         // a computer scanned before the worker started: its code now
         tls?.let { t -> hosts?.pending(System.currentTimeMillis())?.let { h -> t.open(h.pin, h.exp, h.fp) } }
+        pairedSeen = tls?.paired?.list()?.map { it.fp }?.toSet() ?: emptySet()
         gate = Gate.Server(port, secret, { ch -> if (ch == "rpc") rpcPort else api?.port }, auditor, tls) { ev ->
-          when (ev.kind) { "connect" -> connects++; "reject" -> rejects++; "pair" -> ev.fp?.let { hosts?.paired(it, System.currentTimeMillis()) } }
+          when (ev.kind) {
+            "connect" -> { connects++; ev.fp?.let { fp -> runCatching { seen?.saw(fp, ev.peer, System.currentTimeMillis()) } } }
+            "reject" -> rejects++
+            "pair" -> ev.fp?.let { hosts?.paired(it, System.currentTimeMillis()); runCatching { seen?.saw(it, ev.peer, System.currentTimeMillis()) } }
+          }
         }.also { it.start() }
         // GET /trust on the api: the key, the certificate, the gate and the ledger as they are
         api?.trust = Trust(key, held.store, identity.certDer, ledgerFile(this), {
@@ -251,6 +265,18 @@ class WorkerService : Service() {
     if (advertisedPair != next?.id) readvertise()
   }
 
+  /** Cuts the open connections of every master that left the paired list since the last look. */
+  @Synchronized
+  private fun dropRemoved() {
+    val t = tls ?: return
+    val now = t.paired.list().map { it.fp }.toSet()
+    for (fp in pairedSeen - now) {
+      val n = gate?.drop(fp) ?: 0
+      Log.i(TAG, "access removed for ${fp.take(16)}" + if (n > 0) ", $n open connection(s) closed" else "")
+    }
+    pairedSeen = now
+  }
+
   private fun startStatusLoop() {
     thread(name = "kula-worker-status", isDaemon = true) {
       var last = ""
@@ -275,6 +301,8 @@ class WorkerService : Service() {
         }
         // a pairing code nobody used in PIN_TTL_MS is replaced here, so the qr on screen never shows a dead one
         tls?.let { if (it.expired(System.currentTimeMillis())) it.spend() }
+        // a master removed in the app while no intent reached us: its open connections go too
+        runCatching { dropRemoved() }
         val peer = gate?.currentPeer ?: Native.workerPeer()
         val held = residentMb()
         writeStatus("running", peer = peer, heldMb = held)

@@ -344,6 +344,8 @@ export async function startUi(opts: UiOptions): Promise<UiServer> {
     if (route === 'projects/new') { try { return json(res, 200, projects.create(body)); } catch (e) { return fail(e); } }
     if (route === 'projects/cancel') { const p = projects.cancel(String(body?.id ?? '')); return p ? json(res, 200, p) : json(res, 404, { error: 'no such project' }); }
     if (route === 'peers/remove') return engine.removePeer(String(body?.id ?? '')) ? json(res, 200, { ok: true }) : json(res, 404, { error: 'no such device' });
+    // the other direction: the device may no longer use this computer (its own gate, kula-node share)
+    if (route === 'peers/unpair') return engine.unpairPeer(String(body?.id ?? '')) ? json(res, 200, { ok: true }) : json(res, 404, { error: 'that device cannot use this computer' });
     if (route === 'peers/probe') {
       try { return json(res, 200, await engine.probe(Array.isArray(body?.ids) ? body.ids.map(String) : undefined)); } catch (e) { return fail(e, 500); }
     }

@@ -35,6 +35,9 @@ export interface PeerView {
   reach: { rpc: Reach; api: Reach } | null; probedAt: number | null;
 }
 export interface DeviceView { id: string; name: string; local: boolean; busy: boolean; tps: number | null; done: number; bw: number }
+// A device that can use this computer without a code (share mode, tls): its fingerprint is
+// public (it was in no secret), the rest is what this computer saw. Never a secret.
+export interface PairedView { fp: string; name: string | null; address: string | null; pairedAt: number | null; lastSeen: number | null }
 export interface LedgerView { file: string; lines: string[]; total: number; verify: { ok: boolean; count: number; problems: { file: string; n: number; reason: string }[]; keyId: string; at: number } | null }
 
 export interface Snapshot {
@@ -45,6 +48,8 @@ export interface Snapshot {
   traffic: Traffic;
   api: ApiView;
   peers: PeerView[];
+  // share mode: the devices paired with this computer's gate (docs/GATE.md, remove a device's access)
+  paired: PairedView[];
   devices: DeviceView[];
   ledger: LedgerView;
   models: string[];
@@ -58,6 +63,7 @@ export type Patch =
   | { kind: 'traffic'; data: Traffic }
   | { kind: 'api'; data: ApiView }
   | { kind: 'peers'; data: PeerView[] }
+  | { kind: 'paired'; data: PairedView[] }
   | { kind: 'devices'; data: DeviceView[] }
   | { kind: 'ledger'; data: LedgerView }
   | { kind: 'models'; data: string[] }
@@ -109,7 +115,7 @@ export class DashboardState {
       gate: { port: null, open: [], lastPeer: null, lastAt: null, lastReject: null },
       traffic: { rpc: counter(), api: counter() },
       api: { loaded: false, model: null, ctx: 0, busy: false, tokensUsed: 0, heldMB: 0, running: false },
-      peers: [], devices: [],
+      peers: [], paired: [], devices: [],
       ledger: { file: '', lines: [], total: 0, verify: null },
       models: [], log: [], hasQr: false,
     };
@@ -160,6 +166,11 @@ export class DashboardState {
   }
 
   peers(list: PeerView[]) { this.snap.peers = list; this.emit({ kind: 'peers', data: list }); }
+  paired(list: PairedView[]) {
+    if (JSON.stringify(list) === JSON.stringify(this.snap.paired)) return;
+    this.snap.paired = list;
+    this.emit({ kind: 'paired', data: list });
+  }
   devices(list: DeviceView[]) { this.snap.devices = list; this.emit({ kind: 'devices', data: list }); }
   ledger(l: LedgerView) { this.snap.ledger = l; this.emit({ kind: 'ledger', data: l }); }
   models(list: string[]) { this.snap.models = list; this.emit({ kind: 'models', data: list }); }

@@ -276,11 +276,16 @@ class KulaLlamaModule : Module() {
       hosts.byFp(fp)?.name ?: "computer"
     }
     AsyncFunction("forgetHost") { fp: String ->
-      val f = fp.lowercase()
-      Hosts(Keeper.hostsFile(context)).forget(f)
-      Paired(WorkerService.pairedFile(context)).forget(f)
-      if (WorkerService.isRunning(context)) context.startService(Intent(context, WorkerService::class.java).setAction(WorkerService.ACTION_FORGET).putExtra(WorkerService.EXTRA_FP, f))
+      removePaired(fp.lowercase())
       autoStatus()
+    }
+    // --- devices that can use this phone (Unpair.kt; docs/GATE.md "remove a device's access") ---
+    /** The masters paired with this phone's gate: `[{fp, name, pairedAt, lastSeen, address, computer}]`, last seen first. */
+    AsyncFunction("pairedDevices") { pairedDevices() }
+    /** Takes a master's access away (new connections refused at once, open ones closed, one ledger line); returns the list after. */
+    AsyncFunction("removePaired") { fp: String ->
+      removePaired(fp.lowercase())
+      pairedDevices()
     }
     /** Auto mode opens no pairing code by itself: this one, for a new device, for ten minutes. */
     AsyncFunction("openPairing") {
@@ -330,6 +335,27 @@ class KulaLlamaModule : Module() {
     val ledger = WorkerService.ledgerFile(context)
     if (ledger.exists()) return expo.modules.kulallama.audit.Ledger.tail(ledger, limit)
     return File(context.filesDir, "kula_gate_ledger.jsonl").takeIf { it.exists() }?.readLines()?.takeLast(limit) ?: emptyList()
+  }
+
+  private fun pairedDevices(): List<Map<String, Any?>> =
+    Unpair.list(Paired(WorkerService.pairedFile(context)), Hosts(Keeper.hostsFile(context)), Seen(WorkerService.seenFile(context)), WorkerService.ledgerFile(context)).map { d ->
+      mapOf("fp" to d.fp, "name" to d.name, "pairedAt" to d.pairedAt?.toDouble(), "lastSeen" to d.lastSeen?.toDouble(), "address" to d.address, "computer" to d.host)
+    }
+
+  /**
+   * Out of the paired list and the scanned computers, a signed ledger line (the ledger takes
+   * appends from both processes, Ledger.kt), and the running worker told to cut the master's
+   * open connections (it would notice within two seconds anyway; the gate refuses it at once).
+   */
+  private fun removePaired(fp: String): Boolean {
+    val ledger = WorkerService.ledgerFile(context)
+    val removed = Unpair.remove(fp, Paired(WorkerService.pairedFile(context)), Hosts(Keeper.hostsFile(context)), Seen(WorkerService.seenFile(context))) { fields ->
+      runCatching { expo.modules.kulallama.audit.Ledger(ledger, KeyStoreVault.deviceKey(WorkerService.deviceKeyFile(context)).key).append("health", null, fields) }
+    }
+    if (WorkerService.isRunning(context)) runCatching {
+      context.startService(Intent(context, WorkerService::class.java).setAction(WorkerService.ACTION_FORGET).putExtra(WorkerService.EXTRA_FP, fp))
+    }
+    return removed
   }
 
   private fun stopWorkerNow() {

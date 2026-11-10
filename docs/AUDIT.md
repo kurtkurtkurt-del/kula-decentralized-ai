@@ -47,6 +47,7 @@ One JSON object per line, append-only. Phone: `files/beyin/ledger.jsonl`. Comput
 | `load` | split `[{peer, layers}]`, sha, `reject:"model"` when the file is not the expected one | the api channel was asked for a model, or a split model was loaded |
 | `claim` | ramMb (claimed), heldMb (measured), bw (claimed GB/s), tps, modelGb, warn / reject | while a master is connected, once the worker holds at least 256 MB for it |
 | `health` | throttled, batteryC, batteryPct, warn | once a minute, or when the warnings change |
+| `health` | unpaired (the fingerprint's first 16 hex), name | a paired master's access was removed ([GATE.md](GATE.md#remove-a-devices-access-10112026)); `health` and not a new kind, so older verifiers keep reading the chain |
 | `end` | channel, bytes (both directions), seconds, `reject:"bounds"` when over the limits | the pipe closed |
 
 ## the key

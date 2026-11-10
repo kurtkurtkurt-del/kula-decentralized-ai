@@ -16,7 +16,8 @@ import java.security.MessageDigest
  * that is the line without `,"sig":"..."}`. The hash in the next line's prev is SHA-256 of the
  * whole previous line (UTF-8, without the newline). When a file passes [maxBytes] it is
  * renamed to `<name>.<t>.jsonl` and the next line's prev still points at its last line, so
- * the chain continues across files. Appends are synchronized; nothing is ever rewritten,
+ * the chain continues across files. Appends are synchronized, across the app's two processes
+ * too (a lock file, and each append chains on from the file as it really is); nothing is ever rewritten,
  * with one exception: a last line the process died in the middle of (no newline at the end)
  * is cut off before the next line is written, and a `health` line with `torn` = the bytes
  * dropped records the cut in the chain itself.
@@ -31,22 +32,46 @@ class Ledger(
     private set
   /** Bytes cut off a torn last line and not yet recorded (the record failed, say a key that cannot sign). */
   private var torn = 0L
+  /** The live file's length as this object last left it (-1: no file). */
+  private var knownLength: Long = lengthNow()
+  private fun lengthNow(): Long = if (file.exists()) file.length() else -1L
 
   init {
-    torn = cutTorn(file)
-    lastHash = lastHashOfChain(file)
+    // under the lock too: the other process may be half way through a line right now, and
+    // that is not a torn line to cut
+    crossProcess {
+      torn = cutTorn(file)
+      lastHash = lastHashOfChain(file)
+      knownLength = lengthNow()
+    }
     // the cut goes into the chain at once; when that fails the next append tries again
-    if (torn > 0) runCatching { synchronized(this) { recordTorn(now()) } }
+    if (torn > 0) runCatching { synchronized(this) { crossProcess { recordTorn(now()) } } }
   }
 
   /** Appends one event and returns the line as written (without the newline). */
   @Synchronized
-  fun append(kind: String, peer: String?, fields: Map<String, Any?> = emptyMap(), t: Long = now()): String {
+  fun append(kind: String, peer: String?, fields: Map<String, Any?> = emptyMap(), t: Long = now()): String = crossProcess {
     // a write that failed half way (disk full) leaves a torn line too: cut it before chaining on
     val cut = cutTorn(file)
     if (cut > 0) { torn += cut; lastHash = lastHashOfChain(file) }
     if (torn > 0) recordTorn(t)
-    return write(kind, peer, fields, t)
+    write(kind, peer, fields, t)
+  }
+
+  /**
+   * Both of the app's processes write this ledger (the worker its gate events, the app a removed
+   * device): one append at a time across them, through a lock file next to the ledger. Inside
+   * one JVM a monitor per path comes first (a second FileLock on the same file from the same
+   * JVM would throw instead of wait). A lock that cannot be taken (odd filesystem) does not
+   * stop the append.
+   */
+  private fun <T> crossProcess(block: () -> T): T = synchronized(LOCKS.computeIfAbsent(file.absolutePath) { Any() }) {
+    val raf = runCatching { file.parentFile?.mkdirs(); RandomAccessFile(File(file.parentFile, file.name + ".lock"), "rw") }.getOrNull()
+      ?: return@synchronized block()
+    raf.use { r ->
+      val lock = runCatching { r.channel.lock() }.getOrNull()
+      try { block() } finally { runCatching { lock?.release() } }
+    }
   }
 
   private fun recordTorn(t: Long) {
@@ -60,9 +85,11 @@ class Ledger(
     ordered["kind"] = kind
     if (peer != null) ordered["peer"] = peer
     for ((k, v) in fields) if (k != "t" && k != "kind" && k != "peer" && k != "prev" && k != "sig") ordered[k] = v
-    // the file is gone and nothing rotated it: it was cleared (settings → beyin audit), so a
-    // new chain starts from the genesis zeros instead of pointing at a line nobody can read
-    if (!file.exists()) lastHash = GENESIS
+    // the file is not as this object left it: the other process of the app wrote a line (the
+    // app records a removed device while the worker runs), rotated it, or cleared it
+    // (settings → beyin audit). The chain goes on from what is really there: the last line,
+    // the last rotated file's, or the genesis zeros when nothing is left.
+    if (lengthNow() != knownLength) lastHash = lastHashOfChain(file)
     ordered["prev"] = lastHash
     val unsigned = Json.obj(ordered)
     val line = sign(unsigned, key)
@@ -70,8 +97,10 @@ class Ledger(
     file.parentFile?.mkdirs()
     FileOutputStream(file, true).use { it.write((line + "\n").toByteArray(Charsets.UTF_8)) }
     lastHash = sha256Hex(line.toByteArray(Charsets.UTF_8))
+    knownLength = lengthNow()
     return line
   }
+
 
   /** The last [limit] lines of the current file, oldest first. */
   fun tail(limit: Int): List<String> = tail(file, limit)
@@ -91,6 +120,7 @@ class Ledger(
 
   companion object {
     const val GENESIS = "0000000000000000000000000000000000000000000000000000000000000000"
+    private val LOCKS = java.util.concurrent.ConcurrentHashMap<String, Any>()
     // the closing brace escaped: java's regex takes a bare "}" as a literal, android's ICU
     // engine refuses it (the worker process died at class load, 5.11.2026)
     private val sigTail = Regex(""","sig":"([A-Za-z0-9+/=]*)"\}$""")
@@ -144,6 +174,7 @@ class Ledger(
       var ok = true
       file.parentFile?.listFiles()?.filter { rotated.matches(it.name) }?.forEach { ok = it.delete() && ok }
       if (file.exists()) ok = file.delete() && ok
+      File(file.parentFile, file.name + ".lock").delete()
       return ok
     }
 

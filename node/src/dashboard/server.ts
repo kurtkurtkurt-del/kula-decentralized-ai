@@ -23,6 +23,7 @@ export interface DashboardActions {
   probe?: () => Promise<void>;          // probe the peer book, update state
   verify?: () => Promise<void> | void;  // verify the ledger, update state
   load?: (model: string) => Promise<void>; // share mode: load a model from the models dir into the local api
+  unpair?: (fp: string) => Promise<void> | void; // share mode: take a paired device's access away
 }
 
 export interface DashboardOptions {
@@ -171,6 +172,12 @@ export async function startDashboard(opts: DashboardOptions): Promise<Dashboard>
         const model = typeof body?.model === 'string' ? path.basename(body.model) : '';
         if (!model) return json(res, 400, { error: 'need model' });
         try { await opts.actions.load(model); return json(res, 200, { ok: true }); } catch (e) { return json(res, 500, { error: (e as Error).message }); }
+      }
+      if (route === 'unpair') {
+        if (!opts.actions?.unpair) return json(res, 404, { error: 'nothing is paired here' });
+        const fp = typeof body?.fp === 'string' ? body.fp.toLowerCase() : '';
+        if (!/^[0-9a-f]{64}$/.test(fp)) return json(res, 400, { error: 'need fp' });
+        try { await opts.actions.unpair(fp); return json(res, 200, { ok: true }); } catch (e) { return json(res, 500, { error: (e as Error).message }); }
       }
       if (route === 'chat') {
         if (!opts.chat) return json(res, 409, { error: 'no device to talk to' });

@@ -53,6 +53,13 @@
       <p class="hint" id="peers-empty" hidden>eş yok. telefonun qr'ını <code>kula-node peers add</code> ile ekle.</p>
     </section>
 
+    <section class="card wide" id="c-paired" hidden>
+      <h2>bu bilgisayarı kullanabilen cihazlar</h2>
+      <table><thead><tr><th>ad</th><th>parmak izi</th><th>adres</th><th>eşleşti</th><th>son görülme</th><th></th></tr></thead><tbody id="paired"></tbody></table>
+      <p class="hint" id="paired-empty" hidden>henüz eşleşen cihaz yok: kodu okutan ilk cihaz buraya gelir.</p>
+      <p class="hint">erişimi kaldırılan cihaz bir sonraki bağlantıda reddedilir, açık bağlantıları kapanır, deftere imzalı bir satır yazılır. geri gelmesi için yeni bir kodla yeniden eşleşmesi gerekir.</p>
+    </section>
+
     <section class="card" id="c-qr">
       <h2>eşleşme</h2>
       <div class="qr" id="qr" hidden><img id="qr-img" alt="eşleşme qr kodu"></div>

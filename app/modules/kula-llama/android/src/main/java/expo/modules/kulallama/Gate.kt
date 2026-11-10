@@ -133,6 +133,22 @@ object Gate {
     private val inHandshake = java.util.concurrent.atomic.AtomicInteger(0)
     private val ring = ReplayRing()
     val currentPeer: String? get() = slot.peer
+    /** Open pipes by the client certificate behind them (v2), so a removed device can be cut off at once. */
+    private val live = java.util.concurrent.ConcurrentHashMap<Socket, Pair<String, Socket>>()
+
+    /**
+     * Closes every open connection of the client certificate [fp] (its access was just
+     * removed); the pipes end, the ledger gets their `end` lines. Returns how many were closed.
+     */
+    fun drop(fp: String): Int {
+      var n = 0
+      for ((s, v) in live.entries.toList()) if (v.first == fp && live.remove(s) != null) {
+        // the local leg first: the pipe's reader ends and closes the tls side itself
+        runCatching { v.second.close() }; runCatching { s.close() }; n++
+      }
+      return n
+    }
+
     /** Whether the server has v2 at all. */
     val tlsOn: Boolean get() = tls != null
     /** How many certificates are paired over v2. */
@@ -316,7 +332,12 @@ object Gate {
       onEvent(Event("connect", peer, channel, null, fp, v))
       audit { it.onConnect(peer, channel) }
       val started = System.currentTimeMillis()
-      val bytes = try { pipe(s, inp, local, ByteArray(0)) } finally { if (linked) ApiPeers.remove(localPort) }
+      if (fp != null) {
+        live[s] = fp to local
+        // removed between the handshake and here: the drop() for it may already have run
+        if (tls?.paired?.contains(fp) == false) drop(fp)
+      }
+      val bytes = try { pipe(s, inp, local, ByteArray(0)) } finally { if (linked) ApiPeers.remove(localPort); live.remove(s) }
       if (channel == "rpc") slot.release()
       onEvent(Event("end", peer, channel, null, fp, v))
       audit { it.onEnd(peer, channel, bytes, (System.currentTimeMillis() - started) / 1000) }
