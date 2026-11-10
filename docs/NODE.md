@@ -173,6 +173,24 @@ kula-node probe <host> <port> - --fp <64 hex> [--pin <code>]   # v2
 
 `channel closed` still means the worker is up; its program for that channel is not running.
 
+### who can use this computer
+
+A phone (or computer) that paired with `share` once gets in by its certificate alone from
+then on. Taking that away:
+
+```bash
+kula-node paired list [--json]          # fingerprint (first 16), name, address, when paired, last seen
+kula-node paired remove <fp prefix>     # 6+ hex of the fingerprint, naming exactly one device
+```
+
+A running `share` refuses the removed device at its next connection (`not paired`; it reads
+`~/.kula-node/paired` again when the file changes), closes what that device has open within
+two seconds, and the ledger gets one signed line (`health`, `unpaired` = the fingerprint's
+first 16 hex). The device comes back only by pairing again with a fresh code. The share
+dashboard has the same list with a button per device; the chat page shows "remove its
+access" on a device that is in its own list and also paired here. Details:
+[GATE.md](GATE.md#remove-a-devices-access-10112026).
+
 ### the ledger
 
 ```bash
@@ -256,7 +274,8 @@ read them: [BENCH.md](BENCH.md).
 | `~/.kula-node/models/` | models loaded on request |
 | `~/.kula-node/peers.json` | the peer book (600) |
 | `~/.kula-node/device_key.pem` | the Ed25519 (or P-256) device key |
-| `~/.kula-node/gate_key.pem`, `gate_cert.der`, `paired` | the TLS identity and the pinned masters (v2) |
+| `~/.kula-node/gate_key.pem`, `gate_cert.der`, `paired` | the TLS identity and the pinned masters (v2); `kula-node paired remove` takes one out |
+| `~/.kula-node/seen.json` | when each paired master was last here and from where (`paired list`, the dashboard) |
 | `~/.kula-node/ledger.jsonl` | the signed ledger |
 | `~/.kula-node/chats/` | the chat page's conversations (600; guests' under `guests/<session>/`) |
 | `~/.kula-node/ui-token` | the chat page's `/v1` bearer token (600) |
@@ -358,7 +377,12 @@ the phone does the work, the computer only carries the words.
      be sure). A phone that cannot be reached at all (host unreachable, timeout) leads to "this
      network keeps devices apart" with *use the cable instead* or *try the phone's hotspot*.
      One tls handshake with the code pairs the two for good (the code's proof covers both
-     certificates); a code works once, a wrong one means a new one on the phone.
+     certificates); a code works once, a wrong one means a new one on the phone. "For good"
+     until the phone removes this computer (share this phone › devices that can use this
+     phone › remove). The device list's × only **forgets** the phone here: this computer stops
+     using it, the phone still lets this computer in, and the confirmation says so. A device
+     that is also paired with this computer's own `kula-node share` has a separate **remove its
+     access** button: it may no longer use this computer ([GATE.md](GATE.md#remove-a-devices-access-10112026)).
    - Coming back with a paired phone that answers, the sheet opens at the model; with a model
      loaded it stays shut (connect opens it at the model; *connect another device* starts
      over). *advanced* (bottom right) keeps the old one-page sheet: the cable list, *scan the

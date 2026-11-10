@@ -190,6 +190,49 @@ code with less open:
 The worker by hand ("share this phone") is unchanged; a computer scanned while it runs gets
 its code there too. RPC and the api stay on 127.0.0.1 behind the gate in both modes.
 
+### remove a device's access (10.11.2026)
+
+A paired master is trusted by its certificate until its line leaves `paired`. Taking it out
+is "remove" on the worker, never anything on the master:
+
+- **phone:** "devices that can use this phone" on the share screen (and, for the ones that
+  are not its scanned computers, on "let my computers use this phone"; forgetting a scanned
+  computer there removes it the same way). Each row: a name (the computer's QR, else the
+  name the `paired` line carries, else the short fingerprint), when it paired, when it was
+  last here and from where (`files/gate/seen`, the worker writes it on connect at most once a
+  minute per master; else the ledger's `pair` line). Remove asks first. Native:
+  `pairedDevices()`, `removePaired(fp)` (`Unpair.kt`).
+- **kula-node share:** `kula-node paired list [--json]`, `kula-node paired remove <fp prefix>`
+  (6+ hex, must name one device), and the same list with "erişimi kaldır" on the share
+  dashboard. `~/.kula-node/seen.json` is the last-seen file.
+- **the Mac's chat page** is a master only. Its × **forgets** a device (this computer stops
+  using it; the device still lets this computer in until it removes this computer itself,
+  and the confirmation says where). When a device in its list is also paired with this
+  computer's own `kula-node share` gate, the row says so and has a separate **remove its
+  access** button (`POST peers/unpair`), which removes it from `~/.kula-node/paired` and
+  leaves the peer book alone.
+
+What a removal does, the same on both workers:
+
+1. the line goes from `paired` (the other lines keep their times and names). The gate's
+   `Paired` reads the file again whenever its size or time changed, so the **running gate
+   refuses the next connection with `not paired`** even though the removal happened in
+   another process (the phone's app process vs. its `:worker`; `kula-node paired remove`
+   vs. a running `share`);
+2. **open connections are closed** (`Gate.Server.drop(fp)` / `GateServer.drop(fp)`): the
+   phone's app tells the worker (`ACTION_FORGET`) and the worker also compares the list every
+   two seconds; `share` compares it every two seconds; the dashboard and the chat page cut at
+   once. A pipe whose certificate left the list between its handshake and its start is cut
+   too. A split model on that master loses this worker's layers;
+3. **one signed ledger line**: kind `health` with `unpaired` = the first 16 hex of the
+   fingerprint and `name` when known. Not a new kind on purpose: `node/src/audit/ledger.ts`
+   `KINDS` rejects unknown kinds, so an older kula-node verifying a newer phone's ledger
+   would turn red. Both processes may write the ledger now: the phone's `Ledger` takes a
+   lock file (`ledger.jsonl.lock`) and every append, on both sides, chains on from the file
+   as it is when another writer changed it;
+4. the device can come back only by pairing again with a fresh one-time code. Removing the
+   last paired master also opens v1 again where a v1 secret was given (see above).
+
 ## refusal reasons
 
 The wire reply is `NO <reason>`; the same word is the `why` of the ledger's `reject` line.
@@ -291,8 +334,12 @@ Binaries come from `node tools/llama-src.mjs --host`.
 | a photographed QR giving lasting access | **yes, it does** | no: the code is one-time, later access needs the paired certificate |
 | a device impersonating another | **no identity** | the certificate fingerprint, pinned both ways |
 | the worker's own memory abuse by a paired master | no (llama.cpp's protocol allows it; that is why pairing is a trust decision) | same |
+| a paired master that should not be trusted any more (a lost laptop, an old phone) | only a new secret for everyone | remove it on the worker: refused at once, its open connections closed, a signed ledger line ([above](#remove-a-devices-access-10112026)) |
 
-Open: a paired master is trusted until `paired` is edited (there is no unpair screen yet).
+A pairing does not expire by itself: a master stays trusted until it is removed on the
+worker. Removal is local to the worker; nothing tells the master, which simply hears
+`not paired` next time. A master that has the worker's certificate and its own key keeps
+both: what makes it harmless is the worker's list, not anything on the master.
 Since 10.11.2026 the phone's device and gate keys live in the Android KeyStore (`Keys.kt`,
 `KeyStoreVault.kt`: a P-256 key file is moved in with the same id and fingerprint; an Ed25519
 device key stays a file, since moving it would change the device's identity), and
