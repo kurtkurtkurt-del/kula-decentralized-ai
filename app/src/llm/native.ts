@@ -23,6 +23,11 @@ export type PeerArg = { host: string; port: number; secret: string; weight: numb
 export type HomeNet = { subnet: string; gateway: string | null; domain: string | null; ssid: string | null };
 /** A computer added by scanning its chat page's QR: waiting = its one-time code is still open. */
 export type HostEntry = { id: string; name: string; fp: string; paired: number | null; waiting: boolean; exp: number | null };
+/**
+ * A device that can use this phone without a code (paired with its gate, Unpair.kt): times in ms,
+ * null when not known; address and lastSeen from its last connection; computer = added by scanning its QR.
+ */
+export type PairedDevice = { fp: string; name: string | null; pairedAt: number | null; lastSeen: number | null; address: string | null; computer: boolean };
 /** Why the auto worker runs or not (Auto.decide in Auto.kt). */
 export type AutoDecision = 'start' | 'off' | 'nohome' | 'paused' | 'away' | 'unplugged';
 /** "let my computers use this phone" (Keeper.kt): the switch, the home wi-fi, what is missing. */
@@ -80,7 +85,12 @@ type Module = {
   startAuto(): Promise<AutoStatus>;
   /** A computer's QR (k: kula-host); returns its name. Throws notHost | expired | used | nowifi. */
   addHost(qr: string): Promise<string>;
+  /** Forgets a scanned computer and removes its access (as removePaired). */
   forgetHost(fp: string): Promise<AutoStatus>;
+  /** The devices that can use this phone without a code, last seen first. */
+  pairedDevices?(): Promise<PairedDevice[]>;
+  /** Removes a device's access: refused at once, its open connections closed, one signed ledger line. Returns the list after. */
+  removePaired?(fp: string): Promise<PairedDevice[]>;
   /** The auto worker opens no code by itself: one for a new device, for ten minutes. */
   openPairing(): Promise<void>;
   openAppSettings(): Promise<void>;

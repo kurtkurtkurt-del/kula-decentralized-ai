@@ -6,6 +6,7 @@ import QRCode from 'react-native-qrcode-svg';
 import * as Clipboard from 'expo-clipboard';
 import Button from '@/components/Button';
 import InfoTip from '@/components/InfoTip';
+import PairedDevices from '@/components/PairedDevices';
 import { MainMark } from '@/components/models/Tags';
 import StaffPage from '@/components/StaffPage';
 import { useAppSize } from '@/hooks/useAppSize';
@@ -204,6 +205,8 @@ export default function ShareScreen() {
           <Text style={styles.meta}>{t('comp.open.hint')}</Text>
         </Pressable>
       ) : null}
+      {/* who can come in without a code, and taking that away (docs/GATE.md) */}
+      {hasNative() ? <PairedDevices peer={state === 'running' ? status?.peer : null} /> : null}
     </StaffPage>
   );
 }

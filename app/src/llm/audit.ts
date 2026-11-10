@@ -112,7 +112,9 @@ export function detailOf(line: AuditLine): string {
   if (line.kind === 'load' && typeof f.sha === 'string') parts.push(`sha ${f.sha.slice(0, 12)}`);
   if (line.kind === 'load' && Array.isArray(f.split)) parts.push(`${f.split.length} parts`);
   if (line.kind === 'claim') parts.push(`${f.ramMb ?? '?'} / ${f.heldMb ?? '?'} mb`, `${f.bw ?? '?'} gb/s`, `${f.tps ?? '?'} tps`);
-  if (line.kind === 'health') parts.push(`${f.batteryPct ?? '?'}%`, `${f.batteryC ?? '?'}°c`, f.throttled ? 'throttled' : '');
+  // a removed device (Unpair.kt) is a health line too: say which, not the battery
+  if (line.kind === 'health' && typeof f.unpaired === 'string') parts.push(`access removed ${f.unpaired.slice(0, 8)}${typeof f.name === 'string' ? ` (${f.name})` : ''}`);
+  else if (line.kind === 'health') parts.push(`${f.batteryPct ?? '?'}%`, `${f.batteryC ?? '?'}°c`, f.throttled ? 'throttled' : '');
   if (line.kind === 'end') parts.push(`${f.bytes ?? 0} b`, `${f.seconds ?? 0} s`);
   if (line.reject) parts.push(line.reject);
   parts.push(...line.warn);

@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Platform, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Alert, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import * as Clipboard from 'expo-clipboard';
 import * as Location from 'expo-location';
 import { router } from 'expo-router';
 import Button from '@/components/Button';
+import PairedDevices from '@/components/PairedDevices';
 import { Panel, Row, Section, Switch, Value } from '@/components/Row';
 import StaffPage from '@/components/StaffPage';
 import { ScanModal } from '@/components/models/PeerScan';
@@ -105,6 +106,16 @@ export default function ComputersScreen() {
     router.push('/share');
   });
 
+  // forgetting a computer also takes its access away (Unpair.kt): asked first, like any removal
+  const forget = (fp: string, name: string) => {
+    tapSelect();
+    const n = name.toLowerCase();
+    Alert.alert(t('comp.access.confirm.title', { name: n }), t('comp.access.confirm.body'), [
+      { text: t('word.cancel'), style: 'cancel' },
+      { text: t('comp.access.remove'), style: 'destructive', onPress: () => run(async () => { setA(await llama!.forgetHost(fp)); tapDone(); setNote(t('comp.access.removed', { name: n })); }) },
+    ]);
+  };
+
   const onScan = (text: string): boolean => {
     if (!isHostQr(text)) {
       setErr(t('comp.err.notHost'));
@@ -190,7 +201,7 @@ export default function ComputersScreen() {
             <Text style={[styles.meta, h.paired ? styles.okText : null]}>{h.paired ? t('comp.paired') : h.waiting ? t('comp.waiting') : t('comp.notyet')}</Text>
             <Text style={styles.mono}>{up(`${h.fp.slice(0, 8)} ${h.fp.slice(8, 16)}`)}</Text>
           </View>
-          <Pressable onPress={() => run(async () => { tapSelect(); setA(await llama!.forgetHost(h.fp)); })} hitSlop={10} accessibilityRole="button" accessibilityLabel={t('comp.forget', { name: h.name })} style={styles.xHit}>
+          <Pressable onPress={() => forget(h.fp, h.name)} hitSlop={10} accessibilityRole="button" accessibilityLabel={t('comp.forget', { name: h.name })} style={styles.xHit}>
             <Text style={styles.x}>×</Text>
           </Pressable>
         </View>
@@ -199,6 +210,8 @@ export default function ComputersScreen() {
         <Button label={t('comp.add')} kind={a?.hosts.length ? 'line' : 'red'} onPress={() => { setErr(null); setScan(true); }} disabled={busy} />
       </View>
       <Text style={styles.hintLeft}>{t('comp.add.hint')}</Text>
+      {/* paired through "share this phone" (a code), not scanned here: listed apart, removable the same way */}
+      <PairedDevices skip={a?.hosts.map((h) => h.fp) ?? []} peer={w?.state === 'running' ? w.peer : null} others />
       {note ? <Text style={styles.okText} accessibilityLiveRegion="polite">{note}</Text> : null}
       {err ? <Text style={styles.err} accessibilityRole="alert">{err}</Text> : null}
 
