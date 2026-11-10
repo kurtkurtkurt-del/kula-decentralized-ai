@@ -878,3 +878,85 @@ ul.wiz-steps li::before { content: "› "; color: var(--meta); }
 .tr-check .tr-t { color: var(--words); line-height: 1.4; overflow-wrap: anywhere; }
 .tr-accept { margin-top: 6px; font-size: 12px; }
 .bt-viz .marks i.bad { border-color: var(--red); background: color-mix(in srgb, var(--red) 22%, transparent); }
+
+/* ---------- the map (10.11.2026, the owner's pick of five designs: the map, then four numbers).
+   One colour language for the twelve instead of twelve hues: red look at this, gold worth
+   knowing, sage fine, grey dashed quiet. The map, its legend, the numbers, the open card and the
+   notices stay put; the feed under them scrolls in its own box. */
+.btop { gap: 0; }
+.bmap { display: flex; flex-direction: column; }
+.bmap[hidden] { display: none; }
+.bm-s { width: 8px; height: 8px; border-radius: 50%; display: inline-block; flex: none; background: var(--sage); }
+.bm-s.is-look { background: var(--red); }
+.bm-s.is-know { background: var(--gold); }
+.bm-s.is-quiet, .bm-s.is-off { background: none; border: 1.5px dashed var(--meta); width: 9px; height: 9px; }
+.bm-map { display: block; width: 100%; max-width: 348px; height: auto; aspect-ratio: 348 / 320; margin: -4px auto 0; overflow: visible; }
+.bm-map .ring { fill: none; stroke: var(--line); }
+.bm-map .spoke { stroke: var(--line2); stroke-width: 1; }
+.bm-map .spoke.is-look { stroke: var(--red); stroke-width: 1.6; }
+.bm-map .spoke.is-know { stroke: var(--gold); stroke-width: 1.3; }
+.bm-map .spoke.is-quiet, .bm-map .spoke.is-off { stroke-dasharray: 2 4; }
+.bm-map text { font: 11px var(--sans); fill: var(--words); text-anchor: middle; paint-order: stroke; stroke: var(--side); stroke-width: 4px; stroke-linejoin: round; pointer-events: none; }
+.bm-map text .n { font: 9.5px var(--mono); fill: var(--meta); }
+.bm-map .core { cursor: pointer; outline: none; }
+.bm-map .core circle { fill: var(--card); stroke: var(--line2); transition: stroke 0.15s ease; }
+.bm-map .core:hover circle, .bm-map .core:focus-visible circle { stroke: var(--accent); }
+.bm-map .core text { stroke: none; }
+.bm-map .c1 { font-size: 10px; fill: var(--meta); }
+.bm-map .c2 { font-size: 13.5px; font-weight: 500; letter-spacing: -0.01em; }
+.bm-map .c3 { font-size: 10.5px; fill: var(--mute); }
+.bm-map .node { cursor: pointer; outline: none; }
+.bm-map .node .bm-dot { fill: var(--card); stroke: color-mix(in srgb, var(--sage) 70%, transparent); stroke-width: 1.3; transition: stroke-width 0.15s ease; }
+.bm-map .node .ic { fill: none; stroke: var(--mute); stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; overflow: visible; pointer-events: none; }
+.bm-map .node:hover .bm-dot, .bm-map .node:focus-visible .bm-dot { stroke-width: 2.4; }
+.bm-map .node.is-look .bm-dot { fill: color-mix(in srgb, var(--red) 12%, var(--card)); stroke: var(--red); stroke-width: 1.8; }
+.bm-map .node.is-look .ic { stroke: var(--red); }
+.bm-map .node.is-look text { font-weight: 500; }
+.bm-map .node.is-know .bm-dot { fill: color-mix(in srgb, var(--gold) 13%, var(--card)); stroke: var(--gold); stroke-width: 1.5; }
+.bm-map .node.is-know .ic { stroke: color-mix(in srgb, var(--gold) 80%, var(--words)); }
+.bm-map .node.is-quiet .bm-dot, .bm-map .node.is-off .bm-dot { fill: var(--side); stroke: var(--line2); stroke-dasharray: 3 3; }
+.bm-map .node.is-quiet .ic, .bm-map .node.is-off .ic { stroke: var(--meta); }
+.bm-map .node.is-quiet text, .bm-map .node.is-off text { fill: var(--meta); }
+.bm-map .node.is-off .ic { opacity: 0.5; }
+.bm-map .node .halo { fill: none; stroke: color-mix(in srgb, var(--accent) 25%, transparent); stroke-width: 5; }
+.bm-map .node.is-look .halo { stroke: color-mix(in srgb, var(--red) 22%, transparent); }
+.bm-map .node.is-know .halo { stroke: color-mix(in srgb, var(--gold) 25%, transparent); }
+.bm-legend { display: flex; justify-content: space-between; gap: 8px; flex-wrap: wrap; font-size: 11.5px; color: var(--mute); padding: 2px 2px 9px; }
+.bm-legend span { display: inline-flex; align-items: center; gap: 6px; }
+.bm-kpi { background: var(--card); border: 1px solid var(--line); border-radius: 14px; box-shadow: 0 1px 2px rgba(24, 36, 28, 0.05); overflow: hidden; }
+.bm-kpi button { font: inherit; color: inherit; background: none; border: 0; text-align: left; cursor: pointer; }
+.bm-kpi button:hover { background: var(--hover); }
+.bm-kpi .k { font-size: 11px; color: var(--mute); }
+.bm-speed { display: flex; align-items: center; justify-content: space-between; gap: 10px; width: 100%; padding: 8px 14px; }
+.bm-speed .big { font-weight: 600; font-size: 36px; letter-spacing: -0.035em; line-height: 1.1; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.bm-kpi small { font-weight: 400; font-size: 13px; letter-spacing: 0; color: var(--mute); margin-left: 5px; }
+.bm-speed .bm-side { display: flex; flex-direction: column; align-items: flex-end; gap: 1px; min-width: 0; text-align: right; }
+.bm-speed .kstate { font-size: 11.5px; color: var(--mute); display: inline-flex; align-items: center; gap: 7px; }
+.bm-3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); border-top: 1px solid var(--line); }
+.bm-kpi .bm-cell { padding: 8px 10px 9px 14px; display: flex; flex-direction: column; gap: 1px; border-left: 1px solid var(--line); min-width: 0; }
+.bm-kpi .bm-cell:first-child { border-left: 0; }
+.bm-kpi .bm-cell + .bm-cell { padding-left: 11px; }
+.bm-cell b { font-weight: 600; font-size: 23px; letter-spacing: -0.025em; line-height: 1.15; font-variant-numeric: tabular-nums; }
+.bm-cell .sub { font-size: 11px; color: var(--meta); display: inline-flex; align-items: center; gap: 6px; line-height: 1.3; }
+.bm-cell.is-know b { color: color-mix(in srgb, var(--gold) 78%, var(--words)); }
+.bm-cell.is-look b { color: var(--red); }
+.bm-sel { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 11px 14px 10px; margin-top: 8px; }
+.bm-sel.is-look { border-color: color-mix(in srgb, var(--red) 35%, transparent); }
+.bm-sel.is-know { border-color: color-mix(in srgb, var(--gold) 40%, transparent); }
+.bm-sel .h { display: flex; align-items: baseline; gap: 8px; }
+.bm-sel .n { font: 11px var(--mono); color: var(--meta); }
+.bm-sel .h b { font-weight: 500; font-size: 15px; }
+.bm-sel .tag { margin-left: auto; font-size: 11px; padding: 1px 8px; border-radius: 999px; white-space: nowrap; color: var(--mute); background: var(--sunk); }
+.bm-sel .tag.is-look { color: var(--red); background: color-mix(in srgb, var(--red) 12%, transparent); }
+.bm-sel .tag.is-know { color: color-mix(in srgb, var(--gold) 85%, var(--words)); background: color-mix(in srgb, var(--gold) 14%, transparent); }
+.bm-sel .tag.is-fine { color: var(--sage); background: color-mix(in srgb, var(--sage) 12%, transparent); }
+.bm-sel .stat { font-size: 19px; letter-spacing: -0.01em; line-height: 1.3; margin: 5px 0 7px; overflow-wrap: anywhere; }
+.bm-sel .f { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; font-size: 11.5px; color: var(--meta); border-top: 1px solid var(--line); padding-top: 7px; }
+.bm-sel .f .link { font-size: 12px; white-space: nowrap; }
+.bm-also { display: flex; flex-direction: column; margin-top: 2px; }
+.bm-also button { display: flex; align-items: center; gap: 8px; padding: 9px 2px 8px; border: 0; border-bottom: 1px solid var(--line); background: none; color: var(--mute); font: inherit; font-size: 13px; text-align: left; cursor: pointer; }
+.bm-also button:last-child { border-bottom: 0; }
+.bm-also button:hover { color: var(--words); }
+.bm-also b { font-weight: 500; color: var(--words); }
+.bm-also span:not(.go) { flex: 1; min-width: 0; }
+.bm-also .go { color: var(--meta); }

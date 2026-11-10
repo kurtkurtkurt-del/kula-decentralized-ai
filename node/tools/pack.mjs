@@ -116,7 +116,7 @@ async function bundle(outFile, version) {
   const baked = Object.fromEntries(['index.html', 'app.js', 'app.css'].map((f) => [f, fs.readFileSync(path.join(staticDir, f), 'utf8')]));
   // the chat page (kula-node ui) the same way; the list is UI_STATIC in src/ui/server.ts
   const uiDir = path.join(NODE_DIR, 'src', 'ui', 'static');
-  const uiBaked = Object.fromEntries(['index.html', 'app.js', 'app.css', 'fonts.css', 'markdown.js', 'wizard.js', 'learn.js'].map((f) => [f, fs.readFileSync(path.join(uiDir, f), 'utf8')]));
+  const uiBaked = Object.fromEntries(['index.html', 'app.js', 'app.css', 'fonts.css', 'markdown.js', 'wizard.js', 'learn.js', 'brainmap.js'].map((f) => [f, fs.readFileSync(path.join(uiDir, f), 'utf8')]));
   const r = await esbuild.build({
     entryPoints: [path.join(NODE_DIR, 'src', 'bin', 'kula-node.ts')],
     outfile: outFile,
