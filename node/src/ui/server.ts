@@ -179,7 +179,7 @@ export async function startUi(opts: UiOptions): Promise<UiServer> {
   // night projects: without one given (tests) the routes answer but nothing watches the clock
   const projects = opts.projects ?? new ProjectRunner(engine, store, undefined, { awake: false });
   // god's eye, the brain: watches from above, fed copies only (godseye/types.ts, godseye-feed.ts)
-  const eye = opts.eye === false ? null : opts.eye ?? new GodsEye({ snapshot: () => kulaSnapshot(engine, projects), dir: path.join(home(), 'godseye'), log });
+  const eye = opts.eye === false ? null : opts.eye ?? new GodsEye({ snapshot: () => kulaSnapshot(engine, projects), dir: path.join(home(), 'godseye'), log, box: { dir: path.join(home(), 'godseye', 'box') } });
   eye?.start();
   const token = opts.token ?? loadOrCreateToken();
   if (opts.prefix !== undefined && !PREFIX_RE.test(opts.prefix)) throw new Error('the prefix must be 24 hex characters');
