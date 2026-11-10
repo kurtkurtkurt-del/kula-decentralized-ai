@@ -1,13 +1,17 @@
 // The chat page's conversations: one JSON file each in ~/.kula-node/chats/ (KULA_NODE_HOME
 // moves it), mode 600 in a 700 folder, because what people type is theirs. The page sends the
 // whole conversation after every turn; the title is the first user message until renamed.
+// A user message may keep its photos (at most three, shrunk by the page, data: urls checked by
+// ui/vision.ts) and the vision model's reading of them; a chat holds 6 MB of photos at most.
 import fs from 'node:fs';
 import path from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { home } from '../paths.js';
+import { checkPhotos, cleanSeen, CHAT_PHOTOS_MAX_CHARS, type Seen } from './vision.js';
 
-export interface ChatMeta { tokens?: number; tps?: number; firstMs?: number; ms?: number; device?: string; stopped?: boolean; error?: string }
-export interface ChatMessage { role: 'system' | 'user' | 'assistant'; content: string; meta?: ChatMeta }
+// photos: how the newest message's photos were answered (seen by the model, or read by a vision model first)
+export interface ChatMeta { tokens?: number; tps?: number; firstMs?: number; ms?: number; device?: string; stopped?: boolean; error?: string; photos?: { how: 'direct' | 'describe'; by: string; n: number; tight?: boolean } }
+export interface ChatMessage { role: 'system' | 'user' | 'assistant'; content: string; meta?: ChatMeta; photos?: string[]; seen?: Seen }
 export interface Conversation {
   id: string;
   title: string;
@@ -45,12 +49,23 @@ export function clean(id: string, body: any, prev: Conversation | null): Convers
     const out: ChatMessage = { role, content: String(m?.content ?? '').slice(0, MAX_CONTENT) };
     if (m?.meta && typeof m.meta === 'object') {
       const x = m.meta;
-      const meta: ChatMeta = { tokens: num(x.tokens), tps: num(x.tps), firstMs: num(x.firstMs), ms: num(x.ms), device: typeof x.device === 'string' ? x.device.slice(0, 80) : undefined, stopped: x.stopped === true ? true : undefined, error: typeof x.error === 'string' ? x.error.slice(0, 500) : undefined };
+      const p = x.photos;
+      const photos = p && typeof p === 'object' && (p.how === 'direct' || p.how === 'describe') && typeof p.by === 'string'
+        ? { how: p.how as 'direct' | 'describe', by: p.by.slice(0, 80), n: Math.max(1, Math.min(3, Math.round(Number(p.n) || 1))), ...(p.tight === true ? { tight: true } : {}) } : undefined;
+      const meta: ChatMeta = { tokens: num(x.tokens), tps: num(x.tps), firstMs: num(x.firstMs), ms: num(x.ms), device: typeof x.device === 'string' ? x.device.slice(0, 80) : undefined, stopped: x.stopped === true ? true : undefined, error: typeof x.error === 'string' ? x.error.slice(0, 500) : undefined, photos };
       for (const k of Object.keys(meta) as (keyof ChatMeta)[]) if (meta[k] === undefined) delete meta[k];
       if (Object.keys(meta).length) out.meta = meta;
     }
+    if (role === 'user' && m?.photos != null) {
+      const photos = checkPhotos(m.photos);
+      if (photos.length) out.photos = photos;
+      const seen = cleanSeen(m.seen);
+      if (seen && photos.length) out.seen = seen;
+    }
     return out;
   });
+  const photoChars = messages.reduce((a, m) => a + (m.photos ?? []).reduce((b, u) => b + u.length, 0), 0);
+  if (photoChars > CHAT_PHOTOS_MAX_CHARS) throw new Error(`this chat holds too many photos (${Math.round(photoChars / 1e6)} MB; at most ${CHAT_PHOTOS_MAX_CHARS / 1e6} MB): start a new chat for more photos`);
   const titleSet = prev?.titleSet ?? false;
   const now = Date.now();
   return {

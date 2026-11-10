@@ -21,7 +21,7 @@ import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { packageRoot, home } from '../paths.js';
 import { version } from '../build.js';
 import { TAG } from '../llama.js';
-import { readJson, BASE_HEADERS, Sse } from '../dashboard/server.js';
+import { BASE_HEADERS, Sse } from '../dashboard/server.js';
 import type { Message } from '../apart.js';
 import { Engine, hostLabel, type LoadEvent } from './engine.js';
 import { ChatStore, ID_RE } from './store.js';
@@ -31,6 +31,7 @@ import { kulaSnapshot } from './godseye-feed.js';
 import { Invite, INVITE_TTL_MS, type Guest } from './invite.js';
 import { qrSvg } from '../dashboard/qr.js';
 import { lanIPv4 } from '../sysinfo.js';
+import { splitPhotos, PHOTO_MAX_CHARS } from './vision.js';
 
 export const UI_PORT = 50590;
 
@@ -130,6 +131,45 @@ export function fromOpenAi(list: unknown): Message[] {
   });
 }
 
+// The same with each message's photos (OpenAI image_url parts: a url string or { url }), for
+// splitPhotos: only the newest user message's are looked at, and only data: urls are taken.
+export function fromOpenAiPhotos(list: unknown): { role: Message['role']; content: string; photos?: unknown[] }[] {
+  if (!Array.isArray(list)) return [];
+  const text = fromOpenAi(list);
+  return list.map((m: any, i) => {
+    const c = m?.content;
+    const photos = Array.isArray(c) ? c.filter((p: any) => p?.type === 'image_url').map((p: any) => (typeof p.image_url === 'string' ? p.image_url : p.image_url?.url)) : [];
+    return photos.length ? { ...text[i], photos } : text[i];
+  });
+}
+
+// Bodies: a chat carries at most three shrunk photos (ui/vision.ts: 1 MB each at most) next to
+// its text; a stored chat its photos (6 MB at most) and text; the rest is small.
+const CHAT_BODY = 4 << 20;
+const CHATS_BODY = 8 << 20;
+
+// A JSON body of at most `limit` bytes. One that is bigger is read to its end without being
+// kept (up to twice the limit, then the connection is cut), so the answer can say why.
+export function readJson(req: http.IncomingMessage, limit: number): Promise<any> {
+  return new Promise((resolve, reject) => {
+    const parts: Buffer[] = [];
+    let n = 0;
+    req.on('data', (d: Buffer) => {
+      n += d.length;
+      if (n > limit * 2) req.destroy();
+      else if (n <= limit) parts.push(d);
+    });
+    req.on('end', () => {
+      if (n > limit) return reject(new Error('body too large'));
+      const text = Buffer.concat(parts).toString('utf8');
+      if (!text.trim()) return resolve({});
+      try { resolve(JSON.parse(text)); } catch { reject(new Error('bad json')); }
+    });
+    req.on('error', reject);
+    req.on('close', () => { if (n > limit) reject(new Error('body too large')); });
+  });
+}
+
 const posNum = (v: unknown, d: number, max: number) => { const n = Number(v); return Number.isFinite(n) && n > 0 ? Math.min(n, max) : d; };
 
 export async function startUi(opts: UiOptions): Promise<UiServer> {
@@ -195,8 +235,10 @@ export async function startUi(opts: UiOptions): Promise<UiServer> {
     }
     if (req.method === 'POST' && p === '/v1/chat/completions') {
       let body: any;
-      try { body = await readJson(req, 4 << 20); } catch (e) { return oaError(res, 400, (e as Error).message); }
-      const messages = fromOpenAi(body?.messages);
+      try { body = await readJson(req, CHAT_BODY); } catch (e) { return oaError(res, (e as Error).message === 'body too large' ? 413 : 400, (e as Error).message === 'body too large' ? `too big: at most ${CHAT_BODY >> 20} MB, with at most 3 photos of ${PHOTO_MAX_CHARS / 1000} KB each` : (e as Error).message); }
+      let messages: Message[];
+      let photos: string[];
+      try { ({ messages, photos } = splitPhotos(fromOpenAiPhotos(body?.messages))); } catch (e) { return oaError(res, 400, (e as Error).message); }
       if (!messages.length) return oaError(res, 400, 'need messages');
       if (!loaded) return oaError(res, 503, 'no model loaded: open the kula chat page and load one', 'server_error');
       const maxTokens = posNum(body.max_completion_tokens ?? body.max_tokens, 1024, 32768);
@@ -214,7 +256,7 @@ export async function startUi(opts: UiOptions): Promise<UiServer> {
           res.write(`data: ${JSON.stringify({ id, object: 'chat.completion.chunk', created, model, choices: [{ index: 0, delta, finish_reason: finish }], ...extra })}\n\n`);
         chunk({ role: 'assistant', content: '' }, null);
         try {
-          const r = await engine.chat(messages, (t) => chunk({ content: t }, null), { maxTokens, temperature, signal: ac.signal, use: 'api' });
+          const r = await engine.chat(messages, (t) => chunk({ content: t }, null), { maxTokens, temperature, signal: ac.signal, use: 'api', photos });
           chunk({}, r.tokens >= maxTokens ? 'length' : 'stop');
           if (body.stream_options?.include_usage) res.write(`data: ${JSON.stringify({ id, object: 'chat.completion.chunk', created, model, choices: [], usage: { prompt_tokens: 0, completion_tokens: r.tokens, total_tokens: r.tokens } })}\n\n`);
         } catch (e) {
@@ -225,13 +267,15 @@ export async function startUi(opts: UiOptions): Promise<UiServer> {
         return;
       }
       try {
-        const r = await engine.chat(messages, () => {}, { maxTokens, temperature, signal: ac.signal, use: 'api' });
+        const r = await engine.chat(messages, () => {}, { maxTokens, temperature, signal: ac.signal, use: 'api', photos });
         return json(res, 200, {
           id, object: 'chat.completion', created, model,
           choices: [{ index: 0, message: { role: 'assistant', content: r.text }, finish_reason: r.tokens >= maxTokens ? 'length' : 'stop' }],
           usage: { prompt_tokens: 0, completion_tokens: r.tokens, total_tokens: r.tokens },
+          // how the photos were seen: straight by the model, or read by a vision model first
+          ...(r.photos ? { kula: { photos: { how: r.photos.how, by: r.photos.by, n: r.photos.n } } } : {}),
         });
-      } catch (e) { return oaError(res, 500, (e as Error).message, 'server_error'); }
+      } catch (e) { return oaError(res, /^no model on this computer sees photos|^reading photos needs/.test((e as Error).message) ? 400 : 500, (e as Error).message, 'server_error'); }
     }
     return oaError(res, 404, 'not found');
   }
@@ -270,6 +314,8 @@ export async function startUi(opts: UiOptions): Promise<UiServer> {
           version: version(packageRoot()), llamaTag: TAG, llama: !!engine.status().llama, node: process.versions.node,
           paths: { home: h, chats: store.dir, models: path.join(h, 'models'), brain: path.join(h, 'godseye'), usage: engine.usage.file(), token: path.join(h, 'ui-token') },
           chats: store.list().length,
+          // the vision model is the computer's (/v1 and guests use it too), not this browser's
+          vision: engine.visionView(),
         });
       }
       if (route === 'usage') return json(res, 200, engine.usage.view(30));
@@ -289,7 +335,8 @@ export async function startUi(opts: UiOptions): Promise<UiServer> {
     if (req.method !== 'POST') return send(res, 405, 'method not allowed');
     if (!sameOrigin(req)) return send(res, 403, 'same origin only');
     let body: any;
-    try { body = await readJson(req, 4 << 20); } catch (e) { return json(res, 400, { error: (e as Error).message }); }
+    const limit = route === 'chat' ? CHAT_BODY : /^chats\/[0-9a-f]+$/.test(route) ? CHATS_BODY : 4 << 20;
+    try { body = await readJson(req, limit); } catch (e) { return json(res, (e as Error).message === 'body too large' ? 413 : 400, { error: (e as Error).message === 'body too large' ? `too big: a message takes at most 3 photos, shrunk (${route === 'chat' ? CHAT_BODY >> 20 : limit >> 20} MB in all)` : (e as Error).message }); }
     const fail = (e: unknown, code = 400) => json(res, code, { error: (e as Error).message });
 
     if (route === 'invite') return json(res, 200, await setInvite(body?.on === true));
@@ -323,6 +370,18 @@ export async function startUi(opts: UiOptions): Promise<UiServer> {
       return json(res, word ? 200 : 409, word ? { ok: true, view: eye.view() } : { error: 'nothing to do' });
     }
     if (route === 'invite/new') return json(res, 200, await rotateInvite());
+    // settings › model › vision model: which model reads photos (null: the smallest here), and fetching one
+    if (route === 'settings/vision') { try { return json(res, 200, engine.setVision(body?.id ?? null)); } catch (e) { return fail(e); } }
+    if (route === 'vision/fetch') {
+      const sse = new Sse(res);
+      open.add(res);
+      const ac = new AbortController();
+      res.on('close', () => { if (!res.writableFinished) ac.abort(); });
+      try { await engine.fetchVision(body?.id, (e) => { if (!res.writableEnded) sse.send(e); }, ac.signal); } catch (e) { if (!res.writableEnded) sse.send({ error: (e as Error).message }); }
+      open.delete(res);
+      if (!res.writableEnded) sse.end();
+      return;
+    }
     if (route === 'peers/add') {
       try {
         if (typeof body?.address === 'string') return json(res, 200, await engine.pairByHand({ address: body.address, pin: body.pin, fp: body.fp, name: body.name }));
@@ -365,7 +424,13 @@ export async function startUi(opts: UiOptions): Promise<UiServer> {
     if (route === 'stop') return json(res, 200, { stopped: engine.stop() });
     if (route === 'chat') {
       if (!Array.isArray(body?.messages) || !body.messages.length) return json(res, 400, { error: 'need messages' });
-      const messages: Message[] = body.messages.map((m: any) => ({ role: m?.role === 'assistant' || m?.role === 'system' ? m.role : 'user', content: String(m?.content ?? '') }));
+      // each message with its photos (and, for earlier ones, the reading kept with it): only the
+      // newest user message's photos are looked at, the rest become notes (ui/vision.ts)
+      let messages: Message[];
+      let photos: string[];
+      try {
+        ({ messages, photos } = splitPhotos(body.messages.map((m: any) => ({ role: m?.role === 'assistant' || m?.role === 'system' ? m.role : 'user', content: String(m?.content ?? ''), photos: m?.photos, seen: m?.seen }))));
+      } catch (e) { return fail(e); }
       if (guest) {
         const why = invite.chatAllowed(guest.guest);
         if (why) return json(res, 429, { error: why });
@@ -381,8 +446,11 @@ export async function startUi(opts: UiOptions): Promise<UiServer> {
       const sse = new Sse(res);
       open.add(res);
       try {
-        const r = await engine.chat(messages, (t) => sse.send({ t }), { maxTokens: posNum(body.maxTokens, 1024, 32768), temperature: Number.isFinite(Number(body.temperature)) ? Math.max(0, Math.min(2, Number(body.temperature))) : 0.7, signal: ac.signal, use: guest ? 'guest' : 'chat' });
-        sse.end({ done: true, tokens: r.tokens, ms: r.ms, firstMs: r.firstMs, tps: r.tps, device: r.device, stopped: r.stopped === true });
+        const r = await engine.chat(messages, (t) => sse.send({ t }), {
+          maxTokens: posNum(body.maxTokens, 1024, 32768), temperature: Number.isFinite(Number(body.temperature)) ? Math.max(0, Math.min(2, Number(body.temperature))) : 0.7, signal: ac.signal, use: guest ? 'guest' : 'chat',
+          photos, onReading: (x) => sse.send({ reading: x.by, n: x.n, tight: x.tight }),
+        });
+        sse.end({ done: true, tokens: r.tokens, ms: r.ms, firstMs: r.firstMs, tps: r.tps, device: r.device, stopped: r.stopped === true, ...(r.photos ? { photos: r.photos } : {}) });
       } catch (e) { sse.end({ error: (e as Error).message }); }
       open.delete(res);
       return;

@@ -11,6 +11,10 @@ import { freePort, startChild } from './children.js';
 import type { LlamaBinaries } from './llama.js';
 
 export interface Message { role: 'system' | 'user' | 'assistant'; content: string }
+// A message as it goes to a llama-server: text, or text and photos as OpenAI content parts
+// (ui/vision.ts; only this computer's own llama-server with --mmproj gets photos).
+export type ChatPart = { type: 'text'; text: string } | { type: 'image_url'; image_url: { url: string } };
+export interface WireMessage { role: Message['role']; content: string | ChatPart[] }
 
 export interface Reply {
   text: string;
@@ -78,7 +82,7 @@ export async function apiLoad(apiPort: number, model: ModelRef, onProgress?: (st
   if (!last.done) throw new Error('load ended without done');
 }
 
-export function apiChat(dev: Device, messages: Message[], onToken: (t: string) => void, opts: { maxTokens: number; temperature: number; reset?: boolean }): Promise<Reply> & { stop: () => void } {
+export function apiChat(dev: Device, messages: WireMessage[], onToken: (t: string) => void, opts: { maxTokens: number; temperature: number; reset?: boolean }): Promise<Reply> & { stop: () => void } {
   const ac = new AbortController();
   const p = (async (): Promise<Reply> => {
     const res = await fetch(`http://127.0.0.1:${dev.apiPort}/chat`, {
@@ -120,24 +124,33 @@ export async function openPeerDevice(peer: Peer, identity?: GateIdentity): Promi
   return { id: peer.id, name: peer.name, local: false, apiPort: port, bw: peer.bw ?? 4, busy: false, tps: null, done: 0, close: () => tunnel.close() };
 }
 
+export type StartBackend = (file: string, ctx: number, o?: { mmproj?: string | null }) => Promise<{ port: number; stop(): Promise<void> }>;
+
+// This computer's llama-server on 127.0.0.1 with a gguf (and a vision model's image encoder,
+// --mmproj), once its /health answers: the port opens before the model is in memory.
+export async function startLlamaServer(llama: LlamaBinaries | null, file: string, ctx: number, log: Log, o: { mmproj?: string | null; extra?: string[] } = {}): Promise<{ port: number; stop(): Promise<void>; proc: import('node:child_process').ChildProcess }> {
+  if (!llama) throw new Error('llama.cpp is not set up here (run: kula-node setup), or pass --no-local to use the peers only');
+  const port = await freePort();
+  const args = ['--host', '127.0.0.1', '--port', String(port), '-m', file, '-c', String(ctx), '-ngl', '99', '--no-webui', ...(o.mmproj ? ['--mmproj', o.mmproj] : []), ...(o.extra ?? [])];
+  const child = await startChild('llama-server', llama.llamaServer, args, port, log, 180000);
+  const t0 = Date.now();
+  for (;;) {
+    try { const r = await fetch(`http://127.0.0.1:${port}/health`); if (r.ok) break; } catch {}
+    if (child.proc.exitCode !== null) throw new Error('llama-server exited while loading');
+    if (Date.now() - t0 > 600000) { await child.stop(); throw new Error('llama-server took too long to load the model'); }
+    await new Promise((r) => setTimeout(r, 300));
+  }
+  return child;
+}
+
 // This computer as a device: its own llama-server on 127.0.0.1 with the gguf,
 // reached through the same tiny api so the scheduler sees one kind of thing.
-// `startBackend` is what tests replace with a fake.
-export async function openLocalDevice(opts: { llama: LlamaBinaries | null; modelFile: string; ctx: number; bw: number; log: Log; startBackend?: (file: string, ctx: number) => Promise<{ port: number; stop(): Promise<void> }> }): Promise<Device> {
+// `startBackend` is what tests replace with a fake; `mmproj` (a vision model's image
+// encoder) lets it take photos.
+export async function openLocalDevice(opts: { llama: LlamaBinaries | null; modelFile: string; ctx: number; bw: number; log: Log; startBackend?: StartBackend; mmproj?: string | null }): Promise<Device> {
   const { startApiServer } = await import('./api.js');
-  const startBackend = opts.startBackend ?? (async (file: string, ctx: number) => {
-    if (!opts.llama) throw new Error('llama.cpp is not set up here (run: kula-node setup), or pass --no-local to use the peers only');
-    const port = await freePort();
-    const child = await startChild('llama-server', opts.llama.llamaServer, ['--host', '127.0.0.1', '--port', String(port), '-m', file, '-c', String(ctx), '-ngl', '99', '--no-webui'], port, opts.log, 180000);
-    const t0 = Date.now();
-    for (;;) {
-      try { const r = await fetch(`http://127.0.0.1:${port}/health`); if (r.ok) break; } catch {}
-      if (child.proc.exitCode !== null) throw new Error('llama-server exited while loading');
-      if (Date.now() - t0 > 600000) { await child.stop(); throw new Error('llama-server took too long to load the model'); }
-      await new Promise((r) => setTimeout(r, 300));
-    }
-    return child;
-  });
+  const start: StartBackend = opts.startBackend ?? ((file, ctx, o) => startLlamaServer(opts.llama, file, ctx, opts.log, o));
+  const startBackend = (file: string, ctx: number) => start(file, ctx, opts.mmproj ? { mmproj: opts.mmproj } : undefined);
   // the local api keeps no copy: it is told the file it already has
   const path = await import('node:path');
   const api = await startApiServer({ models: path.dirname(opts.modelFile), llama: opts.llama, log: opts.log, startBackend, defaultCtx: opts.ctx });
@@ -147,12 +160,13 @@ export async function openLocalDevice(opts: { llama: LlamaBinaries | null; model
 export interface ApartOptions {
   model: ModelRef;        // what the peers fetch
   localModelFile?: string | null; // when set, this computer joins with its own llama-server
+  localMmproj?: string | null;    // and with this image encoder next to it (a vision model, mode "here")
   localBw?: number;
   llama?: LlamaBinaries | null;
   peers: Peer[];
   probeMs?: number;
   log?: Log;
-  startBackend?: (file: string, ctx: number) => Promise<{ port: number; stop(): Promise<void> }>;
+  startBackend?: StartBackend;
   probe?: typeof probePeers;
   identity?: GateIdentity;  // this computer's certificate: v3 and relayed peers need it
   measuredTps?: Record<string, number | null | undefined>; // by device id ('local' for this computer), from kula-node bench
@@ -168,7 +182,7 @@ export interface Cluster {
   stamped: Peer[];
   // `signal`: aborting it asks the device to stop (POST /stop) and keeps what came so far;
   // a device that does not end its stream within a few seconds is cut off
-  chat(messages: Message[], onToken: (t: string) => void, opts?: { maxTokens?: number; temperature?: number; reset?: boolean; device?: string; signal?: AbortSignal }): Promise<Reply & { stopped?: boolean }>;
+  chat(messages: WireMessage[], onToken: (t: string) => void, opts?: { maxTokens?: number; temperature?: number; reset?: boolean; device?: string; signal?: AbortSignal }): Promise<Reply & { stopped?: boolean }>;
   batch(prompts: string[], opts?: { maxTokens?: number; temperature?: number; onReply?: (i: number, r: Reply) => void }): Promise<Reply[]>;
   close(): Promise<void>;
 }
@@ -187,7 +201,7 @@ export async function openApart(opts: ApartOptions): Promise<Cluster> {
   }
   const devices: Device[] = [];
   if (opts.localModelFile) {
-    const dev = await openLocalDevice({ llama: opts.llama ?? null, modelFile: opts.localModelFile, ctx: opts.model.ctx, bw: opts.localBw ?? 4, log, startBackend: opts.startBackend });
+    const dev = await openLocalDevice({ llama: opts.llama ?? null, modelFile: opts.localModelFile, ctx: opts.model.ctx, bw: opts.localBw ?? 4, log, startBackend: opts.startBackend, mmproj: opts.localMmproj ?? null });
     devices.push(dev);
   }
   for (const p of live) {
