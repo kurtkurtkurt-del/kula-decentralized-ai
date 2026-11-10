@@ -669,6 +669,198 @@ test('restart keeps the folded slots', () => {
   assert.equal(v.rows[0][1], String((c.stored as any).looks + 1));
 });
 
+// ---- the scored hours, handed to the learning branch
+
+test('a pair at every fold once the device is known: the slot\'s estimate just before, the prior, x', () => {
+  const F = hourAt(0, 22);   // sunday 22:00: slot 22; the notes' slot times equal the fold time, so nothing decays
+  const { c, ctx } = fakeCtx({ v: 2, looks: 36, since: F, lastGood: F, dev: { p1: {
+    name: 'pixel', seen: F, slots: { '46': [1, 1, F], '47': [1, 1, F], '48': [1, 1, F] },
+    cur: { slot: 49, looks: 12, there: 9, t: F }, tps: {},
+  } } });
+  const b = create(ctx);
+  b.observe(snap([dev()], F), null);                    // slot 22 != 49: folds slot 49
+  c.t += 61_000;
+  b.observe(snap([dev()], F + 5000), null);             // saves
+  const saved = c.stored as any;
+  const q = saved.dev.p1.pairs[0];
+  // N = 3, S = 3: p0 = 3.5 / 4 = 0.875, a = 3.5; slot 49 was never seen: p = 3.5 / 4 = 0.875;
+  // x = 9 / 12 = 0.75; the 80% wilson interval around 0.875 with m = 4: lo ~ 0.55666, hi ~ 0.97502
+  assert.equal(q.t, F);
+  assert.equal(q.p, 0.875);
+  assert.equal(q.p0, 0.875);
+  assert.equal(q.x, 0.75);
+  assert.ok(Math.abs(q.lo - 0.55666) < 1e-4, `lo ${q.lo}`);
+  assert.ok(Math.abs(q.hi - 0.97502) < 1e-4, `hi ${q.hi}`);
+  assert.deepEqual(saved.dev.p1.slots['49'].slice(0, 2), [1, 0.75], 'the fold itself is unchanged');
+  const vp = b.view().pairs!;
+  assert.equal(vp.length, 1);
+  assert.equal(vp[0].id, 'p1');
+  assert.equal(vp[0].name, 'pixel');
+  assert.deepEqual(vp[0].scored, [[F, 0.875, q.lo, q.hi, 0.875, 0.75]], 'handed over oldest first');
+});
+
+test('the very first folds of a device are not scored: no pair while it has under three folded hours', () => {
+  const { c, ctx } = fakeCtx();
+  const b = create(ctx);
+  hourLooks(b, [dev()], 0, 22);                          // fold 22: N = 0 -> no pair
+  hourLooks(b, [dev()], 0, 23);                          // fold 23: N ~ 1 -> no pair
+  hourLooks(b, [dev()], 0, 24);                          // fold 24: N ~ 2 -> no pair
+  hourLooks(b, [dev()], 0, 25);
+  assert.equal(b.view().pairs![0].scored.length, 0, 'three folded hours are not known yet');
+  hourLooks(b, [dev()], 0, 26);                          // fold 25: N ~ 3 -> the first pair
+  c.t += 61_000;
+  b.observe(snap([dev()], hourAt(0, 26) + 55_000), null);   // saves
+  const saved = c.stored as any;
+  assert.equal(saved.dev.p1.pairs.length, 1);
+  assert.equal(saved.dev.p1.pairs[0].x, 1);
+  assert.equal(saved.dev.p1.pairs[0].t, hourAt(0, 26));
+});
+
+test('the pairs cap at 200 per device, the oldest dropped', () => {
+  const F = hourAt(0, 22);
+  const T0 = hourAt(0, 1);
+  const pairs = Array.from({ length: 200 }, (_, i) => ({ t: T0 + i * 60_000, p: 0.5, lo: 0.2, hi: 0.8, p0: 0.5, x: 1 }));
+  const { c, ctx } = fakeCtx({ v: 2, looks: 36, since: F, lastGood: F, dev: { p1: {
+    name: 'pixel', seen: F, slots: { '46': [1, 1, F], '47': [1, 1, F], '48': [1, 1, F] },
+    cur: { slot: 49, looks: 12, there: 12, t: F }, tps: {}, pairs,
+  } } });
+  const b = create(ctx);
+  b.observe(snap([dev()], F), null);                    // folds slot 49: one more pair
+  c.t += 61_000;
+  b.observe(snap([dev()], F + 5000), null);             // saves
+  const saved = c.stored as any;
+  assert.equal(saved.dev.p1.pairs.length, 200);
+  assert.equal(saved.dev.p1.pairs[0].t, T0 + 60_000, 'the oldest went');
+  assert.equal(saved.dev.p1.pairs[199].t, F, 'the new fold is the newest');
+});
+
+test('more than 200 pairs on disk: the last 200 are kept', () => {
+  const t = hourAt(0, 23);
+  const { c, ctx } = fakeCtx({ v: 2, looks: 5, since: t, lastGood: t, dev: { p1: {
+    name: 'pixel', seen: t, slots: { '46': [1, 1, t] }, cur: null, tps: {},
+    pairs: Array.from({ length: 300 }, (_, i) => ({ t: t + i * 60_000, p: 0.5, lo: 0.2, hi: 0.8, p0: 0.5, x: 1 })),
+  } } });
+  const b = create(ctx);
+  b.observe(snap([dev()], t), null);
+  c.t += 61_000;
+  b.observe(snap([dev()], t + 5000), null);
+  const saved = c.stored as any;
+  assert.equal(saved.dev.p1.pairs.length, 200);
+  assert.equal(saved.dev.p1.pairs[0].t, t + 100 * 60_000, 'the 101st pair is now the oldest');
+});
+
+test('corrupt pairs in the notes: bad entries dropped, the device and its slots stay, never a throw', () => {
+  const t = hourAt(0, 23);
+  const good = { name: 'pixel', seen: t, slots: { '46': [1, 1, t] }, cur: null, tps: {} };
+  const cases: [string, unknown][] = [
+    ['not an array', 'x'],
+    ['null', null],
+    ['bad entries', [null, 42, {}, { t: NaN, p: 0.5, lo: 0.2, hi: 0.8, p0: 0.5, x: 1 },
+      { t, p: 2, lo: 0.2, hi: 0.8, p0: 0.5, x: 1 }, { t, p: 0.5, lo: 0.8, hi: 0.2, p0: 0.5, x: 1 },
+      { t: -1, p: 0.5, lo: 0.2, hi: 0.8, p0: 0.5, x: 1 }, { t: 9e15, p: 0.5, lo: 0.2, hi: 0.8, p0: 0.5, x: 1 },
+      { t, p: 0.5, lo: 0.2, hi: 0.8, p0: 0.5, x: 1 }]],
+  ];
+  for (const [what, pairs] of cases) {
+    const { c, ctx } = fakeCtx({ v: 2, looks: 5, since: t, lastGood: t, dev: { p1: { ...structuredClone(good), pairs: structuredClone(pairs) } } });
+    const b = create(ctx);
+    b.observe(snap([dev()], t), null);
+    c.t += 61_000;
+    b.observe(snap([dev()], t + 5000), null);
+    const saved = c.stored as any;
+    assert.ok(saved.dev.p1, `${what}: the device survives`);
+    assert.equal(saved.dev.p1.slots['46'][0], 1, `${what}: the slots survive`);
+    if (what === 'bad entries') assert.equal(saved.dev.p1.pairs.length, 1, 'only the valid pair survives');
+    else assert.deepEqual(saved.dev.p1.pairs, [], `${what}: an empty list`);
+  }
+});
+
+test('restart keeps the pairs; a notes file as the merged branch wrote it (no pairs) loads with an empty list', () => {
+  const t = hourAt(0, 23);
+  const { c, ctx } = fakeCtx({ v: 2, looks: 24, since: t, lastGood: t, dev: { p1: {
+    name: 'pixel', seen: t, slots: { '46': [1, 1, t], '47': [1, 1, t], '48': [1, 1, t] }, cur: null, tps: {},
+  } } });   // the exact shape the merged branch wrote: no pairs field
+  const b = create(ctx);
+  hourLooks(b, [dev()], 0, 22);                          // the cur for slot 22
+  hourLooks(b, [dev()], 0, 23);                          // folds slot 22 at hour 23, the slots' own time: N = 3, a pair
+  c.t += 61_000;
+  b.observe(snap([dev()], hourAt(0, 23) + 55_000), null);   // saves
+  const saved = c.stored as any;
+  assert.equal(saved.dev.p1.pairs.length, 1, 'the merged-shape notes load with an empty list, then score');
+  assert.deepEqual(Object.keys(saved.dev.p1.slots).sort(), ['22', '46', '47', '48'], 'the old slots survived');
+  const again = create(ctx);
+  hourLooks(again, [dev()], 0, 24);                      // after the restart: folds slot 23, another pair
+  c.t += 61_000;
+  again.observe(snap([dev()], hourAt(0, 24) + 55_000), null);
+  assert.equal((c.stored as any).dev.p1.pairs.length, 2, 'the pairs survived the restart and grew');
+});
+
+test('a far-forward clock: the untrusted fold scores nothing, after the re-anchor pairs come back, live and after a restart', () => {
+  const { c, ctx } = fakeCtx();
+  const b = create(ctx);
+  for (let h = 0; h < 6; h++) hourLooks(b, [dev()], 0, 22 + h);   // sunday 22:00 .. monday 02:55: two pairs
+  const far1 = hourAt(365, 12);
+  b.observe(snap([dev()], far1), null);                  // not trusted on its own
+  b.observe(snap([dev()], far1 + 5000), null);           // agreed: folds the old cur at the far time, nothing known -> no pair
+  hourLooks(b, [dev()], 0, 28);                          // the far cur is dropped (one look), the hour folds and re-anchors
+  hourLooks(b, [dev()], 0, 29);                          // folds slot 28: known again -> a pair
+  c.t += 61_000;
+  b.observe(snap([dev()], hourAt(0, 29) + 55_000), null);   // saves
+  const saved = c.stored as any;
+  assert.equal(saved.dev.p1.pairs.length, 3, 'no pair from the far fold, pairs again after the re-anchor');
+  assert.equal(saved.dev.p1.pairs[2].t, hourAt(0, 29));
+  const again = create(ctx);
+  hourLooks(again, [dev()], 0, 30);                      // after the restart: another fold, another pair
+  c.t += 61_000;
+  again.observe(snap([dev()], hourAt(0, 30) + 55_000), null);
+  const saved2 = c.stored as any;
+  assert.equal(saved2.dev.p1.pairs.length, 4);
+  assert.equal(saved2.dev.p1.pairs[3].t, hourAt(0, 30));
+});
+
+test('a device gone from the snapshot: its pairs stay, no new pair while it is away, scoring resumes when it is back', () => {
+  const F = hourAt(0, 22);
+  const { c, ctx } = fakeCtx({ v: 2, looks: 36, since: F, lastGood: F, dev: { p1: {
+    name: 'pixel', seen: F, slots: { '46': [1, 1, F], '47': [1, 1, F], '48': [1, 1, F] },
+    cur: { slot: 49, looks: 12, there: 12, t: F }, tps: {},
+  } } });
+  const b = create(ctx);
+  b.observe(snap([dev()], F), null);                     // folds slot 49: the first pair
+  for (let h = 1; h <= 3; h++) b.observe(snap([], hourAt(0, 22 + h)), null);   // the device is away
+  c.t += 61_000;
+  b.observe(snap([], hourAt(1, 1)), null);               // saves
+  assert.equal((c.stored as any).dev.p1.pairs.length, 1, 'no pair while the device was away');
+  hourLooks(b, [dev()], 1, 22);                          // back: a full hour
+  hourLooks(b, [dev()], 1, 23);                          // its first look folds slot 22: known again -> a pair
+  c.t += 61_000;
+  b.observe(snap([dev()], hourAt(1, 23) + 55_000), null);   // saves
+  const saved = c.stored as any;
+  assert.equal(saved.dev.p1.pairs.length, 2, 'scoring resumes when the device is back');
+  assert.equal(saved.dev.p1.pairs[1].t, hourAt(1, 23));
+  assert.equal(saved.dev.p1.pairs[0].t, F, 'the old pair stayed');
+});
+
+test('the view hands the pairs to learning: at most 40 devices, at most 200 pairs each, oldest first', () => {
+  const t = hourAt(0, 23);
+  const mk = (seen: number, nPairs: number) => ({
+    name: 'd', seen, slots: { '46': [1, 1, t] }, cur: null, tps: {},
+    pairs: Array.from({ length: nPairs }, (_, i) => ({ t: t + i * 60_000, p: 0.5, lo: 0.2, hi: 0.8, p0: 0.5, x: 1 })),
+  });
+  const devs: any = Object.create(null);
+  devs.big = mk(t, 300);                                 // first, so it stays within the 40
+  for (let i = 0; i < 44; i++) devs[`p${i}`] = mk(t, 1);
+  const { ctx } = fakeCtx({ v: 2, looks: 0, since: t, lastGood: t, dev: devs });
+  const b = create(ctx);
+  const v = b.view();                                    // before any look: the pairs come from the notes alone
+  assert.equal(v.pairs!.length, 40, 'at most 40 devices (45 in the notes)');
+  assert.equal(v.pairs![0].id, 'big');
+  assert.equal(v.pairs![0].name, 'd');
+  assert.deepEqual(v.pairs![0].scored[0], [t + 100 * 60_000, 0.5, 0.2, 0.8, 0.5, 1], 'oldest first, capped at 200');
+  assert.equal(v.pairs![0].scored.length, 200, 'at most 200 pairs each');
+  assert.equal(v.pairs![1].id, 'p0');
+  assert.equal(v.pairs![1].scored[0][0], t, 'one pair, untouched');
+  assert.ok(v.pairs!.every((p) => p.scored.length <= 200));
+});
+
 test('in the eye: the forecast tile is lit and keeps its notes in forecast.json', () => {
   let t = at23(0);
   const dir = path.join(HOME, 'eye');
