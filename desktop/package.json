@@ -39,12 +39,14 @@
       "identity": null,
       "target": [
         "dmg"
-      ]
+      ],
+      "icon": "assets/icon.png"
     },
     "win": {
       "target": [
         "nsis"
-      ]
+      ],
+      "icon": "assets/icon.png"
     },
     "nsis": {
       "oneClick": true,

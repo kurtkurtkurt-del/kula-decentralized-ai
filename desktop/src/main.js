@@ -6,7 +6,8 @@
 //   2. first launch: `kula-node setup` (llama.cpp b11157) with its lines on the start screen
 //   3. `kula-node ui --no-open`: the page on 127.0.0.1 (or the one already running), shown here
 // Everything the page does stays as it is: 127.0.0.1 only, the random prefix, same-origin posts.
-import { app, BrowserWindow, shell, utilityProcess } from 'electron';
+import { app, BrowserWindow, clipboard, shell, utilityProcess } from 'electron';
+import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -28,6 +29,15 @@ function kulaRoot() {
 }
 
 const root = kulaRoot();
+
+// an app opened from the Finder gets PATH=/usr/bin:/bin:/usr/sbin:/sbin: Homebrew's cmake,
+// ninja and adb (/opt/homebrew/bin on Apple silicon, /usr/local/bin on Intel) would not be
+// found by setup or the cable steps, however they were installed (10.11.2026)
+const BREW_BINS = ['/opt/homebrew/bin', '/usr/local/bin'];
+const PATH = process.platform === 'darwin'
+  ? [...new Set([...(process.env.PATH || '').split(':').filter(Boolean), ...BREW_BINS, '/usr/bin', '/bin', '/usr/sbin', '/sbin'])].join(':')
+  : process.env.PATH;
+const onPath = (cmd) => PATH.split(path.delimiter).some((d) => { try { fs.accessSync(path.join(d, cmd), fs.constants.X_OK); return true; } catch { return false; } });
 let win = null;
 let page = null;          // the `kula-node ui` this app started (null when one was already running)
 let quitting = false;
@@ -35,7 +45,7 @@ let quitting = false;
 // kula-node with these arguments; each output line to onLine; resolves with the exit code
 function run(args, onLine = () => {}) {
   const child = utilityProcess.fork(path.join(root, 'dist', 'bin', 'kula-node.js'), args, {
-    cwd: root, stdio: 'pipe', serviceName: 'kula-node', env: { ...process.env, KULA_UI_NO_BROWSER: '1' },
+    cwd: root, stdio: 'pipe', serviceName: 'kula-node', env: { ...process.env, PATH, KULA_UI_NO_BROWSER: '1' },
   });
   let buf = '';
   const feed = (d) => { buf += d.toString(); const parts = buf.split(/\r?\n/); buf = parts.pop(); for (const l of parts) if (l.trim()) onLine(l); };
@@ -47,11 +57,35 @@ function run(args, onLine = () => {}) {
 
 const say = (fn, ...a) => { if (win && !win.isDestroyed()) win.webContents.executeJavaScript(`window.${fn} && window.${fn}(...${JSON.stringify(a)})`).catch(() => {}); };
 
-function waitForChoice() {
+function waitForChoice(choices = ['retry', 'skip']) {
   return new Promise((resolve) => {
-    const onHash = (_e, url) => { const h = new URL(url).hash; if (h === '#retry' || h === '#skip') { win.webContents.off('did-navigate-in-page', onHash); resolve(h.slice(1)); } };
+    const onHash = (_e, url) => { const h = new URL(url).hash.slice(1); if (choices.includes(h)) { win.webContents.off('did-navigate-in-page', onHash); resolve(h); } };
     win.webContents.on('did-navigate-in-page', onHash);
   });
+}
+
+// what building llama.cpp on a Mac needs, looked at before setup starts rather than after it
+// fails: Apple's command line tools (the compiler), then cmake (Homebrew). ninja only speeds it up.
+export function macNeeds() {
+  const clt = spawnSync('xcode-select', ['-p'], { stdio: 'ignore' }).status === 0;
+  const brew = BREW_BINS.some((d) => fs.existsSync(path.join(d, 'brew')));
+  return [
+    { id: 'clt', ok: clt, what: 'Apple’s command line tools (the compiler)', how: 'press “install”: macOS asks once and downloads them (a few minutes)', action: clt ? null : 'install' },
+    { id: 'cmake', ok: onPath('cmake'), what: 'cmake, to build llama.cpp', how: brew ? 'in Terminal: brew install cmake ninja' : 'first Homebrew (brew.sh), then in Terminal: brew install cmake ninja', action: onPath('cmake') ? null : 'copy', copy: 'brew install cmake ninja', link: brew ? null : 'https://brew.sh' },
+  ];
+}
+
+async function macReady() {
+  if (process.platform !== 'darwin') return true;
+  for (;;) {
+    const needs = macNeeds();
+    if (needs.every((n) => n.ok)) return true;
+    say('needs', needs);
+    const choice = await waitForChoice(['check', 'skip', 'install-clt', 'copy-cmake']);
+    if (choice === 'skip') return false;
+    if (choice === 'install-clt') spawn('xcode-select', ['--install'], { stdio: 'ignore', detached: true }).unref();
+    if (choice === 'copy-cmake') clipboard.writeText('brew install cmake ninja');
+  }
 }
 
 async function ensureLlama() {
@@ -59,6 +93,8 @@ async function ensureLlama() {
   const code = await check.done;
   console.log(`kula: setup --check exited ${code}`);
   if (code === 0) return;
+  // the page still works with phones without llama.cpp; "here" and "split" will say setup is missing
+  if (!(await macReady())) return;
   say('step', 'setting up llama.cpp b11157: once on this computer, a few minutes');
   for (;;) {
     const s = run(['setup'], (l) => say('line', l));

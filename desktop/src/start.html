@@ -21,6 +21,21 @@
   .bad .row { display: flex; }
   a.btn { padding: 8px 16px; border-radius: 999px; border: 1px solid var(--line); color: var(--ink); text-decoration: none; }
   a.btn.main { background: var(--accent); border-color: var(--accent); color: var(--bg); }
+  /* before the first start on a Mac: what building llama.cpp needs, each with its one step */
+  #needs { display: none; margin: 0 0 14px; padding: 0; list-style: none; border: 1px solid var(--line); border-radius: 10px; }
+  .needs #needs { display: block; }
+  .needs #log, .needs .row { display: none; }
+  #needs li { display: grid; grid-template-columns: 18px 1fr auto; gap: 4px 10px; align-items: center; padding: 10px 12px; border-top: 1px solid var(--line); }
+  #needs li:first-child { border-top: 0; }
+  #needs .m { font-weight: 700; color: var(--bad); }
+  #needs li.ok .m { color: var(--accent); }
+  #needs .w { font-weight: 500; }
+  #needs .h { grid-column: 2 / 4; color: var(--mute); font-size: 13px; }
+  #needs li.ok .h, #needs li.ok a.btn { display: none; }
+  #needs a.btn { font-size: 13px; padding: 4px 12px; }
+  .needs-row { display: none; gap: 8px; }
+  .needs .needs-row { display: flex; }
+  .needs .dot { background: var(--bad); animation: none; }
 </style>
 </head>
 <body>
@@ -28,14 +43,39 @@
   <h1>kula</h1>
   <p class="sub">your phones, tablets and computers as one local ai.</p>
   <p id="step"><span class="dot"></span><span id="t">starting</span></p>
+  <ul id="needs"></ul>
+  <div class="needs-row"><a class="btn main" href="#check" onclick="again()">check again</a><a class="btn" href="#skip">continue without it (phones only)</a></div>
   <pre id="log"></pre>
   <div class="row"><a class="btn main" href="#retry" onclick="again()">try again</a><a class="btn" href="#skip">continue without it</a></div>
 </main>
 <script>
   const log = document.getElementById('log');
-  window.step = (t) => { document.getElementById('m').classList.remove('bad'); document.getElementById('t').textContent = t; };
+  const m = document.getElementById('m');
+  // each item: {id, ok, what, how, action: 'install' | 'copy' | null, link}
+  window.needs = (items) => {
+    m.classList.add('needs');
+    document.getElementById('t').textContent = 'before the first start, this Mac needs:';
+    const ul = document.getElementById('needs');
+    ul.replaceChildren(...items.map((n) => {
+      const li = document.createElement('li');
+      if (n.ok) li.className = 'ok';
+      const mark = Object.assign(document.createElement('span'), { className: 'm', textContent: n.ok ? '✓' : '✕' });
+      const what = Object.assign(document.createElement('span'), { className: 'w', textContent: n.what });
+      const act = document.createElement('span');
+      if (n.link) act.appendChild(Object.assign(document.createElement('a'), { className: 'btn', href: n.link, textContent: 'Homebrew' }));
+      if (n.action) {
+        const a = Object.assign(document.createElement('a'), { className: 'btn', href: `#${n.action === 'install' ? 'install-clt' : 'copy-cmake'}`, textContent: n.action === 'install' ? 'install' : 'copy the command' });
+        a.addEventListener('click', () => { again(); if (n.action === 'copy') setTimeout(() => { a.textContent = 'copied: paste it in Terminal'; }, 60); });
+        act.appendChild(a);
+      }
+      const how = Object.assign(document.createElement('span'), { className: 'h', textContent: n.how });
+      li.append(mark, what, act, how);
+      return li;
+    }));
+  };
+  window.step = (t) => { m.classList.remove('bad', 'needs'); document.getElementById('t').textContent = t; };
   window.line = (t) => { log.textContent += t + '\n'; log.scrollTop = log.scrollHeight; };
-  window.failed = (t) => { document.getElementById('m').classList.add('bad'); document.getElementById('t').textContent = t; };
+  window.failed = (t) => { m.classList.remove('needs'); m.classList.add('bad'); document.getElementById('t').textContent = t; };
   function again() { setTimeout(() => { location.hash = ''; }, 50); }
 </script>
 </body>
