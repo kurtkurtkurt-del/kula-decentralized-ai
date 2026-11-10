@@ -405,14 +405,18 @@ the phone does the work, the computer only carries the words.
 5. **Chat.** Streaming answers with markdown (escaped: model text never becomes html), a
    collapsible "thinking" block for qwen3's `<think>`, tok/s, first-token time and the device
    under each answer, stop, answer again, edit and resend the last message. **the brain** (the
-   icon top right) shows the devices, why the model sits where it sits, and the last decisions.
-   Settings: temperature, max tokens, context (next load), a system prompt, light/dark.
+   icon top right) shows the devices, why the model sits where it sits, and the last decisions;
+   the same icon closes it on a wide window too, and a closed brain stays closed (10.11.2026). Settings: temperature, max tokens, context (next load), a system prompt, light/dark.
 
 6. **Photos** (10.11.2026, as on the phone: [NIGHT.md](NIGHT.md#photos-10112026)). The photo
    button in the composer (or paste, or drop onto it) takes up to three per message; they show
    as thumbnails, are shrunk in the browser before they leave it (a canvas, jpeg: 768 px on the
    long side for one photo, 512 for two or three) and go as data urls with the message. Who
-   looks at them (`node/src/ui/vision.ts`, the engine's `chat`):
+   looks at them (`node/src/ui/vision.ts`, the engine's `chat`). The photo button is a **+**:
+   after a pick (not a paste or a drop), unless the loaded model sees photos itself, the start a
+   chat sheet asks "which model should see the photo?", lists only the vision models, each judged
+   for this computer, and loads the chosen one *here* (no llama.cpp, or none fits: it says so; "not
+   now" keeps the photo in the box for the ways below).
    - **seen by** the model itself when a vision model (one with an image encoder, `mmproj`: SmolVLM
      500M, SmolVLM2 2.2B, Gemma 3 4B) is loaded *here*: loading it fetches the encoder next to the
      model in `~/.kula-node/models` (sha256-checked like the model) and starts llama-server with

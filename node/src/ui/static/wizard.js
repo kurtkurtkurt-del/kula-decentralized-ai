@@ -87,7 +87,7 @@ export function back(w) {
     case 'model': return w.chat ? null : w.peerId ? 'connected' : 'how';
     case 'mode': return 'model';
     case 'pick': return 'mode';
-    case 'load': return w.picked && PICK_MODES.has(w.mode) ? 'pick' : 'mode';
+    case 'load': return w.vision ? 'model' : w.picked && PICK_MODES.has(w.mode) ? 'pick' : 'mode'; // the "+": model, then the load
     default: return null;
   }
 }
