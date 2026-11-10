@@ -52,21 +52,35 @@
 //   anything else is false.
 //   containers: devices, models, projects, work, work.loaded, work.loading, host, a device's trust
 //   and the nested lists. An array that is not an array counts as empty; an entry that is not an
-//   object is dropped; a device, model or project needs a usable id — a non-empty string of at
-//   most 200 chars that is not a key of Object.prototype ('__proto__' and friends cannot be keyed
-//   safely everywhere the eye stores them, so they are dropped at the door) — and the first of a
-//   duplicated id wins. A null work is the empty work: loaded null, loading null, chatting 0,
-//   plan [], decisions [], llama false. A loaded or loading that is not an object is null; a
-//   loaded model that is not an object is the empty model (id '', name '', file '', size 0).
+//   object is dropped; a device, model or project needs an id — any non-empty string. An id is kept
+//   as it is when it is at most 200 chars, is not a key of Object.prototype ('__proto__', 'valueOf'
+//   … cannot be keyed safely everywhere the eye stores them) and does not start with '~'. Any other
+//   string id is not dropped: it is kept under a stand-in that depends on the id alone — '~' + the
+//   first 16 hex chars of its sha256 + '~' + its first 40 chars with every char outside
+//   [A-Za-z0-9._:-] replaced by '_' (at most 58 chars) — so a device cannot hide from the report by
+//   choosing such an id, and the same id always gets the same stand-in whatever else is in the look.
+//   A real id never starts with '~' (one that does is escaped too), so a stand-in never equals a
+//   real id and cannot take its place. A project's peer and a work.loaded row get the same stand-in
+//   as the device they name. An entry whose id is not a string or is empty is dropped; so is a
+//   second entry with the same id (the first wins, as before); dropped() counts both, so the eye
+//   can say how many were left out.
+//   A null work is the empty work: loaded null, loading null, chatting 0, plan [], decisions [],
+//   llama false. A loaded or loading that is not an object is null; a loaded model that is not an
+//   object is the empty model (id '', name '', file '', size 0).
 //   a device's trust.rejectsDay is a plain object; its keys are reason words from the snapshot, so
 //   the three names that change an object's shape ("__proto__", "constructor", "prototype") are
 //   skipped (they are never reason words).
-//   the engine's loaded.sees is not in the Snapshot type and no branch reads it: it is dropped.
+//   the engine's loaded.sees and a trust's upTo are not in the Snapshot type and no branch reads
+//   them: they are dropped.
+import { createHash } from 'node:crypto';
 import type { EyeDevice, EyeModel, EyeProject, EyeTrust, EyeWork, Snapshot } from '../types.js';
 
 export const TIME_MAX = 8.64e15;     // the largest ms a Date can hold (ECMAScript)
 export const ID_MAX = 200;           // an id longer than this is not one of ours
 export const NAME_MAX = 80;          // a name shown is cut to this
+const HASHED = 16;                   // a stand-in shows this many hex chars of the id's sha256
+const SHOWN = 40;                    // ... and this many chars of the id itself
+const SHOWN_SAFE = /[^A-Za-z0-9._:-]/g;   // the chars a stand-in keeps; every other becomes '_'
 
 const WORD = 80;                     // a short word: kind, via, lastOk, gpu, alg, store, self, state, mode
 const HOST_NAME = 253;               // a hostname may be this long (os.hostname, the engine's hostLabel)
@@ -140,12 +154,18 @@ const timeOr = (x: unknown, or: number | null): number | null => (isTime(x) ? x 
 const bool3 = (x: unknown): boolean | null => (x === true || x === false ? x : null);
 const bool2 = (x: unknown): boolean => x === true;
 
-/** an id that can be keyed anywhere the eye stores it: a prototype key would leak onto
- *  Object.prototype in the branch that still keeps a plain object */
-const keyId = (x: unknown): string | null => {
-  const id = idOf(x);
-  return id !== null && !(id in Object.prototype) ? id : null;
-};
+/** an id the eye can key anywhere, the same for the same id whatever else is in the look: a real
+ *  id — non-empty, at most ID_MAX chars, not a key of Object.prototype, not starting with '~' —
+ *  passes unchanged; any other string becomes '~' + the first 16 hex chars of sha256(id) + '~' +
+ *  its first 40 chars with every char outside [A-Za-z0-9._:-] replaced by '_'. A real id that
+ *  starts with '~' is escaped too, so a stand-in can never equal a real id. */
+export function safeId(id: string): string {
+  if (id.length > 0 && id.length <= ID_MAX && !id.startsWith('~') && !(id in {})) return id;
+  return `~${createHash('sha256').update(id).digest('hex').slice(0, HASHED)}~${id.slice(0, SHOWN).replace(SHOWN_SAFE, '_')}`;
+}
+
+/** an entry's id: safeId of a non-empty string; null when there is no id at all (the entry is left out) */
+const entryId = (x: unknown): string | null => (typeof x === 'string' && x.length > 0 ? safeId(x) : null);
 
 /** the names that would change a plain object's shape when used as a key */
 const shapeKey = (k: string): boolean => k === '__proto__' || k === 'constructor' || k === 'prototype';
@@ -191,10 +211,7 @@ function trustOf(raw: Record<string, unknown>): EyeTrust {
   };
 }
 
-function devOf(raw: unknown): EyeDevice | null {
-  if (!isObj(raw)) return null;
-  const id = keyId(raw.id);
-  if (id === null) return null;
+function devOf(raw: Record<string, unknown>, id: string): EyeDevice {
   return {
     id,
     name: nameOf(raw.name, id),
@@ -221,10 +238,11 @@ function devicesOf(raw: unknown): EyeDevice[] {
   const seen = new Set<string>();
   const out: EyeDevice[] = [];
   for (const d of list(raw)) {
-    const one = devOf(d);
-    if (!one || seen.has(one.id)) continue;   // the first of a duplicated id wins
-    seen.add(one.id);
-    out.push(one);
+    if (!isObj(d)) continue;
+    const id = entryId(d.id);
+    if (id === null || seen.has(id)) continue;   // no usable id, or the same id twice: the first wins
+    seen.add(id);
+    out.push(devOf(d, id));
   }
   return out;
 }
@@ -233,7 +251,7 @@ function loadedOf(raw: unknown): EyeWork['loaded'] {
   if (!isObj(raw)) return null;
   const model = isObj(raw.model)
     ? {
-        id: idOf(raw.model.id) ?? '',
+        id: entryId(raw.model.id) ?? '',
         name: word(raw.model.name, MODEL),
         file: word(raw.model.file, MODEL),
         size: capped(raw.model.size, 0, SIZE_MAX) ?? 0,
@@ -242,7 +260,7 @@ function loadedOf(raw: unknown): EyeWork['loaded'] {
   const devices: { id: string; name: string; local: boolean; busy: boolean; tps: number | null; done: number }[] = [];
   for (const d of list(raw.devices)) {
     if (!isObj(d)) continue;
-    const id = keyId(d.id);
+    const id = entryId(d.id);
     if (id === null) continue;
     devices.push({
       id,
@@ -263,7 +281,7 @@ function loadedOf(raw: unknown): EyeWork['loaded'] {
   if (raw.parts !== undefined) {
     loaded.parts = list(raw.parts).map((p) => {
       if (!isObj(p)) return null;
-      const id = keyId(p.id);
+      const id = entryId(p.id);
       if (id === null) return null;
       return { id, name: nameOf(p.name, id), local: bool2(p.local), mb: capped(p.mb, 0, MB_MAX) ?? 0, layers: capped(p.layers, 0, LAYERS_MAX) ?? 0 };
     }).filter((p): p is NonNullable<NonNullable<EyeWork['loaded']>['parts']>[number] => p !== null);
@@ -299,8 +317,8 @@ function modelsOf(raw: unknown): EyeModel[] {
   const out: EyeModel[] = [];
   for (const m of list(raw)) {
     if (!isObj(m)) continue;
-    const id = keyId(m.id);
-    if (id === null || seen.has(id)) continue;   // the first of a duplicated id wins
+    const id = entryId(m.id);
+    if (id === null || seen.has(id)) continue;   // no usable id, or the same id twice: the first wins
     seen.add(id);
     out.push({
       id,
@@ -322,8 +340,8 @@ function projectsOf(raw: unknown): EyeProject[] {
   const out: EyeProject[] = [];
   for (const p of list(raw)) {
     if (!isObj(p)) continue;
-    const id = keyId(p.id);
-    if (id === null || seen.has(id)) continue;   // the first of a duplicated id wins
+    const id = entryId(p.id);
+    if (id === null || seen.has(id)) continue;   // no usable id, or the same id twice: the first wins
     seen.add(id);
     const project: EyeProject = {
       id,
@@ -334,7 +352,7 @@ function projectsOf(raw: unknown): EyeProject[] {
       state: word(p.state, WORD),
       mode: word(p.mode, WORD),
       model: word(p.model, MODEL),
-      peers: list(p.peers).map((x) => idOf(x)).filter((x): x is string => x !== null),
+      peers: list(p.peers).map((x) => entryId(x)).filter((x): x is string => x !== null),
     };
     if (p.parts !== undefined) project.parts = capped(p.parts, 0, PARTS_MAX) ?? 0;
     if (p.done !== undefined) project.done = capped(p.done, 0, DONE_MAX) ?? 0;
@@ -357,6 +375,37 @@ function hostOf(raw: unknown): Snapshot['host'] {
       : null;
   }
   return host;
+}
+
+/** how many entries of a look clean() leaves out: not an object, no id at all (not a string, or
+ *  empty), or the same id again after its first entry. */
+export interface Dropped { devices: number; models: number; projects: number }
+
+/** the same counts clean() makes: what it still drops, so the eye can say it. a getter that throws
+ *  is no look (clean() returns null and the eye skips it), so there is nothing to count. */
+export function dropped(raw: unknown): Dropped {
+  const out: Dropped = { devices: 0, models: 0, projects: 0 };
+  try {
+    if (!isObj(raw)) return out;
+    out.devices = leftOut(raw.devices);
+    out.models = leftOut(raw.models);
+    out.projects = leftOut(raw.projects);
+  } catch {
+    // a getter that throws is no look: clean() returns null and the eye skips it
+  }
+  return out;
+}
+
+/** one list's left-out entries: no usable id, and every entry after the first with the same id */
+function leftOut(xs: unknown): number {
+  const seen = new Set<string>();
+  let n = 0;
+  for (const x of list(xs)) {
+    const id = isObj(x) ? entryId(x.id) : null;
+    if (id === null || seen.has(id)) n++;
+    else seen.add(id);
+  }
+  return n;
 }
 
 /** one raw value in, one clean Snapshot out. null when it is not an object or its `at` is not a

@@ -11,6 +11,7 @@ process.env.KULA_NODE_HOME = HOME;
 after(() => fs.rmSync(HOME, { recursive: true, force: true }));
 
 const { GodsEye, BRANCH_IDS, dark } = await import('../src/godseye/index.ts');
+const { safeId } = await import('../src/godseye/branches/guard.ts');
 const { Engine } = await import('../src/ui/engine.ts');
 const { kulaSnapshot } = await import('../src/ui/godseye-feed.ts');
 const { writePeers } = await import('../src/peers.ts');
@@ -123,6 +124,8 @@ const hostileLooks: [string, () => any, boolean][] = [
   ['devices [null]', () => ({ ...snap([dev()]), devices: [null] }), false],
   ['device id __proto__', () => ({ ...snap([dev()]), devices: [dev({ id: '__proto__' })] }), false],
   ['device id constructor', () => ({ ...snap([dev()]), devices: [dev({ id: 'constructor' })] }), false],
+  ['device id valueOf', () => ({ ...snap([dev()]), devices: [dev({ id: 'valueOf' })] }), false],
+  ['device id toString', () => ({ ...snap([dev()]), devices: [dev({ id: 'toString' })] }), false],
   ['device id 300 chars', () => ({ ...snap([dev()]), devices: [dev({ id: 'x'.repeat(300) })] }), false],
   ['device id 42', () => ({ ...snap([dev()]), devices: [dev({ id: 42 })] }), false],
   ['device name null', () => ({ ...snap([dev()]), devices: [dev({ name: null })] }), false],
@@ -139,6 +142,7 @@ const hostileLooks: [string, () => any, boolean][] = [
 ];
 
 test('one hostile look after another: no throw, no broken branch, no NaN, undefined, [object Object] or exponent, nothing on Object.prototype', () => {
+  const protoNames = Object.getOwnPropertyNames(Object.prototype).sort();
   let i = 0;
   for (const [row, make, skip] of hostileLooks) {
     let s: any = make();
@@ -149,12 +153,15 @@ test('one hostile look after another: no throw, no broken branch, no NaN, undefi
     assert.deepEqual(broken, [], `${row}: a branch broke on the hostile look`);
     assert.doesNotMatch(JSON.stringify(v), /NaN|undefined|\[object Object\]|e\+\d/, `${row}: garbage reached the view`);
     assert.equal(({} as any).name, undefined, `${row}: Object.prototype was polluted`);
+    assert.deepEqual(Object.getOwnPropertyNames(Object.prototype).sort(), protoNames, `${row}: Object.prototype changed`);
+    assert.equal(({} as any).valueOf, Object.prototype.valueOf, `${row}: valueOf was replaced`);
     if (skip) assert.equal(v.at, 0, `${row}: a skipped look was taken in`);
     for (const again of [1, 2]) {                        // two normal looks after the hostile one
       s = snap([dev()]);
       assert.doesNotThrow(() => eye.tick(), `${row}: a normal look threw`);
       assert.ok(eye.view().branches.every((b) => b.error === undefined), `${row}: a branch broke on normal look ${again}`);
       assert.equal(({} as any).name, undefined, row);
+      assert.deepEqual(Object.getOwnPropertyNames(Object.prototype).sort(), protoNames, row);
     }
   }
 });
@@ -422,4 +429,134 @@ test('a refusal count past the cap is capped, never dropped: the trust alarm sta
   const ev = eye.view().events.find((e) => e.branch === 'trust');
   assert.ok(ev);
   assert.equal(ev!.text, 'pixel: 10000 wrong codes today: someone may be guessing. all were refused');
+});
+
+test('a device whose id is a prototype key cannot hide: the trust view is red and names it', () => {
+  const trust = (at: number) => ({
+    at, error: null, id: null, alg: 'ed25519', pub: null, store: 'keystore', cert: null, certPinned: false,
+    v1: false, paired: 1, self: 'ok', count: 0, head: null, lines: [], restartedAt: null,
+    rejectsDay: { 'wrong pin': 6 }, rejectsLast: [],   // six wrong codes: the real trust branch reads this as bad
+  });
+  for (const id of ['valueOf', 'constructor', '__proto__', 'toString']) {
+    const eye = new GodsEye({ snapshot: () => snap([dev({ id, name: id, trust: trust(900) })], 1000), dir: path.join(HOME, `eye-protokey-${id}`) });
+    eye.tick();
+    const tv: any = eye.view().branches.find((b) => b.id === 'trust')!;
+    assert.equal(tv.report.verdict, 'bad', id);
+    assert.equal(tv.stat, '1 thing to look at', id);
+    assert.deepEqual(tv.lines, [`${id} · 6 wrong codes today: someone may be guessing. all were refused`], id);
+    assert.equal(({} as any).valueOf, Object.prototype.valueOf, id);
+  }
+});
+
+test('a device with no usable id is left out and the eye says so once per run of such looks', () => {
+  const lines: string[] = [];
+  const line = "god's eye: 1 device(s) in the look had no usable id and were left out";
+  let s: any = snap([dev({ id: 42 })]);
+  const eye = new GodsEye({ snapshot: () => s, dir: path.join(HOME, 'eye-no-id'), log: (x) => lines.push(x) });
+  const said = () => lines.filter((l) => l === line).length;
+  eye.tick();
+  eye.tick();
+  assert.equal(said(), 1);                               // one run of such looks: one line
+  assert.equal(eye.view().branches.find((b) => b.id === 'trust')!.stat, 'nothing to check');
+  s = snap([dev()]);
+  eye.tick();                                            // a good look ends the run
+  assert.equal(said(), 1);
+  s = snap([dev({ id: 42 }), dev({ id: '' })]);
+  eye.tick();
+  assert.equal(lines.filter((l) => l === "god's eye: 2 device(s) in the look had no usable id and were left out").length, 1);
+  assert.equal(said(), 1);                               // the second run says its own number once
+});
+
+/** a device's trust answer: tls, nothing refused, its ledger reporting `count` lines */
+const trustAt = (at: number, count: number) => ({
+  at, error: null, id: null, alg: 'ed25519', pub: null, store: 'keystore', cert: null, certPinned: false,
+  v1: false, paired: 1, self: 'ok', count, head: null, lines: [], restartedAt: null, rejectsDay: {}, rejectsLast: [],
+});
+const ledgerOf = (d: any) => d.checks.find((c: any) => c.k === 'ledger');
+/** the trust report's devices by their cleaned id */
+const trustById = (eye: any): Map<string, any> => {
+  const r: any = eye.view().branches.find((b: any) => b.id === 'trust').report;
+  return new Map(r.devices.map((d: any) => [d.id, d] as [string, any]));
+};
+
+/** one device's ledger shrinks from 5 lines to 3, beside a healthy one, in both list orders and with
+ *  either one leaving: the shortened-ledger fault must stay with its own id and never move. */
+function faultStaysWith(faultyId: string, healthyId: string, dir: string): void {
+  const faulty = (at: number, count: number) => dev({ id: faultyId, name: 'faulty', trust: trustAt(at, count) });
+  const healthy = (at: number) => dev({ id: healthyId, name: 'real', trust: trustAt(at, 5) });
+  const FAULT = safeId(faultyId);
+  const REAL = safeId(healthyId);
+  for (const order of [0, 1]) {
+    let s: any = null;
+    const eye = new GodsEye({ snapshot: () => s, dir: `${dir}-${order}` });
+    const both = (f: any, h: any) => (order === 0 ? [f, h] : [h, f]);
+    s = snap(both(faulty(900, 5), healthy(900)), 1000); eye.tick();
+    s = snap(both(faulty(1900, 3), healthy(1900)), 2000); eye.tick();    // the fault is raised
+    let byId = trustById(eye);
+    assert.ok(byId.get(FAULT) && byId.get(REAL), `${dir} ${order}: both devices are in the report`);
+    assert.equal(byId.get(FAULT)!.verdict, 'bad');
+    assert.equal(byId.get(FAULT)!.accept, true);
+    assert.equal(ledgerOf(byId.get(FAULT)!).text, 'its ledger got shorter: 5 lines before, 3 now (lines were removed)');
+    assert.notEqual(byId.get(REAL)!.verdict, 'bad');
+    assert.equal(byId.get(REAL)!.accept, false);
+    assert.doesNotMatch(JSON.stringify(byId.get(REAL)!), /got shorter/);
+    s = snap([healthy(2900)], 3000); eye.tick();                         // the faulty one leaves
+    byId = trustById(eye);
+    assert.equal(byId.size, 1);
+    assert.notEqual(byId.get(REAL)!.verdict, 'bad', `${dir} ${order}: healthy after the faulty leaves`);
+    assert.equal(byId.get(REAL)!.accept, false);
+    assert.doesNotMatch(JSON.stringify(byId.get(REAL)!), /got shorter/);
+    s = snap(both(faulty(3900, 3), healthy(3900)), 4000); eye.tick();    // it comes back
+    byId = trustById(eye);
+    assert.equal(byId.get(FAULT)!.verdict, 'bad');
+    assert.equal(byId.get(FAULT)!.accept, true);
+    assert.notEqual(byId.get(REAL)!.verdict, 'bad');
+    s = snap([faulty(4900, 3)], 5000); eye.tick();                       // the healthy one leaves
+    byId = trustById(eye);
+    assert.equal(byId.size, 1);
+    assert.equal(byId.get(FAULT)!.verdict, 'bad');
+    assert.equal(byId.get(FAULT)!.accept, true);
+    assert.equal(ledgerOf(byId.get(FAULT)!).text, 'its ledger got shorter: 5 lines before, 3 now (lines were removed)');
+  }
+}
+
+test('a shortened-ledger fault stays with "valueOf" beside "~valueOf", in either order and after one leaves', () => {
+  faultStaysWith('valueOf', '~valueOf', path.join(HOME, 'eye-fault-short'));
+});
+
+test('the same for two 300-char ids that differ only at the end', () => {
+  const a = 'z'.repeat(290) + 'a' + 'q'.repeat(9);
+  const b = 'z'.repeat(290) + 'b' + 'q'.repeat(9);
+  faultStaysWith(a, b, path.join(HOME, 'eye-fault-long'));
+});
+
+test('ids "valueOf", "~valueOf" and "~valueOf~2" are three distinct devices through the eye', () => {
+  const ids = ['valueOf', '~valueOf', '~valueOf~2'];
+  const s: any = snap(ids.map((id) => dev({ id, name: id, trust: trustAt(900, 5) })), 1000);
+  const eye = new GodsEye({ snapshot: () => s, dir: path.join(HOME, 'eye-three-ids') });
+  eye.tick();
+  const tv: any = eye.view().branches.find((b) => b.id === 'trust')!;
+  assert.equal(tv.report.devices.length, 3);
+  assert.deepEqual(tv.report.devices.map((d: any) => d.id), ids.map(safeId));
+  assert.equal(new Set(tv.report.devices.map((d: any) => d.id)).size, 3);
+});
+
+test('a look that leaves out models or projects says so once per run, like devices do', () => {
+  const lines: string[] = [];
+  const model = "god's eye: 1 model(s) in the look had no usable id and were left out";
+  const project = "god's eye: 1 project(s) in the look had no usable id and were left out";
+  const said = (l: string) => lines.filter((x) => x === l).length;
+  let s: any = { ...snap([dev()]), models: [{ id: 42 }, { id: 'm1' }], projects: [{ id: '' }] };
+  const eye = new GodsEye({ snapshot: () => s, dir: path.join(HOME, 'eye-dropped-others'), log: (x) => lines.push(x) });
+  eye.tick();
+  eye.tick();
+  assert.equal(said(model), 1);                          // one run of such looks: one line each
+  assert.equal(said(project), 1);
+  s = snap([dev()]);
+  eye.tick();                                            // a good look ends both runs
+  assert.equal(said(model), 1);
+  s = { ...snap([dev()]), models: [{ id: 42 }, { id: 'm1' }] };
+  eye.tick();
+  assert.equal(said(model), 2);                          // a new run says it once again
+  assert.equal(said(project), 1);                        // projects were not left out this time
 });
