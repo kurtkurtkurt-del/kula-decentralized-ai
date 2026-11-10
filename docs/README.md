@@ -24,7 +24,7 @@ progress log and a few pages written on Turkish branches are in Turkish (marked 
 | [PLANNER.md](PLANNER.md) *tr* | the split planner and the apart dispatcher, the simulator and its calibration |
 | [BACKEND.md](BACKEND.md) *tr* | the night on the server: schema, row-level rules, privacy, edge functions, the ledger plan |
 | [SERVERS.md](SERVERS.md) | which build talks to which server, the demo world, setting up the live project |
-| [SECURITY.md](SECURITY.md) *tr* | the security review: threat model, findings and fixes, remaining risks |
+| [SECURITY.md](SECURITY.md) | the security review: threat model, findings and fixes, remaining risks |
 | [BEYIN.md](BEYIN.md) | kula and beyin: free joining, the brain as a service, what stays open protocol |
 
 ## background
