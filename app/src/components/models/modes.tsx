@@ -3,7 +3,7 @@ import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { usePassport, useLinked } from '@/data/passport';
 import type { Passport } from '@/passport/contract';
 import { useLang } from '@/i18n';
-import { fitOn, fitTogether, haveMb } from '@/llm/fit';
+import { activeShare, fitOn, fitTogether, haveMb } from '@/llm/fit';
 import { estimateAlone, modelProfile, NETWORKS, planShares, withMeasured, workerFromPeer, type Estimate, type SimDevice, type SplitPlan } from '@/llm/sim';
 import { modelKey } from '@/llm/cluster';
 import { measuredFor } from '@/bench/store';
@@ -23,8 +23,8 @@ export function useModes(model: LocalModel | null, peers: Peer[], ctx: number) {
   const farPeers = peers.filter((p) => !!p.relay).length;
   const pool: Passport[] = useMemo(() => [...(passport ? [passport] : []), ...linked.map((l) => l.data)], [passport, linked]);
   const measuredHere = model ? measuredFor('self', modelKey(model)) : null;
-  const fit = model ? fitOn(passport, { size: model.size, kv_mb_per_1k: model.kv_mb_per_1k, ctx }, measuredHere) : null;
-  const together = model && pool.length > 1 ? fitTogether(pool, { size: model.size, kv_mb_per_1k: model.kv_mb_per_1k, ctx }) : null;
+  const fit = model ? fitOn(passport, { size: model.size, kv_mb_per_1k: model.kv_mb_per_1k, ctx, active: activeShare(model) }, measuredHere) : null;
+  const together = model && pool.length > 1 ? fitTogether(pool, { size: model.size, kv_mb_per_1k: model.kv_mb_per_1k, ctx, active: activeShare(model) }) : null;
   // the same model the planner runs at load time (sim/model.ts), fed from the passport
   // (this phone) and the peers' qr numbers, on 5 ghz wi-fi: what each option would do
   const est = useMemo(() => {

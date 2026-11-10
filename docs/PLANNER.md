@@ -31,6 +31,15 @@ Sonuç: eşit hızlı cihazlar arasında paylaşmak zaman kazandırmaz (toplam a
 
 **Yükleme süresi**: `5 s + işçi_baytları / ağ + yerel_baytlar / 300 MB/s`.
 
+**Uzmanlar karışımı (MoE, 10.11.2026)**: `SimModel.activeShare` = bir token'ın okuduğu ağırlık payı
+(katalogda `active_b / params_b`, ör. Qwen3 30B-A3B için 3.3 / 30.5; kula-node'da gguf'un tensör
+tablosundan: `*_exps` tensörlerinin `expert_used_count / expert_count`'u, gerisi tam). Hız bu payla
+hesaplanır (`readMb = dosya × 1.05 × pay`; bölünmüşte blokların payı `blockShareOf`), bellek ve
+yükleme her zaman tüm dosyayla: her uzman bellekte olmalı. Bölünmüş modda token başına ağ bedeli
+(aktivasyon + 3 gidiş-dönüş) MoE'de küçülmez; hesap küçüldüğü için hop'lar token'ın daha büyük kısmı
+olur, yani MoE'yi bölmek aynı boyuttaki yoğun modeli bölmekten daha az kazandırır. `fit.ts`
+(`activeShare`, `FitInput.active`) aynı kuralı izler.
+
 **Ayrı mod**: cihaz başına `tok/s`, istem işleme `8 × tok/s`; istek süresi
 `prompt/promptTps + maxTokens/tps`; dağıtıcı her isteği *beklenen bitiş* en erken olan cihaza verir
 (`busyUntil + istek süresi`). Kısa istek meşgul hızlı cihazı beklemek yerine boş yavaş cihaza gider;

@@ -25,6 +25,7 @@ export type LocalModel = {
   arch?: string;
   meta_read?: boolean;
   params_b: number;
+  active_b?: number;     // mixture of experts: the parameters one token uses (catalog, or "A3B" in the name)
   quant: string;
   kv_mb_per_1k: number;
   ctx_max: number;
@@ -167,7 +168,7 @@ export async function readMeta(id: string): Promise<LocalModel | null> {
 }
 
 export function describe(m: CatalogModel): ModelDraft {
-  return { id: m.id, name: m.name, file: m.file, size: m.size, sha256: m.sha256, params_b: m.params_b, quant: m.quant, kv_mb_per_1k: m.kv_mb_per_1k, ctx_max: m.ctx_max, license: m.license, source: 'catalog', url: modelUrl(m) };
+  return { id: m.id, name: m.name, file: m.file, size: m.size, sha256: m.sha256, params_b: m.params_b, ...(m.active_b ? { active_b: m.active_b } : {}), quant: m.quant, kv_mb_per_1k: m.kv_mb_per_1k, ctx_max: m.ctx_max, license: m.license, source: 'catalog', url: modelUrl(m) };
 }
 
 // ---- hugging face search history (last 5) -------------------------------------------------

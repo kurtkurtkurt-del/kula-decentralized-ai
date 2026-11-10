@@ -21,6 +21,8 @@ const CATALOG_TAGS: Record<string, TagId[]> = {
   'qwen3-4b-q4': ['reason', 'code', 'write'],
   'phi4-mini-q4': ['reason', 'code'],
   'qwen2.5-7b-q4': ['quality', 'write', 'code', 'translate'],
+  'qwen3-30b-a3b': ['quality', 'reason', 'code', 'translate'],
+  'gemma4-26b-a4b': ['quality', 'write', 'translate', 'code'],
 };
 
 export function tagsOf(m: { id: string; name: string; params_b: number }): TagId[] {

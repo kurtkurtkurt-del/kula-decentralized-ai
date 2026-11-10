@@ -1,4 +1,5 @@
 import { CATALOG, type CatalogModel } from '@/llm/catalog';
+import { activeShare } from '@/llm/fit';
 import type { Passport } from '@/passport/contract';
 import { DEFAULT_BW, DEFAULT_EFF, LOCAL_SHARE, MB, WORKER_SHARE, type SimDevice, type SimModel, type SimNet } from '@/llm/sim/model';
 
@@ -49,19 +50,27 @@ const ARCH: Record<string, { layers: number; hidden: number; vocab: number }> = 
   'qwen3-4b-q4': { layers: 36, hidden: 2560, vocab: 151936 },
   'phi4-mini-q4': { layers: 32, hidden: 3072, vocab: 200064 },
   'qwen2.5-7b-q4': { layers: 28, hidden: 3584, vocab: 152064 },
+  // mixtures of experts (10.11.2026, read off the headers the same way)
+  'qwen3-30b-a3b': { layers: 48, hidden: 2048, vocab: 151936 },
+  'gemma4-26b-a4b': { layers: 30, hidden: 2816, vocab: 262144 },
 };
 
 const bytesPerParam = (quant: string) => (/q8/i.test(quant) ? 1 : /q3/i.test(quant) ? 0.45 : /f16|bf16/i.test(quant) ? 2 : 0.55);
 
-/** A model's shape for the simulator; an unknown (hugging face) model gets a guess from its size. */
-export function modelProfile(m: Pick<CatalogModel, 'id' | 'size' | 'quant' | 'kv_mb_per_1k'> & { params_b?: number }): SimModel {
+/**
+ * A model's shape for the simulator; an unknown (hugging face) model gets a guess from its size.
+ * A mixture of experts carries its active share (fit.ts activeShare): the planner's speed reads
+ * the active weights, its memory the whole file.
+ */
+export function modelProfile(m: Pick<CatalogModel, 'id' | 'size' | 'quant' | 'kv_mb_per_1k'> & { params_b?: number; active_b?: number; file?: string }): SimModel {
   const a = ARCH[m.id];
   const bpp = bytesPerParam(m.quant);
   const params = m.params_b ?? m.size / bpp / 1e9;
   // roughly: hidden grows with the cube root of the parameters, 28 layers, a 150k vocabulary
   const guess = { layers: 28, hidden: Math.round((1024 * Math.cbrt(params / 0.6)) / 128) * 128, vocab: 151936 };
   const { layers, hidden, vocab } = a ?? guess;
-  return { id: m.id, fileMb: m.size / MB, layers, hidden, vocab, bytesPerParam: bpp, kvMbPer1k: m.kv_mb_per_1k };
+  const active = activeShare(m);
+  return { id: m.id, fileMb: m.size / MB, layers, hidden, vocab, bytesPerParam: bpp, kvMbPer1k: m.kv_mb_per_1k, ...(active < 1 ? { activeShare: active } : {}) };
 }
 export const MODELS: SimModel[] = CATALOG.map(modelProfile);
 export const modelById = (id: string) => MODELS.find((m) => m.id === id) ?? null;

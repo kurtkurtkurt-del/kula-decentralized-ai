@@ -52,7 +52,7 @@ export const LINEUP: MakerSpec[] = [
         { catalog: 'qwen3-1.7b-q8' },
         { catalog: 'qwen3-4b-q4' },
         { id: 'qwen3-8b', name: 'Qwen3 8B', repo: 'Qwen/Qwen3-8B-GGUF', file: 'Qwen3-8B-Q4_K_M.gguf', quant: q4, params_b: 8, blurb: 'thinks before it answers; a computer or two phones' },
-        { id: 'qwen3-30b-a3b', name: 'Qwen3 30B-A3B', repo: 'Qwen/Qwen3-30B-A3B-GGUF', file: 'Qwen3-30B-A3B-Q4_K_M.gguf', quant: q4, params_b: 30, active_b: 3, blurb: 'mixture of experts: 30B in memory, 3B per token' },
+        { catalog: 'qwen3-30b-a3b' },
       ] },
       { id: 'qwen-coder', name: 'Qwen Coder', blurb: 'for code', models: [
         { id: 'qwen3-coder-30b-a3b', name: 'Qwen3 Coder 30B-A3B', repo: 'unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF', file: 'Qwen3-Coder-30B-A3B-Instruct-Q4_K_M.gguf', quant: q4, params_b: 30, active_b: 3, blurb: 'code, quick for its size' },
@@ -73,7 +73,7 @@ export const LINEUP: MakerSpec[] = [
         { id: 'gemma4-e2b', name: 'Gemma 4 E2B', repo: 'unsloth/gemma-4-E2B-it-GGUF', file: 'gemma-4-E2B-it-Q4_K_M.gguf', quant: q4, params_b: 2, blurb: 'made for phones' },
         { id: 'gemma4-e4b', name: 'Gemma 4 E4B', repo: 'unsloth/gemma-4-E4B-it-GGUF', file: 'gemma-4-E4B-it-Q4_K_M.gguf', quant: q4, params_b: 4, blurb: 'made for phones, a step up' },
         { id: 'gemma4-12b', name: 'Gemma 4 12B', repo: 'unsloth/gemma-4-12b-it-GGUF', file: 'gemma-4-12b-it-Q4_K_M.gguf', quant: q4, params_b: 12, blurb: 'a computer, or split over phones' },
-        { id: 'gemma4-26b-a4b', name: 'Gemma 4 26B-A4B', repo: 'unsloth/gemma-4-26B-A4B-it-GGUF', file: 'gemma-4-26B-A4B-it-UD-Q4_K_M.gguf', quant: 'UD-Q4_K_M', params_b: 26, active_b: 4, blurb: 'mixture of experts: 4B per token' },
+        { catalog: 'gemma4-26b-a4b' },
         { id: 'gemma4-31b', name: 'Gemma 4 31B', repo: 'unsloth/gemma-4-31B-it-GGUF', file: 'gemma-4-31B-it-Q4_K_M.gguf', quant: q4, params_b: 31, blurb: 'the biggest gemma' },
       ] },
       { id: 'gemma3', name: 'Gemma 3', blurb: 'proven on phones', models: [
@@ -199,7 +199,7 @@ export const LINEUP_EXTRA: UiModel[] = fileSpecs().flatMap((s) => {
   const f = LINEUP_FILES[s.id];
   if (!f || whyNot(s, f)) return [];
   return [{
-    id: s.id, name: s.name, family: f.arch, params_b: s.params_b, quant: s.quant, repo: s.repo, file: s.file!,
+    id: s.id, name: s.name, family: f.arch, params_b: s.params_b, ...(s.active_b ? { active_b: s.active_b } : {}), quant: s.quant, repo: s.repo, file: s.file!,
     size: f.size, sha256: f.sha256, license: f.license, ctx_max: f.ctx_max, kv_mb_per_1k: f.kv_mb_per_1k, blurb: s.blurb, good: '',
   }];
 });
@@ -221,7 +221,7 @@ export function lineupView(hereFreeMb: number, hereTotalMb: number): LineupView 
       models: s.models.flatMap((m): LineupModel[] => {
         if (!isFile(m)) {
           const c = UI_CATALOG.find((x) => x.id === m.catalog);
-          return c ? [{ id: c.id, name: c.name, quant: c.quant, size: c.size, params_b: c.params_b, active_b: null, blurb: c.blurb, why: null }] : [];
+          return c ? [{ id: c.id, name: c.name, quant: c.quant, size: c.size, params_b: c.params_b, active_b: c.active_b ?? null, blurb: c.blurb, why: null }] : [];
         }
         const f = LINEUP_FILES[m.id];
         return [{ id: m.id, name: m.name, quant: m.quant, size: f?.size ?? null, params_b: m.params_b || null, active_b: m.active_b ?? null, blurb: m.blurb, why: whyNot(m, f) }];

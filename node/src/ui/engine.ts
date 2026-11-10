@@ -150,6 +150,7 @@ export interface ModelRow {
   size: number;
   quant: string | null;
   params_b: number | null;
+  active_b: number | null;    // a mixture of experts: the parameters one token uses
   blurb: string;
   catalog: boolean;           // phones can fetch it (public url + sha256)
   here: boolean;              // the file is on this computer
@@ -1133,7 +1134,7 @@ export class Engine {
 
   models(): ModelRow[] {
     const rows: ModelRow[] = this.catalog.map((m) => ({
-      id: m.id, name: m.name, file: m.file, size: m.size, quant: m.quant, params_b: m.params_b, blurb: m.blurb,
+      id: m.id, name: m.name, file: m.file, size: m.size, quant: m.quant, params_b: m.params_b, active_b: m.active_b ?? null, blurb: m.blurb,
       catalog: true, here: !!this.findLocal(m.file), needMb: needMb(m.size, m.kv_mb_per_1k, 4096),
     }));
     const seen = new Set(this.catalog.map((m) => m.file));
@@ -1146,7 +1147,7 @@ export class Engine {
         let size = 0;
         try { size = fs.statSync(path.join(d, n)).size; } catch { continue; }
         const quant = /(q\d_[a-z0-9_]+|q\d_\d|f16|bf16)/i.exec(n)?.[1]?.toUpperCase() ?? null;
-        rows.push({ id: `local:${n}`, name: n.replace(/\.gguf$/, ''), file: n, size, quant, params_b: null, blurb: 'a file on this computer', catalog: false, here: true, needMb: needMb(size, 64, 4096) });
+        rows.push({ id: `local:${n}`, name: n.replace(/\.gguf$/, ''), file: n, size, quant, params_b: null, active_b: null, blurb: 'a file on this computer', catalog: false, here: true, needMb: needMb(size, 64, 4096) });
       }
     }
     return rows;
