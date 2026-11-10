@@ -61,7 +61,7 @@ class LedgerTest {
     var t = 1_700_000_000_000L
     val l = Ledger(f, key, maxBytes = 600, now = { t++ })
     for (i in 0 until 12) l.append("health", null, mapOf("throttled" to false, "batteryC" to 30, "batteryPct" to 80))
-    val rotated = d.listFiles()!!.filter { it.name != "ledger.jsonl" }.sortedBy { it.name }
+    val rotated = d.listFiles()!!.filter { it.name != "ledger.jsonl" && it.name.endsWith(".jsonl") }.sortedBy { it.name }
     assertTrue("expected rotated files, got ${d.list()!!.toList()}", rotated.isNotEmpty())
     // every file verifies on its own given its predecessor's last hash
     var prev = Ledger.GENESIS
