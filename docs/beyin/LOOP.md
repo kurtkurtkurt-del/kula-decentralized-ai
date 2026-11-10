@@ -79,7 +79,8 @@ Her dal **ayrı bir projedir**:
    `cd app/android && ./gradlew :kula-llama:testReleaseUnitTest :kula-llama:compileReleaseKotlin`.
    Kapsam taşması, yasak yola dokunma, sahte test, sessizce atlanan hata ara. Yanlışsa aynı işçiye somut
    düzeltme gönder; üç turda düzelmezse o işi bırak, nedenini proje dosyasına ve STATE.md'ye yaz.
-3. **Birleştir.** Temiz ve sınanmış dal işini dalın kendi worktree'sinde commit'le (mesaj sonu:
+   Testler geçince **Fable incelemesi** (aşağıda "kalite: Fable denetler"): onay gelmeden birleştirme yok.
+3. **Birleştir.** Fable'ın onayladığı, temiz ve sınanmış dal işini dalın kendi worktree'sinde commit'le (mesaj sonu:
    `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`), sonra `kula-main`'e `--no-ff` ile birleştir,
    birleşik hâlde testleri yeniden çalıştır. Her 3 birleştirmede bir `cd backend && npm run gate`
    (temiz ağaçta). Gate kırılırsa önce onu düzelt, yeni iş dağıtma.
@@ -102,6 +103,38 @@ Her dal **ayrı bir projedir**:
 8. **Uyku.** İşçiler çalışıyorsa bildirim seni uyandırır; döngü için yedek uyanışı **en çok 30 dakika**
    sonraya kur (`ScheduleWakeup`), ki özet aksamasın. Bekleyen iş yoksa hemen sıradakine geç.
 
+## kalite: Fable denetler
+
+Kod kalitesini **Fable** (Claude Fable 5.2, en güçlü model) aktif olarak denetler ve gerektiğinde ayar çeker.
+DeepSeek yazar, Fable inceler, sen (orkestra) ikisinin arasında karar verirsin.
+
+**Her birleştirmeden önce (zorunlu):** testler geçtikten sonra bir alt ajan başlat: `Agent` aracı,
+`model: "fable"`, yalnız okur. Ona dalın adını, `git diff kula-main...beyin/<id>` komutunu, görevin
+amacını ve aşağıdaki listeyi ver; senin kanaatini verme (bağımsız okusun). Fable şuna bakar:
+- doğruluk: mantık hatası, kenar durumu, yarış, hata yutma, yanlış birim, taşma, bozuk veriyle ne olur;
+- testler gerçek mi: davranışı mı sınıyor yoksa kendini mi doğruluyor; eksik kenar durumları;
+- sadelik: gereksiz soyutlama, tekrar, ölü kod, var olan yardımcıyı yeniden yazmak;
+- sınırlar: god's eye'ın kula'dan import etmemesi, "izler, dokunmaz" kuralı, gizli bilgi sızıntısı,
+  vendor/llama.cpp, kapsam taşması;
+- dil ve üslup: kod tamamen İngilizce, repo üslubu, açıklayıcı adlar, formüllerin yorumda doğru yazılması;
+- güvenlik: girdi doğrulama, kaçış (escape), zamanlama saldırısı, anahtar ve iz bilgisi.
+Fable'ın cevabı: **onay** ya da **ret ve somut düzeltme listesi** (dosya:satır, ne yanlış, ne olmalı).
+- Ret gelirse listeyi aynı DeepSeek işçisine `--resume` ile gönder, düzeltmeyi yine Fable'a okut.
+- Fable ile DeepSeek üç turda anlaşamazsa o işi birleştirme; proje dosyasına ve STATE.md'ye yaz,
+  karar özetine "Fable'ın itirazı" olarak koy.
+- Fable'ın bulgusuna katılmıyorsan nedenini yaz ve ikinci bir Fable incelemesi iste; tek başına geçersiz kılma.
+
+**Ayar çekme (Fable'ın yetkisi):**
+- Her 5 birleştirmede bir Fable'a **genel inceleme** yaptır: o dalların birleşik kodu (`node/src/godseye/`,
+  telefonun brain bölümleri), tutarlılık, birbirini tekrar eden mantık, dalların arayüzleri, test kapsamı.
+  Bulguları önem sırasıyla iş olarak ilgili dal projelerine ekle; ciddi olanlar yeni iş dağıtmadan önce düzelir.
+- Fable kalite kurallarını sıkılaştırabilir: `~/.claude/beyin-loop/QUALITY.md` dosyasını Fable'ın önerisiyle
+  sen tutarsın (yasaklı kalıplar, zorunlu test türleri, sınır değerler). Her DeepSeek görevine bu dosyanın
+  özünü ekle. Kural gevşetmek kullanıcıya sorulur; sıkılaştırmak sorulmaz.
+- Bir DeepSeek işçisi aynı tür hatayı tekrar ediyorsa Fable o dal için görev yazma biçimini düzeltir
+  (daha küçük görev, daha kesin kabul ölçütü, önce test).
+- Fable'ın başlıca bulguları ve ayar çekmeleri 30 dakikalık karar özetinde ayrı başlıkla yer alır.
+
 ## karar özeti: 30 dakikada bir kullanıcıya
 
 Kullanıcı aldığın ana kararları 30 dakikada bir görmek istiyor. Her özet:
@@ -111,6 +144,7 @@ Kullanıcı aldığın ana kararları 30 dakikada bir görmek istiyor. Her özet
   seçilmeyen ana seçenek, dayandığı kaynak (başlık + adres). Yalnız gerçek kararlar: yöntem seçimi, mimari,
   güvenlik ayarı, bir eşik ya da formül, bir şeyi yapmama kararı. Rutin ilerleme buraya girmez.
 - **Senin kararını bekleyenler:** haritada `durum: soru` bıraktığın her şey, bir satırda, seçenekleriyle.
+- **Fable'ın denetimi:** kaç inceleme, kaç ret, ana bulgular ve sıkılaştırılan kurallar (kısa).
 - **Değiştirmek istersen:** haritadaki ilgili düğümün adı (kullanıcı oraya `senin_kararin` yazar ya da not
   bırakır; bir sonraki turda sen okuyup uyarsın).
 - Yeni karar yoksa tek satır: "bu yarım saatte yeni karar yok; şunlar sürüyor: …".
@@ -170,7 +204,7 @@ Her dalda sırayla:
 
 ## değişmez kurallar
 
-- **İzinli:** okumak, worktree ve `beyin/*` dalları açmak, DeepSeek işçisi çalıştırmak, testler, gate,
+- **İzinli:** okumak, worktree ve `beyin/*` dalları açmak, DeepSeek işçisi ve Fable inceleme alt ajanı çalıştırmak, testler, gate,
   yerel commit ve `kula-main`'e yerel birleştirme, beyin haritası ve destede yazmak (yukarıdaki sınırlarla),
   `~/.claude/beyin-loop/` dosyaları, kullanıcıya karar özeti ve bildirim göndermek.
 - **Yasak:** `git push`, release yayınlamak, siteyi değiştirmek, apk derlemek, bir şey silmek (dal, dosya,
