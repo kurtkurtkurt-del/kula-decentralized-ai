@@ -1,0 +1,125 @@
+/* kula's download page, dark (8.11.2026: the user picked the dark look as the page's own).
+   Tokens from the chat page's dark theme (node/src/ui/static/app.css) with its deep green rail
+   and emerald for the one thing to press. Inter Tight is the chat page's own (fonts/LICENSE.txt). */
+@font-face { font-family: 'Inter Tight'; font-weight: 400; font-display: swap; src: url(fonts/inter-tight-400.woff2) format('woff2'); }
+@font-face { font-family: 'Inter Tight'; font-weight: 500; font-display: swap; src: url(fonts/inter-tight-500.woff2) format('woff2'); }
+@font-face { font-family: 'Inter Tight'; font-weight: 600; font-display: swap; src: url(fonts/inter-tight-600.woff2) format('woff2'); }
+
+:root {
+  --ground: #0a0a0a; --card: #151715; --sunk: #1b1d1b;
+  --line: rgba(255, 255, 255, 0.09); --line2: rgba(255, 255, 255, 0.16);
+  --words: #ededed; --mute: #a3aea6; --meta: #6e7a72;
+  --accent: #5fbf8a; --accent-ink: #0a0a0a; --accent-soft: rgba(95, 191, 138, 0.15);
+  --rail: #12201a; --rail-words: #e6efe8; --rail-mute: #9db5a5; --rail-accent: #6fcf97;
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 12px 32px rgba(0, 0, 0, 0.5);
+  --shot-shadow: 0 0 0 1px rgba(255, 255, 255, 0.06), 0 30px 80px -20px rgba(95, 191, 138, 0.25);
+  --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --sans: "Inter Tight", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, Helvetica, Arial, sans-serif;
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body { margin: 0; background: var(--ground); color: var(--words); font: 16px/1.55 var(--sans); -webkit-font-smoothing: antialiased; }
+a { color: var(--accent); text-underline-offset: 3px; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 6px; }
+h1, h2 { font-weight: 500; letter-spacing: -0.02em; margin: 0; }
+b { font-weight: 600; }
+svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; flex: none; }
+
+.wrap { width: 100%; max-width: 1080px; margin: 0 auto; padding: 0 16px; }
+@media (min-width: 720px) { .wrap { padding: 0 32px; } }
+
+/* ---------- top */
+.top { display: flex; align-items: center; justify-content: space-between; height: 64px; }
+.brand { font-size: 24px; font-weight: 500; letter-spacing: -0.02em; color: var(--words); text-decoration: none; }
+.top-links { display: flex; gap: 20px; font-size: 15px; }
+.top-links a { color: var(--mute); text-decoration: none; }
+.top-links a:hover { color: var(--words); }
+
+/* ---------- hero */
+.hero { padding-top: 40px; text-align: center; }
+.kicker { display: inline-flex; align-items: center; gap: 8px; margin: 0 0 20px; padding: 5px 12px; border: 1px solid var(--line2); border-radius: 999px; font-size: 13.5px; color: var(--mute); background: var(--card); }
+.dot { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+h1 { font-size: clamp(40px, 9vw, 76px); line-height: 1.02; letter-spacing: -0.035em; }
+.lede { max-width: 34em; margin: 20px auto 0; font-size: clamp(17px, 2.4vw, 19px); color: var(--mute); }
+
+/* ---------- the four buttons, each with its arrow menu */
+.downloads { list-style: none; margin: 40px 0 0; padding: 0; display: grid; grid-template-columns: 1fr 1fr; gap: 14px 12px; text-align: left; }
+@media (min-width: 880px) { .downloads { grid-template-columns: repeat(4, 1fr); gap: 16px; } }
+@media (max-width: 519px) { .downloads { grid-template-columns: 1fr; } }
+.dl { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.dl-row { position: relative; display: flex; gap: 6px; }
+.dl-btn { position: relative; flex: 1; min-width: 0; display: grid; grid-template-columns: auto 1fr; grid-template-rows: auto auto; column-gap: 12px; align-items: center;
+  min-height: 72px; padding: 14px 16px; border: 1px solid var(--line2); border-radius: 14px; background: var(--card); color: var(--words);
+  text-decoration: none; box-shadow: var(--shadow); transition: border-color .15s, transform .15s, background .15s; }
+.dl-btn svg { grid-row: 1 / 3; color: var(--accent); }
+.dl-name { font-size: 18px; font-weight: 600; letter-spacing: -0.01em; line-height: 1.2; }
+.dl-file { font-size: 13px; color: var(--meta); line-height: 1.3; }
+a.dl-btn:hover { border-color: var(--accent); transform: translateY(-1px); }
+a.dl-btn:active { transform: translateY(0); }
+.dl-btn[aria-disabled="true"] { opacity: .55; box-shadow: none; background: var(--sunk); cursor: default; }
+.dl-btn[aria-disabled="true"] svg { color: var(--meta); }
+.dl-how { margin: 0 4px; font-size: 13px; line-height: 1.45; color: var(--mute); }
+.dl.is-later .dl-how { color: var(--meta); }
+.closed-test + .closed-test { margin-top: 10px; }
+.dl-how code, .closed-test code { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 12px; overflow-wrap: anywhere; }
+.closed-test { max-width: 620px; margin: 26px auto 0; padding: 12px 16px; border-radius: 14px; border: 1px solid var(--line, rgba(255, 255, 255, 0.12)); font-size: 13.5px; line-height: 1.5; color: var(--mute); text-align: left; }
+.closed-test b { color: inherit; font-weight: 600; }
+.dl-here { display: none; position: absolute; top: -9px; right: 12px; padding: 1px 8px; border-radius: 999px; font-size: 11.5px; font-weight: 500; background: var(--rail-accent); color: var(--rail); }
+/* the visitor's own platform: filled in the accent */
+.dl.is-here a.dl-btn { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+.dl.is-here a.dl-btn svg, .dl.is-here a.dl-btn .dl-file { color: var(--accent-ink); opacity: .85; }
+.dl.is-here a.dl-btn:hover { filter: brightness(1.06); }
+.dl.is-here .dl-here { display: block; }
+@media (max-width: 879px) { .dl.is-here:has(a.dl-btn) { grid-column: 1 / -1; order: -1; } }
+
+/* the arrow on each button's right, and its menu */
+.more { flex: none; display: flex; }
+.more summary { list-style: none; display: grid; place-items: center; width: 40px; border: 1px solid var(--line2); border-radius: 14px;
+  background: var(--card); color: var(--mute); cursor: pointer; transition: border-color .15s, color .15s; }
+.more summary::-webkit-details-marker { display: none; }
+.more summary svg { width: 18px; height: 18px; transition: transform .15s; }
+.more summary:hover, .more[open] summary { border-color: var(--accent); color: var(--accent); }
+.more[open] summary svg { transform: rotate(180deg); }
+.dl.is-later .more summary { background: var(--sunk); }
+.menu { position: absolute; z-index: 10; top: calc(100% + 6px); right: 0; width: max(100%, 250px); padding: 6px; border: 1px solid var(--line2); border-radius: 12px; background: var(--card); box-shadow: var(--shadow); }
+.menu a { display: flex; flex-direction: column; padding: 8px 10px; border-radius: 8px; color: var(--words); text-decoration: none; }
+.menu a b { font-size: 14px; }
+.menu a span { font: 12px/1.4 var(--mono); color: var(--meta); }
+.menu a[href]:hover { background: var(--accent-soft); }
+.menu a[href] b::after { content: " ↗"; color: var(--accent); font-weight: 400; }
+/* an item whose link is not there yet: data-todo, no href */
+.menu a[data-todo] { opacity: .5; cursor: default; }
+.menu a[data-todo] b::after { content: " · later"; font-weight: 400; color: var(--meta); }
+
+/* ---------- the picture, and the brain under it, on the green band */
+.band { margin-top: 56px; padding-bottom: 48px; background: linear-gradient(to bottom, transparent 0, transparent 22%, var(--rail) 22%, var(--rail) 100%); }
+@media (min-width: 720px) { .band { margin-top: 72px; padding-bottom: 56px; } }
+.shot { max-width: 1080px; margin: 0 auto; padding: 0 16px; }
+@media (min-width: 720px) { .shot { padding: 0 32px; } }
+.shot img { display: block; width: 100%; height: auto; border-radius: 12px; border: 1px solid var(--line2); box-shadow: var(--shot-shadow); background: var(--card); }
+@media (min-width: 720px) { .shot img { border-radius: 16px; } }
+
+.brain { margin-top: 32px; color: var(--rail-words); display: grid; gap: 10px; }
+@media (min-width: 820px) { .brain { grid-template-columns: 200px 1fr; column-gap: 32px; align-items: start; } .brain-links { grid-column: 2; } }
+.brain h2 { display: flex; align-items: center; gap: 10px; font-size: 22px; }
+.brain .dot { background: var(--rail-accent); box-shadow: 0 0 0 3px rgba(111, 207, 151, 0.2); }
+.brain p { margin: 0; max-width: 46em; font-size: 15px; color: var(--rail-mute); }
+.brain b { color: var(--rail-words); }
+.brain-links { display: flex; flex-wrap: wrap; gap: 8px; }
+.brain-links a { padding: 5px 12px; border: 1px solid rgba(230, 239, 232, 0.2); border-radius: 999px; font-size: 13.5px; color: var(--rail-words); text-decoration: none; }
+.brain-links a:hover { border-color: var(--rail-accent); color: var(--rail-accent); }
+
+/* ---------- foot: the links */
+.foot { padding-top: 28px; padding-bottom: 40px; }
+.links { display: flex; flex-wrap: wrap; gap: 8px 22px; font-size: 15px; }
+.links a { color: var(--words); text-decoration: none; }
+.links a:hover { color: var(--accent); }
+.models { margin-top: 12px; gap: 6px 16px; font-size: 14px; }
+.models span { color: var(--meta); }
+.models a { color: var(--mute); }
+.small { margin: 16px 0 0; font-size: 13px; color: var(--meta); }
+.small a { color: inherit; }
+
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
