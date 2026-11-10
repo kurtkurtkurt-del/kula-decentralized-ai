@@ -90,3 +90,23 @@ export function nodeAt(k) {
   // the three at the top carry their label above, the rest below
   return { x: Math.round(x * 10) / 10, y: Math.round(y * 10) / 10, ly: Math.round((k === 11 || k === 0 || k === 1 ? y - 24 : y + 31) * 10) / 10 };
 }
+
+/** The black box (god's eye's hash-chained record, EyeView.box = { count, from, head, bytes, ok,
+ *  problem } or null): its line for the memory branch and that line's state, or null while the
+ *  eye has none. A chain that does not hold needs you. */
+export function boxLine(box) {
+  if (!box || typeof box !== 'object') return null;
+  const n = Number(box.count) || 0;
+  if (box.ok === false) return { state: 'look', text: `black box: ${box.problem ? String(box.problem) : 'the chain does not hold'}` };
+  return { state: 'fine', text: `black box: ${n} record${n === 1 ? '' : 's'}, chain ok` };
+}
+
+/** The black box's rows on the memory branch's page: [key, value]. */
+export function boxRows(box, when = (t) => new Date(t).toLocaleString()) {
+  if (!box || typeof box !== 'object') return [];
+  const rows = [['black box', box.ok === false ? `look at this: ${box.problem ?? 'the chain does not hold'}` : 'chain ok'], ['records', String(Number(box.count) || 0)]];
+  if (Number.isFinite(box.from) && box.from > 0) rows.push(['kept since', when(box.from)]);
+  if (Number.isFinite(box.bytes)) rows.push(['size', box.bytes >= 1e6 ? `${(box.bytes / 1e6).toFixed(1)} MB` : `${Math.max(1, Math.round(box.bytes / 1e3))} KB`]);
+  if (typeof box.head === 'string' && box.head) rows.push(['last link', box.head.slice(0, 12)]);
+  return rows;
+}

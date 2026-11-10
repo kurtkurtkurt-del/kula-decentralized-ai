@@ -65,6 +65,16 @@ test('brain map: twelve places on the ring, clockwise from the top, inside the d
   }
 });
 
+test('brain map: the black box on the memory branch: its line, its state and its page rows', () => {
+  assert.equal(bm.boxLine(null), null);
+  assert.deepEqual(bm.boxLine({ count: 12, from: 1, head: 'abc', bytes: 4000, ok: true, problem: null }), { state: 'fine', text: 'black box: 12 records, chain ok' });
+  assert.deepEqual(bm.boxLine({ count: 1, ok: true }), { state: 'fine', text: 'black box: 1 record, chain ok' });
+  assert.deepEqual(bm.boxLine({ count: 12, ok: false, problem: 'record 7 does not follow record 6' }), { state: 'look', text: 'black box: record 7 does not follow record 6' });
+  const rows = bm.boxRows({ count: 12, from: 1794300000000, head: '0123456789abcdef', bytes: 2_500_000, ok: true }, () => 'then');
+  assert.deepEqual(rows, [['black box', 'chain ok'], ['records', '12'], ['kept since', 'then'], ['size', '2.5 MB'], ['last link', '0123456789ab']]);
+  assert.deepEqual(bm.boxRows(undefined), []);
+});
+
 test('brain map: the page imports it and serves and packs it', () => {
   assert.ok(UI_STATIC.includes('brainmap.js'));
   assert.match(fs.readFileSync(path.join(NODE_DIR, 'src/ui/static/app.js'), 'utf8'), /from '\.\/brainmap\.js'/);

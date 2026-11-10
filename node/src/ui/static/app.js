@@ -878,6 +878,8 @@ const BRANCHES = BRANCH_MAP.map(([n, id, name]) => ({
     if (!v) return [];
     if (id === 'trust' && v.report) return trustReport(v.report);
     const out = (v.rows ?? []).map(([k, val]) => kv(k, val));
+    // the black box (god's eye's hash-chained record) is the memory's: its rows under the memory's own
+    if (id === 'memory') for (const [k, val] of bmap.boxRows(S.brain?.box)) out.push(kv(k, val, k === 'black box' && S.brain.box.ok === false ? 'busy' : ''));
     if (v.lines?.length) out.push(bdList(v.lines, ''));
     if (v.note) out.push(el('p', 'bd-note', v.note));
     if (v.error) out.push(el('p', 'bd-note', `stopped: ${v.error}`));
@@ -985,6 +987,10 @@ const stateDot = (state) => `<i class="bm-s is-${state}"></i>`;
 function drawMap(box) {
   const ids = BRANCHES.map((b) => b.id);
   const list = bmap.statesOf(ids, eyeOf);
+  // a black box whose chain does not hold puts the memory branch on "look at this", in its words
+  const boxSays = bmap.boxLine(S.brain?.box);
+  if (boxSays?.state === 'look') { const m = list.find((x) => x.id === 'memory'); if (m && m.state !== 'off') m.state = 'look'; }
+  const said = (id) => (id === 'memory' && boxSays?.state === 'look' ? boxSays.text : BRANCHES.find((b) => b.id === id)?.stat() ?? '');
   const stateOf = Object.fromEntries(list.map((x) => [x.id, x.state]));
   const auto = bmap.firstOpen(list);
   const pick = ids.includes(brainPick) ? brainPick : auto;
@@ -1033,10 +1039,10 @@ function drawMap(box) {
   const ps = stateOf[pick];
   const hint = pick === auto && (ps === 'look' || ps === 'know') ? 'shown first: it needs you most. tap any node to swap.' : 'tap any node to swap.';
   const sel = `<div class="bm-sel is-${ps}"><div class="h"><span class="n">${b.n}</span><b>${esc(b.name)}</b><span class="tag is-${ps}">${bmap.STATE_WORD[ps]}</span></div>`
-    + `<p class="stat">${esc(b.built ? b.stat() : 'not built yet')}</p><div class="f"><span>${hint}</span><button type="button" class="link" data-open="${b.id}">open ›</button></div></div>`;
+    + `<p class="stat">${esc(b.built ? said(b.id) : 'not built yet')}</p><div class="f"><span>${hint}</span><button type="button" class="link" data-open="${b.id}">open ›</button></div></div>`;
 
   // the others worth a look
-  const also = bmap.notices(list, pick).map((x) => { const o = BRANCHES.find((y) => y.id === x.id); return `<button type="button" data-open="${o.id}">${stateDot(x.state)}<span><b>${esc(SHORT_MAP[o.id] ?? o.name)}</b> ${esc(o.stat())}</span><span class="go">›</span></button>`; }).join('');
+  const also = bmap.notices(list, pick).map((x) => { const o = BRANCHES.find((y) => y.id === x.id); return `<button type="button" data-open="${o.id}">${stateDot(x.state)}<span><b>${esc(SHORT_MAP[o.id] ?? o.name)}</b> ${esc(said(o.id))}</span><span class="go">›</span></button>`; }).join('');
 
   box.innerHTML = `${map}<div class="bm-legend">${legend}</div>${card}${sel}${also ? `<div class="bm-also">${also}</div>` : ''}`;
   const choose = (id) => { brainPick = id === auto ? null : id; renderBrain(); box.querySelector(`.node[data-id="${id}"]`)?.focus(); };
