@@ -70,8 +70,10 @@ test('brain map: the black box on the memory branch: its line, its state and its
   assert.deepEqual(bm.boxLine({ count: 12, from: 1, head: 'abc', bytes: 4000, ok: true, problem: null }), { state: 'fine', text: 'black box: 12 records, chain ok' });
   assert.deepEqual(bm.boxLine({ count: 1, ok: true }), { state: 'fine', text: 'black box: 1 record, chain ok' });
   assert.deepEqual(bm.boxLine({ count: 12, ok: false, problem: 'record 7 does not follow record 6' }), { state: 'look', text: 'black box: record 7 does not follow record 6' });
-  const rows = bm.boxRows({ count: 12, from: 1794300000000, head: '0123456789abcdef', bytes: 2_500_000, ok: true }, () => 'then');
-  assert.deepEqual(rows, [['black box', 'chain ok'], ['records', '12'], ['kept since', 'then'], ['size', '2.5 MB'], ['last link', '0123456789ab']]);
+  const rows = bm.boxRows({ count: 12, from: 40, head: '0123456789abcdef', bytes: 2_500_000, ok: true });
+  assert.deepEqual(rows, [['black box', 'chain ok'], ['records', '12'], ['oldest kept', 'record 40'], ['size', '2.5 MB'], ['last link', '0123456789ab']]);
+  // nothing let go yet: no "oldest kept" row
+  assert.deepEqual(bm.boxRows({ count: 3, from: 1, bytes: 900, ok: true }), [['black box', 'chain ok'], ['records', '3'], ['size', '1 KB']]);
   assert.deepEqual(bm.boxRows(undefined), []);
 });
 

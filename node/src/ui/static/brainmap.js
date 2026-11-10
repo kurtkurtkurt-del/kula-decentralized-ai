@@ -92,7 +92,7 @@ export function nodeAt(k) {
 }
 
 /** The black box (god's eye's hash-chained record, EyeView.box = { count, from, head, bytes, ok,
- *  problem } or null): its line for the memory branch and that line's state, or null while the
+ *  problem } or null; `from` is the number of the oldest record kept, 1 while none was let go): its line for the memory branch and that line's state, or null while the
  *  eye has none. A chain that does not hold needs you. */
 export function boxLine(box) {
   if (!box || typeof box !== 'object') return null;
@@ -102,10 +102,10 @@ export function boxLine(box) {
 }
 
 /** The black box's rows on the memory branch's page: [key, value]. */
-export function boxRows(box, when = (t) => new Date(t).toLocaleString()) {
+export function boxRows(box) {
   if (!box || typeof box !== 'object') return [];
   const rows = [['black box', box.ok === false ? `look at this: ${box.problem ?? 'the chain does not hold'}` : 'chain ok'], ['records', String(Number(box.count) || 0)]];
-  if (Number.isFinite(box.from) && box.from > 0) rows.push(['kept since', when(box.from)]);
+  if (Number.isFinite(box.from) && box.from > 1) rows.push(['oldest kept', `record ${box.from}`]);
   if (Number.isFinite(box.bytes)) rows.push(['size', box.bytes >= 1e6 ? `${(box.bytes / 1e6).toFixed(1)} MB` : `${Math.max(1, Math.round(box.bytes / 1e3))} KB`]);
   if (typeof box.head === 'string' && box.head) rows.push(['last link', box.head.slice(0, 12)]);
   return rows;
