@@ -1,4 +1,5 @@
 // The command line: setup, share, probe, peers, chat, ledger; a short menu when run bare.
+import fs from 'node:fs';
 import readline from 'node:readline';
 import { probe, type Channel, type TlsClient } from './gate.js';
 import { loadOrCreateIdentity } from './tls.js';
@@ -24,15 +25,21 @@ usage:
       --port <n>        gate port (default 50551)
       --name <s>        name shown to the phone (default: this computer's hostname)
       --models <dir>    where models are kept (default ~/.kula-node/models)
-      --secret <hex>    cluster secret (default: a fresh one each run)
+      tls is the default: protocol v2 between device certificates, a qr (v3) with the
+      certificate's fingerprint and a one-time code. v1 is off unless a secret is given on
+      purpose (old phones), and goes off for good once a device has paired.
+      --no-tls          the old v1-only gate: a qr (v2) with a fresh secret each run; prompts and
+                        answers then cross the network in plain text
+      --secret-file <path>   v1 cluster secret (hex) from a file only you can read (mode 600)
+      KULA_SECRET=<hex> the same from the environment
+      --secret <hex>    the same on the command line (works, but every user sees it in ps)
       --lie-ram <MB>    advertise a false amount of free ram (for audit tests)
       --no-qr           print the json payload only
-      --tls             protocol v2: tls between device certificates, qr v3 with a one-time code;
-                        v1 is then off unless --secret is given (old phones)
       --relay <wss://…> also register with that relay so a device far away (behind nat) can come in
-                        with a six digit code; the qr carries it. implies --tls (docs/RELAY.md)
+                        with a six digit code; the qr carries it. needs tls (docs/RELAY.md)
       --dashboard <n>   local dashboard port on 127.0.0.1 (default 50580); --no-dashboard turns it off
   kula-node probe <host> <port> <secret> [--json]   handshake on both channels, print OK/NO
+      secret "env" reads $KULA_SECRET (a secret typed here shows in ps); "-" is none
       --fp <hex> [--pin <code>]   probe over tls (v2) against that certificate fingerprint; secret may be "-"
   kula-node ledger [--verify] [--tail N]   print the signed ledger; --verify checks the chain and signatures
   kula-node --version [--json]
@@ -87,7 +94,7 @@ files live in ${home()} (KULA_NODE_HOME overrides)
 `;
 
 // flags that never take a value, so `--json host` does not swallow the host
-const BOOLEAN = new Set(['json', 'help', 'check', 'dry-run', 'no-qr', 'no-dashboard', 'verify', 'no-local', 'keep-local', 'code', 'tls', 'no-apart', 'no-split', 'no-bandwidth', 'no-open', 'new-token', 'lan', 'new-prefix', 'stop', 'install-mac', 'uninstall-mac', 'login']);
+const BOOLEAN = new Set(['json', 'help', 'check', 'dry-run', 'no-qr', 'no-dashboard', 'verify', 'no-local', 'keep-local', 'code', 'tls', 'no-tls', 'no-apart', 'no-split', 'no-bandwidth', 'no-open', 'new-token', 'lan', 'new-prefix', 'stop', 'install-mac', 'uninstall-mac', 'login']);
 
 export function parse(argv: string[]): { cmd: string; flags: Record<string, string | boolean>; rest: string[] } {
   const [cmd = 'help', ...tail] = argv;
@@ -112,6 +119,52 @@ function num(v: string | boolean | undefined, dflt: number): number {
   const n = Number(v);
   if (!Number.isFinite(n)) throw new Error(`not a number: ${v}`);
   return n;
+}
+
+const HEX_SECRET = /^[0-9a-f]{16,128}$/i;
+const PS_NOTE = 'is visible to every user of this computer (ps); use KULA_SECRET=<hex> or --secret-file <path> (mode 600) instead';
+
+// The v1 secret for share, from --secret-file or --secret (not both), else $KULA_SECRET; a
+// flag wins over the environment. Never echoes the secret: an error names where it came
+// from, not what it was.
+export function secretFrom(flags: Record<string, string | boolean>, env: NodeJS.ProcessEnv = process.env, warn: (s: string) => void = (s) => console.error(s)): { secret?: string; error?: string } {
+  const file = flags['secret-file'];
+  const arg = flags.secret;
+  if (file === true) return { error: '--secret-file needs a path' };
+  if (arg === true) return { error: '--secret needs a value' };
+  if (typeof file === 'string' && typeof arg === 'string') return { error: 'give the secret one way: --secret-file or --secret' };
+  if (typeof file === 'string') {
+    let st: fs.Stats;
+    try { st = fs.statSync(file); } catch { return { error: `--secret-file: cannot read ${file}` }; }
+    if (process.platform !== 'win32' && (st.mode & 0o044)) return { error: `--secret-file: ${file} can be read by other users; chmod 600 ${file}` };
+    let text: string;
+    try { text = fs.readFileSync(file, 'utf8').trim(); } catch { return { error: `--secret-file: cannot read ${file}` }; }
+    if (!HEX_SECRET.test(text)) return { error: `--secret-file: ${file} must hold one hex secret (16 to 128 characters)` };
+    return { secret: text.toLowerCase() };
+  }
+  if (typeof arg === 'string') {
+    if (!HEX_SECRET.test(arg)) return { error: '--secret must be hex' };
+    warn(`warning: --secret ${PS_NOTE}`);
+    return { secret: arg.toLowerCase() };
+  }
+  const e = env.KULA_SECRET;
+  if (e !== undefined && e !== '') {
+    if (!HEX_SECRET.test(e.trim())) return { error: 'KULA_SECRET must be hex (16 to 128 characters)' };
+    return { secret: e.trim().toLowerCase() };
+  }
+  return {};
+}
+
+// probe's secret word: "env" is $KULA_SECRET, "-" none (tls only), anything else the secret
+// itself (with the ps warning).
+export function probeSecret(word: string, env: NodeJS.ProcessEnv = process.env, warn: (s: string) => void = (s) => console.error(s)): { secret?: string; error?: string } {
+  if (word === '-') return { secret: '-' };
+  if (word === 'env') {
+    const e = env.KULA_SECRET?.trim();
+    return e ? { secret: e } : { error: 'probe: secret "env" but KULA_SECRET is not set' };
+  }
+  warn('warning: a secret on the command line is visible to every user of this computer (ps); set KULA_SECRET=<hex> and write "env" in its place');
+  return { secret: word };
 }
 
 export function versionInfo() {
@@ -225,8 +278,11 @@ export async function main(argv: string[]): Promise<number> {
   }
 
   if (cmd === 'probe') {
-    const [host, portS, secret] = rest;
-    if (!host || !portS || !secret) { console.error('usage: kula-node probe <host> <port> <secret> [--json]'); return 2; }
+    const [host, portS, word] = rest;
+    if (!host || !portS || !word) { console.error('usage: kula-node probe <host> <port> <secret | env | -> [--json]'); return 2; }
+    const ps = probeSecret(word);
+    if (ps.error) { console.error(ps.error); return 2; }
+    const secret = ps.secret!;
     const port = Number(portS);
     let tlsOpts: TlsClient | null = null;
     if (typeof flags.fp === 'string') {
@@ -248,17 +304,21 @@ export async function main(argv: string[]): Promise<number> {
   }
 
   if (cmd === 'share') {
-    const secret = typeof flags.secret === 'string' ? flags.secret : undefined;
-    if (secret !== undefined && !/^[0-9a-f]{16,128}$/i.test(secret)) { console.error('--secret must be hex'); return 2; }
+    const got = secretFrom(flags);
+    if (got.error) { console.error(got.error); return 2; }
+    const secret = got.secret;
+    if (flags['no-tls'] === true && typeof flags.relay === 'string') { console.error('--relay needs tls: drop --no-tls'); return 2; }
+    if (flags['no-tls'] === true) console.error('warning: --no-tls: v1 only, prompts and answers cross the network in plain text');
     if (process.platform === 'win32') console.error(WINDOWS_FIREWALL_NOTE);
     const stop = await share({
       port: num(flags.port, 50551),
       name: typeof flags.name === 'string' ? flags.name : undefined,
       models: typeof flags.models === 'string' ? flags.models : '~/.kula-node/models',
-      secret: secret?.toLowerCase(),
+      secret,
       lieRam: flags['lie-ram'] !== undefined ? num(flags['lie-ram'], 0) : undefined,
       noQr: flags['no-qr'] === true,
-      tls: flags.tls === true || typeof flags.relay === 'string',
+      // tls unless --no-tls; --tls is still taken (it was the switch before tls was the default)
+      tls: flags['no-tls'] !== true,
       relay: typeof flags.relay === 'string' ? flags.relay : undefined,
       dashboard: flags['no-dashboard'] === true ? false : flags.dashboard !== undefined ? num(flags.dashboard, 50580) : undefined,
     });

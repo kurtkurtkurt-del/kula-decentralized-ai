@@ -1,11 +1,26 @@
 // What the worker tells the cluster about itself: lan address, free memory,
 // memory bandwidth (a short copy benchmark on a worker thread) and the gpu.
 import os from 'node:os';
+import dgram from 'node:dgram';
 import { execFile, execFileSync } from 'node:child_process';
 import { Worker } from 'node:worker_threads';
 import { promisify } from 'node:util';
 
 const execFileP = promisify(execFile);
+
+// The address this computer sends from towards `host` (the route's own choice; with two
+// interfaces it may not be lanIPv4()). A udp "connect" sends nothing. null when unknown.
+export function sourceAddressTo(host: string): Promise<string | null> {
+  return new Promise((resolve) => {
+    let s: dgram.Socket;
+    try { s = dgram.createSocket(host.includes(':') ? 'udp6' : 'udp4'); } catch { return resolve(null); }
+    const done = (v: string | null) => { try { s.close(); } catch {} resolve(v); };
+    s.on('error', () => done(null));
+    try {
+      s.connect(9, host, () => { try { done(s.address().address); } catch { done(null); } });
+    } catch { done(null); }
+  });
+}
 
 export function lanIPv4(): string | null {
   const all: { name: string; address: string }[] = [];

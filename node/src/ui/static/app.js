@@ -743,6 +743,7 @@ const BRANCHES = BRANCH_MAP.map(([n, id, name]) => ({
   live: () => {
     const v = eyeOf(id);
     if (!v) return [];
+    if (id === 'trust' && v.report) return trustReport(v.report);
     const out = (v.rows ?? []).map(([k, val]) => kv(k, val));
     if (v.lines?.length) out.push(bdList(v.lines, ''));
     if (v.note) out.push(el('p', 'bd-note', v.note));
@@ -750,6 +751,47 @@ const BRANCHES = BRANCH_MAP.map(([n, id, name]) => ({
     return out;
   },
 }));
+
+// the trust branch's one screen (10.11.2026): one verdict for the cluster on top, then every
+// device's checks, each with a mark: ✓ checked and holds, ✕ look at this, – not known or the
+// device's own word. god's eye checked all of it on this computer; the page only draws it.
+// device names come from the devices' own qrs: escaped before they go into any html string
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
+const TRUST_WORD = { ok: 'all clear', bad: 'look at this', unknown: 'not checked yet' };
+const TRUST_K = { pinned: 'pinned', encrypted: 'encrypted', identity: 'identity', refused: 'refused', ledger: 'ledger', key: 'key' };
+const verdictOf = (checks) => (checks.some((c) => c.ok === false) ? 'bad' : checks.some((c) => c.ok === null) ? 'unknown' : 'ok');
+function trustCard(name, verdict, checks, sub, acceptId) {
+  const card = el('section', `tr-card ${verdict}`);
+  const head = el('div', 'tr-head');
+  head.append(el('span', `tr-dot ${verdict}`), el('b', '', name), el('span', 'tr-v', `${TRUST_WORD[verdict]}${sub ? ` · ${sub}` : ''}`));
+  card.appendChild(head);
+  for (const c of checks) {
+    const row = el('div', `tr-check ${c.ok === true ? 'ok' : c.ok === false ? 'bad' : 'na'}`);
+    row.append(el('span', 'tr-m', c.ok === true ? '✓' : c.ok === false ? '✕' : '–'), el('span', 'tr-k', TRUST_K[c.k] ?? c.k), el('span', 'tr-t', c.text));
+    card.appendChild(row);
+  }
+  if (acceptId) {
+    const b = el('button', 'link tr-accept', 'I know why (I cleared it): carry on from here');
+    b.type = 'button';
+    b.addEventListener('click', async () => {
+      b.disabled = true;
+      try { const r = await postJson('brain/act', { branch: 'trust', action: 'accept', arg: acceptId }); if (r?.view) S.brain = r.view; renderBrain(); } catch (e) { b.disabled = false; b.textContent = e.message; }
+    });
+    card.appendChild(b);
+  }
+  return card;
+}
+function trustReport(r) {
+  const top = el('div', `tr-verdict ${r.verdict}`);
+  const words = el('div', 'tr-words');
+  words.append(el('b', '', TRUST_WORD[r.verdict]), el('span', '', r.headline));
+  top.append(el('span', 'tr-big', r.verdict === 'ok' ? '✓' : r.verdict === 'bad' ? '!' : '…'), words);
+  const out = [top];
+  for (const d of r.devices) out.push(trustCard(d.name, d.verdict, d.checks, d.refused, d.accept ? d.id : null));
+  out.push(trustCard(`${r.host.name} · this computer`, verdictOf(r.host.checks), r.host.checks, ''));
+  out.push(el('p', 'bd-note', 'checked here, not taken on trust: each certificate against the fingerprint pinned from its qr, each ledger line’s chain and signature. no prompts, no answers: only who connected and whether it was let in.'));
+  return out;
+}
 
 // a colour and a sign for each branch (from kula's palette: terracotta, sage, gold, clay, and
 // the dusty blue of a cable), drawn faint inside its tile like the devices bubble does
@@ -797,14 +839,18 @@ function gaugeOf(id) {
       if (!L) return '';
       const parts = L.parts?.length ? L.parts : [{ name: L.devices?.[0]?.name ?? 'here', layers: 1, local: true }];
       const tot = parts.reduce((a, p) => a + (p.layers || 1), 0), blues = ['#3d6fb0', '#6f8fb3', '#4f7397', '#8aa6c8'];
-      return `<span class="layers" title="${parts.map((p) => `${p.name} ${p.layers}`).join(' · ')}">${parts.map((p, i) => `<span data-w="${((p.layers || 1) / tot) * 100}" data-bg="${p.local ? 'var(--accent)' : blues[(i - 1) % blues.length]}"></span>`).join('')}</span>`;
+      return `<span class="layers" title="${esc(parts.map((p) => `${p.name} ${p.layers}`).join(' · '))}">${parts.map((p, i) => `<span data-w="${Number((p.layers || 1) / tot) * 100}" data-bg="${p.local ? 'var(--accent)' : blues[(i - 1) % blues.length]}"></span>`).join('')}</span>`;
     }
     case 'executor': {
       const d = L?.devices ?? [], busy = d.some((x) => x.busy), tps = Math.max(0, ...d.map((x) => x.tps || 0));
       return `<span class="big">${busy ? 'answering' : tps ? tps.toFixed(1) : '—'}${!busy && tps ? '<small>tok/s</small>' : ''}</span><span class="gauge"><span data-w="${busy ? 100 : Math.min(100, (tps / 30) * 100)}"></span></span>`;
     }
-    case 'trust': return S.peers.length ? `<span class="marks">${S.peers.map((p) => `<i class="${p.tls ? 'ok' : ''}" title="${p.name}: ${p.tls ? 'tls, certificate pinned' : 'older pairing'}"></i>`).join('')}</span>` : '';
-    case 'models': return L ? `<span class="big">${L.model.name}<small>${Math.round(L.model.size / 1e6)} MB</small></span>` : '';
+    case 'trust': {
+      const devs = eyeOf('trust')?.report?.devices;
+      if (devs?.length) return `<span class="marks">${devs.map((d) => `<i class="${d.verdict === 'ok' ? 'ok' : d.verdict === 'bad' ? 'bad' : ''}" title="${esc(d.name)}: ${TRUST_WORD[d.verdict]}"></i>`).join('')}</span>`;
+      return S.peers.length ? `<span class="marks">${S.peers.map((p) => `<i class="${p.tls ? 'ok' : ''}" title="${esc(p.name)}: ${p.tls ? 'tls, certificate pinned' : 'older pairing'}"></i>`).join('')}</span>` : '';
+    }
+    case 'models': return L ? `<span class="big">${esc(L.model.name)}<small>${Math.round(L.model.size / 1e6)} MB</small></span>` : '';
   }
   // a branch with no drawing of its own here: the bar god's eye gives it
   const g = eyeOf(id)?.gauge;

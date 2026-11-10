@@ -99,24 +99,75 @@ export function chainFiles(file: string): string[] {
   return [...old.map((o) => o.p), file];
 }
 
+// A process that died mid-append leaves a last line without its "\n"; the next line would
+// run on from it and both would be lost. Cuts the file back to just after its last "\n" and
+// says how many bytes went (0: nothing to cut).
+export function cutTorn(file: string): number {
+  let fd: number;
+  try { fd = fs.openSync(file, 'r+'); } catch { return 0; }
+  try {
+    const size = fs.fstatSync(fd).size;
+    if (size === 0) return 0;
+    const one = Buffer.alloc(1);
+    fs.readSync(fd, one, 0, 1, size - 1);
+    if (one[0] === 10) return 0;
+    // walk back in blocks to the last "\n" (a line is short; a torn file is rare)
+    const block = Buffer.alloc(64 * 1024);
+    let end = size;
+    let keep = 0;
+    while (end > 0) {
+      const start = Math.max(0, end - block.length);
+      const n = fs.readSync(fd, block, 0, end - start, start);
+      const i = block.subarray(0, n).lastIndexOf(10);
+      if (i >= 0) { keep = start + i + 1; break; }
+      end = start;
+    }
+    fs.ftruncateSync(fd, keep);
+    return size - keep;
+  } finally { fs.closeSync(fd); }
+}
+
 export class Ledger {
   private prev: string;
   private size: number;
+  // an append threw (disk full, killed write): look for a torn line before the next one
+  private dirty = false;
 
   constructor(readonly file: string, readonly key: DeviceKey, readonly now: () => number = Date.now, readonly rotateBytes = ROTATE_BYTES) {
     fs.mkdirSync(path.dirname(file), { recursive: true });
-    const last = lastLine(file);
+    const torn = cutTorn(file);
+    // the live file may hold nothing yet (or nothing whole) after a rotation: then the
+    // chain goes on from the newest rotated file
+    let last: string | null = null;
+    for (const f of chainFiles(file).reverse()) { last = lastLine(f); if (last) break; }
     this.prev = last ? sha256Hex(last) : GENESIS;
     try { this.size = fs.statSync(file).size; } catch { this.size = 0; }
+    // the cut is itself written down and signed
+    if (torn > 0) this.append('health', 'self', { torn });
   }
 
   append(kind: Kind, peer: string, fields: Fields = {}): Entry {
+    if (this.dirty) this.repair();
     if (this.size >= this.rotateBytes) this.rotate();
     const { line, entry } = makeLine(this.key, this.now(), kind, peer, fields, this.prev);
-    fs.appendFileSync(this.file, line + '\n');
+    try {
+      fs.appendFileSync(this.file, line + '\n');
+    } catch (e) {
+      this.dirty = true;
+      throw e;
+    }
     this.prev = sha256Hex(line);
     this.size += Buffer.byteLength(line) + 1;
     return entry;
+  }
+
+  private repair() {
+    this.dirty = false;
+    const torn = cutTorn(this.file);
+    const last = lastLine(this.file);
+    this.prev = last ? sha256Hex(last) : this.prev;
+    try { this.size = fs.statSync(this.file).size; } catch { this.size = 0; }
+    if (torn > 0) this.append('health', 'self', { torn });
   }
 
   // The old file keeps its name plus a stamp; the next line still names the

@@ -139,7 +139,7 @@ the tag must match `node/package.json`'s version.
 ### as a worker
 
 ```bash
-kula-node share [--port 50551] [--name <s>] [--models <dir>] [--secret <hex>] [--tls] [--lie-ram <MB>] [--no-qr]
+kula-node share [--port 50551] [--name <s>] [--models <dir>] [--no-tls] [--secret-file <path>] [--lie-ram <MB>] [--no-qr]
 ```
 
 Prints a QR and the same payload as JSON, then waits. Scan the QR with the phone (peers →
@@ -152,8 +152,8 @@ and no fingerprint.
 | `--port` | gate port (default 50551) |
 | `--name` | the name the phone shows (default: hostname) |
 | `--models` | where models asked for by a master are kept (default `~/.kula-node/models`) |
-| `--secret` | reuse a v1 secret instead of a fresh one per run (visible in `ps`; a known gap) |
-| `--tls` | protocol v2: TLS between device certificates, a v3 QR with a one-time code ([GATE.md](GATE.md)) |
+| `--no-tls` | the old protocol v1 only (a v2 QR with a shared secret; prompts cross the network in plain text, it warns). TLS (protocol v2, a v3 QR with a one-time code, [GATE.md](GATE.md)) is the default since 10.11.2026; `--tls` is still accepted |
+| `--secret-file` | a v1 secret for old phones, read from a file that only you can read (`chmod 600`, refused otherwise). Or the environment: `KULA_SECRET=<hex>`. `--secret <hex>` on the command line still works but warns: every user on the computer sees it in `ps`. v1 stays off once any device has paired over TLS |
 | `--lie-ram` | advertise a false amount of free memory, to make the auditor's claim check fire |
 | `--no-qr` | JSON only |
 
@@ -167,7 +167,7 @@ record and both child programs at once. `KULA_NODE_VERBOSE=1` shows the children
 ### checking a worker
 
 ```bash
-kula-node probe <host> <port> <secret>                 # v1: handshake on both channels, OK <ms> or NO <reason>
+kula-node probe <host> <port> env                      # v1 with KULA_SECRET from the environment: OK <ms> or NO <reason>
 kula-node probe <host> <port> - --fp <64 hex> [--pin <code>]   # v2
 ```
 
@@ -293,7 +293,7 @@ assumption, in split mode, of a few milliseconds per hop.
   Use **apart** mode: prompts and answers are small, a round trip of 30 ms does not matter.
   Do not use **split** mode over a distance: every token crosses the link several times and
   the model runs at the speed of the slowest hop. With v1 the `api` channel is plain text,
-  so a private network is also what keeps the prompts private; v2 (`--tls`) encrypts them.
+  so a private network is also what keeps the prompts private; v2 (the default) encrypts them.
 - **The kula relay** (`node/relay/`, since 5.11.2026) forwards gate connections between two
   NATed devices without seeing inside them: the worker runs `kula-node share --relay wss://…`
   (which forces `--tls`), the master adds it by a six-digit code and the pin

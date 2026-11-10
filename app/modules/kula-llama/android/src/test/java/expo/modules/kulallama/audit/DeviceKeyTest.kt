@@ -49,4 +49,35 @@ class DeviceKeyTest {
     assertEquals(a.id, rebuilt.id)
     f.delete()
   }
+
+  @Test fun aBrokenKeyFileIsMovedAsideNotOverwritten() {
+    val d = java.nio.file.Files.createTempDirectory("kula-key").toFile()
+    val good = SoftwareKey.generate(preferEd25519 = false)
+    val whole = "${good.alg}\n${B64.encode(good.pkcs8())}\n${B64.encode(good.publicKey)}\n"
+    // what a write cut short, a wiped file or plain junk leave behind
+    val broken = listOf("", "p256\n", "p256\n${B64.encode(good.pkcs8())}\n", whole.substring(0, whole.length - 20) + "\n", "rsa\nAAAA\nAAAA\n", "p256\n!!!!\nAAAA\n")
+    for ((i, text) in broken.withIndex()) {
+      val f = File(d, "key$i")
+      f.writeText(text)
+      var aside: File? = null
+      val k = SoftwareKey.loadOrCreate(f) { aside = it }
+      assertTrue("case $i: told where the old file went", aside != null)
+      assertTrue(aside!!.name.startsWith("key$i.broken."))
+      assertEquals("case $i: the old bytes are kept", text, aside!!.readText())
+      // a new key in its place, which loads again without a word
+      var again = false
+      assertEquals(k.id, SoftwareKey.loadOrCreate(f) { again = true }.id)
+      assertFalse(again)
+    }
+    // a whole file is never touched
+    val f = File(d, "good")
+    f.writeText(whole)
+    var told = false
+    assertEquals(good.id, SoftwareKey.loadOrCreate(f) { told = true }.id)
+    assertFalse(told)
+    assertEquals(whole, f.readText())
+    assertEquals(1, d.listFiles()!!.count { it.name.startsWith("good") })
+    // no file at all is not broken either
+    assertEquals(null, SoftwareKey.load(File(d, "none")))
+  }
 }

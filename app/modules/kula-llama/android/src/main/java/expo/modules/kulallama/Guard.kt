@@ -46,20 +46,49 @@ object UrlPolicy {
     return false
   }
 
+  /** The address in an ip literal host ("10.0.0.5", "[fd00::5]", "fe80::1%wlan0"); null for a name. */
+  fun literal(host: String): InetAddress? {
+    val h = host.trim().removePrefix("[").removeSuffix("]").substringBefore('%')
+    val looksLiteral = h.isNotEmpty() && (h.all { it.isDigit() || it == '.' } || h.contains(':'))
+    if (!looksLiteral) return null
+    return runCatching { InetAddress.getByName(h) }.getOrNull()
+  }
+
   fun isPrivateLiteral(host: String): Boolean {
     val h = host.trim().removePrefix("[").removeSuffix("]")
     val looksLiteral = h.all { it.isDigit() || it == '.' } || h.contains(':')
     if (!looksLiteral) return false
-    return runCatching { isPrivateAddress(InetAddress.getByName(h)) }.getOrDefault(true)
+    return literal(h)?.let { isPrivateAddress(it) } ?: true
   }
 
   /**
+   * The one exception to "public only": [host] is an ip literal equal to [master], the
+   * address the gate saw for the master that sent this /load (a computer in apart mode
+   * hands its workers the model from its own lan address). Never loopback, any-local or
+   * multicast, even when the master is one of those (a relayed stream reaches the gate
+   * from 127.0.0.1); never a name, whatever it resolves to. "::ffff:10.0.0.5" and
+   * "10.0.0.5" are the same address; an ipv6 zone ("%wlan0") is not compared.
+   */
+  fun isMaster(host: String, master: String?): Boolean {
+    if (master.isNullOrBlank()) return false
+    val a = literal(host) ?: return false
+    val m = literal(master) ?: return false
+    if (a.isLoopbackAddress || a.isAnyLocalAddress || a.isMulticastAddress) return false
+    if (m.isLoopbackAddress || m.isAnyLocalAddress || m.isMulticastAddress) return false
+    return a.address.contentEquals(m.address)
+  }
+
+  /** What a private host is told; the Node twin says the same (node/src/policy.ts). */
+  const val NOT_PUBLIC = "url must be public or the master's own address"
+
+  /**
    * null when [url] may be fetched, else why not: http(s) only, no credentials, no local
-   * or private host by name or literal. Names are checked again when resolved
+   * or private host by name or literal, except the literal address of the master that sent
+   * the request ([master], see [isMaster]). Names are checked again when resolved
    * (ModelDownloader): a public name for 127.0.0.1 is the usual way round the text check.
    * [allowPrivate] is for tests that serve files from 127.0.0.1.
    */
-  fun problem(url: String?, allowPrivate: Boolean = false): String? {
+  fun problem(url: String?, master: String? = null, allowPrivate: Boolean = false): String? {
     if (url.isNullOrBlank()) return "bad url"
     val u = try { URI(url) } catch (e: Exception) { return "bad url" }
     val scheme = u.scheme?.lowercase() ?: return "bad url"
@@ -68,7 +97,31 @@ object UrlPolicy {
     val host = u.host?.lowercase() ?: return "bad url"
     if (allowPrivate) return null
     if (host == "localhost" || host.endsWith(".localhost") || host.endsWith(".local")) return "url points at a local host"
-    if (isPrivateLiteral(host)) return "url points at a private address"
+    if (isPrivateLiteral(host)) return if (isMaster(host, master)) null else NOT_PUBLIC
+    return null
+  }
+
+  /** The master's address when [url]'s host is that very literal (the exception is in use), else null. */
+  fun pinnedMaster(url: String, master: String?): InetAddress? {
+    val host = runCatching { URI(url).host }.getOrNull() ?: return null
+    if (!isMaster(host, master)) return null
+    return literal(host)
+  }
+
+  /**
+   * One download hop, once its host was resolved: null when it may be fetched. [pinned] is
+   * the master's address when the first url used the exception ([pinnedMaster]): then every
+   * hop, redirects included, must stay on that very address. Otherwise no resolved address
+   * may be private, so a public name for a lan address is refused too.
+   */
+  fun hopProblem(url: String, master: String?, pinned: InetAddress?, resolved: List<InetAddress>): String? {
+    problem(url, master)?.let { return it }
+    val host = runCatching { URI(url).host }.getOrNull() ?: return "bad url"
+    if (pinned != null) {
+      val a = literal(host)
+      return if (a != null && a.address.contentEquals(pinned.address)) null else "redirect left the master's address"
+    }
+    if (resolved.any { isPrivateAddress(it) }) return "$NOT_PUBLIC ($host resolves to a private address)"
     return null
   }
 
@@ -110,6 +163,31 @@ class RpcSlot {
   }
 
   @Synchronized fun openCount() = open
+}
+
+/**
+ * Which master is behind an api connection. ApiServer listens on 127.0.0.1 and the gate pipes
+ * the `api` channel to it, so all it sees is 127.0.0.1:<port>. When the gate admits a
+ * connection it records the local port of its own socket to ApiServer (the remote port
+ * ApiServer accepts) with the peer address it saw, and removes it when the pipe ends.
+ * Loopback peers are never recorded: a relayed stream comes in from 127.0.0.1.
+ */
+object ApiPeers {
+  private val byPort = java.util.concurrent.ConcurrentHashMap<Int, String>()
+
+  /** Records [peer] for [localPort]; false (nothing recorded) for a loopback or unknown peer. */
+  fun put(localPort: Int, peer: String): Boolean {
+    if (localPort <= 0) return false
+    val a = UrlPolicy.literal(peer) ?: return false
+    if (a.isLoopbackAddress || a.isAnyLocalAddress) return false
+    byPort[localPort] = peer
+    return true
+  }
+
+  fun remove(localPort: Int) { byPort.remove(localPort) }
+
+  /** The master's address for the api connection that came from 127.0.0.1:[remotePort]; null when none. */
+  fun get(remotePort: Int): String? = byPort[remotePort]
 }
 
 object Endpoints {

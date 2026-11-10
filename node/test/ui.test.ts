@@ -424,8 +424,9 @@ test('mode here with a fake llama-server: a catalog model is fetched to this com
     const mine = rows.find((m) => m.id === 'local:mine-Q4_K_M.gguf');
     assert.equal(mine?.catalog, false);
     assert.equal(mine?.quant, 'Q4_K_M');
-    await assert.rejects(engine.load({ model: 'local:mine-Q4_K_M.gguf', mode: 'phone' }, () => {}), (e: Error) => e.message === PRIVATE_URL_NOTE);
-    await assert.rejects(engine.load({ model: 'local:mine-Q4_K_M.gguf', mode: 'apart' }, () => {}), /public internet/);
+    // a local file reaches devices only over the wi-fi, from this computer's own address (10.11.2026)
+    await assert.rejects(engine.load({ model: 'local:mine-Q4_K_M.gguf', mode: 'phone' }, () => {}), /no paired device/);
+    await assert.rejects(engine.load({ model: 'local:mine-Q4_K_M.gguf', mode: 'apart' }, () => {}), (e: Error) => e.message === PRIVATE_URL_NOTE);
     await assert.rejects(engine.load({ model: 'nope', mode: 'phone' }, () => {}), /unknown model/);
     await assert.rejects(engine.load({ model: 'tiny', mode: 'phone' }, () => {}), /no paired device/);
     // without llama.cpp, split and here say what is missing

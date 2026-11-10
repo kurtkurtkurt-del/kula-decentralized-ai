@@ -1,5 +1,6 @@
-// Compiles expo.modules.kulallama.audit (plus Gate.kt and Auto.kt; Gate.kt's only Android import is Log,
-// stubbed in stub/) straight from the module's source tree and runs the junit4 tests.
+// Compiles expo.modules.kulallama.audit (plus the plain Kotlin beside it: Gate.kt, Guard.kt, Keys.kt,
+// Trust.kt, Auto.kt...; Gate.kt's only Android import is Log, stubbed in stub/) straight from the
+// module's source tree and runs the junit4 tests.
 //   cd app/modules/kula-llama/audit-jvm && gradle test
 plugins { kotlin("jvm") version "2.0.21" }
 
@@ -12,8 +13,8 @@ java { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaV
 sourceSets {
   main {
     kotlin.setSrcDirs(listOf("../android/src/main/java/expo/modules/kulallama", "stub"))
-    // everything but Gate.kt and audit/ needs the Android SDK
-    kotlin.exclude("ApiServer.kt", "Discovery.kt", "Keeper.kt", "KulaLlamaModule.kt", "ModelDownloader.kt", "Native.kt", "WorkerService.kt")
+    // these need the Android SDK
+    kotlin.exclude("ApiServer.kt", "Discovery.kt", "Keeper.kt", "KeyStoreVault.kt", "KulaLlamaModule.kt", "ModelDownloader.kt", "Native.kt", "WorkerService.kt")
   }
   test {
     kotlin.setSrcDirs(listOf("../android/src/test/java/expo/modules/kulallama"))

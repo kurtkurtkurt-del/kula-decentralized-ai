@@ -7,14 +7,14 @@ import path from 'node:path';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { Bonjour } from 'bonjour-service';
 import qrcode from 'qrcode-terminal';
-import { startGateServer, PIN_TTL_MS, type GateEvent, type Channel, type TlsServer } from './gate.js';
+import { startGateServer, v1Open, PIN_TTL_MS, type GateEvent, type Channel, type TlsServer } from './gate.js';
 import { loadOrCreateIdentity, newPin, Paired } from './tls.js';
 import { findLlama, TAG } from './llama.js';
 import { home, expandHome } from './paths.js';
 import { lanIPv4, freeRamMB, measureBandwidth, detectGpu } from './sysinfo.js';
 import { freePort, startChild, type Child } from './children.js';
 import { startApiServer, type ApiServer } from './api.js';
-import { loadOrCreate } from './audit/key.js';
+import { loadOrCreateKey } from './audit/key.js';
 import { Ledger } from './audit/ledger.js';
 import { Auditor } from './audit/auditor.js';
 import { startRelayWorker, type RelayWorker } from './relay.js';
@@ -31,16 +31,18 @@ export interface ShareOptions {
   secret?: string;
   lieRam?: number;
   noQr?: boolean;
-  // protocol v2: the gate also speaks tls and the qr is v3 (fingerprint + one-time code)
+  // protocol v2: the gate also speaks tls and the qr is v3 (fingerprint + one-time code).
+  // the default; false (--no-tls) is the old v1-only gate, prompts in plain text
   tls?: boolean;
-  // far away masters: connect out to this relay, register, put the code in the qr (docs/RELAY.md). implies tls.
+  // far away masters: connect out to this relay, register, put the code in the qr (docs/RELAY.md). needs tls.
   relay?: string;
   dashboard?: number | false; // the local dashboard's port on 127.0.0.1; false: none
 }
 
 // The qr the phone scans. v2 carries the shared secret (protocol v1); v3 carries
 // this computer's certificate fingerprint and a one-time pairing code (protocol
-// v2, docs/GATE.md). A v3 worker still answers v1 clients with the secret.
+// v2, docs/GATE.md). A v3 worker given a secret on purpose answers v1 clients with it
+// until the first device pairs; then v1 is off (gate.ts v1Open).
 export interface PeerPayload {
   k: 'kula-peer';
   v: 2 | 3;
@@ -90,9 +92,12 @@ export async function share(opts: ShareOptions): Promise<ShareHandle> {
 
   const host = lanIPv4();
   if (!host) log('no lan ipv4 address found; the phone will not reach this computer');
-  // v1 needs a secret in a qr. With --tls the qr carries none, so unless one was given
+  if (opts.relay && opts.tls === false) throw new Error('--relay needs tls: the handshake crosses the relay and must be end to end (drop --no-tls)');
+  const useTls = opts.tls !== false;
+  if (!useTls) log('tls is off (--no-tls): v1 only, prompts and answers cross the network in plain text');
+  // v1 needs a secret in a qr. With tls the qr carries none, so unless one was given
   // on purpose (--secret, for old phones) v1 is off: there is nothing it could prove.
-  const secret: string | null = opts.secret ?? (opts.tls ? null : newSecret());
+  const secret: string | null = opts.secret ?? (useTls ? null : newSecret());
   const id = deviceId();
   const name = opts.name ?? os.hostname().replace(/\.local$/, '');
 
@@ -107,9 +112,12 @@ export async function share(opts: ShareOptions): Promise<ShareHandle> {
   logSinks.add(logSink);
 
   // every gate event goes through the auditor into the signed ledger
-  const key = loadOrCreate();
+  const { key, broken } = loadOrCreateKey(undefined, log);
   log(`device key ${key.alg} ${key.id}`);
-  const auditor = new Auditor({ ledger: new Ledger(path.join(home(), 'ledger.jsonl'), key), log });
+  const ledgerFile = path.join(home(), 'ledger.jsonl');
+  const auditor = new Auditor({ ledger: new Ledger(ledgerFile, key), log });
+  // the old key is not readable: the lines it signed no longer verify, and the ledger says why
+  if (broken) auditor.health('self', { key: 'replaced' });
   const onEvent = (e: GateEvent) => {
     state.gate(e);
     if (e.type === 'pair') { auditor.pair(e.peer, { fp: e.fp, channel: e.channel }); log(`paired ${e.peer} (certificate ${e.fp.slice(0, 16)}…)`); }
@@ -150,7 +158,15 @@ export async function share(opts: ShareOptions): Promise<ShareHandle> {
       try { rpc = await rpcStarting; return rpc.port; } catch (e) { log(`ggml-rpc-server failed: ${(e as Error).message}`); return null; }
     }
     if (api) return api.port;
-    apiStarting ??= startApiServer({ models, llama, log, onLoad: (name, want, got) => auditor.load('api', name, want, got) }).finally(() => { apiStarting = null; });
+    apiStarting ??= startApiServer({
+      models, llama, log, onLoad: (name, want, got) => auditor.load('api', name, want, got),
+      // GET /trust: the key, the certificate, the gate's state and the ledger, nothing secret
+      trust: {
+        key, ledgerFile,
+        cert: () => tlsServer?.identity.certDer ?? null,
+        gate: () => ({ v1: v1Open(secret, tlsServer), tls: !!tlsServer, paired: tlsServer?.paired.size ?? 0 }),
+      },
+    }).finally(() => { apiStarting = null; });
     try { api = await apiStarting; log(`api on 127.0.0.1:${api.port}`); state.api({ running: true }); return api.port; } catch (e) { log(`api failed: ${(e as Error).message}`); return null; }
   };
 
@@ -183,18 +199,17 @@ export async function share(opts: ShareOptions): Promise<ShareHandle> {
     if (payload.relay) console.log(`far away: kula-node peers add "${payload.relay.code}${payload.pin ? ' ' + payload.pin : ''}" --relay ${payload.relay.url}`);
     console.log();
   };
-  if (opts.relay && !opts.tls) { opts = { ...opts, tls: true }; log('--relay implies --tls: the handshake crosses the relay and must be end to end'); }
-  if (opts.tls) {
-    const identity = loadOrCreateIdentity(home(), key);
+  if (useTls) {
+    const identity = loadOrCreateIdentity(home(), key, log);
     const paired = new Paired(path.join(home(), 'paired'));
     tlsServer = { identity, paired, pin: newPin(), pinExpiresAt: Date.now() + PIN_TTL_MS };
     // the code is spent by the phone that used it, or by time; the next qr gets a fresh one
     tlsServer.onPinUsed = () => { tlsServer!.pin = newPin(); tlsServer!.pinExpiresAt = Date.now() + PIN_TTL_MS; log('pairing code used or expired; a new qr follows'); printQr(opts.port); };
-    log(`tls certificate ${identity.fp.slice(0, 16)}… (${paired.size} paired); ${secret ? 'v1 on (--secret)' : 'v1 off'}`);
+    log(`tls certificate ${identity.fp.slice(0, 16)}… (${paired.size} paired); ${!secret ? 'v1 off' : paired.size ? 'v1 off (a device is paired; --secret is not used)' : 'v1 on (--secret) until the first device pairs'}`);
   }
 
   const gate = await startGateServer({ port: opts.port, secret, targets, onEvent, admit: (peer, nonceC, unixMs) => auditor.hello(peer, nonceC, unixMs), tls: tlsServer });
-  log(`gate listening on 0.0.0.0:${gate.port}${tlsServer ? (secret ? ' (v1 and v2 tls)' : ' (v2 tls only)') : ''}`);
+  log(`gate listening on 0.0.0.0:${gate.port}${tlsServer ? (v1Open(secret, tlsServer) ? ' (v1 and v2 tls)' : ' (v2 tls only)') : ' (v1 only, no tls)'}`);
   if (opts.relay) {
     // the relay sees this computer's id, name and certificate fingerprint, nothing more; a
     // relayed stream reaches the gate from 127.0.0.1 and is served like any other

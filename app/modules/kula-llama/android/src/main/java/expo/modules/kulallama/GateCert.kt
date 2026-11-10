@@ -4,23 +4,23 @@ import expo.modules.kulallama.audit.DeviceKey
 import expo.modules.kulallama.audit.SoftwareKey
 import java.io.ByteArrayInputStream
 import java.io.File
-import java.security.KeyFactory
+import java.net.Socket
 import java.security.KeyPair
 import java.security.KeyPairGenerator
-import java.security.KeyStore
 import java.security.MessageDigest
+import java.security.Principal
+import java.security.PrivateKey
 import java.security.Signature
 import java.security.cert.CertificateFactory
 import java.security.cert.X509Certificate
 import java.security.spec.ECGenParameterSpec
-import java.security.spec.PKCS8EncodedKeySpec
-import java.security.spec.X509EncodedKeySpec
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import java.util.TimeZone
 import javax.net.ssl.KeyManager
-import javax.net.ssl.KeyManagerFactory
+import javax.net.ssl.SSLEngine
+import javax.net.ssl.X509ExtendedKeyManager
 
 /**
  * The gate's TLS identity (protocol v2, docs/GATE.md): an EC P-256 key and a self-signed
@@ -126,35 +126,57 @@ object GateCert {
 
 /**
  * What a device shows on the wire in protocol v2: its P-256 key pair and the certificate
- * over it. [fp] is what goes into the qr. Kept in [dir] as gate_key (PKCS8 + public key,
- * base64, like the device key file) and gate_cert.der, so the fingerprint survives restarts
- * and both of the app's processes (the app and the ":worker") present the same identity.
+ * over it. [fp] is what goes into the qr. The key is the device key when that is P-256,
+ * else a separate gate key (Keys.gate: the Android KeyStore, or gate_key in [dir]); the
+ * certificate is kept in [dir] as gate_cert.der, so the fingerprint survives restarts and
+ * both of the app's processes (the app and the ":worker") present the same identity.
+ * The private key may live in the Android KeyStore and not be exportable: it goes to the
+ * TLS stack as a key object ([OneKey]), never as bytes.
  */
 class GateIdentity(val keyPair: KeyPair, val certDer: ByteArray) {
   val cert: X509Certificate = GateCert.parse(certDer)
   val fp: String = GateCert.fingerprint(certDer)
 
   /** Key managers that offer this one certificate to the TLS stack, as server or as client. */
-  fun keyManagers(): Array<KeyManager> {
-    val ks = KeyStore.getInstance("PKCS12").apply { load(null, null) }
-    ks.setKeyEntry("kula-gate", keyPair.private, CharArray(0), arrayOf(cert))
-    return KeyManagerFactory.getInstance(KeyManagerFactory.getDefaultAlgorithm()).apply { init(ks, CharArray(0)) }.keyManagers
+  fun keyManagers(): Array<KeyManager> = arrayOf(OneKey(keyPair.private, arrayOf(cert)))
+
+  /**
+   * One EC key and its certificate for TLS, without a KeyStore in between: a PKCS12 store
+   * would have to encode the private key, which a keystore key refuses. Conscrypt (Android)
+   * and the JDK both take any X509ExtendedKeyManager; Conscrypt signs with a keystore key
+   * through the keystore itself.
+   */
+  class OneKey(private val key: PrivateKey, private val chain: Array<X509Certificate>) : X509ExtendedKeyManager() {
+    private fun fits(keyType: String?): Boolean = keyType == null || keyType.equals("EC", true) || keyType.startsWith("EC_", true)
+    override fun getClientAliases(keyType: String?, issuers: Array<out Principal>?): Array<String>? = if (fits(keyType)) arrayOf(ALIAS) else null
+    override fun chooseClientAlias(keyTypes: Array<out String>?, issuers: Array<out Principal>?, socket: Socket?): String? = if (keyTypes == null || keyTypes.any { fits(it) }) ALIAS else null
+    override fun getServerAliases(keyType: String?, issuers: Array<out Principal>?): Array<String>? = if (fits(keyType)) arrayOf(ALIAS) else null
+    override fun chooseServerAlias(keyType: String?, issuers: Array<out Principal>?, socket: Socket?): String? = if (fits(keyType)) ALIAS else null
+    override fun chooseEngineClientAlias(keyTypes: Array<out String>?, issuers: Array<out Principal>?, engine: SSLEngine?): String? = chooseClientAlias(keyTypes, issuers, null)
+    override fun chooseEngineServerAlias(keyType: String?, issuers: Array<out Principal>?, engine: SSLEngine?): String? = chooseServerAlias(keyType, issuers, null)
+    override fun getCertificateChain(alias: String?): Array<X509Certificate>? = if (alias == ALIAS) chain.clone() else null
+    override fun getPrivateKey(alias: String?): PrivateKey? = if (alias == ALIAS) key else null
+
+    companion object { const val ALIAS = "kula-gate" }
   }
 
   companion object {
     /** A fresh identity; [cn] is the device id (DeviceKey.id). */
     fun create(cn: String, pair: KeyPair = GateCert.newP256()): GateIdentity = GateIdentity(pair, GateCert.selfSigned(pair, cn))
 
+    /** For a software device key (the tests, and a phone without a keystore): files only. */
+    fun loadOrCreate(dir: File, deviceKey: SoftwareKey): GateIdentity = loadOrCreate(dir, deviceKey, deviceKey.keyPair, null)
+
     /**
-     * Loads the identity under [dir] or makes one. A P-256 [deviceKey] is used as the TLS
-     * key itself; an Ed25519 one gets a separate P-256 gate key (see GateCert). A stored
-     * certificate whose key no longer matches is replaced.
+     * Loads the identity under [dir] or makes one. A P-256 [deviceKey] is used as the TLS key
+     * itself ([devicePair], whose private key may be a keystore key); an Ed25519 one gets a
+     * separate P-256 gate key (see GateCert and Keys.gate, in [vault] when there is one). A
+     * stored certificate whose key no longer matches is replaced.
      */
-    fun loadOrCreate(dir: File, deviceKey: SoftwareKey): GateIdentity {
+    fun loadOrCreate(dir: File, deviceKey: DeviceKey, devicePair: KeyPair, vault: KeyVault?, log: (String) -> Unit = {}): GateIdentity {
       dir.mkdirs()
-      val keyFile = File(dir, "gate_key")
       val certFile = File(dir, "gate_cert.der")
-      val pair: KeyPair = if (deviceKey.alg == DeviceKey.P256) deviceKey.keyPair else loadOrCreateP256(keyFile)
+      val pair: KeyPair = if (deviceKey.alg == DeviceKey.P256) devicePair else Keys.gate(File(dir, "gate_key"), vault, deviceKey.id, log).first
       if (certFile.exists()) {
         val der = certFile.readBytes()
         val ok = runCatching { GateCert.parse(der).publicKey.encoded.contentEquals(pair.public.encoded) }.getOrDefault(false)
@@ -163,21 +185,6 @@ class GateIdentity(val keyPair: KeyPair, val certDer: ByteArray) {
       val id = create(deviceKey.id, pair)
       certFile.writeBytes(id.certDer)
       return id
-    }
-
-    private fun loadOrCreateP256(file: File): KeyPair {
-      if (file.exists()) {
-        val lines = file.readLines()
-        if (lines.size >= 3 && lines[0].trim() == DeviceKey.P256) {
-          val dec = java.util.Base64.getDecoder()
-          val kf = KeyFactory.getInstance("EC")
-          return KeyPair(kf.generatePublic(X509EncodedKeySpec(dec.decode(lines[2].trim()))), kf.generatePrivate(PKCS8EncodedKeySpec(dec.decode(lines[1].trim()))))
-        }
-      }
-      val pair = GateCert.newP256()
-      val enc = java.util.Base64.getEncoder()
-      file.writeText("${DeviceKey.P256}\n${enc.encodeToString(pair.private.encoded)}\n${enc.encodeToString(pair.public.encoded)}\n")
-      return pair
     }
   }
 }

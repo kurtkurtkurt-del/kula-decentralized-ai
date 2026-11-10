@@ -5,10 +5,12 @@ import http from 'node:http';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { startGateServer, probe, MAX_HANDSHAKES, type TlsServer, type GateEvent } from '../src/gate.ts';
+import { createHash } from 'node:crypto';
+import { startGateServer, probe, Tunnel, MAX_HANDSHAKES, type TlsServer, type GateEvent } from '../src/gate.ts';
 import { createIdentity, Paired, newPin } from '../src/tls.ts';
 import { urlProblem, isPrivateAddress, overSize, sizeProblem } from '../src/policy.ts';
-import { download } from '../src/download.ts';
+import { download, pinnedMaster } from '../src/download.ts';
+import { lanIPv4, sourceAddressTo } from '../src/sysinfo.ts';
 import { startApiServer } from '../src/api.ts';
 
 // What docs/SECURITY.md says the worker refuses: floods of half-open connections, v1 on
@@ -115,16 +117,16 @@ test('url policy: only public http(s) without credentials; private, loopback, li
   assert.equal(urlProblem('ftp://example.com/m'), 'url must be http(s)');
   assert.equal(urlProblem('not a url'), 'bad url');
   assert.equal(urlProblem('https://user:pw@example.com/m'), 'url must not carry credentials');
-  assert.equal(urlProblem('http://127.0.0.1:8080/m'), 'url points at a private address');
+  assert.equal(urlProblem('http://127.0.0.1:8080/m'), "url must be public or the master's own address");
   assert.equal(urlProblem('http://localhost/m'), 'url points at a local host');
   assert.equal(urlProblem('http://router.local/m'), 'url points at a local host');
-  assert.equal(urlProblem('http://192.168.1.1/m'), 'url points at a private address');
-  assert.equal(urlProblem('http://10.0.0.5/m'), 'url points at a private address');
-  assert.equal(urlProblem('http://172.20.0.1/m'), 'url points at a private address');
-  assert.equal(urlProblem('http://169.254.169.254/latest/meta-data'), 'url points at a private address');
-  assert.equal(urlProblem('http://[::1]/m'), 'url points at a private address');
-  assert.equal(urlProblem('http://[fe80::1]/m'), 'url points at a private address');
-  assert.equal(urlProblem('http://[::ffff:10.0.0.1]/m'), 'url points at a private address');
+  assert.equal(urlProblem('http://192.168.1.1/m'), "url must be public or the master's own address");
+  assert.equal(urlProblem('http://10.0.0.5/m'), "url must be public or the master's own address");
+  assert.equal(urlProblem('http://172.20.0.1/m'), "url must be public or the master's own address");
+  assert.equal(urlProblem('http://169.254.169.254/latest/meta-data'), "url must be public or the master's own address");
+  assert.equal(urlProblem('http://[::1]/m'), "url must be public or the master's own address");
+  assert.equal(urlProblem('http://[fe80::1]/m'), "url must be public or the master's own address");
+  assert.equal(urlProblem('http://[::ffff:10.0.0.1]/m'), "url must be public or the master's own address");
   assert.equal(urlProblem('http://127.0.0.1/m', true), null);
   assert.equal(isPrivateAddress('8.8.8.8'), false);
   assert.equal(isPrivateAddress('100.64.1.1'), true);
@@ -171,7 +173,7 @@ test('download: a redirect into the lan, a redirect loop, a body past the given 
     await assert.rejects(download(`${base}/big`, path.join(dir, 'd'), undefined, undefined, { allowPrivate: true, size: 1000 }), /size mismatch/);
     assert.ok(!fs.existsSync(path.join(dir, 'a')) && !fs.existsSync(path.join(dir, 'b')) && !fs.existsSync(path.join(dir, 'c')) && !fs.existsSync(path.join(dir, 'd')));
     // what a private-address check without the test switch does to a 127.0.0.1 url
-    await assert.rejects(download(`${base}/big`, path.join(dir, 'e'), undefined, undefined, {}), /private address/);
+    await assert.rejects(download(`${base}/big`, path.join(dir, 'e'), undefined, undefined, {}), /master's own address/);
   } finally {
     srv.close();
   }
@@ -185,11 +187,95 @@ test('/load refuses a bad sha256, a negative size and a lan url with 400 before 
   try {
     assert.deepEqual(await post({ url: 'https://example.com/m', sha256: 'zz', size: 10, name: 'm' }), { status: 400, body: { error: 'sha256 must be 64 hex characters' } });
     assert.deepEqual(await post({ url: 'https://example.com/m', sha256: 'ab'.repeat(32), size: -5, name: 'm' }), { status: 400, body: { error: 'need size (bytes)' } });
-    assert.deepEqual(await post({ url: 'http://192.168.1.10/m', sha256: 'ab'.repeat(32), size: 10, name: 'm' }), { status: 400, body: { error: 'url points at a private address' } });
+    assert.deepEqual(await post({ url: 'http://192.168.1.10/m', sha256: 'ab'.repeat(32), size: 10, name: 'm' }), { status: 400, body: { error: "url must be public or the master's own address" } });
     assert.deepEqual(await post({ url: 'file:///etc/passwd', sha256: 'ab'.repeat(32), size: 10, name: 'm' }), { status: 400, body: { error: 'url must be http(s)' } });
     assert.equal(fs.readdirSync(models).length, 0);
     assert.equal(api.status().busy, false);
   } finally {
     await api.close();
+  }
+});
+
+test('url policy: the one exception is the private address of the master that sent the /load, as an ip literal, never loopback', () => {
+  assert.equal(urlProblem('http://192.168.1.5:8000/m/x/a.gguf', false, '192.168.1.5'), null);
+  assert.equal(urlProblem('http://192.168.1.5:8000/m', false, '::ffff:192.168.1.5'), null, 'the gate may see a mapped address');
+  assert.equal(urlProblem('http://[fe80::5]/m', false, 'FE80::5'), null);
+  assert.equal(urlProblem('http://192.168.1.6/m', false, '192.168.1.5'), "url must be public or the master's own address");
+  assert.equal(urlProblem('http://10.0.0.1/m', false, '192.168.1.5'), "url must be public or the master's own address");
+  assert.equal(urlProblem('http://169.254.169.254/latest/meta-data', false, '192.168.1.5'), "url must be public or the master's own address");
+  // a relayed connection reaches the gate from 127.0.0.1: no exception for it
+  assert.equal(urlProblem('http://127.0.0.1:8000/m', false, '127.0.0.1'), "url must be public or the master's own address");
+  assert.equal(urlProblem('http://[::1]:8000/m', false, '::1'), "url must be public or the master's own address");
+  // a name is never the exception, even one that would resolve to the master
+  assert.equal(urlProblem('http://masters-mac.local/m', false, '192.168.1.5'), 'url points at a local host');
+  assert.equal(urlProblem('http://localhost/m', false, '192.168.1.5'), 'url points at a local host');
+  // public stays public
+  assert.equal(urlProblem('https://huggingface.co/m', false, '192.168.1.5'), null);
+  assert.equal(pinnedMaster('http://192.168.1.5/m', '192.168.1.5'), '192.168.1.5');
+  assert.equal(pinnedMaster('http://192.168.1.5/m', null), null);
+  assert.equal(pinnedMaster('http://127.0.0.1/m', '127.0.0.1'), null);
+  assert.equal(pinnedMaster('https://huggingface.co/m', '192.168.1.5'), null);
+  assert.equal(pinnedMaster('http://8.8.8.8/m', '8.8.8.8'), null, 'a public master needs no exception');
+});
+
+test('a master offers its model at the address it sends from towards the peer', async () => {
+  assert.equal(await sourceAddressTo('127.0.0.1'), '127.0.0.1');
+  const lan = lanIPv4();
+  if (lan) assert.equal(await sourceAddressTo(lan), lan);
+});
+
+// A master on this lan: the gate sees its address, the api lets it hand out the model from
+// that address and from nowhere else in the lan. Needs a lan address on this machine.
+test('/load through the gate: the master\'s own lan address is fetched; another private ip, a private name, a redirect off it and a loopback (relay) peer are refused', { skip: !lanIPv4() && 'no lan address' }, async () => {
+  const lan = lanIPv4()!;
+  const other = lan === '10.255.255.1' ? '10.255.255.2' : '10.255.255.1';
+  const model = Buffer.from('a tiny model');
+  const sha = createHash('sha256').update(model).digest('hex');
+  const lo = await new Promise<http.Server>((r) => { const s = http.createServer((_q, res) => res.end(model)); s.listen(0, '127.0.0.1', () => r(s)); });
+  const loPort = (lo.address() as net.AddressInfo).port;
+  const files = await new Promise<http.Server>((r) => {
+    const s = http.createServer((req, res) => {
+      if (req.url === '/m.gguf') { res.writeHead(200, { 'content-length': model.length }); res.end(model); return; }
+      if (req.url === '/to-loopback') { res.writeHead(302, { location: `http://127.0.0.1:${loPort}/m.gguf` }); res.end(); return; }
+      if (req.url === '/to-public') { res.writeHead(302, { location: 'http://93.184.216.34/m.gguf' }); res.end(); return; }
+      if (req.url === '/to-self') { res.writeHead(302, { location: '/m.gguf' }); res.end(); return; }
+      res.writeHead(404); res.end();
+    });
+    s.listen(0, lan, () => r(s));
+  });
+  const fport = (files.address() as net.AddressInfo).port;
+  const models = tmp();
+  const api = await startApiServer({ models, llama: null, startBackend: async () => ({ port: 1, stop: async () => {} }) });
+  const gate = await startGateServer({ port: 0, host: lan, secret: 'lan-secret', targets: (ch) => (ch === 'api' ? api.port : null) });
+  const loGate = await startGateServer({ port: 0, host: '127.0.0.1', secret: 'lan-secret', targets: (ch) => (ch === 'api' ? api.port : null) });
+  const tunnel = new Tunnel(lan, gate.port, 'lan-secret', 'api');
+  const loTunnel = new Tunnel('127.0.0.1', loGate.port, 'lan-secret', 'api');
+  const tport = await tunnel.listen();
+  const loTport = await loTunnel.listen();
+  const load = async (port: number, url: string, name: string) => {
+    const r = await fetch(`http://127.0.0.1:${port}/load`, { method: 'POST', body: JSON.stringify({ url, sha256: sha, size: model.length, name }) });
+    return { status: r.status, text: await r.text() };
+  };
+  try {
+    const same = await load(tport, `http://${lan}:${fport}/m.gguf`, 'a.gguf');
+    assert.equal(same.status, 200);
+    assert.match(same.text, /"done":true/, same.text);
+    assert.ok(fs.existsSync(path.join(models, 'a.gguf')));
+    const hop = await load(tport, `http://${lan}:${fport}/to-self`, 'b.gguf');
+    assert.match(hop.text, /"done":true/, 'a redirect that stays on the same address is followed');
+    assert.deepEqual(await load(tport, `http://${other}:${fport}/m.gguf`, 'c.gguf'), { status: 400, text: '{"error":"url must be public or the master\'s own address"}' });
+    const named = await load(tport, `http://localhost.:${loPort}/m.gguf`, 'd.gguf');
+    assert.match(named.text, /resolves to a private address/, named.text);
+    const offLo = await load(tport, `http://${lan}:${fport}/to-loopback`, 'e.gguf');
+    assert.match(offLo.text, /redirect left the master's address/, offLo.text);
+    const offPub = await load(tport, `http://${lan}:${fport}/to-public`, 'f.gguf');
+    assert.match(offPub.text, /redirect left the master's address/, offPub.text);
+    // the same master through 127.0.0.1 (what a relayed stream looks like): no exception
+    assert.deepEqual(await load(loTport, `http://${lan}:${fport}/m.gguf`, 'g.gguf'), { status: 400, text: '{"error":"url must be public or the master\'s own address"}' });
+    assert.deepEqual(fs.readdirSync(models).sort(), ['a.gguf', 'b.gguf']);
+  } finally {
+    await tunnel.close(); await loTunnel.close(); await gate.close(); await loGate.close(); await api.close();
+    files.close(); lo.close();
+    fs.rmSync(models, { recursive: true, force: true });
   }
 });

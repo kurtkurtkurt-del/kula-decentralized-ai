@@ -16,19 +16,21 @@ import kotlin.concurrent.thread
  * at the source. One thread per download; progress goes to [onProgress] at most 4×/s.
  *
  * Limits (docs/SECURITY.md): the url and every redirect must pass [UrlPolicy] (public http(s);
- * a name that resolves to a private address is refused too), the body may not run past
- * [expectedSize] when one was given, and the disk keeps [SizePolicy.KEEP_FREE_BYTES].
+ * a name that resolves to a private address is refused too; the one exception is the literal
+ * address of the master that sent a /load, and then every hop stays on it), the body may not
+ * run past [expectedSize] when one was given, and the disk keeps [SizePolicy.KEEP_FREE_BYTES].
  */
 class ModelDownloader(private val onProgress: (id: String, got: Long, total: Long, state: String, error: String?) -> Unit) {
   private val cancelled = ConcurrentHashMap.newKeySet<String>()
   private val active = ConcurrentHashMap<String, Thread>()
 
-  fun start(id: String, url: String, dest: File, sha256: String?, expectedSize: Long) {
+  /** [master]: the address of the master that asked for this download (a /load), null for the app's own downloads; see [UrlPolicy.isMaster]. */
+  fun start(id: String, url: String, dest: File, sha256: String?, expectedSize: Long, master: String? = null) {
     if (active.containsKey(id)) return
     cancelled.remove(id)
     active[id] = thread(name = "download-$id") {
       try {
-        run(id, url, dest, sha256?.lowercase(), expectedSize)
+        run(id, url, dest, sha256?.lowercase(), expectedSize, master)
       } catch (e: Exception) {
         Log.w(TAG, "download $id: ${e.message}")
         onProgress(id, dest.resolveSibling(dest.name + ".part").length(), expectedSize, if (cancelled.contains(id)) "cancelled" else "error", e.message)
@@ -45,7 +47,7 @@ class ModelDownloader(private val onProgress: (id: String, got: Long, total: Lon
 
   fun isActive(id: String) = active.containsKey(id)
 
-  private fun run(id: String, url: String, dest: File, sha256: String?, expectedSize: Long) {
+  private fun run(id: String, url: String, dest: File, sha256: String?, expectedSize: Long, master: String?) {
     dest.parentFile?.mkdirs()
     val part = dest.resolveSibling(dest.name + ".part")
     var got = part.length()
@@ -57,7 +59,7 @@ class ModelDownloader(private val onProgress: (id: String, got: Long, total: Lon
     var attempt = 0
     while (true) {
       if (cancelled.contains(id)) { onProgress(id, got, total, "cancelled", null); return }
-      val conn = open(url, got)
+      val conn = open(url, got, master)
       try {
         val code = conn.responseCode
         when {
@@ -131,13 +133,15 @@ class ModelDownloader(private val onProgress: (id: String, got: Long, total: Lon
    * passes the policy and the resolved address is checked: HttpURLConnection would follow a
    * 302 into the lan on its own.
    */
-  private fun open(url: String, got: Long): HttpURLConnection {
+  private fun open(url: String, got: Long, master: String?): HttpURLConnection {
     var at = url
+    // the master's own address, when the url is that very literal: every hop stays on it
+    val pinned = UrlPolicy.pinnedMaster(url, master)
     for (hop in 0..UrlPolicy.MAX_REDIRECTS) {
-      UrlPolicy.problem(at)?.let { throw PolicyException(it) }
+      UrlPolicy.problem(at, master)?.let { throw PolicyException(it) }
       val u = URL(at)
       val resolved = runCatching { java.net.InetAddress.getAllByName(u.host) }.getOrElse { throw java.io.IOException("cannot resolve ${u.host}") }
-      if (resolved.any { UrlPolicy.isPrivateAddress(it) }) throw PolicyException("${u.host} resolves to a private address")
+      UrlPolicy.hopProblem(at, master, pinned, resolved.toList())?.let { throw PolicyException(it) }
       val conn = (u.openConnection() as HttpURLConnection).apply {
         connectTimeout = 20_000
         readTimeout = 60_000

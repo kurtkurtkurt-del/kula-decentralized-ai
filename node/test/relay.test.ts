@@ -41,7 +41,7 @@ function fakeLlamaServer(): Promise<{ port: number; close: () => void }> {
   });
 }
 
-// a worker like `kula-node share --tls`, without llama.cpp
+// a worker like `kula-node share` (tls, the default), without llama.cpp
 async function fakeWorker(pin: string | null, events: GateEvent[] = []) {
   const models = fs.mkdtempSync(path.join(os.tmpdir(), 'kula-relay-w-'));
   const llama = await fakeLlamaServer();

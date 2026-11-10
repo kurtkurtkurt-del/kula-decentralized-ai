@@ -10,7 +10,7 @@ import { Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { createHash } from 'node:crypto';
 import dns from 'node:dns';
-import { isPrivateAddress, urlProblem, overSize, MAX_REDIRECTS, KEEP_FREE_BYTES } from './policy.js';
+import { isPrivateAddress, isLoopback, plainIp, urlIp, urlProblem, NOT_PUBLIC, overSize, MAX_REDIRECTS, KEEP_FREE_BYTES } from './policy.js';
 
 export type Progress = (got: number, total: number) => void;
 
@@ -22,15 +22,18 @@ function publicLookup(host: string, options: any, cb: any) {
   dns.lookup(host, opts, (err: any, address: any, family?: any) => {
     if (err) return done(err);
     const addrs = Array.isArray(address) ? address.map((a: any) => a.address) : [address];
-    if (addrs.some((a: string) => isPrivateAddress(a))) return done(new Error(`${host} resolves to a private address`));
+    if (addrs.some((a: string) => isPrivateAddress(a))) return done(new Error(`${NOT_PUBLIC} (${host} resolves to a private address)`));
     done(null, address, family);
   });
 }
 
 // Every hop, the first and each redirect, goes through the url policy; at most MAX_REDIRECTS.
-function request(url: string, headers: Record<string, string>, signal: AbortSignal | undefined, allowPrivate: boolean, hops = 0): Promise<http.IncomingMessage> {
+// `pinned` is the master's address when the first url used the exception for it: then every
+// hop must stay on that very ip (a redirect elsewhere, public or private, is refused).
+function request(url: string, headers: Record<string, string>, signal: AbortSignal | undefined, allowPrivate: boolean, pinned: string | null, hops = 0): Promise<http.IncomingMessage> {
   return new Promise((resolve, reject) => {
-    const why = urlProblem(url, allowPrivate);
+    if (pinned && urlIp(url) !== pinned) return reject(new Error('redirect left the master\'s address'));
+    const why = urlProblem(url, allowPrivate, pinned);
     if (why) return reject(new Error(why));
     const u = new URL(url);
     const mod = u.protocol === 'https:' ? https : http;
@@ -41,7 +44,7 @@ function request(url: string, headers: Record<string, string>, signal: AbortSign
         if (hops >= MAX_REDIRECTS) return reject(new Error('too many redirects'));
         let next: string;
         try { next = new URL(res.headers.location, u).toString(); } catch { return reject(new Error('bad redirect')); }
-        resolve(request(next, headers, signal, allowPrivate, hops + 1));
+        resolve(request(next, headers, signal, allowPrivate, pinned, hops + 1));
         return;
       }
       resolve(res);
@@ -56,7 +59,15 @@ function freeBytes(dir: string): number | null {
 
 // `size` is what the master said the file is: the body may not run past it (a server that
 // streams for ever would otherwise fill the disk), and the disk must keep KEEP_FREE_BYTES.
-export interface DownloadLimits { size?: number; allowPrivate?: boolean }
+// `masterIp`: the address of the master that asked for this download (policy.ts urlProblem).
+export interface DownloadLimits { size?: number; allowPrivate?: boolean; masterIp?: string | null }
+
+// The master's address when the url is that very private ip literal, else null (no exception).
+export function pinnedMaster(url: string, masterIp: string | null | undefined): string | null {
+  if (!masterIp || isLoopback(masterIp)) return null;
+  const ip = urlIp(url);
+  return ip && isPrivateAddress(ip) && ip === plainIp(masterIp) ? ip : null;
+}
 
 export async function download(url: string, dest: string, onProgress?: Progress, signal?: AbortSignal, limits: DownloadLimits = {}): Promise<void> {
   const size = limits.size ?? 0;
@@ -66,7 +77,7 @@ export async function download(url: string, dest: string, onProgress?: Progress,
   try { have = fs.statSync(part).size; } catch {}
   const headers: Record<string, string> = { 'user-agent': 'kula-node' };
   if (have > 0) headers.range = `bytes=${have}-`;
-  const res = await request(url, headers, signal, allowPrivate);
+  const res = await request(url, headers, signal, allowPrivate, pinnedMaster(url, limits.masterIp));
   const code = res.statusCode ?? 0;
   if (code === 416) {
     // nothing left to fetch: the part is already the whole file

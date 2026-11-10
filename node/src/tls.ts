@@ -7,7 +7,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { createHash, createPrivateKey, createPublicKey, generateKeyPairSync, randomBytes, sign, X509Certificate, type KeyObject } from 'node:crypto';
-import type { DeviceKey } from './audit/key.js';
+import { moveAside, tighten, writeOnce, type DeviceKey } from './audit/key.js';
 
 const OID_CN = '2.5.4.3';
 const OID_ECDSA_SHA256 = '1.2.840.10045.4.3.2';
@@ -133,20 +133,15 @@ export function createIdentity(cn: string, privateKey = newP256()): GateIdentity
 // P-256 device key is the TLS key itself; an Ed25519 one gets a separate P-256
 // gate key beside it (Android's TLS does not take Ed25519 certificates on every
 // version). A stored certificate whose key no longer matches is replaced.
-export function loadOrCreateIdentity(dir: string, deviceKey: DeviceKey): GateIdentity {
+// A gate key file that is there but unreadable as a key is moved aside (<name>.broken.<unix
+// ms>) and logged, never silently written over; the new certificate has a new fingerprint.
+export function loadOrCreateIdentity(dir: string, deviceKey: DeviceKey, log: (s: string) => void = (s) => console.error(s)): GateIdentity {
   fs.mkdirSync(dir, { recursive: true });
   const keyFile = path.join(dir, 'gate_key.pem');
   const certFile = path.join(dir, 'gate_cert.der');
   let privateKey: KeyObject;
   if (deviceKey.alg === 'p256') privateKey = deviceKey.privateKey;
-  else {
-    try {
-      privateKey = createPrivateKey({ key: fs.readFileSync(keyFile, 'utf8'), format: 'pem' });
-    } catch {
-      privateKey = newP256();
-      fs.writeFileSync(keyFile, privateKey.export({ type: 'pkcs8', format: 'pem' }) as string, { mode: 0o600 });
-    }
-  }
+  else privateKey = loadOrCreateGateKey(keyFile, log);
   try {
     const certDer = fs.readFileSync(certFile);
     const cert = new X509Certificate(certDer);
@@ -155,6 +150,27 @@ export function loadOrCreateIdentity(dir: string, deviceKey: DeviceKey): GateIde
   const id = createIdentity(deviceKey.id, privateKey);
   fs.writeFileSync(certFile, id.certDer);
   return id;
+}
+
+function loadOrCreateGateKey(keyFile: string, log: (s: string) => void): KeyObject {
+  let pem: string | null = null;
+  try {
+    pem = fs.readFileSync(keyFile, 'utf8');
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e;
+  }
+  if (pem !== null) {
+    try {
+      const key = createPrivateKey({ key: pem, format: 'pem' });
+      tighten(keyFile);
+      return key;
+    } catch {
+      const to = moveAside(keyFile);
+      log(`gate key ${keyFile} could not be read; kept as ${to}, a new one is made (paired devices must pair again)`);
+    }
+  }
+  const key = newP256();
+  return writeOnce(keyFile, key.export({ type: 'pkcs8', format: 'pem' }) as string) ? key : loadOrCreateGateKey(keyFile, log);
 }
 
 // The worker's record of the clients it has paired with (two-way TOFU): one

@@ -833,3 +833,28 @@ ul.wiz-steps li::before { content: "› "; color: var(--meta); }
 #host-line { text-align: center; margin: 0; font-family: var(--mono); font-size: 12px; }
 .host-more summary { font-size: 12.5px; color: var(--mute); cursor: pointer; }
 .host-more .row { display: flex; gap: 8px; align-items: flex-end; flex-wrap: wrap; }
+
+/* the trust branch's one screen (10.11.2026): one verdict, then each device's checks */
+.tr-verdict { display: flex; gap: 12px; align-items: center; padding: 14px 16px; border-radius: 16px; margin: 4px 0 12px; border: 1px solid color-mix(in srgb, var(--tc) 35%, transparent); background: color-mix(in srgb, var(--tc) 12%, var(--card)); --tc: var(--meta); }
+.tr-verdict.ok { --tc: var(--sage); }
+.tr-verdict.bad { --tc: var(--red); }
+.tr-big { flex: none; width: 44px; height: 44px; border-radius: 50%; display: grid; place-items: center; font-size: 22px; font-weight: 700; color: var(--card); background: var(--tc); }
+.tr-words { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.tr-words b { font-family: var(--serif); font-size: 19px; font-weight: 600; color: var(--tc); }
+.tr-words span { font-size: 13px; color: var(--words); line-height: 1.4; overflow-wrap: anywhere; }
+.tr-card { border-radius: 12px; background: var(--card); border: 1px solid var(--line); padding: 8px 10px; margin-bottom: 8px; }
+.tr-card.bad { border-color: color-mix(in srgb, var(--red) 45%, transparent); }
+.tr-head { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+.tr-head b { font-size: 13.5px; font-weight: 600; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tr-v { margin-left: auto; font-size: 11.5px; color: var(--mute); white-space: nowrap; }
+.tr-dot { flex: none; width: 9px; height: 9px; border-radius: 50%; background: var(--meta); }
+.tr-dot.ok { background: var(--sage); }
+.tr-dot.bad { background: var(--red); }
+.tr-check { display: grid; grid-template-columns: 16px 74px 1fr; gap: 6px; font-size: 12.5px; padding: 3px 0; border-top: 1px solid var(--line); align-items: baseline; }
+.tr-check .tr-m { font-weight: 700; color: var(--meta); text-align: center; }
+.tr-check.ok .tr-m { color: var(--sage); }
+.tr-check.bad .tr-m, .tr-check.bad .tr-t { color: var(--red); }
+.tr-check .tr-k { color: var(--meta); font-size: 11.5px; }
+.tr-check .tr-t { color: var(--words); line-height: 1.4; overflow-wrap: anywhere; }
+.tr-accept { margin-top: 6px; font-size: 12px; }
+.bt-viz .marks i.bad { border-color: var(--red); background: color-mix(in srgb, var(--red) 22%, transparent); }

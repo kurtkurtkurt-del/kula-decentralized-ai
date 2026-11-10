@@ -1,7 +1,8 @@
 // What a /load request may ask for. The master is paired, but a paired phone that was
 // taken over, or a bug in it, must not turn this computer into a proxy into the lan or
-// fill its disk: only http(s) to a public address, a sha256 that is one, and a size the
-// body must keep to. The Kotlin twin is Guard.kt (UrlPolicy, ModelName).
+// fill its disk: only http(s) to a public address (or the master's own lan address, see
+// urlProblem), a sha256 that is one, and a size the body must keep to. The Kotlin twin is
+// Guard.kt (UrlPolicy, ModelName).
 import net from 'node:net';
 
 export const SHA256_RE = /^[0-9a-f]{64}$/;
@@ -33,10 +34,36 @@ export function isPrivateAddress(ip: string): boolean {
   return false;
 }
 
+// An address as one form: "::ffff:10.0.0.5" and "10.0.0.5" are the same peer, ipv6 lowercase.
+export function plainIp(ip: string): string {
+  const l = ip.replace(/^\[|\]$/g, '').toLowerCase();
+  const m = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/.exec(l);
+  return m ? m[1] : l;
+}
+
+export function isLoopback(ip: string): boolean {
+  const p = plainIp(ip);
+  return p === '::1' || (net.isIPv4(p) && p.startsWith('127.'));
+}
+
+// The host of a url as an ip literal, or null when it is a name (or no url).
+export function urlIp(url: string): string | null {
+  try {
+    const host = new URL(url).hostname.replace(/^\[|\]$/g, '');
+    return net.isIP(host) ? plainIp(host) : null;
+  } catch { return null; }
+}
+
 // null when the url may be fetched, else why not. Hostnames are not resolved here: a name
 // that resolves to a private address is caught by the connect-time check in download.ts.
-// `allowPrivate` is for tests, which serve files from 127.0.0.1.
-export function urlProblem(url: string, allowPrivate = false): string | null {
+// `allowPrivate` is for tests, which serve files from 127.0.0.1. `masterIp` is the one
+// exception: the address of the master that sent this /load (the gate saw it), so a master
+// on the same wi-fi can hand out the model from its own lan address. Only that ip literal,
+// never a name, never loopback (a relayed connection reaches the gate from 127.0.0.1).
+// the same words as the phone's Guard.kt (UrlPolicy.NOT_PUBLIC)
+export const NOT_PUBLIC = "url must be public or the master's own address";
+
+export function urlProblem(url: string, allowPrivate = false, masterIp: string | null = null): string | null {
   let u: URL;
   try { u = new URL(url); } catch { return 'bad url'; }
   if (u.protocol !== 'https:' && u.protocol !== 'http:') return 'url must be http(s)';
@@ -45,7 +72,10 @@ export function urlProblem(url: string, allowPrivate = false): string | null {
   if (!host) return 'bad url';
   if (allowPrivate) return null;
   if (host === 'localhost' || host.endsWith('.localhost') || host.endsWith('.local')) return 'url points at a local host';
-  if (net.isIP(host) && isPrivateAddress(host)) return 'url points at a private address';
+  if (net.isIP(host) && isPrivateAddress(host)) {
+    if (masterIp && !isLoopback(masterIp) && plainIp(host) === plainIp(masterIp)) return null;
+    return NOT_PUBLIC;
+  }
   return null;
 }
 

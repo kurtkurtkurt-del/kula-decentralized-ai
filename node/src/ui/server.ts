@@ -314,6 +314,14 @@ export async function startUi(opts: UiOptions): Promise<UiServer> {
       log(`god's eye forgot its notes (${n} file${n === 1 ? '' : 's'})`);
       return json(res, 200, { forgot: n });
     }
+    // a decision on a branch's page (the trust report: "I cleared it" on a device's ledger)
+    if (route === 'brain/act') {
+      if (!eye) return json(res, 404, { error: 'no brain here' });
+      if (body?.branch !== 'trust' || typeof body?.action !== 'string' || typeof body?.arg !== 'string') return json(res, 400, { error: 'bad act' });
+      const word = eye.act('trust', body.action, body.arg);
+      if (word) log(`god's eye trust: ${body.action} ${body.arg}`);
+      return json(res, word ? 200 : 409, word ? { ok: true, view: eye.view() } : { error: 'nothing to do' });
+    }
     if (route === 'invite/new') return json(res, 200, await rotateInvite());
     if (route === 'peers/add') {
       try {

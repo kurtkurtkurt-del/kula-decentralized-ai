@@ -158,7 +158,13 @@ S → C   OK <proof_s>     pin:    HMAC-SHA256(pin, "nonce_s|nonce_c|channel|fp_
   else goes to the v1 reader, and a v1 hello starts with `K` (0x4b), so there is no overlap.
 - A phone worker always creates an identity; its QR while running is v3. A v2 QR an older
   master still holds keeps working against the same worker over v1, because the secret is
-  still in the share record.
+  still in the share record, **until any master pairs over v2** (10.11.2026): from then on
+  every plain hello hears `NO no v1` (`v1Open()` in `Gate.kt` and `node/src/gate.ts`: a
+  secret and no paired certificate). v1 has no identity of its own, so the rule is global,
+  not per device; forgetting the last paired master opens it again. The worker's status and
+  `GET /trust` say whether v1 is open.
+- `kula-node share` is TLS by default since 10.11.2026 (`--no-tls` for v1 only); its secret,
+  when one is given for old phones, comes from `KULA_SECRET` or `--secret-file`, not `ps`.
 - A new master reads both: v3 gives `fp` + `pin` and v2; v2 gives `secret` and v1.
 - Vectors: v1 in `vectors`, v2 pin proofs in `v2`, the certificate in `cert`. Both
   implementations test all three.
@@ -214,6 +220,42 @@ The wire reply is `NO <reason>`; the same word is the `why` of the ledger's `rej
 Client-side errors: `fingerprint mismatch` (the server certificate is not the one in the
 QR; no hello is sent), `tls …` (handshake failure), `server proof wrong`.
 
+## the api channel's two rules from the gate (10.11.2026)
+
+**Which master is asking.** The api server only sees 127.0.0.1: the gate pipes to it. For
+the `api` channel the gate records *the local port of its leg to the api server → the
+master's address* while the pipe lives (`ApiPeers` in `Guard.kt`; the registry in
+`node/src/gate.ts`). A loopback peer (a relay stream, an adb forward) is never recorded.
+
+**Where a `/load` may download from.** A public http(s) url, or a private ip *literal*
+that is exactly the address of the master that sent this `/load`: a computer on the same
+wi-fi hands out a file only it has from its own address (`node/src/modelserve.ts`, a random
+path, that file only). Never a name that resolves private, never loopback, and once the
+exception was used every redirect must stay on that address (`redirect left the master's
+address`). Anything else: `url must be public or the master's own address`.
+
+## GET /trust
+
+The worker's account of its own security, on the `api` channel, for the computer's security
+report ([AUDIT.md](AUDIT.md#the-security-report-10112026)). `ApiServer.kt` / `Trust.kt` and
+`node/src/trust.ts` write the same bytes (pinned in `node/test/conformance.test.ts`).
+
+```
+GET /trust  or  GET /trust?since=<sha256 hex of a ledger line>
+200 {"v":1,"id":"<device id>","key":{"alg","pub":"<base64 spki>","store":"keystore"|"file"},
+     "cert":"<base64 der>"|null,"gate":{"v1":<bool>,"tls":<bool>,"paired":<n>},
+     "ledger":{"count","head","self":"ok"|"broken"|"empty","found":true|false|null,"more":<bool>,"lines":[…]},
+     "rejects":{"day":{"<why>":<n>},"last":[{"t","why","peer"}]}}
+400 {"error":"bad since"}
+```
+
+- `lines`: after `since` when it is found (at most 200, `more` when there are more), else
+  the last 200 (`found` false: the line is gone, the ledger was cleared or rewritten; `found`
+  null: no `since` asked). Raw lines, exactly as stored; only whole lines.
+- `id` is sha256(`key.pub`)[:16], and the gate certificate's CN is the same id: whoever
+  pinned the certificate can tie the ledger's signatures to it.
+- Nothing secret: no v1 secret, no pairing code, no private key, no prompts.
+
 ## the tunnel
 
 `Tunnel` (in `Gate.kt` and `node/src/gate.ts`) listens on a free 127.0.0.1 port. Every
@@ -250,9 +292,12 @@ Binaries come from `node tools/llama-src.mjs --host`.
 | a device impersonating another | **no identity** | the certificate fingerprint, pinned both ways |
 | the worker's own memory abuse by a paired master | no (llama.cpp's protocol allows it; that is why pairing is a trust decision) | same |
 
-Open: the gate key sits on disk, not in the Android KeyStore (`KeyStoreKey` is still an
-interface); a paired master is trusted until `paired` is edited (there is no unpair screen
-yet); kula-node's `--secret` is visible in `ps`.
+Open: a paired master is trusted until `paired` is edited (there is no unpair screen yet).
+Since 10.11.2026 the phone's device and gate keys live in the Android KeyStore (`Keys.kt`,
+`KeyStoreVault.kt`: a P-256 key file is moved in with the same id and fingerprint; an Ed25519
+device key stays a file, since moving it would change the device's identity), and
+kula-node's secret no longer has to be on the command line. The KeyStore path has not run on
+a real phone yet.
 
 ## status (5.11.2026)
 

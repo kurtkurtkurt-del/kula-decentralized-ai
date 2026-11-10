@@ -12,7 +12,8 @@ import { prepareSplit, startSplitServer } from './split.js';
 import { TooBig } from './planner.js';
 import { findLlama, sha256File } from './llama.js';
 import { serveModel } from './modelserve.js';
-import { freeRamMB, lanIPv4, measureBandwidth } from './sysinfo.js';
+import { isLoopback } from './policy.js';
+import { freeRamMB, lanIPv4, measureBandwidth, sourceAddressTo } from './sysinfo.js';
 import { expandHome } from './paths.js';
 import { DashboardState, type DeviceView } from './dashboard/state.js';
 import { startDashboard, BATCH_PROMPTS, type Dashboard } from './dashboard/server.js';
@@ -167,7 +168,11 @@ export async function chatCommand(flags: Flags): Promise<number> {
     let url = str(flags['model-url']);
     if (!url && remote.length) { console.error(`${remote.map((p) => p.name).join(', ')}: far away; a model served from this lan does not reach it. pass --model-url with an address it can fetch (https), or let it use a model it already has (the worker api keeps what it downloaded)`); }
     if (!url && peers.length) {
-      const host = lanIPv4();
+      // a worker takes a lan url only from the address its gate sees this master at (policy.ts),
+      // so the model is offered at the address this computer sends from towards the peers
+      const near = peers.find((p) => !p.relay && p.host && !isLoopback(p.host) && p.host !== 'localhost');
+      const from = near ? await sourceAddressTo(near.host) : null;
+      const host = from && !isLoopback(from) && from !== '0.0.0.0' ? from : lanIPv4();
       if (!host) { console.error('no lan ipv4 address: the peers cannot fetch the model from here; pass --model-url'); return 1; }
       const srv = await serveModel(modelFile, host, '0.0.0.0', num(flags['serve-port'], 0));
       extraClose.push(srv.close);

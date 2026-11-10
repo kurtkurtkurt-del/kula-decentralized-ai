@@ -20,7 +20,6 @@ import android.util.Log
 import androidx.core.app.NotificationCompat
 import expo.modules.kulallama.audit.Auditor
 import expo.modules.kulallama.audit.Ledger
-import expo.modules.kulallama.audit.SoftwareKey
 import expo.modules.kulallama.audit.Checks
 import org.json.JSONObject
 import java.io.File
@@ -89,7 +88,11 @@ class WorkerService : Service() {
     private const val CLAIM_MIN_HELD_MB = 256L
 
     fun statusFile(context: Context) = File(context.filesDir, "kula_worker_status.json")
-    /** The worker process's signing key (PKCS8 + public key, base64) and beyin's ledger. */
+    /**
+     * The device key's file (alg, PKCS8, public key, base64) while it has one: a P-256 key moves
+     * into the Android KeyStore ("kula-device", Keys.kt) and the file goes; an Ed25519 key stays
+     * here. And beyin's ledger.
+     */
     fun deviceKeyFile(context: Context) = File(context.filesDir, "kula_device_key")
     fun ledgerFile(context: Context) = File(File(context.filesDir, "beyin"), "ledger.jsonl")
     /** Protocol v2: the gate's P-256 key + certificate (shared by both processes) and the masters this worker paired with. */
@@ -171,11 +174,18 @@ class WorkerService : Service() {
         rpcPort = ServerSocket(0).use { it.localPort }
         api = ApiServer(this, modelsDir(this).apply { mkdirs() }, threads).also { it.start() }
         // beyin/check v0: every gate event goes to the signed ledger; replays and bad clocks are refused
-        val key = SoftwareKey.loadOrCreate(deviceKeyFile(this))
-        auditor = Auditor(Ledger(ledgerFile(this), key), key)
+        val held = KeyStoreVault.deviceKey(deviceKeyFile(this))
+        val key = held.key
+        val ledger = Ledger(ledgerFile(this), key)
+        auditor = Auditor(ledger, key)
+        // a key file that was not a key was moved aside and a new key made (by this process or
+        // the app's): the identity changed, and the ledger says so
+        Keys.takeReplaced(deviceKeyFile(this)).forEach { aside ->
+          runCatching { ledger.append("health", null, linkedMapOf("key" to "replaced", "aside" to aside)) }
+        }
         // protocol v2 on the same port: our certificate, the paired masters, a one-time code per qr
         // (the code is spent by the master that proves it; the status file carries the next one)
-        val identity = GateIdentity.loadOrCreate(gateDir(this), key)
+        val identity = KeyStoreVault.gateIdentity(gateDir(this), held)
         hosts = Hosts(Keeper.hostsFile(this))
         // a code lives PIN_TTL_MS: spent by the master that proves it or by time, a new one follows
         // (by hand), or the next scanned computer's code, or none at all (auto mode)
@@ -188,6 +198,11 @@ class WorkerService : Service() {
         gate = Gate.Server(port, secret, { ch -> if (ch == "rpc") rpcPort else api?.port }, auditor, tls) { ev ->
           when (ev.kind) { "connect" -> connects++; "reject" -> rejects++; "pair" -> ev.fp?.let { hosts?.paired(it, System.currentTimeMillis()) } }
         }.also { it.start() }
+        // GET /trust on the api: the key, the certificate, the gate and the ledger as they are
+        api?.trust = Trust(key, held.store, identity.certDer, ledgerFile(this), {
+          val g = gate
+          Trust.GateState(g?.v1Open() ?: false, g?.tlsOn ?: false, g?.pairedCount ?: 0)
+        }).also { t -> thread(name = "kula-trust-warm", isDaemon = true) { runCatching { t.warm() } } }
         Log.i(TAG, "worker${if (auto) " (auto)" else ""}: $threads threads, $ramMb MB free, %.1f GB/s, gate $port".format(bandwidth))
         val name = intent?.getStringExtra(EXTRA_NAME) ?: Keeper.config(this).name ?: Build.MODEL
         // far away masters: register with the relay; every relayed stream reaches the gate on
@@ -299,6 +314,8 @@ class WorkerService : Service() {
     tls?.let { t ->
       val forHost = t.pinFor
       json.put("fp", t.identity.fp).put("pin", if (forHost == null) t.pin ?: JSONObject.NULL else JSONObject.NULL).put("paired", t.paired.size())
+      // v1 (the plain secret) is off once anything is paired: the share screen offers the v3 qr only
+      json.put("v1", gate?.v1Open() ?: false)
       if (forHost != null && t.pin != null) json.put("pairFor", hosts?.byFp(forHost)?.name ?: "computer")
     }
     // the relay code for the v3 qr (and the "share far away" screen), or why there is none yet

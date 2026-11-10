@@ -1,6 +1,6 @@
 // The api channel: the same tiny http api a phone offers in "apart" mode.
-// GET /status, POST /load, POST /chat, POST /stop, GET /blob?mb=N. Streams are
-// server sent events, one JSON object per `data:` line. Behind it runs llama-server.
+// GET /status, POST /load, POST /chat, POST /stop, GET /blob?mb=N, GET /trust. Streams
+// are server sent events, one JSON object per `data:` line. Behind it runs llama-server.
 // /blob is the bench's tunnel speed test: N MB (1024²) of zeros, N capped at 64
 // (BLOB_MAX_MB), the same bytes and headers as ApiServer.kt on a phone.
 import http from 'node:http';
@@ -11,6 +11,8 @@ import { SHA256_RE, sizeProblem, urlProblem } from './policy.js';
 import { freePort, startChild, type Child } from './children.js';
 import type { LlamaBinaries } from './llama.js';
 import { blobMb } from './benchcore.js';
+import { apiPeerOf } from './gate.js';
+import { trustBody, SINCE_RE, type TrustSource } from './trust.js';
 
 export interface ApiStatus {
   loaded: boolean;
@@ -35,8 +37,13 @@ export interface ApiOptions {
   defaultCtx?: number;
   // told about every /load: the sha256 asked for and the one on disk (null when nothing usable arrived)
   onLoad?: (name: string, wantSha256: string, gotSha256: string | null) => void;
-  // tests serve their files from 127.0.0.1; a worker never takes a private url
+  // tests serve their files from 127.0.0.1; a worker never takes a private url, except
+  // the address of the master that sent the /load (policy.ts urlProblem)
   allowPrivateUrls?: boolean;
+  // which master is behind a request, by the remote port of its socket; default: the gate's record
+  masterOf?: (remotePort: number | undefined) => string | null;
+  // what GET /trust tells (trust.ts); without it /trust is not found
+  trust?: TrustSource;
 }
 
 export interface ApiServer {
@@ -132,7 +139,7 @@ export async function startApiServer(opts: ApiOptions): Promise<ApiServer> {
     state.loaded = false; state.model = null; state.sha256 = null; state.ctx = 0;
   }
 
-  async function handleLoad(body: any, res: http.ServerResponse) {
+  async function handleLoad(body: any, res: http.ServerResponse, masterIp: string | null) {
     if (state.busy) return json(res, 409, { error: 'busy' });
     const { url, sha256, size, name } = body ?? {};
     if (typeof url !== 'string' || typeof sha256 !== 'string' || typeof name !== 'string') return json(res, 400, { error: 'need url, sha256, size, name' });
@@ -146,7 +153,7 @@ export async function startApiServer(opts: ApiOptions): Promise<ApiServer> {
     // the url is only fetched when the file is not here yet, so only then must it pass the
     // policy (as ApiServer.kt does): this computer's own api is told file://<the model it has>
     if (!fs.existsSync(file)) {
-      const urlWhy = urlProblem(url, opts.allowPrivateUrls);
+      const urlWhy = urlProblem(url, opts.allowPrivateUrls, masterIp);
       if (urlWhy) return json(res, 400, { error: urlWhy });
     }
     state.busy = true;
@@ -168,7 +175,7 @@ export async function startApiServer(opts: ApiOptions): Promise<ApiServer> {
       if (!have) {
         log(`downloading ${name} from ${url}`);
         sse.send({ state: 'running', got: 0, total: size ?? 0 });
-        await download(url, file, (got, total) => sse.send({ state: 'running', got, total: total || size || 0 }), ac.signal, { size: Number(size), allowPrivate: opts.allowPrivateUrls });
+        await download(url, file, (got, total) => sse.send({ state: 'running', got, total: total || size || 0 }), ac.signal, { size: Number(size), allowPrivate: opts.allowPrivateUrls, masterIp });
         sse.send({ state: 'checking', got: 0, total: size ?? 0 });
         const sum = await sha256Of(file, (got, total) => sse.send({ state: 'checking', got, total }));
         opts.onLoad?.(name, want, sum);
@@ -277,12 +284,19 @@ export async function startApiServer(opts: ApiOptions): Promise<ApiServer> {
     }
   }
 
+  const masterOf = opts.masterOf ?? apiPeerOf;
   const server = http.createServer(async (req, res) => {
     const url = (req.url ?? '/').split('?')[0];
     try {
       if (req.method === 'GET' && url === '/status') return json(res, 200, state);
+      if (req.method === 'GET' && url === '/trust' && opts.trust) {
+        const q = new URLSearchParams((req.url ?? '').split('?')[1] ?? '');
+        const since = q.get('since');
+        if (since !== null && !SINCE_RE.test(since)) return json(res, 400, { error: 'bad since' });
+        return json(res, 200, trustBody(opts.trust, since));
+      }
       if (req.method === 'GET' && url === '/blob') return blob(new URLSearchParams((req.url ?? '').split('?')[1] ?? '').get('mb'), res);
-      if (req.method === 'POST' && url === '/load') return handleLoad(await readJson(req), res);
+      if (req.method === 'POST' && url === '/load') return handleLoad(await readJson(req), res, masterOf(req.socket.remotePort));
       if (req.method === 'POST' && url === '/chat') return handleChat(await readJson(req), res);
       if (req.method === 'POST' && url === '/stop') { current?.abort(); return json(res, 200, { ok: true, wasBusy: state.busy }); }
       if (req.method === 'POST' && url === '/unload') { if (state.busy) return json(res, 409, { error: 'busy' }); await unload(); return json(res, 200, { ok: true }); }

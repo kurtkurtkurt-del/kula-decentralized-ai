@@ -15,7 +15,8 @@ import { openApart, openPeerDevice, type Cluster, type Message, type ModelRef, t
 import { readPeers, writePeers, parsePeerText, upsertPeer, findPeer, probePeers, peersFile, whereIs, discover, type Peer, type PeerProbe, type Found, type PeerKind } from '../peers.js';
 import { connectRemote, handshake, peekGate, GateRefused, type GatePeek } from '../gate.js';
 import { Adb, isSerial, stateHelp, NO_ADB_HELP, type CableDevice } from './cable.js';
-import { loadOrCreateIdentity, type GateIdentity } from '../tls.js';
+import { loadOrCreateIdentity, fingerprint, type GateIdentity } from '../tls.js';
+import { sha256Hex } from '../audit/ledger.js';
 import { loadOrCreate as loadDeviceKey } from '../audit/key.js';
 import { home, repoRoots } from '../paths.js';
 import { findLlama, sha256File, type LlamaBinaries } from '../llama.js';
@@ -24,7 +25,8 @@ import { prepareSplit, startSplitServer } from '../split.js';
 import { TooBig } from '../planner.js';
 import { simModelOf } from '../gguf.js';
 import { publicName } from '../devicenames.js';
-import { freeRamMB, measureBandwidth } from '../sysinfo.js';
+import { freeRamMB, measureBandwidth, sourceAddressTo, lanIPv4 } from '../sysinfo.js';
+import { serveModel } from '../modelserve.js';
 import { modelUrl, type UiModel } from './catalog.js';
 import { FULL_CATALOG, lineupView, type LineupView } from './lineup.js';
 import { Usage, type Use } from './usage.js';
@@ -35,6 +37,51 @@ export const MODES: Mode[] = ['phone', 'apart', 'split', 'here'];
 const MB = 1024 * 1024;
 
 export interface Reach { ok: boolean; ms?: number; reason?: string }
+
+// What a device said about its own security (its GET /trust, docs/GATE.md), kept per device. The
+// ledger lines are a window: each look asks only for the lines after the last one received, and
+// the window keeps the newest TRUST_WINDOW for god's eye's trust branch, which checks them.
+export interface TrustLook {
+  at: number; error: string | null;
+  id: string | null; alg: string | null; pub: string | null; store: string | null; cert: string | null;
+  certPinned: boolean | null;         // the certificate it shows is the one pinned from its qr (the pin itself stays here)
+  v1: boolean | null; paired: number | null;
+  self: string | null; count: number | null; head: string | null;
+  upTo: string | null;                // sha256 of the last line received: where the next look starts
+  lines: string[]; restartedAt: number | null;
+  rejectsDay: Record<string, number>; rejectsLast: { t: number; why: string; peer: string }[];
+}
+export const TRUST_WINDOW = 500;
+export const OLD_WORKER = 'an older kula without the security report: update it';
+const str = (v: unknown, max = 4096): string | null => (typeof v === 'string' && v.length <= max ? v : null);
+const HEX64 = /^[0-9a-f]{64}$/;
+
+/** One /trust answer folded into what was kept before (exported for tests). [pin]: the fingerprint
+ *  this computer pinned for the device; only whether the shown certificate matches it goes on. */
+export function foldTrust(was: TrustLook | null, b: any, at: number, pin: string | null = null): TrustLook {
+  const lg = b?.ledger ?? {};
+  const got: string[] = Array.isArray(lg.lines) ? lg.lines.filter((l: unknown) => typeof l === 'string' && l.length <= 64 * 1024).slice(0, 200) : [];
+  let lines: string[];
+  let restartedAt = was?.restartedAt ?? null;
+  if (lg.found === true && was) lines = [...was.lines, ...got].slice(-TRUST_WINDOW);
+  else { lines = got; if (lg.found === false) restartedAt = at; }
+  const day: Record<string, number> = {};
+  if (b?.rejects?.day && typeof b.rejects.day === 'object') for (const [w, n] of Object.entries(b.rejects.day)) if (typeof n === 'number' && Number.isFinite(n)) day[String(w).slice(0, 40)] = n;
+  const last = Array.isArray(b?.rejects?.last) ? b.rejects.last.slice(0, 5).map((r: any) => ({ t: Number(r?.t) || 0, why: String(r?.why ?? '').slice(0, 40), peer: String(r?.peer ?? '').slice(0, 80) })) : [];
+  const cert = str(b?.cert, 8192);
+  let certPinned: boolean | null = null;
+  if (cert && pin) certPinned = fingerprint(Buffer.from(cert, 'base64')) === pin.toLowerCase();
+  return {
+    at, error: null,
+    id: str(b?.id, 64), alg: str(b?.key?.alg, 16), pub: str(b?.key?.pub), store: str(b?.key?.store, 16), cert, certPinned,
+    v1: typeof b?.gate?.v1 === 'boolean' ? b.gate.v1 : null, paired: typeof b?.gate?.paired === 'number' ? b.gate.paired : null,
+    self: str(lg.self, 16), count: typeof lg.count === 'number' ? lg.count : null, head: typeof lg.head === 'string' && HEX64.test(lg.head) ? lg.head : null,
+    // not the head: with `more` the answer stopped before it
+    upTo: got.length ? sha256Hex(got[got.length - 1]) : lg.found === true ? was?.upTo ?? null : null,
+    lines, restartedAt, rejectsDay: day, rejectsLast: last,
+  };
+}
+
 export interface PeerRow {
   id: string; name: string; kind: string; where: string; far: boolean; tls: boolean; waitingPair: boolean;
   ram: number | null; bw: number | null; gpu: string | null; last_ok: string | null;
@@ -160,7 +207,7 @@ export function needMb(size: number, kvMbPer1k: number, ctx: number): number {
   return Math.round((size / MB) * 1.05 + (kvMbPer1k * ctx) / 1024 + 300);
 }
 
-export const PRIVATE_URL_NOTE = 'phones only fetch models from the public internet (a huggingface url with a sha256); a file that is only on this computer cannot reach them. pick a model from the list, or use "here" or "split" for this file.';
+export const PRIVATE_URL_NOTE = 'a file that is only on this computer reaches other devices only over the wi-fi (they fetch it from this computer\'s own address); pick devices on the wi-fi, a model from the list, or use "here" or "split" for this file.';
 
 export function defaultModelDirs(): string[] {
   const dirs = [path.join(home(), 'models')];
@@ -205,6 +252,8 @@ export class Engine {
   private installedBy = new Map<string, boolean>();
   private jobs = new Map<string, CableJob>();
   private held = new Map<string, string | null>();
+  // each device's security report (its GET /trust), by device (its first record's id)
+  private trusts = new Map<string, TrustLook>();
   private discovering: Promise<FoundRow[]> | null = null;
   // a paired wi-fi phone that mdns heard at another address than the peer book has (it got a
   // new ip on this network): tried by the next probe when the saved address does not answer,
@@ -378,10 +427,42 @@ export class Engine {
       const open = openPeerDevice(p, this.identity());
       dev = await Promise.race([open, sleep(ms).then(() => { open.then((d) => d.close()).catch(() => {}); return null; })]);
       if (!dev) return mine;
-      const r = await fetch(`http://127.0.0.1:${dev.apiPort}/status`, { signal: AbortSignal.timeout(ms) });
-      const st = (await r.json()) as { loaded?: unknown; model?: unknown };
-      return st.loaded === true && typeof st.model === 'string' && st.model ? path.basename(st.model).slice(0, 200) : mine;
+      let held = mine;
+      try {
+        const r = await fetch(`http://127.0.0.1:${dev.apiPort}/status`, { signal: AbortSignal.timeout(ms) });
+        const st = (await r.json()) as { loaded?: unknown; model?: unknown };
+        if (st.loaded === true && typeof st.model === 'string' && st.model) held = path.basename(st.model).slice(0, 200);
+      } catch {}
+      // the same tunnel carries the device's security report
+      await this.askTrust(p, dev.apiPort, ms);
+      return held;
     } catch { return mine; } finally { await dev?.close().catch(() => {}); }
+  }
+
+  // GET /trust through a tunnel already open: only the ledger lines after the last one received.
+  // A failed look keeps what was known; a worker without the route says so.
+  private async askTrust(p: Peer, apiPort: number, ms: number): Promise<void> {
+    const id = this.groupId(p.id);
+    let look = this.trusts.get(id) ?? null;
+    try {
+      for (let round = 0; round < 5; round++) {
+        const since = look && !look.error && look.upTo ? `?since=${look.upTo}` : '';
+        const r = await fetch(`http://127.0.0.1:${apiPort}/trust${since}`, { signal: AbortSignal.timeout(ms) });
+        if (r.status === 404) { look = { ...(look ?? foldTrust(null, {}, Date.now())), at: Date.now(), error: OLD_WORKER }; break; }
+        if (!r.ok) throw new Error(`it answered ${r.status}`);
+        const b = await r.json();
+        look = foldTrust(look && !look.error ? look : null, b, Date.now(), p.fp ?? null);
+        if (b?.ledger?.more !== true) break;
+      }
+    } catch (e) {
+      if (!look) look = { ...foldTrust(null, {}, Date.now()), error: `no answer: ${(e as Error).message}` };
+    }
+    if (look) this.trusts.set(id, look);
+  }
+
+  /** What a device last said about its security (GET /trust), or null when never asked. */
+  trustOf(deviceId: string): TrustLook | null {
+    return this.trusts.get(this.groupId(deviceId)) ?? null;
   }
 
   // Kula devices announcing themselves on this network (mdns), for the wi-fi steps. One look
@@ -516,7 +597,7 @@ export class Engine {
     const row = this.deviceRow(g);
     writePeers(list.filter((p) => !g.includes(p)), file);
     for (const p of g) {
-      this.reach.delete(p.id); this.held.delete(p.id); this.heard.delete(p.id); this.heardAt.delete(p.id);
+      this.reach.delete(p.id); this.held.delete(p.id); this.trusts.delete(p.id); this.heard.delete(p.id); this.heardAt.delete(p.id);
       if (p.cable) this.jobs.delete(p.cable.serial);
     }
     const ways = [row.ways.cable && 'cable', row.ways.wifi && 'wi-fi', row.ways.relay && 'relay'].filter(Boolean);
@@ -1141,7 +1222,6 @@ export class Engine {
     }
     const ctxMax = cat?.ctx_max ?? 32768;
     const ctx = Math.max(512, Math.min(ctxMax, Number(req.ctx) > 0 ? Math.floor(Number(req.ctx)) : 4096));
-    if (localOnly && (mode === 'phone' || mode === 'apart')) throw new Error(PRIVATE_URL_NOTE);
     const llama = this.llama();
     if ((mode === 'split' || mode === 'here') && !llama && !this.opts.startBackend) throw new Error(`${mode} needs llama.cpp on this computer: run kula-node setup (or pick "phone")`);
 
@@ -1165,6 +1245,11 @@ export class Engine {
         if (g.length > 1) reached.push(`${p.named ? p.name : publicName(p.name)} ${viaWords(viaOf(p), p.cable ? null : whereIs(p))}`);
       }
     }
+    // a file only this computer has reaches the devices from this computer's own lan address
+    // (a worker takes a private address only from the master it is talking to, Guard.kt /
+    // policy.ts): so only over the wi-fi. A cable's forward and a relay both reach the worker's
+    // gate from 127.0.0.1, where nothing private is let through.
+    if (localOnly && (mode === 'phone' || mode === 'apart') && (!peers.length || peers.some((p) => p.cable || p.relay))) throw new Error(PRIVATE_URL_NOTE);
     // apart: this computer runs its own copy unless the page left it out
     const hereToo = !(mode === 'apart' && req.here === false);
     if (exact && mode === 'apart' && !peers.length && !hereToo) throw new Error('pick at least one device');
@@ -1201,8 +1286,18 @@ export class Engine {
       }
 
       if (mode === 'phone' || mode === 'apart') {
-        const m = cat!;
-        const ref: ModelRef = { url: m.url ?? modelUrl(m), sha256: m.sha256, size: m.size, name: m.file, ctx };
+        let m: Pick<CatalogEntry, 'name' | 'file' | 'size' | 'sha256' | 'kv_mb_per_1k'> & { url?: string } = cat!;
+        if (localOnly) {
+          say({ phase: 'checking', device: 'this computer', line: 'hashing the file' });
+          const sha256 = await sha256File(localOnly.file);
+          const host = (await sourceAddressTo(peers[0].host)) ?? lanIPv4();
+          if (!host) throw new Error('this computer has no lan address to offer the file from');
+          const srv = await serveModel(localOnly.file, host);
+          this.extraClose.push(() => srv.close());
+          m = { name: localOnly.name, file: localOnly.name, size: localOnly.size, sha256, kv_mb_per_1k: 0, url: srv.url };
+          plan.push(`${localOnly.name} is only on this computer: the devices fetch it from here (${host}, this file only, under a random path) and check its sha256.`);
+        }
+        const ref: ModelRef = { url: m.url ?? modelUrl(m as UiModel), sha256: m.sha256, size: m.size, name: m.file, ctx };
         const need = needMb(m.size, m.kv_mb_per_1k, ctx);
         // this computer joins apart mode only when it can run the file it already has
         const localFile = mode === 'apart' && hereToo && (llama || this.opts.startBackend) ? this.findLocal(m.file) : null;

@@ -23,7 +23,7 @@ export const BRANCHES: BranchMeta[] = [
   { n: 5, id: 'connections', name: 'connections', what: 'how each device is reached: a usb cable, the wi-fi or a relay. no server outside, no relay by default.' },
   { n: 6, id: 'planner', name: 'planner', what: 'where the model sits: one phone, a copy on each (apart) or one model across them (split), and why.' },
   { n: 7, id: 'executor', name: 'executor', what: 'who is answering now and how fast; in apart mode the fastest free device answers.' },
-  { n: 8, id: 'trust', name: 'trust and verification', what: 'every link is tls with the certificate pinned from the qr, pairing takes a one-time code, the model server stays on 127.0.0.1 behind the gate.' },
+  { n: 8, id: 'trust', name: 'trust and verification', what: 'one answer for the whole cluster: is every link tls with the certificate pinned, does each device prove who it is, what did its gate refuse, does its signed ledger hold together.' },
   { n: 9, id: 'limits', name: 'limits', what: 'will keep phones cool and charged: heat, battery and energy rules a device may set for itself.' },
   { n: 10, id: 'models', name: 'models and device care', what: 'which model fits which device, files checked by sha256, what each device holds right now.' },
   { n: 11, id: 'review', name: 'request review', what: 'will look at a job before it runs: is it allowed, is it safe to send to someone else’s phone.' },
@@ -51,6 +51,41 @@ export interface EyeDevice {
   waitingPair: boolean;            // waiting for its one-time code
   plugged: boolean | null;         // on a cable: is it plugged in now (null: unknown)
   holds: string | null;            // the model file it has loaded
+  trust: EyeTrust | null;          // what the device said about itself (GET /trust); null: never asked
+}
+
+/** A device's own account of its security (the worker's GET /trust, docs/GATE.md), as kula's engine
+ *  received it. Nothing in it is taken on faith: the trust branch checks the certificate against the
+ *  pinned fingerprint and every ledger line's chain and signature itself. */
+export interface EyeTrust {
+  at: number;                      // ms, when the last answer (or failure) came
+  error: string | null;            // why there is no answer: an older worker without /trust, a timeout, …
+  id: string | null;               // the device id it claims (32 hex)
+  alg: string | null;              // its ledger key: ed25519 or p256
+  pub: string | null;              // the ledger key's public half, base64 spki
+  store: string | null;            // where that key lives: keystore or file
+  cert: string | null;             // its gate certificate, base64 der
+  certPinned: boolean | null;      // kula compared it with the fingerprint pinned from the qr (the pin itself stays out)
+  v1: boolean | null;              // would it still accept the old plain-text protocol
+  paired: number | null;           // how many certificates it has paired
+  self: string | null;             // ok, broken or empty: its own check of its ledger
+  count: number | null;            // lines in its ledger
+  head: string | null;             // sha256 of its last ledger line
+  lines: string[];                 // ledger lines received, oldest first, a window of the last few hundred
+  restartedAt: number | null;      // when its ledger last no longer held the line seen before
+  rejectsDay: Record<string, number>;               // refusals of the last 24 h, by reason
+  rejectsLast: { t: number; why: string; peer: string }[];
+}
+
+/** The trust branch's one screen: one verdict over every device, and each device's checks. */
+export type Verdict = 'ok' | 'bad' | 'unknown';
+export interface TrustCheck { k: string; ok: boolean | null; text: string }
+export interface TrustReport {
+  verdict: Verdict;
+  headline: string;
+  at: number;
+  host: { name: string; checks: TrustCheck[] };
+  devices: { id: string; name: string; verdict: Verdict; checks: TrustCheck[]; refused: string; accept: boolean }[];
 }
 
 export interface EyeWork {
@@ -83,7 +118,7 @@ export interface EyeProject {
 
 export interface Snapshot {
   at: number;                      // ms, the clock of the computer that took it
-  host: { name: string; freeMb: number | null };
+  host: { name: string; freeMb: number | null; ledger?: { ok: boolean; count: number; problem: string | null } | null };
   devices: EyeDevice[];
   work: EyeWork;
   models: EyeModel[];
@@ -101,6 +136,7 @@ export interface BranchView {
   lines: string[];                 // its page: a list, newest or most important first
   note?: string;                   // its page: one line under the list
   what?: string;                   // overrides the map's line once the branch says more
+  report?: TrustReport;            // the trust branch's one screen
 }
 
 /** A line a branch wants in the live feed. */
@@ -112,6 +148,8 @@ export interface Branch {
   id: BranchId;
   observe(now: Snapshot, before: Snapshot | null): void;
   view(): BranchView;
+  /** something the person decided on the branch's page (the trust branch: "I cleared it"); a word back, or null */
+  act?(action: string, arg: string): string | null;
 }
 
 /** What a branch lives on: a clock, its own notes file, the feed, the others' views (read only). */

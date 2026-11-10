@@ -12,6 +12,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import { startApiServer } from '../src/api.ts';
 import { startGateServer, handshake, GateRefused, Tunnel } from '../src/gate.ts';
 import { blobMb, BLOB_MAX_MB } from '../src/benchcore.ts';
+import { fromSeed } from '../src/audit/key.ts';
 
 type Srv = { port: number; close: () => void };
 const listen = (s: http.Server): Promise<Srv> => new Promise((r) => s.listen(0, '127.0.0.1', () => r({ port: (s.address() as any).port, close: () => s.close() })));
@@ -225,5 +226,30 @@ test("/blob through the gate's api channel arrives whole (what the bench times)"
   } finally {
     await tunnel.close(); await gate.close(); await api.close();
     fs.rmSync(models, { recursive: true, force: true });
+  }
+});
+
+// GET /trust, byte for byte, over the shared audit vectors (the key from the fixed seed, the
+// two vector lines as the ledger): ApiServer.kt must give the same text for the same input.
+test('/trust over the audit vectors gives these exact bytes', async () => {
+  const vectors = JSON.parse(fs.readFileSync(new URL('./audit-vectors.json', import.meta.url), 'utf8'));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kula-conf-'));
+  const ledgerFile = path.join(dir, 'ledger.jsonl');
+  fs.writeFileSync(ledgerFile, vectors.lines.map((v: any) => v.line + '\n').join(''));
+  const key = fromSeed(Buffer.from(vectors.key.seed, 'hex'));
+  const api = await startApiServer({ models: dir, llama: null, trust: { key, ledgerFile, cert: () => null, gate: () => ({ v1: false, tls: true, paired: 1 }), now: () => 1700000042000 } });
+  const pub = Buffer.from(vectors.key.public, 'hex').toString('base64');
+  const [l1, l2] = vectors.lines;
+  const head = `{"v":1,"id":"${vectors.key.id}","key":{"alg":"ed25519","pub":"${pub}","store":"file"},"cert":null,"gate":{"v1":false,"tls":true,"paired":1},`;
+  const tail = `,"rejects":{"day":{},"last":[]}}`;
+  try {
+    const get = async (q: string) => { const r = await fetch(`http://127.0.0.1:${api.port}/trust${q}`); return { status: r.status, type: r.headers.get('content-type'), text: await r.text() }; };
+    assert.deepEqual(await get(''), { status: 200, type: 'application/json', text: `${head}"ledger":{"count":2,"head":"${l2.sha256}","self":"ok","found":null,"more":false,"lines":[${JSON.stringify(l1.line)},${JSON.stringify(l2.line)}]}${tail}` });
+    assert.deepEqual(await get(`?since=${l1.sha256}`), { status: 200, type: 'application/json', text: `${head}"ledger":{"count":2,"head":"${l2.sha256}","self":"ok","found":true,"more":false,"lines":[${JSON.stringify(l2.line)}]}${tail}` });
+    assert.deepEqual(await get(`?since=${'0'.repeat(64)}`), { status: 200, type: 'application/json', text: `${head}"ledger":{"count":2,"head":"${l2.sha256}","self":"ok","found":false,"more":false,"lines":[${JSON.stringify(l1.line)},${JSON.stringify(l2.line)}]}${tail}` });
+    assert.deepEqual(await get('?since=xyz'), { status: 400, type: 'application/json', text: '{"error":"bad since"}' });
+  } finally {
+    await api.close();
+    fs.rmSync(dir, { recursive: true, force: true });
   }
 });

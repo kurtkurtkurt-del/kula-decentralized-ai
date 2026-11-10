@@ -143,14 +143,83 @@ class GateTlsTest {
       }
       // the paired list survives a restart of the gate
       assertTrue(Paired(pairedFile).contains(master.fp))
-      // and a v1 client still connects to the same port with the shared secret
-      assertNull(Gate.probe("127.0.0.1", port, "v1-secret", "rpc"))
-      assertTrue(Gate.probe("127.0.0.1", port, "wrong", "rpc")!!.contains("wrong secret"))
-      assertTrue(events.any { it.kind == "connect" && it.v == 1 } && events.any { it.kind == "connect" && it.v == 2 })
+      // and v1 is off on the same port now that a master is paired, right secret or not
+      assertEquals("gate: NO no v1", Gate.probe("127.0.0.1", port, "v1-secret", "rpc"))
+      assertEquals("gate: NO no v1", Gate.probe("127.0.0.1", port, "wrong", "rpc"))
+      assertTrue(events.any { it.kind == "connect" && it.v == 2 } && events.none { it.kind == "connect" && it.v == 1 })
       assertTrue(events.any { it.kind == "reject" && it.why == "wrong pin" })
     } finally {
       gate.stop(); echo.close()
     }
+  }
+
+  @Test
+  fun v1IsOffOnceAnythingIsPaired() {
+    val echo = echo()
+    val port = freePort()
+    val server = identity("worker")
+    val master = identity("master")
+    val key = SoftwareKey.generate()
+    val ledgerFile = File(java.nio.file.Files.createTempDirectory("kula-ledger").toFile(), "ledger.jsonl")
+    val auditor = expo.modules.kulallama.audit.Auditor(expo.modules.kulallama.audit.Ledger(ledgerFile, key), key)
+    val pin = Gate.newPin()
+    val tls = Gate.TlsServer(server, Paired(null), pin)
+    val gate = Gate.Server(port, "v1-secret", { ch -> if (ch == "rpc") echo.localPort else null }, auditor, tls)
+    gate.start()
+    try {
+      // before any pairing an old master with the v2 qr (the secret) still gets in
+      assertTrue(gate.v1Open())
+      assertNull(Gate.probe("127.0.0.1", port, "v1-secret", "rpc"))
+      // one master pairs over v2
+      assertNull(Gate.probe("127.0.0.1", port, "", "rpc", tls = Gate.TlsClient(master, server.fp, pin)))
+      assertEquals(1, gate.pairedCount)
+      // from now on v1 is refused for everyone: it has no identity to tell masters apart
+      assertFalse(gate.v1Open())
+      assertEquals("gate: NO no v1", Gate.probe("127.0.0.1", port, "v1-secret", "rpc"))
+      // the paired master still gets in
+      assertNull(Gate.probe("127.0.0.1", port, "", "rpc", tls = Gate.TlsClient(master, server.fp)))
+      // the refusal is in the ledger (the gate writes it before it answers)
+      val rejects = ledgerFile.readLines().map { JSONObject(it) }.filter { it.getString("kind") == "reject" }
+      assertEquals(listOf("no v1"), rejects.map { it.getString("why") })
+      assertEquals(-1, expo.modules.kulallama.audit.Ledger.verify(ledgerFile, key.publicKey, key.alg))
+      // forgetting the last paired master opens v1 again
+      tls.paired.forget(master.fp)
+      assertTrue(gate.v1Open())
+    } finally {
+      gate.stop(); echo.close()
+    }
+  }
+
+  @Test
+  fun aServerWithoutASecretNeverHearsV1() {
+    val port = freePort()
+    val gate = Gate.Server(port, null, { null }, null, Gate.TlsServer(identity("w"), Paired(null), null))
+    gate.start()
+    try {
+      assertFalse(gate.v1Open())
+      assertEquals("gate: NO no v1", Gate.probe("127.0.0.1", port, "x", "rpc"))
+    } finally { gate.stop() }
+  }
+
+  @Test
+  fun aKeyThatCannotBeExportedStillSpeaksTls() {
+    // the android keystore's keys have no encoded form: the gate's key managers must not need one
+    val echo = echo()
+    val port = freePort()
+    fun sealed(cn: String): GateIdentity {
+      val p = GateCert.newP256()
+      return GateIdentity.create(cn, KeyPair(p.public, KeysTest.NoExport(p.private as java.security.interfaces.ECPrivateKey)))
+    }
+    val server = sealed("worker")
+    val master = sealed("master")
+    assertNull(server.keyPair.private.encoded)
+    val pin = Gate.newPin()
+    val gate = Gate.Server(port, null, { echo.localPort }, null, Gate.TlsServer(server, Paired(null), pin))
+    gate.start()
+    try {
+      assertNull(Gate.probe("127.0.0.1", port, "", "rpc", tls = Gate.TlsClient(master, server.fp, pin)))
+      assertNull(Gate.probe("127.0.0.1", port, "", "rpc", tls = Gate.TlsClient(master, server.fp)))
+    } finally { gate.stop(); echo.close() }
   }
 
   @Test

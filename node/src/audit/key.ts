@@ -57,18 +57,72 @@ export function generate(): DeviceKey {
   }
 }
 
-export function loadOrCreate(file = keyFile()): DeviceKey {
+// A key file that is there but cannot be read as a key (cut short, overwritten) is not
+// silently replaced: it is moved aside as <name>.broken.<unix ms> and a new one is made,
+// and the caller is told so (`broken`) to write it in the ledger. Other errors (no
+// permission) are thrown: nothing is replaced then.
+export function loadOrCreateKey(file = keyFile(), log: (s: string) => void = (s) => console.error(s)): { key: DeviceKey; broken: string | null } {
+  let broken: string | null = null;
+  let pem: string | null = null;
   try {
-    const pem = fs.readFileSync(file, 'utf8');
-    return fromPrivateKey(createPrivateKey({ key: pem, format: 'pem' }));
+    pem = fs.readFileSync(file, 'utf8');
   } catch (e) {
     if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e;
   }
-  const key = generate();
-  const pem = key.privateKey.export({ type: 'pkcs8', format: 'pem' }) as string;
+  if (pem !== null) {
+    try {
+      const key = fromPrivateKey(createPrivateKey({ key: pem, format: 'pem' }));
+      tighten(file);
+      return { key, broken: null };
+    } catch {
+      broken = moveAside(file);
+      log(`device key ${file} could not be read; kept as ${broken}, a new key is made (the device id changes)`);
+    }
+  }
+  const made = generate();
+  const key = writeOnce(file, made.privateKey.export({ type: 'pkcs8', format: 'pem' }) as string) ? made : loadOrCreateKey(file, log).key;
+  return { key, broken };
+}
+
+export function loadOrCreate(file = keyFile(), log?: (s: string) => void): DeviceKey {
+  return loadOrCreateKey(file, log).key;
+}
+
+// <file>.broken.<unix ms>, the next free one
+export function moveAside(file: string): string {
+  let t = Date.now();
+  let to = `${file}.broken.${t}`;
+  while (fs.existsSync(to)) to = `${file}.broken.${++t}`;
+  fs.renameSync(file, to);
+  return to;
+}
+
+// Writes a new key file, mode 600, all at once: a temp file linked into place, so a second
+// process starting at the same moment never reads half a key, and never overwrites one.
+// false when another process made the file first.
+export function writeOnce(file: string, text: string): boolean {
   fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(file, pem, { mode: 0o600 });
-  return key;
+  const tmp = `${file}.${process.pid}.${Date.now()}.tmp`;
+  fs.writeFileSync(tmp, text, { mode: 0o600 });
+  try {
+    fs.linkSync(tmp, file);
+    return true;
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === 'EEXIST') return false;
+    // a file system without hard links: an exclusive create
+    try { fs.writeFileSync(file, text, { mode: 0o600, flag: 'wx' }); return true; } catch (e2) {
+      if ((e2 as NodeJS.ErrnoException).code === 'EEXIST') return false;
+      throw e2;
+    }
+  } finally {
+    try { fs.unlinkSync(tmp); } catch {}
+  }
+}
+
+// A key file others can read is made 600 (an older kula-node, a copy by hand).
+export function tighten(file: string): void {
+  if (process.platform === 'win32') return;
+  try { if (fs.statSync(file).mode & 0o077) fs.chmodSync(file, 0o600); } catch {}
 }
 
 // Ed25519 signs the message itself; P-256 signs its SHA-256 (ECDSA, DER encoded).

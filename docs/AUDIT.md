@@ -106,6 +106,40 @@ kula-node's `share --lie-ram <MB>` exists to make this rule fire on purpose.
   `node/test/audit-vectors.json` is the byte-identical copy and the node test regenerates
   them. Any new twin of the ledger must reproduce them.
 
+## the security report (10.11.2026)
+
+The first thing beyin will sell, built here first: one screen on the computer's chat page
+(the brain → **trust and verification**) that answers "is my cluster safe?" with one verdict,
+green **all clear** or red **look at this**, and under it every device's checks.
+
+Every worker answers `GET /trust` on its `api` channel, behind the gate (the contract is in
+[GATE.md](GATE.md#get-trust)): its device id, its ledger key's public half and where that key
+lives, its gate certificate, whether it would still take a v1 hello, its ledger lines after
+the last one the computer has, and its refusals of the last day. kula's engine asks it through
+the same tunnel as `/status` at every probe (`askTrust` in `node/src/ui/engine.ts`) and keeps
+a window of the last 500 lines per device; god's eye's trust branch
+(`node/src/godseye/branches/trust.ts`) does the checking. It takes nothing on faith:
+
+| check | how | red when |
+|---|---|---|
+| pinned | the peer record has the fingerprint from the qr | an older pairing (v1 secret, no certificate) |
+| encrypted | tls on the link, and the device's `gate.v1` | no tls, or the device still takes the plain-text protocol |
+| identity | the engine hashes the certificate the device shows and compares it with the pin (the pin itself stays out of god's eye); the branch computes sha256(public key)[:16] and reads the certificate's CN | the certificate is not the pinned one, the key is not the id it claims, the CN names another device |
+| refused | the device's counts of the last 24 h, by reason | any `replay`, or 5 or more wrong codes / secrets / proofs in a day |
+| ledger | every line's `prev` and signature against the device's key, joined to the last line verified before (kept in the branch's notes) | a changed, dropped or inserted line, a forged signature, a ledger that started over (cleared or rewritten), or the device's own check says broken |
+| key | the device's word: keystore or file | never (it is not checkable from outside) |
+
+A ledger fault stays red across looks until the person presses **I know why (I cleared it)**
+on that device (`POST brain/act`, owner only); the chain is then followed from there. A
+device that was not asked yet, or an older worker without `/trust`, is **not checked yet**,
+never green. This computer's own ledger is checked with `verifyChain` (again only when one
+of its files changed). No prompts and no answers are in any of it: ledger lines hold who
+connected, on which channel, and whether they were let in.
+
+Tests: `node/test/godseye-trust.test.ts` (real Ed25519 and P-256 keys, a real certificate,
+real signed lines: a changed line, a forged signature, a dropped line, a restart, too many
+wrong codes, a replay, the old protocol open, the engine's window).
+
 ## peer badges
 
 Beside each device on the peers screen: **verified** (sage), **warning** (gold), **refused**
@@ -127,10 +161,15 @@ anything else verified (`peerBadge` in `app/src/llm/audit.ts`).
 No routing, no server, no scoring, no sharing of the ledger between devices, no hardware
 key, no pruning beyond rotation.
 
-Known gaps (noted, not fixed): a process that dies mid-line leaves a half line that
-`verify` rejects from then on (trim on open is needed); `DeviceKey.loadOrCreate` silently
-replaces a key file shorter than three lines; the key, algorithm and public key are not
-exported from the module, so nothing outside the phone can verify its signatures yet;
+Fixed on 10.11.2026: a half last line (the process died mid-append) is cut off on open
+and before each append, and the cut is itself a signed `health` line `{"torn":<bytes>}`; a
+key file that is there but unreadable is moved aside as `<name>.broken.<ms>` (a `health`
+line `{"key":"replaced"}`) instead of being overwritten in silence; the phone's key lives in
+the Android KeyStore; the key and the lines leave the device through `GET /trust`, so the
+computer verifies the phone's signatures (the security report above).
+
+Known gaps (noted, not fixed): after a key is replaced the old lines no longer verify with
+the new key, so the device reports its ledger `broken` until it is cleared;
 `Json.kt` and `JSON.stringify` differ on `\b`, `\f`, lone surrogates and some decimals
 (none occur in today's fields, but it is the contract); the claim rule measures RSS, not
 the device's real free memory.

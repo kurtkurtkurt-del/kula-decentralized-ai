@@ -28,9 +28,9 @@ class KulaLlamaModule : Module() {
   private val exec = Executors.newSingleThreadExecutor { Thread(it, "kula-llama").apply { isDaemon = true } }
   private val requestIds = AtomicInteger(1)
   private val tunnels = mutableMapOf<String, Gate.Tunnel>()
-  /** This phone's certificate as a master (protocol v2); the same files the worker process uses, so one identity per phone. */
+  /** This phone's certificate as a master (protocol v2); the same keystore keys and files the worker process uses, so one identity per phone. */
   private val identity: GateIdentity by lazy {
-    GateIdentity.loadOrCreate(WorkerService.gateDir(context), expo.modules.kulallama.audit.SoftwareKey.loadOrCreate(WorkerService.deviceKeyFile(context)))
+    KeyStoreVault.gateIdentity(WorkerService.gateDir(context), KeyStoreVault.deviceKey(WorkerService.deviceKeyFile(context)))
   }
   /** `{fp, pin?}` from JS (a v3 peer) → the tls client side; null for a v2 peer (protocol v1 with the secret). */
   private fun tlsOf(m: Map<String, Any?>?): Gate.TlsClient? {
@@ -208,6 +208,8 @@ class KulaLlamaModule : Module() {
         // protocol v2: the worker's certificate and the open pairing code for the v3 qr
         "fp" to s.optString("fp").ifEmpty { null }?.takeIf { alive }, "pin" to s.optString("pin").ifEmpty { null }?.takeIf { alive && !s.isNull("pin") },
         "paired" to s.optInt("paired"),
+        // would the worker still hear a v1 hello (the secret): false once anything is paired
+        "v1" to (alive && s.optBoolean("v1", false)),
         // far away: the relay and the code this worker can be reached by (docs/RELAY.md)
         "relay" to s.optJSONObject("relay")?.takeIf { alive }?.let { mapOf("url" to it.optString("url"), "code" to it.optString("code")) },
         "relayError" to s.optString("relayError").ifEmpty { null }?.takeIf { alive },

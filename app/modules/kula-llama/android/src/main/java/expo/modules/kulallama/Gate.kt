@@ -36,6 +36,8 @@ import kotlin.concurrent.thread
  *   S: "<nonce_s>"
  *   C: "<hmac_c>"                           HMAC-SHA256(secret, nonce_c|nonce_s|channel)
  *   S: "OK <hmac_s>"                        HMAC-SHA256(secret, nonce_s|nonce_c|channel), or "NO <why>"
+ * v1 has no identity: once any master is paired over v2 the server answers every v1 hello
+ * with "NO no v1" ([Server.v1Open]), until the paired list is empty again.
  *
  * Protocol v2 (TLS 1.3 with both sides' self-signed certificates, then the lines inside it;
  * the v3 qr carries the worker's certificate fingerprint "fp" and a one-time pairing code "pin"):
@@ -117,7 +119,7 @@ object Gate {
 
   class Server(
     private val port: Int,
-    /** the v1 secret; null turns v1 off (a plain hello is told "NO no v1") */
+    /** the v1 secret; null turns v1 off (a plain hello is told "NO no v1"), and so does any paired certificate */
     private val secret: String?,
     /** channel -> local port to pipe to (rpc: ggml's server, api: ApiServer). null = closed */
     private val targets: (String) -> Int?,
@@ -131,6 +133,17 @@ object Gate {
     private val inHandshake = java.util.concurrent.atomic.AtomicInteger(0)
     private val ring = ReplayRing()
     val currentPeer: String? get() = slot.peer
+    /** Whether the server has v2 at all. */
+    val tlsOn: Boolean get() = tls != null
+    /** How many certificates are paired over v2. */
+    val pairedCount: Int get() = tls?.paired?.size() ?: 0
+
+    /**
+     * Would a v1 hello be heard right now? Only with a secret and while nothing is paired:
+     * v1 has no identity, so once one master paired over v2 the plain protocol is off for
+     * everyone (docs/GATE.md). Before any pairing an old master with a v2 qr still works.
+     */
+    fun v1Open(): Boolean = secret != null && pairedCount == 0
 
     fun start() {
       if (running) return
@@ -189,6 +202,7 @@ object Gate {
     private fun handlePlain(s: Socket, peer: String, inp: InputStream, handshakeDone: () -> Unit) {
       val out = s.getOutputStream()
       val secret = secret ?: return refuse(s, out, peer, null, "no v1")
+      if (!v1Open()) return refuse(s, out, peer, null, "no v1")
       val hello = readLine(inp)
       if (hello.isEmpty()) return refuse(s, out, peer, null, "no hello")
       val p = hello.trim().split(' ')
@@ -284,13 +298,25 @@ object Gate {
         if (channel == "rpc") slot.release()
         return refuse(s, out, peer, channel, "target down", fp, v)
       }
-      out.write("$okLine\n".toByteArray()); out.flush()
+      // the api server sees only 127.0.0.1: it learns which master sent a request from the
+      // local port of this pipe (a /load may fetch from that master's own address). A relayed
+      // stream arrives from 127.0.0.1 and is not recorded: its peer is the relay, not a master.
+      val localPort = local.localPort
+      val linked = channel == "api" && ApiPeers.put(localPort, peer)
+      try {
+        out.write("$okLine\n".toByteArray()); out.flush()
+      } catch (e: Exception) {
+        if (linked) ApiPeers.remove(localPort)
+        if (channel == "rpc") slot.release()
+        runCatching { local.close() }
+        throw e
+      }
       s.soTimeout = 0
       handshakeDone()
       onEvent(Event("connect", peer, channel, null, fp, v))
       audit { it.onConnect(peer, channel) }
       val started = System.currentTimeMillis()
-      val bytes = pipe(s, inp, local, ByteArray(0))
+      val bytes = try { pipe(s, inp, local, ByteArray(0)) } finally { if (linked) ApiPeers.remove(localPort) }
       if (channel == "rpc") slot.release()
       onEvent(Event("end", peer, channel, null, fp, v))
       audit { it.onEnd(peer, channel, bytes, (System.currentTimeMillis() - started) / 1000) }

@@ -103,13 +103,17 @@ için hiç apk derlenmedi**. Telefonda bakılacaklar:
 ## kalanlar
 
 - fuzz ve ios-module dallarının alınması; iki telefonla bir küme turu.
-- kula-node yönetici olunca ayrı modda modeli kendi LAN adresinden sunuyor; güvenlik incelemesinin
-  URL kuralı işçilerin özel / LAN adreslerinden indirmesini reddediyor. Telefon ustası Hugging Face
-  adresi verdiği için etkilenmiyor; **bilgisayar ustası + ayrı mod şimdilik çalışmaz** (bkz. kararlar 8).
-- Defter: süreç satır ortasında ölürse yarım son satır; `DeviceKey` kısa dosyayı sessizce ezer;
-  anahtar Android KeyStore'a taşınmalı.
+- ~~bilgisayar ustası + ayrı mod~~ (10.11): işçi, özel adresli bir URL'yi yalnız ona `/load`
+  gönderen ustanın kendi adresinden alıyor; sohbet sayfası yalnız bilgisayarda olan bir dosyayı
+  wi-fi'deki cihazlara kendi adresinden sunuyor (kablo ve aktarıcı hariç). Gerçek telefonda denenmedi.
+- ~~Defter yarım satır, `DeviceKey` sessiz ezme, KeyStore~~ (10.11): yarım satır kesilip imzalı
+  `health` satırıyla yazılıyor; bozuk anahtar kenara alınıyor; anahtar Android KeyStore'da (P-256
+  dosyası aynı kimlikle taşınıyor, Ed25519 dosyada kalıyor). **KeyStore + TLS gerçek telefonda denenmedi.**
 - `claim` kuralı RSS ile ölçüyor; cihazın gerçek boş belleğiyle ölçülmeli.
-- kula-node: `--secret` `ps`'te görünür; `share` varsayılanı hâlâ `--tls`siz.
+- ~~kula-node `--secret` `ps`'te, `share` TLS'siz~~ (10.11): `share` varsayılan TLS (`--no-tls`),
+  secret `KULA_SECRET` ya da `--secret-file` ile; v1, bir cihaz v2 ile eşleşince her yerde kapalı.
+- Güvenlik raporu (10.11): sohbet sayfası → the brain → trust: her cihazın `GET /trust`'ı, sertifika,
+  defter zinciri ve imzaları bilgisayarda doğrulanıyor, tek yeşil / kırmızı sonuç (AUDIT.md).
 - Gece: ölçülen watt passport'a girmedi (3 W varsayılıyor); gece yalnız uygulama açıkken çalışır.
 - `sendLedgerHead` yazıldı, çağıran yok (beyin v1).
 - Uygulamada kalan pasaport adları (paket adı, şema, yasal sayfa bağlantıları): karar 7.
@@ -117,7 +121,7 @@ için hiç apk derlenmedi**. Telefonda bakılacaklar:
 
 ## kullanıcının kararını bekleyenler
 
-1. **v1 kapının emekliliği.** Telefon işçisi eski ustalar için v1'i (düz metin) hâlâ kabul ediyor.
+1. ~~**v1 kapının emekliliği.**~~ Karar (10.11): öneri kabul edildi, yapıldı. Telefon işçisi eski ustalar için v1'i (düz metin) hâlâ kabul ediyor.
    Öneri: bir cihaz v3 ile eşleşince ona v1'i kapat; `kula-node share` varsayılanı `--tls` olsun.
 2. **Aktarıcı nerede barınacak.** `node/relay/` Fly, Render ya da Docker ile hazır; genel bir
    adres yok. Kim işletecek, hangi alan adı (beyin'in barındırılan aktarıcısı mı?).
@@ -135,6 +139,6 @@ için hiç apk derlenmedi**. Telefonda bakılacaklar:
    sayfaları nerede olacak (`web/legacy/`'deki afterhours metinleri başlangıç olabilir);
    `app.pasaport.android` / `pasaport://` adları değişecek mi (değişirse kurulu uygulamalar ve
    giriş yönlendirmesi etkilenir).
-8. **İşçinin indirme kuralı.** Öneri: işçi, ustanın kendi adresinden (kapıya bağlanan IP) gelen
+8. ~~**İşçinin indirme kuralı.**~~ Karar (10.11): öneri kabul edildi, yapıldı. Öneri: işçi, ustanın kendi adresinden (kapıya bağlanan IP) gelen
    özel adresli bir URL'yi kabul etsin; başka özel adresleri reddetmeye devam etsin. Böylece
    bilgisayar ustası modelini LAN'dan dağıtabilir, SSRF koruması kalır.

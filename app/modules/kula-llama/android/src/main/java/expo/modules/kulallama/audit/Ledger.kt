@@ -2,6 +2,7 @@ package expo.modules.kulallama.audit
 
 import java.io.File
 import java.io.FileOutputStream
+import java.io.RandomAccessFile
 import java.security.MessageDigest
 
 /**
@@ -15,7 +16,10 @@ import java.security.MessageDigest
  * that is the line without `,"sig":"..."}`. The hash in the next line's prev is SHA-256 of the
  * whole previous line (UTF-8, without the newline). When a file passes [maxBytes] it is
  * renamed to `<name>.<t>.jsonl` and the next line's prev still points at its last line, so
- * the chain continues across files. Appends are synchronized; nothing is ever rewritten.
+ * the chain continues across files. Appends are synchronized; nothing is ever rewritten,
+ * with one exception: a last line the process died in the middle of (no newline at the end)
+ * is cut off before the next line is written, and a `health` line with `torn` = the bytes
+ * dropped records the cut in the chain itself.
  */
 class Ledger(
   val file: File,
@@ -23,12 +27,34 @@ class Ledger(
   private val maxBytes: Long = 5L * 1024 * 1024,
   private val now: () -> Long = System::currentTimeMillis,
 ) {
-  @Volatile var lastHash: String = lastHashOf(file)
+  @Volatile var lastHash: String = GENESIS
     private set
+  /** Bytes cut off a torn last line and not yet recorded (the record failed, say a key that cannot sign). */
+  private var torn = 0L
+
+  init {
+    torn = cutTorn(file)
+    lastHash = lastHashOfChain(file)
+    // the cut goes into the chain at once; when that fails the next append tries again
+    if (torn > 0) runCatching { synchronized(this) { recordTorn(now()) } }
+  }
 
   /** Appends one event and returns the line as written (without the newline). */
   @Synchronized
   fun append(kind: String, peer: String?, fields: Map<String, Any?> = emptyMap(), t: Long = now()): String {
+    // a write that failed half way (disk full) leaves a torn line too: cut it before chaining on
+    val cut = cutTorn(file)
+    if (cut > 0) { torn += cut; lastHash = lastHashOfChain(file) }
+    if (torn > 0) recordTorn(t)
+    return write(kind, peer, fields, t)
+  }
+
+  private fun recordTorn(t: Long) {
+    write("health", null, mapOf("torn" to torn), t)
+    torn = 0
+  }
+
+  private fun write(kind: String, peer: String?, fields: Map<String, Any?>, t: Long): String {
     val ordered = LinkedHashMap<String, Any?>()
     ordered["t"] = t
     ordered["kind"] = kind
@@ -119,6 +145,57 @@ class Ledger(
       file.parentFile?.listFiles()?.filter { rotated.matches(it.name) }?.forEach { ok = it.delete() && ok }
       if (file.exists()) ok = file.delete() && ok
       return ok
+    }
+
+    /**
+     * Cuts a torn last line: when [file] does not end in a newline, everything after its last
+     * newline goes (the whole file when it has none). Returns the bytes dropped, 0 when the
+     * file was whole.
+     */
+    fun cutTorn(file: File): Long {
+      if (!file.exists()) return 0
+      RandomAccessFile(file, "rw").use { raf ->
+        val len = raf.length()
+        if (len == 0L) return 0
+        raf.seek(len - 1)
+        if (raf.read() == '\n'.code) return 0
+        var keep = 0L
+        val buf = ByteArray(8192)
+        var end = len - 1
+        search@ while (end > 0) {
+          val from = maxOf(0L, end - buf.size)
+          val n = (end - from).toInt()
+          raf.seek(from)
+          raf.readFully(buf, 0, n)
+          for (i in n - 1 downTo 0) if (buf[i] == '\n'.code.toByte()) { keep = from + i + 1; break@search }
+          end = from
+        }
+        raf.setLength(keep)
+        return len - keep
+      }
+    }
+
+    /**
+     * The ledger's files oldest first: the files rotated away from [file] by time (and the
+     * ".<n>" a same-millisecond rotation adds), then [file] itself when it exists.
+     */
+    fun chainFiles(file: File): List<File> {
+      val base = file.name.removeSuffix(".jsonl")
+      val rotated = Regex("^" + Regex.escape(base) + "\\.([0-9]+)(?:\\.([0-9]+))?\\.jsonl$")
+      val old = file.parentFile?.listFiles()?.mapNotNull { f ->
+        val m = rotated.matchEntire(f.name) ?: return@mapNotNull null
+        Triple(f, m.groupValues[1].toBigInteger(), m.groupValues[2].ifEmpty { "0" }.toBigInteger())
+      }?.sortedWith(compareBy({ it.second }, { it.third }))?.map { it.first } ?: emptyList()
+      return if (file.exists()) old + file else old
+    }
+
+    /** SHA-256 of the newest line in the chain: [file]'s last line, else the last rotated file's, else the genesis zeros. */
+    fun lastHashOfChain(file: File): String {
+      for (f in chainFiles(file).asReversed()) {
+        val h = lastHashOf(f)
+        if (h != GENESIS) return h
+      }
+      return GENESIS
     }
 
     /** SHA-256 of the last line of [file], or the genesis zeros when there is none. */

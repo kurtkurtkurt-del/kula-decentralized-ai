@@ -6,8 +6,9 @@ import path from 'node:path';
 import net from 'node:net';
 import { createPublicKey } from 'node:crypto';
 import vectors from './audit-vectors.json' with { type: 'json' };
-import { fromSeed, generate, loadOrCreate, publicKeyDer, signText, verifyText } from '../src/audit/key.ts';
-import { Ledger, GENESIS, makeLine, sha256Hex, verifyChain, verifyLines, chainFiles } from '../src/audit/ledger.ts';
+import { fromSeed, generate, loadOrCreate, loadOrCreateKey, publicKeyDer, signText, verifyText } from '../src/audit/key.ts';
+import { Ledger, GENESIS, makeLine, sha256Hex, verifyChain, verifyLines, chainFiles, readLines } from '../src/audit/ledger.ts';
+import { loadOrCreateIdentity } from '../src/tls.ts';
 import { ReplayCheck, clockCheck, claimCheck, modelCheck, boundsCheck, healthWarnings } from '../src/audit/checks.ts';
 import { Auditor } from '../src/audit/auditor.ts';
 import { startGateServer, handshake, connectRemote, GateRefused } from '../src/gate.ts';
@@ -212,4 +213,109 @@ test('kula-node ledger prints and verifies the ledger under KULA_NODE_HOME', asy
     delete process.env.KULA_NODE_HOME;
     fs.rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test('a torn last line (the process died mid-append) is cut back, the cut is a signed health line, and the chain verifies', () => {
+  const dir = tmp();
+  const file = path.join(dir, 'ledger.jsonl');
+  const key = seedKey();
+  let t = 1000;
+  const a = new Ledger(file, key, () => (t += 1));
+  a.append('connect', '10.0.0.7', { channel: 'rpc' });
+  a.append('end', '10.0.0.7', { channel: 'rpc', ms: 5, bytesIn: 1, bytesOut: 2 });
+  const whole = fs.readFileSync(file, 'utf8');
+  const half = '{"t":1003,"kind":"connect","peer":"10.0.0.8","chan';
+  fs.appendFileSync(file, half);
+  const b = new Ledger(file, key, () => (t += 1));
+  const text = fs.readFileSync(file, 'utf8');
+  assert.ok(text.startsWith(whole), 'the whole lines are kept as they were');
+  const lines = readLines(file);
+  assert.equal(lines.length, 3);
+  const health = JSON.parse(lines[2]);
+  assert.equal(health.kind, 'health');
+  assert.equal(health.peer, 'self');
+  assert.equal(health.torn, Buffer.byteLength(half));
+  assert.equal(health.prev, sha256Hex(lines[1]));
+  b.append('connect', '10.0.0.8', { channel: 'api' });
+  const r = verifyChain(file, key.publicKey);
+  assert.equal(r.ok, true, JSON.stringify(r.files));
+  assert.equal(r.count, 4);
+  // a file that is all torn: cut to nothing, the chain starts again from genesis
+  const lone = path.join(dir, 'lone.jsonl');
+  fs.writeFileSync(lone, '{"t":1,"kind":"con');
+  new Ledger(lone, key, () => (t += 1));
+  const one = readLines(lone);
+  assert.equal(one.length, 1);
+  assert.equal(JSON.parse(one[0]).torn, 18);
+  assert.equal(JSON.parse(one[0]).prev, GENESIS);
+  assert.equal(verifyChain(lone, key.publicKey).ok, true);
+  // a whole file is left alone
+  const before = fs.readFileSync(file);
+  new Ledger(file, key, () => (t += 1));
+  assert.deepEqual(fs.readFileSync(file), before);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('a torn line after a rotation chains on from the rotated file', () => {
+  const dir = tmp();
+  const file = path.join(dir, 'ledger.jsonl');
+  const key = seedKey();
+  let t = 1000;
+  const a = new Ledger(file, key, () => (t += 1), 300);
+  for (let i = 0; i < 4; i++) a.append('health', 'self', { n: i });
+  assert.ok(chainFiles(file).length > 1);
+  // the live file holds only half a line
+  fs.writeFileSync(file, '{"t":2000,"kind":"hea');
+  new Ledger(file, key, () => (t += 1), 300);
+  const r = verifyChain(file, key.publicKey);
+  assert.equal(r.ok, true, JSON.stringify(r.files));
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('a device key file that is cut short or not a key is moved aside, not silently replaced; key files are mode 600', () => {
+  const dir = tmp();
+  const file = path.join(dir, 'device_key.pem');
+  const a = loadOrCreate(file);
+  if (process.platform !== 'win32') assert.equal(fs.statSync(file).mode & 0o777, 0o600);
+  const pem = fs.readFileSync(file, 'utf8');
+  fs.writeFileSync(file, pem.slice(0, 40));
+  const said: string[] = [];
+  const r = loadOrCreateKey(file, (s) => said.push(s));
+  assert.ok(r.broken, 'told that it replaced the key');
+  assert.match(path.basename(r.broken!), /^device_key\.pem\.broken\.\d+$/);
+  assert.equal(fs.readFileSync(r.broken!, 'utf8'), pem.slice(0, 40), 'the broken file is kept as it was');
+  assert.notEqual(r.key.id, a.id);
+  assert.equal(said.length, 1);
+  assert.ok(said[0].includes(r.broken!));
+  assert.ok(!said[0].includes(pem.slice(30, 40)), 'the log carries no key bytes');
+  if (process.platform !== 'win32') assert.equal(fs.statSync(file).mode & 0o777, 0o600);
+  assert.equal(loadOrCreate(file).id, r.key.id, 'the new key stays');
+  // an empty file is broken too
+  fs.writeFileSync(file, '');
+  assert.ok(loadOrCreateKey(file, () => {}).broken);
+  // a readable key with loose permissions is made 600
+  if (process.platform !== 'win32') {
+    fs.chmodSync(file, 0o644);
+    loadOrCreate(file);
+    assert.equal(fs.statSync(file).mode & 0o777, 0o600);
+  }
+  assert.equal(fs.readdirSync(dir).filter((n) => n.endsWith('.tmp')).length, 0, 'no temp file left');
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('a broken gate key is moved aside the same way and gets a new certificate', () => {
+  const dir = tmp();
+  const ed = generate();
+  if (ed.alg !== 'ed25519') return;
+  const a = loadOrCreateIdentity(dir, ed, () => {});
+  const keyFile = path.join(dir, 'gate_key.pem');
+  if (process.platform !== 'win32') assert.equal(fs.statSync(keyFile).mode & 0o777, 0o600);
+  fs.writeFileSync(keyFile, 'nonsense');
+  const said: string[] = [];
+  const b = loadOrCreateIdentity(dir, ed, (s) => said.push(s));
+  assert.notEqual(b.fp, a.fp);
+  assert.equal(said.length, 1);
+  assert.equal(fs.readdirSync(dir).filter((n) => /^gate_key\.pem\.broken\.\d+$/.test(n)).length, 1);
+  assert.equal(loadOrCreateIdentity(dir, ed, () => {}).fp, b.fp);
+  fs.rmSync(dir, { recursive: true, force: true });
 });

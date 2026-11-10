@@ -20,11 +20,19 @@ import kotlin.concurrent.thread
  *   POST /load  {url, sha256, size, name, ctx?}   downloads when missing, then loads; streams
  *                                      progress lines "data: {...}\n\n" and ends with {done:true}
  *                                      name is reduced to a file name under models/, url must be
- *                                      public http(s), sha256 is needed to download (Guard.kt)
+ *                                      public http(s) or the literal lan address of the master
+ *                                      that sent this /load (the gate saw it, ApiPeers), sha256
+ *                                      is needed to download (Guard.kt)
  *   POST /chat  {messages:[{role,content}], maxTokens?, temperature?}   SSE: {t:"piece"} … {done, tokens, ms}
  *   POST /stop
  *   GET  /blob?mb=N                    N MB (1024²) of zeros, N capped at 64: the bench's tunnel
  *                                      speed test (app/src/bench, kula-node bench)
+ *   GET  /trust[?since=<64 hex>]       what this device says about itself: id, key (alg, pub,
+ *                                      where it lives), gate certificate, gate state (v1 open,
+ *                                      tls, paired), the ledger (count, head, its own chain
+ *                                      check, up to 200 raw lines: after `since` when found,
+ *                                      else the newest) and the last day's rejects. Nothing
+ *                                      secret. Trust.kt has the exact shape; 400 "bad since".
  *
  * The same routes are what kula-node serves on a computer (node/src/api.ts); its conformance
  * tests pin the bytes, this file follows them by hand (blobMb = bench/core.ts blobMb).
@@ -35,7 +43,8 @@ class ApiServer(private val context: Context, private val modelsDir: File, priva
   private val busy = AtomicBoolean(false)
   @Volatile private var loadedPath: String? = null
   @Volatile private var loadedSha: String? = null
-  private val downloader = ModelDownloader { _, _, _, _, _ -> }
+  /** GET /trust: set by the worker once its key, gate and ledger exist; until then 503. */
+  @Volatile var trust: Trust? = null
 
   val port: Int get() = listener?.localPort ?: 0
 
@@ -67,6 +76,7 @@ class ApiServer(private val context: Context, private val modelsDir: File, priva
     if (parts.size < 2) return
     val method = parts[0]
     val path = parts[1].substringBefore('?')
+    val query = parts[1].substringAfter('?', "")
     var length = 0
     var headers = 0
     try {
@@ -82,9 +92,11 @@ class ApiServer(private val context: Context, private val modelsDir: File, priva
     s.soTimeout = 0
     when {
       method == "GET" && path == "/status" -> json(out, 200, status())
-      method == "GET" && path.substringBefore('?') == "/blob" -> blob(out, path.substringAfter('?', ""))
+      method == "GET" && path == "/blob" -> blob(out, query)
+      method == "GET" && path == "/trust" -> trust?.answer(query.ifEmpty { null })?.let { raw(out, it.code, it.body) } ?: json(out, 503, JSONObject().put("error", "not ready"))
       method == "POST" && path == "/stop" -> { Native.stop(); json(out, 200, JSONObject().put("ok", true)) }
-      method == "POST" && path == "/load" -> load(out, json)
+      // the master behind this connection, as the gate saw it (null for a relayed one)
+      method == "POST" && path == "/load" -> load(out, json, ApiPeers.get(s.port))
       method == "POST" && path == "/chat" -> chat(out, json)
       else -> json(out, 404, JSONObject().put("error", "no such route"))
     }
@@ -99,7 +111,7 @@ class ApiServer(private val context: Context, private val modelsDir: File, priva
     .put("busy", busy.get())
     .put("threads", threads)
 
-  private fun load(out: OutputStream, req: JSONObject) {
+  private fun load(out: OutputStream, req: JSONObject, master: String?) {
     // what the master asked for, checked before busy is taken: a bad request is a 400, not a stream
     val url = req.optString("url")
     val sha = req.optString("sha256").ifEmpty { null }?.lowercase()
@@ -111,7 +123,7 @@ class ApiServer(private val context: Context, private val modelsDir: File, priva
     val dest = File(modelsDir, name)
     if (!dest.exists()) {
       if (url.isEmpty()) return json(out, 400, JSONObject().put("error", "model missing and no url"))
-      UrlPolicy.problem(url)?.let { return json(out, 400, JSONObject().put("error", it)) }
+      UrlPolicy.problem(url, master)?.let { return json(out, 400, JSONObject().put("error", it)) }
       if (sha == null) return json(out, 400, JSONObject().put("error", "sha256 is needed to download"))
     }
     if (!busy.compareAndSet(false, true)) return json(out, 409, JSONObject().put("error", "busy"))
@@ -125,7 +137,7 @@ class ApiServer(private val context: Context, private val modelsDir: File, priva
           if (state == "done") done.countDown()
           if (state == "error" || state == "cancelled") { failed = error ?: state; done.countDown() }
         }
-        dl.start("load", url, dest, sha, size)
+        dl.start("load", url, dest, sha, size, master)
         done.await()
         if (failed != null) return sse(out, JSONObject().put("error", failed))
       } else if (sha != null && loadedSha != sha) {
@@ -206,8 +218,11 @@ class ApiServer(private val context: Context, private val modelsDir: File, priva
     out.write("data: $o\n\n".toByteArray(Charsets.UTF_8)); out.flush()
   }
 
-  private fun json(out: OutputStream, code: Int, o: JSONObject) {
-    val b = o.toString().toByteArray(Charsets.UTF_8)
+  private fun json(out: OutputStream, code: Int, o: JSONObject) = raw(out, code, o.toString())
+
+  /** A json body written as given: /trust keeps its field order, which org.json would not. */
+  private fun raw(out: OutputStream, code: Int, body: String) {
+    val b = body.toByteArray(Charsets.UTF_8)
     out.write("HTTP/1.1 $code ${if (code == 200) "OK" else "Error"}\r\nContent-Type: application/json\r\nContent-Length: ${b.size}\r\nConnection: close\r\n\r\n".toByteArray())
     out.write(b); out.flush()
   }

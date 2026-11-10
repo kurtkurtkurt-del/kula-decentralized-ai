@@ -113,26 +113,90 @@ class SoftwareKey private constructor(override val alg: String, private val pair
     /**
      * Loads the key at [file] or makes one and saves it there. The file holds the algorithm
      * name, a newline, then base64 of the PKCS8 private key and base64 of the public key.
+     * A file that is not a key (short, cut, undecodable) is not overwritten: it is moved
+     * aside first ([load]) and [onReplaced] hears where it went, so the caller can say the
+     * device's identity changed.
      */
-    fun loadOrCreate(file: File): SoftwareKey {
-      if (file.exists()) {
-        val lines = file.readLines()
-        if (lines.size >= 3) {
-          return from(lines[0].trim(), B64.decode(lines[1]), B64.decode(lines[2]))
-        }
-      }
+    fun loadOrCreate(file: File, onReplaced: (aside: File) -> Unit = {}): SoftwareKey {
+      load(file, onReplaced)?.let { return it }
       val k = generate()
+      write(file, k)
+      return k
+    }
+
+    /** Saves [k] at [file] in the loadOrCreate format. */
+    fun write(file: File, k: SoftwareKey) {
       file.parentFile?.mkdirs()
       file.writeText("${k.alg}\n${B64.encode(k.pkcs8())}\n${B64.encode(k.publicKey)}\n")
-      return k
+    }
+
+    /**
+     * The key at [file]; null when there is none. A file that cannot be a key (fewer than
+     * three lines, an unknown algorithm, bad base64, a key cut short: not one whole DER
+     * structure) is moved to `<name>.broken.<unix ms>` and [onBroken] is told; then it
+     * counts as none. A whole file the runtime cannot use (no Ed25519 provider here) is not
+     * broken: that throws, and the file stays where it is, so an identity is never thrown
+     * away for what the phone lacks.
+     */
+    fun load(file: File, onBroken: (aside: File) -> Unit = {}): SoftwareKey? {
+      if (!file.exists()) return null
+      val parts = runCatching { file.readLines() }.getOrElse { emptyList() }.let { lines ->
+        if (lines.size < 3) null else {
+          val alg = lines[0].trim()
+          val priv = runCatching { B64.decode(lines[1]) }.getOrNull()
+          val pub = runCatching { B64.decode(lines[2]) }.getOrNull()
+          if ((alg != DeviceKey.ED25519 && alg != DeviceKey.P256) || priv == null || pub == null || !derWhole(priv) || !derWhole(pub)) null
+          else Triple(alg, priv, pub)
+        }
+      }
+      if (parts != null) return from(parts.first, parts.second, parts.third)
+      onBroken(moveAside(file))
+      return null
+    }
+
+    /** One DER SEQUENCE that is exactly [b], no more, no less: a key file cut mid-write fails this. */
+    internal fun derWhole(b: ByteArray): Boolean {
+      if (b.size < 2 || b[0] != 0x30.toByte()) return false
+      val first = b[1].toInt() and 0xff
+      val (len, head) = if (first < 0x80) first.toLong() to 2 else {
+        val n = first and 0x7f
+        if (n == 0 || n > 3 || b.size < 2 + n) return false
+        var l = 0L
+        for (i in 0 until n) l = (l shl 8) or (b[2 + i].toLong() and 0xff)
+        l to 2 + n
+      }
+      return head + len == b.size.toLong()
+    }
+
+    /** Moves [file] to `<name>.broken.<unix ms>` next to it and returns where it went. */
+    fun moveAside(file: File): File {
+      var aside = File(file.parentFile, "${file.name}.broken.${System.currentTimeMillis()}")
+      var n = 1
+      while (aside.exists()) aside = File(file.parentFile, "${file.name}.broken.${System.currentTimeMillis()}.${n++}")
+      if (!file.renameTo(aside)) { file.copyTo(aside, overwrite = true); file.delete() }
+      return aside
     }
   }
 }
 
 /**
- * A key kept in the Android KeyStore (hardware-backed where the phone has it). The Android
- * side implements this later; nothing in this package depends on it.
- * TODO(beyin): implement in kula-llama's Android code with KeyGenParameterSpec, alias "kula-device".
+ * A P-256 key whose private half may live in the Android KeyStore (alias [alias]) and never
+ * leave it: signing goes through the JCA, which hands a keystore key to the keystore. The
+ * Android side (KeyStoreVault.kt) finds or makes the key; this class only uses it, so the
+ * package stays plain Kotlin. [keyPair]'s public key is the keystore certificate's, so the
+ * id is the same formula as for a key in a file.
+ */
+class VaultKey(override val alias: String, val keyPair: KeyPair) : KeyStoreKey {
+  override val alg: String = DeviceKey.P256
+  override val publicKey: ByteArray = keyPair.public.encoded
+
+  override fun sign(bytes: ByteArray): ByteArray =
+    Signature.getInstance(DeviceKey.jcaNames(alg).first).apply { initSign(keyPair.private); update(bytes) }.sign()
+}
+
+/**
+ * A key kept in the Android KeyStore (hardware-backed where the phone has it): [VaultKey],
+ * found or made by kula-llama's Android code (KeyStoreVault.kt, Keys.kt) under "kula-device".
  */
 interface KeyStoreKey : DeviceKey {
   /** the key store alias this key lives under */

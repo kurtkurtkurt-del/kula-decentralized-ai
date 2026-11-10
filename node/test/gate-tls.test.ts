@@ -69,7 +69,7 @@ test('an identity is kept on disk and follows the device key', () => {
   assert.equal(a.fp.length, 64);
 });
 
-test('pairing with the code, then the certificate alone; strangers, wrong codes and wrong fingerprints are refused; v1 still works', async () => {
+test('pairing with the code, then the certificate alone; strangers, wrong codes and wrong fingerprints are refused; v1 works until the first pairing', async () => {
   const echo = await echoServer();
   const worker = createIdentity('worker');
   const master = createIdentity('master');
@@ -81,6 +81,9 @@ test('pairing with the code, then the certificate alone; strangers, wrong codes 
   const gate = await startGateServer({ port: 0, host: '127.0.0.1', secret: 'v1-secret', targets: (ch) => (ch === 'rpc' ? echo.port : null), onEvent: (e) => events.push(e), tls: t });
   const at = (pin?: string | null, id = master, fp = worker.fp) => ({ identity: id, fp, pin });
   try {
+    // v1 on the same port, while nothing is paired
+    assert.equal((await probe('127.0.0.1', gate.port, 'v1-secret', 'rpc')).ok, true);
+    assert.deepEqual(await probe('127.0.0.1', gate.port, 'wrong', 'rpc'), { ok: false, reason: 'wrong secret' });
     assert.deepEqual(await probe('127.0.0.1', gate.port, '', 'rpc', 2000, at()), { ok: false, reason: 'not paired' });
     assert.deepEqual(await probe('127.0.0.1', gate.port, '', 'rpc', 2000, at('0000000000000000')), { ok: false, reason: 'wrong pin' });
     assert.equal(pinUsed, 0);
@@ -102,9 +105,8 @@ test('pairing with the code, then the certificate alone; strangers, wrong codes 
     assert.deepEqual(await probe('127.0.0.1', gate.port, '', 'api', 2000, at()), { ok: false, reason: 'channel closed' });
     // the paired list survives a restart
     assert.ok(new Paired(pairedFile).has(master.fp));
-    // v1 on the same port
-    assert.equal((await probe('127.0.0.1', gate.port, 'v1-secret', 'rpc')).ok, true);
-    assert.deepEqual(await probe('127.0.0.1', gate.port, 'wrong', 'rpc'), { ok: false, reason: 'wrong secret' });
+    // once a certificate is paired v1 is off for everyone, the right secret too
+    assert.deepEqual(await probe('127.0.0.1', gate.port, 'v1-secret', 'rpc'), { ok: false, reason: 'no v1' });
     await new Promise((r) => setTimeout(r, 50));
     assert.ok(events.some((e) => e.type === 'open' && e.v === 1) && events.some((e) => e.type === 'open' && e.v === 2 && e.fp === master.fp));
     assert.ok(events.some((e) => e.type === 'reject' && e.reason === 'wrong pin'));
@@ -228,5 +230,29 @@ test('handshake over tls hands back the tls socket and bytes after the proof are
   } finally {
     await gate.close();
     target.close();
+  }
+});
+
+test('v1 works before pairing and is told "no v1" after a v2 pairing on the same port, secret or not', async () => {
+  const echo = await echoServer();
+  const worker = createIdentity('worker');
+  const master = createIdentity('master');
+  const pin = newPin();
+  const t: TlsServer = { identity: worker, paired: new Paired(null), pin };
+  const gate = await startGateServer({ port: 0, host: '127.0.0.1', secret: 'v1-secret', targets: () => echo.port, tls: t });
+  try {
+    assert.equal((await probe('127.0.0.1', gate.port, 'v1-secret', 'api')).ok, true);
+    assert.equal((await probe('127.0.0.1', gate.port, '', 'api', 2000, { identity: master, fp: worker.fp, pin })).ok, true);
+    assert.equal(t.paired.size, 1);
+    assert.deepEqual(await probe('127.0.0.1', gate.port, 'v1-secret', 'api'), { ok: false, reason: 'no v1' });
+    assert.deepEqual(await probe('127.0.0.1', gate.port, 'v1-secret', 'rpc'), { ok: false, reason: 'no v1' });
+    // the paired master still comes in with its certificate alone
+    assert.equal((await probe('127.0.0.1', gate.port, '', 'api', 2000, { identity: master, fp: worker.fp })).ok, true);
+    // forgetting the last paired device opens v1 again (the secret was given on purpose)
+    t.paired.forget(master.fp);
+    assert.equal((await probe('127.0.0.1', gate.port, 'v1-secret', 'api')).ok, true);
+  } finally {
+    await gate.close();
+    echo.close();
   }
 });

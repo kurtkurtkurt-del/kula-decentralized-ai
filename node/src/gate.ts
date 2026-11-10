@@ -12,6 +12,7 @@ import { Duplex } from 'node:stream';
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import { ReplayCheck, clockCheck } from './audit/checks.js';
 import { fingerprint, type GateIdentity, type Paired } from './tls.js';
+import { isLoopback, plainIp } from './policy.js';
 
 export type Channel = 'rpc' | 'api';
 export const CHANNELS: Channel[] = ['rpc', 'api'];
@@ -203,6 +204,22 @@ export function pipeBoth(a: Duplex, b: Duplex, fromA: Buffer, fromB: Buffer = Bu
 
 export type Targets = (channel: Channel) => number | null | Promise<number | null>;
 
+// Who is behind an api connection: the gate pipes it to 127.0.0.1, so the api server only
+// sees itself. For the life of each pipe the gate keeps "local port of its leg to the api
+// -> the peer's address"; api.ts looks up req.socket.remotePort to know which master sent a
+// /load (policy.ts urlProblem). A peer on loopback (a relayed stream, this computer) is not
+// kept: it gets no exception.
+const apiPeers = new Map<number, string>();
+export function apiPeerOf(localPort: number | undefined): string | null {
+  return localPort === undefined ? null : apiPeers.get(localPort) ?? null;
+}
+
+// Would a v1 hello be taken right now? Only with a secret, and only while nothing is paired:
+// v1 proves no identity, so once one certificate is trusted it is off for everyone.
+export function v1Open(secret: string | null, t?: TlsServer | null): boolean {
+  return secret !== null && !(t && t.paired.size > 0);
+}
+
 // Called with every well formed hello before the server answers. The fourth
 // hello field, the client's clock in unix ms, is null when it was not sent.
 // A string refuses the connection with that reason (replay, clock).
@@ -212,7 +229,8 @@ export interface GateServerOptions {
   port: number;
   host?: string;
   // the v1 secret; null turns v1 off: a plain hello is told "NO no v1" (a v2 worker that
-  // never handed out a secret has no reason to take the unauthenticated-tls path)
+  // never handed out a secret has no reason to take the unauthenticated-tls path). With
+  // tls, v1 also goes off as soon as one certificate is paired (v1Open).
   secret: string | null;
   targets: Targets;
   onEvent?: (e: GateEvent) => void;
@@ -294,11 +312,15 @@ export async function startGateServer(opts: GateServerOptions): Promise<GateServ
     let target: net.Socket;
     try { target = await connectLocal(targetPort); } catch { letGo(); return refuse('target down'); }
     target.setNoDelay(true);
+    const leg = target.localPort;
+    const kept = channel === 'api' && leg !== undefined && !isLoopback(peer);
+    if (kept) apiPeers.set(leg!, plainIp(peer));
     writeLine(socket, okLine);
     const at = Date.now();
     handshakeDone();
     emit({ type: 'open', channel, peer, at, v, fp });
     const counts = await pipeBoth(socket, target, rest);
+    if (kept && apiPeers.get(leg!) === plainIp(peer)) apiPeers.delete(leg!);
     letGo();
     emit({ type: 'close', channel, peer, at: Date.now(), ms: Date.now() - at, bytesIn: counts.aToB, bytesOut: counts.bToA, v, fp });
   };
@@ -313,8 +335,8 @@ export async function startGateServer(opts: GateServerOptions): Promise<GateServ
       socket.end();
       setTimeout(() => socket.destroy(), 200);
     };
-    if (opts.secret === null) return refuse('no v1');
-    const secret = opts.secret;
+    if (!v1Open(opts.secret, opts.tls)) return refuse('no v1');
+    const secret = opts.secret!;
     let hello: string;
     try { hello = await reader.line(HANDSHAKE_MS); } catch { return refuse('no hello'); }
     // the phone ends its lines in \r\n

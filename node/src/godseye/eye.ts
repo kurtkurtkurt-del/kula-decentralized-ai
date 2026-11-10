@@ -103,6 +103,16 @@ export class GodsEye {
     this.before = snap;
   }
 
+  /** Hands a decision from the branch's page to the branch (it never reaches a device), then looks again. */
+  act(id: BranchId, action: string, arg: string): string | null {
+    const b = this.branches.get(id);
+    if (!b?.act || this.broken.has(id)) return null;
+    let word: string | null = null;
+    try { word = b.act(String(action).slice(0, 40), String(arg).slice(0, 200)); } catch (e) { this.opts.log?.(`god's eye ${id}: ${(e as Error).message}`); return null; }
+    try { this.views.set(id, b.view()); } catch {}
+    return word;
+  }
+
   start(): void {
     if (this.timer) return;
     this.tick();
