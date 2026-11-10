@@ -1,6 +1,6 @@
 # durum
 
-Proje nerede duruyor, 5.11.2026 akşamı (`kula-main`: bütün cloud dalları, temizlik, the brain sekmesi, ölçüm, paketleme).
+Proje nerede duruyor, 5.11.2026 akşamı (10.11 eklemeleri aşağıda) (`kula-main`: bütün cloud dalları, temizlik, the brain sekmesi, ölçüm, paketleme).
 Günü gününe kayıt [ILERLEME.md](ILERLEME.md)'de; bu sayfa onun özeti ve her büyük birleştirmeden
 sonra güncellenir. Mimari [ARCHITECTURE.md](ARCHITECTURE.md), geçmiş [HISTORY.md](HISTORY.md).
 
@@ -91,12 +91,12 @@ için hiç apk derlenmedi**. Telefonda bakılacaklar:
    fotoğraf saklanır, metin işleri yine çalışır. (Bir ajan başladı, kullanıcı durdurdu; geride iş yok.)
    **10.11:** yazıldı, ayrı dalda: `mtmd` Android derlemesinde, katalogda üç görsel model
    (SmolVLM 500M, SmolVLM2 2.2B, Gemma 3 4B, mmproj ile), sohbette fotoğraf, ayarlarda "görüntü
-   modeli", gece projelerinde fotoğrafı önce görüntü modeli okur ([NIGHT.md](NIGHT.md)); telefonda denenmedi.
-2. **Alt çubuk:** models · connect · the brain · projects · passport. "connect" messages'ın
-   yerine geçer, mesajlar connect'in içine girer.
-3. **MoE desteği ve Gemma 4 26B-A4B:** katalogda MoE modeller (Gemma 4 26B-A4B, Qwen3 30B-A3B),
-   sığma ve planlayıcı hızı aktif parametreden hesaplasın (bugün toplam boyuttan hesaplıyor ve
-   MoE'yi yavaş sanıyor).
+   modeli", gece projelerinde fotoğrafı önce görüntü modeli okur ([NIGHT.md](NIGHT.md)); `kula-main`'e
+   birleşti (1b615c9). Telefonda denenmedi; native kod değiştiği için yeni apk gerekiyor.
+2. ~~**Alt çubuk:**~~ models · connect · the brain · projects · passport: uygulamada var.
+3. ~~**MoE desteği ve Gemma 4 26B-A4B.**~~ (10.11) Qwen3 30B-A3B ve Gemma 4 26B-A4B katalogda;
+   bellek dosyanın tamamından, hız token başına okunan bayttan (`read_share`, gerçek dosyaların
+   tensör tablosundan; kula-node yerel dosyada tabloyu kendisi okur). [PLANNER.md](PLANNER.md).
 4. ~~**the brain sekmesinde "bu telefonu paylaş" düğmesi;** cihaz satırında ad iki kez yazıyor
    ("this phone · this phone").~~ (10.11): düğme özetin altında, paylaşım ekranını açıyor; çift
    adlı satır 5.11'deki yeniden çizimle gitmişti, yeni güven ekranında telefonun satırı adı bir
@@ -105,6 +105,21 @@ için hiç apk derlenmedi**. Telefonda bakılacaklar:
 5. **Geliştirme sürümü (Metro):** JavaScript değişiklikleri apk beklemeden telefona gelsin.
 6. **iOS:** Xcode kurulunca iOS modülünün derlenmesi ve iPhone'a kurulum (kullanıcı Xcode'u
    kuracak).
+
+## 10.11.2026'da eklenenler (hepsi `kula-main`'de, gerçek cihazda denenmedi)
+
+- Güvenlik borcu kapandı (v1, TLS varsayılanı, secret, indirme kuralı, defter, KeyStore) ve
+  kümenin güvenlik raporu: bilgisayarda the brain → trust, telefonda the brain → güven ve doğrulama.
+- Eşleşmeyi kaldırma: telefonda paylaşım ve bilgisayarlar ekranında "bu telefonu kullanabilen
+  cihazlar", kula-node'da `paired list/remove` ve pano kartı, sohbet sayfasında "unut" ile
+  "erişimini kaldır" ayrı ([GATE.md](GATE.md)).
+- MoE, fotoğraflar (gece + sohbet + görüntü modeli ayarı), yukarıda.
+- Masaüstü uygulaması: kendi simgesi; ilk açılışta llama.cpp için gerekenler (komut satırı
+  araçları, cmake) önceden listeleniyor; Finder'dan açılınca Homebrew'un klasörleri PATH'te
+  (önceden cmake hiç bulunamıyordu).
+- v0.1.0 release'i (apk, Mac uygulaması, terminal sürümü) ve indirme sitesi:
+  https://kurtkurtkurt-del.github.io/kula-decentralized-ai/ (repo private: indirmek için erişim gerekir).
+  v0.1.0'ın apk'sı bu günün telefon değişikliklerini içermiyor.
 
 ## kalanlar
 
