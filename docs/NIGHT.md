@@ -133,7 +133,7 @@ before; `units`, `checked` and `wrong` ride along and the server does not read t
 
 The projects tab (`app/src/tasks/`, screens `(tabs)/projects.tsx`, `task/new.tsx`,
 `task/[id].tsx`) holds the person's own night work: a title, what they want, photos (kept
-small in the app's document folder; the model does not see them yet), the answer's form and
+small in the app's document folder; a vision model reads them, below), the answer's form and
 length, and a calibration: its own hours (the night window by default), which nights (every,
 weekdays, once), how carefully (quick: one pass; careful: draft → critique → final; very:
 two critique rounds), the model (the best that fits by default), only on charge. Before
@@ -152,6 +152,38 @@ step is written to the project as it finishes, so a run cut by the plug or the w
 on from the next step. The brain log gets a line per step; a local notification says when an
 answer is ready; the morning report lists the projects that came in. "Run now" runs the same
 steps while the app is open and holds the night back meanwhile.
+
+## photos (10.11.2026)
+
+A project's photos are read before its run by the **vision model**: the one picked in
+settings › vision model (`llm.settings.visionModelId`), else the smallest vision model on the
+phone. The catalog has three (`app/src/llm/catalog.ts`, each with its `mmproj`, the image
+encoder llama.cpp's `mtmd` needs): SmolVLM 500M (0.5 GB with its encoder, any phone), SmolVLM2
+2.2B (1.7 GB, 6 GB phones), Gemma 3 4B (3.3 GB, 8 GB phones).
+
+- **When:** the night calls `tasks/seen.ts` through `LlamaWorker`'s `prepare` hook *before* it
+  loads its own model, so nothing else is in RAM; "run now" calls it before the project's
+  model is loaded. The vision model is loaded next to whatever is loaded (`describeImages` in
+  `kula_llama.cpp`: a second, short-lived model, context and mmproj), asked for a short,
+  factual description of each photo plus any visible text (with the project's question), and
+  freed again.
+- **Where it goes:** the reading is kept on the project (`task.seen`, until the photos change)
+  and goes into every step's prompt (draft, critique, final), marked as the vision model's
+  ("SmolVLM 500M, a vision model on this phone, looked at them and wrote: …"). The step
+  models themselves stay text models; the project's own model choice is unchanged.
+- **Without a vision model:** the photos stay with the project, the run goes on the text alone
+  (the steps say the photos could not be seen), the brain log says so, and the run records
+  `photos: { n, by: null }`: the project page and the morning report say "photos not read: no
+  vision model" and how to get one.
+- **Where:** always on this phone. In apart or split mode only text goes to the other devices.
+- Photos are scaled on the phone before they reach the model (`Vision.kt`): 768 px on the long
+  side for one photo, 512 for two or three, 384 for more; SmolVLM-style encoders cut an image
+  into tiles of 81 tokens each, so a full 1280 px photo would cost ~1 400 tokens.
+
+The chat uses the same pieces (`llm/vision.ts`): a chat model that is itself a vision model
+gets the photo directly (its mmproj loaded next to it, `generateWithImages`); a text model gets
+the vision model's description in the prompt, both in RAM when the passport says they fit,
+else the chat model is unloaded for the reading and loaded again (the chat says so).
 
 ## limits, plainly
 
@@ -177,4 +209,9 @@ skipped for five minutes, known answers counted, `stop()` ending the loops with 
 demo list handed out once), `conditions.test.ts` (every flag on its own, the order, the
 window key), `scheduler.test.ts` (fake clock: start and stop, pause and resume, a dry pile,
 a restart, "end now"), `report.test.ts` (totals, queue continuation), `engine-local.test.ts`
-(a local chat that fails ends the promise instead of leaving the device busy forever).
+(a local chat that fails ends the promise instead of leaving the device busy forever),
+`tasks-photos.test.ts` (photos read once and kept until they change, in every step, the run
+saying who read them or that nobody could), `vision-route.test.ts` (direct, describe, swap,
+none), `vision-store.test.ts` (both files downloaded and checked, the setting). On the JVM:
+`VisionTest` (photo size, RGB packing, the prompt's image markers). Untested here, needs a
+phone: mtmd's encoders on a real image, the memory of two models at once, the swap.
