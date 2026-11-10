@@ -90,8 +90,8 @@ export function readPassport(files = passportFiles()): { passport: Record<string
 export function badgesOf(p: Pick<Peer, 'kind' | 'ram' | 'bw' | 'gpu' | 'vram'>): string[] {
   const b: string[] = [p.kind];
   if (p.gpu) b.push('gpu');
-  if ((p.bw ?? 0) >= 20) b.push('hızlı bellek');
-  if ((p.ram ?? 0) >= 16000) b.push('geniş bellek');
+  if ((p.bw ?? 0) >= 20) b.push('fast memory');
+  if ((p.ram ?? 0) >= 16000) b.push('large memory');
   return b;
 }
 

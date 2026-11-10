@@ -184,4 +184,9 @@ Her dalda sırayla:
   ya da loglara girmez.
 - Bir şey üç turda düzelmezse, ya da test/gate sebebini bulamadığın biçimde kırılırsa: o dalı durdur,
   STATE.md'ye yaz, kullanıcıya kısa söyle, diğer dallarla devam et.
-- Her çıktın Türkçe ve kısa; kodda yorumlar repo üslubunda (kısa, sade, küçük harf İngilizce).
+- **Kod tamamen İngilizce:** kod, adlar, yorumlar, testler, log ve hata satırları, arayüz metinleri (Mac sayfası,
+  kula-node panosu), commit mesajları ve beyin haritası (veritabanı İngilizce; `ceviri/tr`, `ceviri/de` ayrı).
+  `docs/` altında her belge kendi dilinde kalır (GATE, AUDIT, NODE... İngilizce; DURUM, ILERLEME Türkçe). Telefonda Türkçe ve Almanca yalnız çeviri dosyalarında (`i18n`)
+  ve bilerek Türkçe olan verilerde (sesli komutlar, katalogdaki `tr` açıklamaları) bulunur. Yorumlar repo
+  üslubunda: kısa, sade, küçük harf. İşçiye verdiğin her görevde bunu söyle; diff'te Türkçe görürsen geri gönder.
+- **Kullanıcıya yazdıkların Türkçe ve kısa:** durum satırları ve 30 dakikalık karar özeti.

@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="tr">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -11,13 +11,13 @@
   <header>
     <h1>kula-node <span id="who">·</span></h1>
     <span class="chip" id="mode">…</span>
-    <span class="chip" id="live">bağlanıyor</span>
+    <span class="chip" id="live">connecting</span>
     <span class="chip" id="up"></span>
   </header>
 
   <div class="grid">
     <section class="card" id="c-self">
-      <h2>bu bilgisayar</h2>
+      <h2>this computer</h2>
       <p class="big" id="self-name">…</p>
       <p class="sub" id="self-sub"></p>
       <dl id="self-facts" class="mt"></dl>
@@ -25,76 +25,76 @@
     </section>
 
     <section class="card" id="c-gate">
-      <h2>kapı</h2>
+      <h2>gate</h2>
       <p class="big wait" id="gate-state">…</p>
       <p class="sub" id="gate-sub"></p>
       <dl id="gate-facts" class="mt"></dl>
     </section>
 
     <section class="card" id="c-traffic">
-      <h2>kanal trafiği</h2>
-      <table><thead><tr><th>kanal</th><th>açık</th><th>açılış</th><th>giren</th><th>çıkan</th><th>ret</th></tr></thead><tbody id="traffic"></tbody></table>
+      <h2>channel traffic</h2>
+      <table><thead><tr><th>channel</th><th>open</th><th>opened</th><th>in</th><th>out</th><th>refused</th></tr></thead><tbody id="traffic"></tbody></table>
     </section>
 
     <section class="card" id="c-model">
-      <h2>model <span class="right"><span class="chip" id="model-busy" hidden>meşgul</span></span></h2>
-      <p class="big" id="model-name">yüklü değil</p>
+      <h2>model <span class="right"><span class="chip" id="model-busy" hidden>busy</span></span></h2>
+      <p class="big" id="model-name">not loaded</p>
       <p class="sub" id="model-sub"></p>
       <div class="row" id="model-load" hidden>
         <select id="model-pick"></select>
-        <button id="model-go" class="line">yükle</button>
+        <button id="model-go" class="line">load</button>
         <span class="hint" id="model-msg"></span>
       </div>
     </section>
 
     <section class="card wide" id="c-peers">
-      <h2>eşler <span class="right"><button id="probe" class="line">yokla</button></span></h2>
-      <table><thead><tr><th>ad</th><th>rozet</th><th>adres</th><th>ram</th><th>bw</th><th>rpc</th><th>api</th><th>son</th></tr></thead><tbody id="peers"></tbody></table>
-      <p class="hint" id="peers-empty" hidden>eş yok. telefonun qr'ını <code>kula-node peers add</code> ile ekle.</p>
+      <h2>peers <span class="right"><button id="probe" class="line">probe</button></span></h2>
+      <table><thead><tr><th>name</th><th>badges</th><th>address</th><th>ram</th><th>bw</th><th>rpc</th><th>api</th><th>last</th></tr></thead><tbody id="peers"></tbody></table>
+      <p class="hint" id="peers-empty" hidden>no peers. add a phone's qr with <code>kula-node peers add</code>.</p>
     </section>
 
     <section class="card wide" id="c-paired" hidden>
-      <h2>bu bilgisayarı kullanabilen cihazlar</h2>
-      <table><thead><tr><th>ad</th><th>parmak izi</th><th>adres</th><th>eşleşti</th><th>son görülme</th><th></th></tr></thead><tbody id="paired"></tbody></table>
-      <p class="hint" id="paired-empty" hidden>henüz eşleşen cihaz yok: kodu okutan ilk cihaz buraya gelir.</p>
-      <p class="hint">erişimi kaldırılan cihaz bir sonraki bağlantıda reddedilir, açık bağlantıları kapanır, deftere imzalı bir satır yazılır. geri gelmesi için yeni bir kodla yeniden eşleşmesi gerekir.</p>
+      <h2>devices that can use this computer</h2>
+      <table><thead><tr><th>name</th><th>fingerprint</th><th>address</th><th>paired</th><th>last seen</th><th></th></tr></thead><tbody id="paired"></tbody></table>
+      <p class="hint" id="paired-empty" hidden>no paired device yet: the first device that scans the code shows up here.</p>
+      <p class="hint">a device whose access is removed is refused at its next connection, its open connections close, and a signed line goes into the ledger. to come back it has to pair again with a new code.</p>
     </section>
 
     <section class="card" id="c-qr">
-      <h2>eşleşme</h2>
-      <div class="qr" id="qr" hidden><img id="qr-img" alt="eşleşme qr kodu"></div>
-      <p class="hint" id="qr-hint">kula → birlikte → bilgisayar ekle → bu kodu okut. kod kümenin sırrını taşır: sayfadaki tek yeri bu resim.</p>
+      <h2>pairing</h2>
+      <div class="qr" id="qr" hidden><img id="qr-img" alt="pairing qr code"></div>
+      <p class="hint" id="qr-hint">kula → together → add a computer → scan this code. the code carries the cluster's secret: this picture is its only place on the page.</p>
     </section>
 
     <section class="card" id="c-ledger">
-      <h2>defter <span class="right"><button id="verify" class="line">zinciri doğrula</button></span></h2>
+      <h2>ledger <span class="right"><button id="verify" class="line">verify the chain</button></span></h2>
       <p class="sub" id="ledger-state">…</p>
       <pre class="ledger" id="ledger" class="mt2"></pre>
     </section>
 
     <section class="card wide" id="c-chat">
-      <h2>sohbet testi <span class="right"><select id="chat-dev"></select></span></h2>
-      <p class="hint">ayrı mod: istem tek bir cihaza gider, cevap buradan akar. yalnız bu bilgisayardan.</p>
+      <h2>chat test <span class="right"><select id="chat-dev"></select></span></h2>
+      <p class="hint">apart mode: the prompt goes to one device, the answer streams back here. from this computer only.</p>
       <div class="out" id="chat-out"></div>
       <div class="row">
-        <textarea id="chat-in" placeholder="bir şey sor…"></textarea>
+        <textarea id="chat-in" placeholder="ask something…"></textarea>
       </div>
       <div class="row">
-        <button id="chat-send">gönder</button>
-        <button id="chat-reset" class="line">sıfırla</button>
+        <button id="chat-send">send</button>
+        <button id="chat-reset" class="line">reset</button>
         <span class="hint" id="chat-stat"></span>
       </div>
     </section>
 
     <section class="card wide" id="c-batch">
-      <h2>toplu test <span class="right"><button id="batch-go">8 istem gönder</button></span></h2>
-      <p class="hint" id="batch-stat">sekiz istem, en hızlı boş cihaza sırayla. cihaz başına tok/s.</p>
+      <h2>batch test <span class="right"><button id="batch-go">send 8 prompts</button></span></h2>
+      <p class="hint" id="batch-stat">eight prompts, each to the fastest free device. tok/s per device.</p>
       <div class="bars" id="bars"></div>
       <pre id="batch-log" class="mt"></pre>
     </section>
 
     <section class="card wide" id="c-log">
-      <h2>günlük</h2>
+      <h2>log</h2>
       <pre class="log" id="log"></pre>
     </section>
   </div>

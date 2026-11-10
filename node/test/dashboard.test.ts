@@ -103,7 +103,7 @@ test('state: a peer view has no secret, badges, a passport is read from either f
   const p: Peer = { id: 'x', name: 'n', host: 'h', port: 1, secret: SECRET, kind: 'pc', ram: 32000, bw: 60, gpu: 'rtx', vram: 8000, added_at: 't' };
   const v = peerView(p);
   assert.ok(!JSON.stringify(v).includes(SECRET));
-  assert.deepEqual(badgesOf(p), ['pc', 'gpu', 'hızlı bellek', 'geniş bellek']);
+  assert.deepEqual(badgesOf(p), ['pc', 'gpu', 'fast memory', 'large memory']);
   const a = path.join(HOME, 'pp-a.json'), b = path.join(HOME, 'pp-b.json');
   assert.equal(readPassport([a, b]), null);
   fs.writeFileSync(b, JSON.stringify({ schema: 'passport/0.3', device: 'mac' }));
