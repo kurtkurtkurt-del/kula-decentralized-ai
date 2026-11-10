@@ -1,7 +1,9 @@
 // kula-llama: llama.cpp on the phone, and the phone cluster (ggml's RPC backend).
 //
 // Ported from PrivateLM's llama_flutter_android jni_wrapper.cpp (MIT, dragneel2074 /
-// orailnoor / techjarves) on 4.11.2026, without Vulkan, mtmd and the Flutter plumbing.
+// orailnoor / techjarves) on 4.11.2026, without Vulkan and the Flutter plumbing. mtmd
+// (llama.cpp's multimodal library) came back on 10.11.2026 for photos in night projects: a
+// vision model's mmproj is loaded next to the text model and a prompt can carry images.
 // Bound to expo.modules.kulallama.Native with RegisterNatives, so the package name
 // lives in one place (kNatives, bottom of this file).
 //
@@ -33,6 +35,8 @@
 #include "llama.h"
 #include "ggml-backend.h"
 #include "gguf.h"
+#include "mtmd.h"
+#include "mtmd-helper.h"
 
 #define LOG_TAG "kula-llama"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
@@ -60,6 +64,8 @@ static std::mutex g_backend_mutex;
 static std::string g_lib_dir;
 static bool g_cpu_backend_loaded = false;
 static bool g_rpc_backend_loaded = false;
+// The vision side of the loaded model (its mmproj), or null: a text-only model, or none asked for.
+static mtmd_context* g_mtmd = nullptr;
 
 static void kulaLog(ggml_log_level level, const char* text, void*);
 
@@ -483,6 +489,7 @@ static void nFreeModel(JNIEnv*, jclass) {
     g_stop_flag = true;
     while (g_generating) std::this_thread::sleep_for(std::chrono::milliseconds(10));
     if (g_sampler) { llama_sampler_free(g_sampler); g_sampler = nullptr; }
+    if (g_mtmd) { mtmd_free(g_mtmd); g_mtmd = nullptr; }
     if (g_ctx) { llama_free(g_ctx); g_ctx = nullptr; }
     if (g_model) { llama_model_free(g_model); g_model = nullptr; }
     g_vocab = nullptr;
@@ -529,6 +536,9 @@ static jstring nApplyTemplate(JNIEnv* env, jclass, jobjectArray roles, jobjectAr
 }
 
 // --- jni: generate --------------------------------------------------------------------------
+
+static jint sampleReply(JNIEnv* env, jint max_tokens, jfloat temperature, jfloat top_p, jint top_k, jfloat min_p,
+                        jfloat repeat_penalty, jint seed, jobject cb, bool track);
 
 // Streams pieces to cb.invoke(String). Returns the number of generated tokens, or -1 when
 // stopped before the first token. Blocks; call it off the main thread.
@@ -587,9 +597,19 @@ static jint nGenerate(JNIEnv* env, jclass, jstring jprompt, jint max_tokens, jfl
         }
         processed += size;
     }
+    llama_batch_free(batch);
     g_n_past = (int)tokens.size();
     g_cached_tokens = tokens;
+    return sampleReply(env, max_tokens, temperature, top_p, top_k, min_p, repeat_penalty, seed, cb, true);
+}
 
+// The reply after a decoded prompt (g_n_past is where it ends): sample, stream each valid
+// utf-8 piece to cb.invoke(String), decode, until max_tokens, an end token or stop().
+// track: the tokens go into g_cached_tokens (a text prompt, so the next turn can reuse the
+// prefix); a prompt with images is not a token list and is never reused.
+static jint sampleReply(JNIEnv* env, jint max_tokens, jfloat temperature, jfloat top_p, jint top_k, jfloat min_p,
+                        jfloat repeat_penalty, jint seed, jobject cb, bool track) {
+    llama_batch batch = llama_batch_init(1, 0, 1);
     if (g_sampler) llama_sampler_free(g_sampler);
     const uint32_t s = seed >= 0 ? (uint32_t)seed : (uint32_t)time(nullptr);
     g_sampler = llama_sampler_chain_init(llama_sampler_chain_default_params());
@@ -629,7 +649,7 @@ static jint nGenerate(JNIEnv* env, jclass, jstring jprompt, jint max_tokens, jfl
         batch.n_tokens = 1;
         if (llama_decode(g_ctx, batch) != 0) { LOGE("decode failed after token %d", i + 1); break; }
         g_n_past++;
-        g_cached_tokens.push_back(id);
+        if (track) g_cached_tokens.push_back(id);
         generated++;
     }
     llama_batch_free(batch);
@@ -645,6 +665,135 @@ static void nClearContext(JNIEnv*, jclass) {
     llama_memory_seq_rm(llama_get_memory(g_ctx), 0, 0, -1);
     g_n_past = 0;
     g_cached_tokens.clear();
+}
+
+// --- jni: vision (mtmd) -------------------------------------------------------------------
+
+// Loads a vision model's mmproj next to the loaded text model (they must belong together:
+// mtmd checks the projector's width against the model's). Throws with the reason.
+static void nLoadMmproj(JNIEnv* env, jclass, jstring jpath, jint n_threads) {
+    if (!g_model || !g_ctx) { throwRuntime(env, "load the model before its mmproj"); return; }
+    if (g_generating) { throwRuntime(env, "already generating"); return; }
+    const std::string path = jstr(env, jpath);
+    {
+        std::ifstream f(path, std::ios::binary);
+        char magic[4] = {};
+        if (!f || !f.read(magic, 4) || std::memcmp(magic, "GGUF", 4) != 0) {
+            throwRuntime(env, "the mmproj is not a GGUF file (incomplete download?)");
+            return;
+        }
+    }
+    if (g_mtmd) { mtmd_free(g_mtmd); g_mtmd = nullptr; }
+    mtmd_helper_log_set(kulaLog, nullptr);
+    mtmd_context_params mp = mtmd_context_params_default();
+    mp.use_gpu = false;          // CPU only, as the text model
+    mp.print_timings = false;
+    mp.n_threads = std::max(1, (int)n_threads);
+    mp.warmup = false;           // the first photo pays for it; loading stays quick
+    {
+        std::lock_guard<std::mutex> lock(g_load_log_mutex);
+        g_load_error.clear();
+        g_capture_load_error = true;
+    }
+    g_mtmd = mtmd_init_from_file(path.c_str(), g_model, mp);
+    const std::string detail = consumeLoadError();
+    if (!g_mtmd) { throwRuntime(env, detail.empty() ? "could not load the mmproj" : "could not load the mmproj: " + detail); return; }
+    if (!mtmd_support_vision(g_mtmd)) {
+        mtmd_free(g_mtmd);
+        g_mtmd = nullptr;
+        throwRuntime(env, "this mmproj has no vision encoder");
+        return;
+    }
+    LOGI("mmproj loaded: vision on");
+}
+
+static void nFreeMmproj(JNIEnv*, jclass) {
+    g_stop_flag = true;
+    while (g_generating) std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    if (g_mtmd) { mtmd_free(g_mtmd); g_mtmd = nullptr; }
+}
+
+static jboolean nHasVision(JNIEnv*, jclass) { return g_mtmd ? JNI_TRUE : JNI_FALSE; }
+
+// The text that stands for one image in a prompt; the prompt carries one per image, in order.
+static jstring nMediaMarker(JNIEnv* env, jclass) { return env->NewStringUTF(mtmd_default_marker()); }
+
+// A templated prompt with one marker per image; images are packed RGB (w * h * 3 bytes each).
+// The mmproj encodes the images, the prompt and the image embeddings are decoded from an
+// empty cache, then the reply streams as in nGenerate. Returns generated tokens, -1 when
+// stopped before the first. Blocks; call it off the main thread.
+static jint nGenerateImages(JNIEnv* env, jclass, jstring jprompt, jobjectArray images, jintArray widths, jintArray heights,
+                            jint max_tokens, jfloat temperature, jfloat top_p, jint top_k, jfloat min_p,
+                            jfloat repeat_penalty, jint seed, jobject cb) {
+    if (!g_model || !g_ctx || !g_vocab) { throwRuntime(env, "no model loaded"); return -1; }
+    if (!g_mtmd) { throwRuntime(env, "no mmproj loaded: this model cannot see images"); return -1; }
+    if (g_generating.exchange(true)) { throwRuntime(env, "already generating"); return -1; }
+    struct Done { ~Done() { g_generating = false; } } done;
+    g_stop_flag = false;
+
+    const jsize n = images ? env->GetArrayLength(images) : 0;
+    if (!widths || !heights || env->GetArrayLength(widths) != n || env->GetArrayLength(heights) != n) {
+        throwRuntime(env, "images, widths and heights differ in length");
+        return -1;
+    }
+    std::vector<jint> ws(n), hs(n);
+    if (n > 0) {
+        env->GetIntArrayRegion(widths, 0, n, ws.data());
+        env->GetIntArrayRegion(heights, 0, n, hs.data());
+    }
+    std::vector<mtmd::bitmap> bitmaps;
+    for (jsize i = 0; i < n; i++) {
+        auto arr = static_cast<jbyteArray>(env->GetObjectArrayElement(images, i));
+        const jsize len = arr ? env->GetArrayLength(arr) : 0;
+        if (ws[i] <= 0 || hs[i] <= 0 || (int64_t)len != (int64_t)ws[i] * hs[i] * 3) {
+            if (arr) env->DeleteLocalRef(arr);
+            throwRuntime(env, "image " + std::to_string(i + 1) + " is not w*h*3 RGB bytes");
+            return -1;
+        }
+        jbyte* bytes = env->GetByteArrayElements(arr, nullptr);
+        bitmaps.emplace_back((uint32_t)ws[i], (uint32_t)hs[i], reinterpret_cast<const unsigned char*>(bytes));  // copies
+        env->ReleaseByteArrayElements(arr, bytes, JNI_ABORT);
+        env->DeleteLocalRef(arr);
+        if (!bitmaps.back().ptr) { throwRuntime(env, "could not take image " + std::to_string(i + 1)); return -1; }
+    }
+    std::vector<const mtmd_bitmap*> ptrs;
+    for (auto& b : bitmaps) ptrs.push_back(b.ptr.get());
+
+    const std::string prompt = jstr(env, jprompt);
+    mtmd_input_text text = {prompt.c_str(), prompt.size(), /* add_special */ true, /* parse_special */ true};
+    mtmd::input_chunks chunks(mtmd_input_chunks_init());
+    const int32_t tok = mtmd_tokenize(g_mtmd, chunks.ptr.get(), &text, ptrs.data(), ptrs.size());
+    if (tok != 0) {
+        throwRuntime(env, tok == 1 ? "the prompt's image markers do not match the images" : "could not prepare the images");
+        return -1;
+    }
+    const int n_ctx = llama_n_ctx(g_ctx);
+    const size_t n_tokens = mtmd_helper_get_n_tokens(chunks.ptr.get());
+    const int reserve = std::min(std::max((int)max_tokens, 64), n_ctx / 2);
+    if ((int)n_tokens > n_ctx - reserve) {
+        throwRuntime(env, "the photos and the text need " + std::to_string(n_tokens) + " tokens, the context leaves " + std::to_string(n_ctx - reserve));
+        return -1;
+    }
+
+    // an image prompt is never a prefix of anything cached: start from an empty cache
+    llama_memory_seq_rm(llama_get_memory(g_ctx), 0, 0, -1);
+    g_cached_tokens.clear();
+    g_n_past = 0;
+    LOGI("prompt with %d image(s): %zu tokens", (int)n, n_tokens);
+    llama_pos new_n_past = 0;
+    if (mtmd_helper_eval_chunks(g_mtmd, g_ctx, chunks.ptr.get(), 0, 0, 512, true, &new_n_past) != 0) {
+        llama_memory_seq_rm(llama_get_memory(g_ctx), 0, 0, -1);
+        throwRuntime(env, "could not read the photos (encode or decode failed; RAM?)");
+        return -1;
+    }
+    if (g_stop_flag) { llama_memory_seq_rm(llama_get_memory(g_ctx), 0, 0, -1); return -1; }
+    g_n_past = (int)new_n_past;
+    const jint out = sampleReply(env, max_tokens, temperature, top_p, top_k, min_p, repeat_penalty, seed, cb, false);
+    // the cache holds image embeddings now: the next text prompt must not reuse any of it
+    llama_memory_seq_rm(llama_get_memory(g_ctx), 0, 0, -1);
+    g_cached_tokens.clear();
+    g_n_past = 0;
+    return out;
 }
 
 // --- jni: cluster ---------------------------------------------------------------------------
@@ -750,6 +899,11 @@ static const JNINativeMethod kNatives[] = {
     {"workerPeer", "()Ljava/lang/String;", (void*)nWorkerPeer},
     {"memBandwidth", "(I)D", (void*)nMemBandwidth},
     {"serve", "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;I)Ljava/lang/String;", (void*)nServe},
+    {"loadMmproj", "(Ljava/lang/String;I)V", (void*)nLoadMmproj},
+    {"freeMmproj", "()V", (void*)nFreeMmproj},
+    {"hasVision", "()Z", (void*)nHasVision},
+    {"mediaMarker", "()Ljava/lang/String;", (void*)nMediaMarker},
+    {"generateImages", "(Ljava/lang/String;[[B[I[IIFFIFFILkotlin/jvm/functions/Function1;)I", (void*)nGenerateImages},
 };
 
 extern "C" JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void*) {

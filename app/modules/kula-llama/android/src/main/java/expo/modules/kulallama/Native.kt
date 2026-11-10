@@ -33,6 +33,19 @@ object Native {
   @JvmStatic external fun memBandwidth(threads: Int): Double
   @JvmStatic external fun serve(libDir: String, endpoint: String, cacheDir: String, threads: Int): String
 
+  // vision (mtmd, 10.11.2026): a vision model's mmproj next to the loaded model, prompts with images
+  /** Throws RuntimeException with the reason (no model, not a GGUF, wrong projector). */
+  @JvmStatic external fun loadMmproj(path: String, threads: Int)
+  @JvmStatic external fun freeMmproj()
+  @JvmStatic external fun hasVision(): Boolean
+  /** The text standing for one image in a prompt (mtmd's default marker). */
+  @JvmStatic external fun mediaMarker(): String
+  /** As [generate], for a templated prompt with one marker per image; images are packed RGB. */
+  @JvmStatic external fun generateImages(
+    prompt: String, images: Array<ByteArray>, widths: IntArray, heights: IntArray, maxTokens: Int, temperature: Float,
+    topP: Float, topK: Int, minP: Float, repeatPenalty: Float, seed: Int, cb: (String) -> Unit,
+  ): Int
+
   /**
    * Fast cores this process may run on (PrivateLM's finding: ggml threads wait for each
    * other every step, so one thread per *available* fast core, never more; 8 threads on a
