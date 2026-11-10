@@ -45,6 +45,15 @@ object Native {
     prompt: String, images: Array<ByteArray>, widths: IntArray, heights: IntArray, maxTokens: Int, temperature: Float,
     topP: Float, topK: Int, minP: Float, repeatPenalty: Float, seed: Int, cb: (String) -> Unit,
   ): Int
+  /**
+   * A second, short-lived model that looks at photos: loads [modelPath] + [mmprojPath] next to
+   * whatever is loaded, answers roles/contents (one marker per image in the contents), frees
+   * itself. The loaded model's context is not touched. Returns generated tokens.
+   */
+  @JvmStatic external fun describeImages(
+    modelPath: String, mmprojPath: String, ctx: Int, threads: Int, roles: Array<String>, contents: Array<String>,
+    images: Array<ByteArray>, widths: IntArray, heights: IntArray, maxTokens: Int, temperature: Float, cb: (String) -> Unit,
+  ): Int
 
   /**
    * Fast cores this process may run on (PrivateLM's finding: ggml threads wait for each

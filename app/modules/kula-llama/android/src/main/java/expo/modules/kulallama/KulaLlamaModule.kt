@@ -212,6 +212,35 @@ class KulaLlamaModule : Module() {
       }
       id
     }
+    // A vision model that is not the loaded one reads photos (a description for a text model's
+    // prompt): loaded next to it for this one answer, then freed. Same events as generate.
+    Function("describeImages") { modelPath: String, mmprojPath: String, ctx: Int, messages: List<Map<String, String>>, images: List<String>, maxSide: Int, maxTokens: Int ->
+      val id = requestIds.getAndIncrement()
+      exec.execute {
+        val start = System.currentTimeMillis()
+        var first = 0L
+        var seen = 0
+        try {
+          Native.initBackends(context.applicationInfo.nativeLibraryDir)
+          val decoded = images.mapNotNull { runCatching { Vision.decode(it, maxSide.coerceIn(64, 2048)) }.getOrNull() }
+          seen = decoded.size
+          if (decoded.isEmpty()) throw RuntimeException("nophotos")
+          val roles = messages.map { it["role"] ?: "user" }
+          val contents = Vision.withMarkers(roles, messages.map { it["content"] ?: "" }, decoded.size, Native.mediaMarker())
+          val n = Native.describeImages(Vision.pathOf(modelPath), Vision.pathOf(mmprojPath), ctx, Native.fastCoreCount(), roles.toTypedArray(), contents.toTypedArray(),
+            decoded.map { it.rgb }.toTypedArray(), decoded.map { it.width }.toIntArray(), decoded.map { it.height }.toIntArray(), maxTokens, 0.2f) { p ->
+            if (first == 0L) first = System.currentTimeMillis()
+            sendEvent("onToken", mapOf("id" to id, "text" to p))
+          }
+          val ms = System.currentTimeMillis() - start
+          sendEvent("onDone", mapOf("id" to id, "tokens" to n, "ms" to ms, "firstMs" to (if (first > 0) first - start else ms),
+            "tps" to (if (n > 0 && ms > 0) n * 1000.0 / ms else 0.0), "stopped" to (n < 0), "error" to null, "images" to seen))
+        } catch (e: Exception) {
+          sendEvent("onDone", mapOf("id" to id, "tokens" to 0, "ms" to (System.currentTimeMillis() - start), "firstMs" to 0, "tps" to 0.0, "stopped" to false, "error" to (e.message ?: "describe failed"), "images" to seen))
+        }
+      }
+      id
+    }
 
     // --- peers --------------------------------------------------------------------------
     /** `tls` is `{fp, pin?}` for a v3 peer (protocol v2 over tls), null for a v2 peer (the secret). */
