@@ -202,7 +202,8 @@ export function pickModel(prefer?: string | null): LocalModel | null {
   if (asked) return asked;
   const chosen = settings().modelId ? localById(settings().modelId!) : null;
   if (chosen) return chosen;
-  const all = [...localModels()].sort((a, b) => b.size - a.size);
+  // text models first; a vision model (mmproj) writes only when nothing else is here (10.11.2026)
+  const all = [...localModels()].sort((a, b) => Number(!!a.mmproj) - Number(!!b.mmproj) || b.size - a.size);
   const p = lastPassport();
   const ctx = settings().ctx;
   return all.find((m) => fitOn(p, { size: m.size, kv_mb_per_1k: m.kv_mb_per_1k, ctx }).verdict !== 'no') ?? all[0] ?? null;

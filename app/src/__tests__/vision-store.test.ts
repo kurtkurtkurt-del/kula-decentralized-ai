@@ -39,6 +39,7 @@ jest.mock('@/data/passport', () => ({ lastPassport: () => null }));
 import { CATALOG, isVision } from '@/llm/catalog';
 import { bytesOf, describe as describeModel, downloadOf, filesOf, forgetModel, initStore, localModels, mmprojPath, partsOf, reconcileModels, rememberModel, saveSettings, settings, startDownload, type LocalModel } from '@/llm/store';
 import { chosenVision, visionModels } from '@/llm/vision';
+import { bestModel } from '@/tasks/models';
 
 const emit = (e: unknown) => mockDisk.onDownload.forEach((fn) => fn(e));
 const vision = CATALOG.filter(isVision);
@@ -134,5 +135,16 @@ describe('the vision model setting', () => {
     await forgetModel(mid.id);
     expect(settings().visionModelId).toBeNull();
     expect(chosenVision()!.id).toBe(small.id);
+  });
+});
+
+describe('automatic picks', () => {
+  it('a project or a night picks a text model over a vision model; a vision model only when it is all there is', () => {
+    rememberModel(local(CATALOG.find((m) => m.id === 'gemma3-4b')!));
+    rememberModel(local(CATALOG[0]));
+    expect(bestModel()!.id).toBe(CATALOG[0].id);
+    mockStore.clear();
+    rememberModel(local(small));
+    expect(bestModel()!.id).toBe(small.id);
   });
 });
