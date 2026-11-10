@@ -13,10 +13,15 @@
 // memory, 100000% for a memory share; a value past its ceiling is capped or shown as "over".
 // Notes on disk are one small json ({ v: 1, days }), oldest days dropped, at most 32 names a day,
 // validated when read back (a NaN, a negative or a wrong shape gives fresh notes or drops that day,
-// never a throw), and saved at most once a minute. Data time is the snapshot's at; only save pacing
-// uses this computer's clock, and a clock that jumps backwards or far ahead is survived: every time
-// this branch remembers (last look, run start, last busy, an answer in the hour) is re-anchored
-// when it is ahead of the look's at, and no duration is ever negative.
+// never a throw), and saved at most once a minute. A day later than the look's own came from a
+// clock that ran ahead: it is dropped only once two looks at least a minute apart agree on the
+// earlier day, so one look whose clock is far behind keeps every saved day. A look's own day that
+// the notes did not have waits in memory until then and is kept as a past day when the clock comes
+// back: with fewer than 14 days saved, a short look far behind leaves one stray earlier day behind.
+// Data time is the snapshot's at; only save pacing uses this computer's clock, and a clock that
+// jumps backwards or far ahead is survived: every time this branch remembers (last look, run
+// start, last busy, an answer in the hour) is re-anchored when it is ahead of the look's at, and
+// no duration is ever negative.
 import type { Branch, BranchCtx, Snapshot } from '../types.js';
 import { gb, hhmm } from './util.js';
 import { masked } from './review.js';   // a project's title may hold personal data: shown masked, as review does
@@ -33,6 +38,7 @@ const DAYS_KEPT = 14;
 const DEVICES_KEPT = 32;
 const SAVE_EVERY_MS = 60_000;
 const HOUR = 3_600_000;
+const DAY_CONFIRM_MS = 60_000;                  // two looks this far apart on the earlier day agree the clock moved back
 
 /** what this branch keeps and shows is bounded: a device cannot burn more than 100000 Wh in a
  *  day, no duration is shown or kept past 100000 minutes (about 69 days), and no memory shown is
@@ -177,6 +183,13 @@ export function create(ctx: BranchCtx): Branch {
   let savedAt = 0;
   let lastAt: number | null = null;
   let snap: Snapshot | null = null;
+  // a day earlier than the saved ones, seen in this run but not yet trusted: the saved days
+  // ahead of it are dropped only when a second look, at least a minute later, says the same day
+  let pendingDay: string | null = null;
+  let pendingSince: number | null = null;
+  // the look's own day while it is earlier than the saved days: its energy waits here, out of
+  // the notes, until the earlier day is confirmed or the clock comes back to the saved days
+  let early: { key: string; day: Day } | null = null;
 
   // per device, in memory only
   const runStart = new Map<string, number>();           // when its current busy run began
@@ -188,16 +201,23 @@ export function create(ctx: BranchCtx): Branch {
   let mems: Mem[] = [];
   let gauge = 100;
 
+  const blankDay = (): Day => ({ wh: 0, busyMin: 0, by: Object.create(null) as Record<string, number> });
+
+  /** the day goes into the notes, and the cap drops the oldest days: the newest 14 stay */
+  const storeDay = (k: string, d: Day) => {
+    notes.days[k] = d;
+    const keys = Object.keys(notes.days).sort().reverse();
+    for (const old of keys.slice(DAYS_KEPT)) delete notes.days[old];
+  };
+
   const today = (at: number): Day => {
     const k = dayKey(at);
     let d = notes.days[k];
     if (!d) {
-      d = { wh: 0, busyMin: 0, by: Object.create(null) as Record<string, number> };
-      notes.days[k] = d;
-      // days later than this look were dropped before today() is called, so the look's own day
-      // is the newest key here and the oldest days go first
-      const keys = Object.keys(notes.days).sort().reverse();
-      for (const old of keys.slice(DAYS_KEPT)) delete notes.days[old];
+      d = blankDay();
+      // today() is only reached when no saved day is later than this look, so the look's own
+      // day is the newest key and the oldest days go first
+      storeDay(k, d);
     }
     return d;
   };
@@ -255,8 +275,11 @@ export function create(ctx: BranchCtx): Branch {
       // watermark moves back with it so the next look is measured from where the clock is now
       const step = lastAt == null ? 0 : at - lastAt;
       lastAt = at;
-      // answers seen across a gap longer than a step cannot be placed in an hour: counted is 0
+      // energy counts only a step of at most 15 s, since a longer gap is not proven work; answers
+      // seen across a gap can still be placed in the hour while the gap is under an hour, while a
+      // look behind or a gap of an hour or more leaves them unplaceable (placed is 0)
       const counted = step > 0 && step <= STEP_MAX_MS ? step : 0;
+      const placed = step > 0 && step < HOUR ? step : 0;
 
       const next = new Map<string, Warn>();
       const heads: number[] = [];
@@ -278,12 +301,55 @@ export function create(ctx: BranchCtx): Branch {
 
       // rest, answers per hour, energy
       // a day later than this look's came from a clock that ran ahead: it is no record of a past
-      // today, and left in place it would pre-fill "energy today" when that date arrives
+      // today, and left in place it would pre-fill "energy today" when that date arrives. one
+      // look far behind is not enough to erase the saved days: they go only when two looks at
+      // least a minute apart agree on this earlier day, and until then nothing is dropped and
+      // the look's own energy waits in memory
       const todayKey = dayKey(at);
-      for (const key of Object.keys(notes.days)) if (key > todayKey) { delete notes.days[key]; dirty = true; }
-      const day = today(at);
+      let later = Object.keys(notes.days).some((key) => key > todayKey);
+      if (!later) {
+        // no saved day is ahead of this look: an earlier day kept in memory goes into the notes
+        // now, the cap dropping the oldest day
+        pendingDay = null;
+        pendingSince = null;
+        if (early) { const e = early; early = null; storeDay(e.key, e.day); if (notes.days[e.key] === e.day) dirty = true; }
+      } else if (pendingDay === todayKey && pendingSince != null && at - pendingSince >= DAY_CONFIRM_MS) {
+        // two looks at least a minute apart agree on this earlier day: the clock moved back for
+        // good, and the days ahead of it are no record of a past today
+        for (const key of Object.keys(notes.days)) if (key > todayKey) { delete notes.days[key]; dirty = true; }
+        later = false;
+        pendingDay = null;
+        pendingSince = null;
+        if (early) { const e = early; early = null; storeDay(e.key, e.day); dirty = true; }
+      } else if (pendingDay !== todayKey) {
+        // the first look on this earlier day: remember it, and forget a day kept for another
+        // unconfirmed clock (it never reached the notes)
+        pendingDay = todayKey;
+        pendingSince = at;
+        early = null;
+      }
       const seen = new Set<string>();
-      let byCount = Object.keys(day.by).length;
+      let day: Day | null = null;
+      let persistent = false;                               // whether the day is in the notes
+      let byCount = 0;
+      const dayNow = (): Day => {
+        if (day) return day;
+        const saved = notes.days[todayKey];
+        if (saved) {
+          // the look's own day is already saved: count into it, even while a later day from a
+          // clock that ran ahead waits to be confirmed; nothing of it is erased by doing so
+          day = saved;
+          persistent = true;
+        } else if (later) {
+          if (!early) early = { key: todayKey, day: blankDay() };
+          day = early.day;
+        } else {
+          day = today(at);
+          persistent = true;
+        }
+        byCount = Object.keys(day.by).length;
+        return day;
+      };
       for (const d of loaded) {
         if (!usableNamed(d)) continue;
         seen.add(d.id);
@@ -302,7 +368,7 @@ export function create(ctx: BranchCtx): Branch {
           const at2 = t > at ? at : t;
           if (at - at2 < HOUR) list.push(at2);
         }
-        if (counted > 0 && done != null && before != null) {
+        if (placed > 0 && done != null && before != null) {
           const got = Math.max(0, done - before);
           for (let i = 0; i < Math.min(got, ANSWERS_PER_LOOK); i++) list.push(at);
         }
@@ -318,14 +384,16 @@ export function create(ctx: BranchCtx): Branch {
           lastBusy.set(d.id, at);
           if (counted) {
             const wh = energyWh(wattsOf(kinds.get(d.id), d.local), counted);
-            day.wh += wh;
-            day.busyMin += counted / 60_000;
-            const had = day.by[name] != null;
+            const dd = dayNow();
+            dd.wh += wh;
+            dd.busyMin += counted / 60_000;
+            const had = dd.by[name] != null;
             if (had || byCount < DEVICES_KEPT) {
-              day.by[name] = (had ? day.by[name] : 0) + wh;
+              dd.by[name] = (had ? dd.by[name] : 0) + wh;
               if (!had) byCount++;
             }
-            dirty = true;
+            // a day kept in memory only is not written yet: saving now would be for nothing
+            if (persistent) dirty = true;
           }
         } else if (runStart.has(d.id)) {
           const lb = lastBusy.get(d.id);
@@ -387,7 +455,9 @@ export function create(ctx: BranchCtx): Branch {
       const s = isObject(snap) ? snap : null;
       const wall = ctx.now();
       const at = s && isTime(s.at) ? s.at : isTime(wall) ? wall : 0;
-      const day = notes.days[dayKey(at)] ?? { wh: 0, busyMin: 0, by: Object.create(null) as Record<string, number> };
+      const key = dayKey(at);
+      // a look earlier than the saved days keeps its energy in memory: show it under its own day
+      const day = (early && early.key === key ? early.day : notes.days[key]) ?? blankDay();
       const yesterday = notes.days[dayKey(at - 24 * HOUR)];
       const l = loadedOf(s);
       const all = l && Array.isArray(l.devices) ? (l.devices as unknown[]) : [];
