@@ -175,6 +175,17 @@ test('energy: busy time × watts by kind, per day, saved about once a minute, re
 const HOUR = 3_600_000;
 const FIVE_YEARS = 5 * 365 * 24 * 60 * MIN;
 
+/** fourteen saved days, 2026-10-26 to 2026-11-08, with distinct Wh values for the checks */
+function fourteenDays(): Record<string, unknown> {
+  const keys = [
+    '2026-10-26', '2026-10-27', '2026-10-28', '2026-10-29', '2026-10-30', '2026-10-31',
+    '2026-11-01', '2026-11-02', '2026-11-03', '2026-11-04', '2026-11-05', '2026-11-06', '2026-11-07', '2026-11-08',
+  ];
+  const days: Record<string, unknown> = {};
+  keys.forEach((k, i) => { days[k] = { wh: i + 1, busyMin: 1, by: { pixel: i + 1 } }; });
+  return days;
+}
+
 /** a fake ctx whose wall clock the test moves on its own, and whose save is a real json round trip */
 function clockCtx(stored: unknown = null, start = T0) {
   const out = { saved: [] as any[], events: [] as string[], file: stored as any, wall: start };
@@ -303,6 +314,156 @@ test("a far-forward clock cannot push the look's own day out of the notes", () =
   assert.ok(out.file.days['2026-11-08'].wh > 0, 'today was not saved');
   const b2 = create(ctx as any);                                                 // restart
   assert.equal(Object.fromEntries(b2.view().rows)['energy today'], '0.3 Wh (a guess)');
+});
+
+test('one look with a clock far behind keeps every saved day, live and after a restart', () => {
+  const days = fourteenDays();
+  const { ctx, out } = clockCtx({ v: 1, days });
+  const b = create(ctx as any);
+  const back = new Date(2001, 0, 1, 12, 0, 0).getTime();
+  // one look far behind the saved days: nothing is dropped and nothing is saved because of it
+  out.wall = back;
+  b.observe(snap(back) as any, null);
+  assert.equal(out.saved.length, 0, 'one look behind saved the notes');
+  assert.deepEqual(Object.keys(out.file.days).sort(), Object.keys(days).sort());
+  // a second look fifteen seconds later counts today's energy under the look's own day, still
+  // in memory only: the saved file is not touched and the fourteen days are not dropped
+  out.wall = back + 15_000;
+  b.observe(snap(back + 15_000, { devices: pcDevices, loaded: pcLoaded }) as any, null);
+  assert.equal(Object.fromEntries(b.view().rows)['energy today'], '0.1 Wh (a guess)');
+  assert.equal(out.saved.length, 0, 'an unconfirmed earlier day was saved');
+  assert.deepEqual(Object.keys(out.file.days).sort(), Object.keys(days).sort());
+  // normal looks record and save again: all fourteen days are still there
+  const l = loaded([ld({ id: 'pc1', name: 'tower', busy: true })]);
+  for (let at = T0; at <= T0 + 2 * MIN; at += 15_000) {
+    out.wall = at;
+    b.observe(snap(at, { devices: pcDevices, loaded: l }) as any, null);
+  }
+  assert.ok(out.saved.length >= 1, 'normal looks save again');
+  const after = Object.keys(out.file.days);
+  assert.equal(after.length, 14, after.join(','));
+  for (const k of Object.keys(days)) assert.ok(after.includes(k), `${k} was erased: ${after.join(',')}`);
+  assert.ok(!after.includes('2001-01-01'), after.join(','));
+  // the history survives a restart
+  const b2 = create(ctx as any);
+  const rows = Object.fromEntries(b2.view().rows);
+  assert.equal(rows['energy yesterday'], '13 Wh');
+});
+
+test('a clock that moved back for good drops the later days after two looks a minute apart', () => {
+  const days = fourteenDays();
+  const { ctx, out } = clockCtx({ v: 1, days });
+  const b = create(ctx as any);
+  const back = new Date(2001, 0, 1, 12, 0, 0).getTime();
+  const look = (at: number) => {
+    out.wall = at;
+    b.observe(snap(at, { devices: pcDevices, loaded: pcLoaded }) as any, null);
+  };
+  look(back);
+  look(back + 15_000);                 // 15 s of work on the earlier day: it waits in memory
+  look(back + 59_000);                 // fifty-nine seconds: not a minute, so nothing is dropped
+  assert.equal(out.saved.length, 0);
+  assert.equal(Object.keys(out.file.days).length, 14);
+  look(back + 60_000);                 // a minute since the first look: the clock really moved back
+  assert.deepEqual(Object.keys(out.file.days), ['2001-01-01']);
+  // 15 W × (15 s that waited + 1 s of this look) under the look's own day
+  assert.equal(out.file.days['2001-01-01'].wh, 1 / 15);
+  // the day and its energy load back
+  const b2 = create(ctx as any);
+  out.wall = back + 75_000;
+  b2.observe(snap(back + 75_000, { devices: pcDevices, loaded: pcLoaded }) as any, null);
+  out.wall = back + 90_000;
+  b2.observe(snap(back + 90_000, { devices: pcDevices, loaded: pcLoaded }) as any, null);
+  assert.equal(Object.fromEntries(b2.view().rows)['energy today'], '0.1 Wh (a guess)');   // 1/15 + 15 s × 15 W
+});
+
+test('a look on a saved day earlier than a ran-ahead day keeps that day\'s saved energy', () => {
+  const days = {
+    '2026-11-08': { wh: 50, busyMin: 10, by: { tower: 50 } },
+    '2026-11-09': { wh: 1, busyMin: 1, by: { tower: 1 } },
+  };
+  const { ctx, out } = clockCtx({ v: 1, days });
+  const b = create(ctx as any);
+  const look = (at: number) => {
+    out.wall = at;
+    b.observe(snap(at, { devices: pcDevices, loaded: pcLoaded }) as any, null);
+  };
+  look(T0);
+  look(T0 + 15_000);
+  // while the ran-ahead day waits to be confirmed, the saved day is the one shown and counted into
+  assert.equal(Object.fromEntries(b.view().rows)['energy today'], '50.1 Wh (a guess)');   // 50 + 15 W × 15 s
+  for (let at = T0 + 30_000; at <= T0 + 3 * MIN; at += 15_000) look(at);
+  // a wall minute later with no new step: the notes are written
+  out.wall = T0 + 3 * MIN + 60_000;
+  b.observe(snap(T0 + 3 * MIN, { devices: pcDevices, loaded: pcLoaded }) as any, null);
+  // 50 Wh saved + 12 counted steps of 15 s at 15 W = 0.75 Wh
+  assert.equal(out.file.days['2026-11-08'].wh, 50.75);
+  assert.ok(!('2026-11-09' in out.file.days), Object.keys(out.file.days).join(','));
+  assert.equal(Object.fromEntries(b.view().rows)['energy today'], '50.8 Wh (a guess)');
+});
+
+test('a look on a saved day stepped back 30 s across midnight keeps that day\'s saved energy', () => {
+  const D9 = new Date(2026, 10, 9, 0, 0, 0).getTime();
+  const days = { '2026-11-08': { wh: 50, busyMin: 10, by: { tower: 50 } } };
+  const { ctx, out } = clockCtx({ v: 1, days });
+  const b = create(ctx as any);
+  const look = (at: number) => {
+    out.wall = at;
+    b.observe(snap(at, { devices: pcDevices, loaded: pcLoaded }) as any, null);
+  };
+  look(D9 - 15_000);                   // 11-08 23:59:45: the saved day, no later day yet
+  look(D9);                            // 11-09 00:00:00: a later day from a clock that ran ahead
+  look(D9 - 30_000);                   // the clock steps back 30 s across midnight to 11-08 23:59:30
+  look(D9 - 15_000);                   // 23:59:45: 15 s of work, 50.0625 Wh
+  // while the earlier day waits, the saved 50 Wh is shown and counted into
+  assert.equal(Object.fromEntries(b.view().rows)['energy today'], '50.1 Wh (a guess)');   // 50 + 15 W × 15 s
+  look(D9);                            // midnight again: the waiting day is merged, not put over
+  // a wall minute later with no new step: the notes are written
+  out.wall = D9 + 60_000;
+  b.observe(snap(D9, { devices: pcDevices, loaded: pcLoaded }) as any, null);
+  assert.equal(out.file.days['2026-11-08'].wh, 50.0625);   // 50 + 15 W × 15 s
+  assert.equal(out.file.days['2026-11-09'].wh, 0.125);     // 2 × 15 W × 15 s
+});
+
+test('energy on a second earlier day is counted under that day, not the first', () => {
+  const days = { '2026-11-09': { wh: 1, busyMin: 1, by: { tower: 1 } } };
+  const { ctx, out } = clockCtx({ v: 1, days });
+  const b = create(ctx as any);
+  const look = (at: number) => {
+    out.wall = at;
+    b.observe(snap(at, { devices: pcDevices, loaded: pcLoaded }) as any, null);
+  };
+  look(new Date(2026, 10, 7, 23, 59, 30).getTime());   // 11-07 23:59:30: the first earlier day waits
+  look(new Date(2026, 10, 7, 23, 59, 45).getTime());   // 11-07 23:59:45: 0.0625 Wh goes into it
+  look(new Date(2026, 10, 8, 0, 0, 0).getTime());      // 11-08 00:00:00: a second earlier day shows up
+  assert.equal(Object.fromEntries(b.view().rows)['energy today'], '0.1 Wh (a guess)');   // 15 W × 15 s on 11-08
+  look(new Date(2026, 10, 8, 0, 1, 0).getTime());      // a minute on 11-08: the clock moved back for good
+  // 11-08 is the day that goes into the notes with its own energy; 11-07 was never in them
+  assert.deepEqual(Object.keys(out.file.days), ['2026-11-08']);
+  assert.equal(out.file.days['2026-11-08'].wh, 0.0625);
+});
+
+test('a transient clock behind keeps its energy as a past day when the clock comes back', () => {
+  const days = {
+    '2026-11-06': { wh: 1, busyMin: 1, by: { pixel: 1 } },
+    '2026-11-07': { wh: 2, busyMin: 1, by: { pixel: 2 } },
+    '2026-11-08': { wh: 3, busyMin: 1, by: { pixel: 3 } },
+  };
+  const { ctx, out } = clockCtx({ v: 1, days });
+  const b = create(ctx as any);
+  const back = new Date(2001, 0, 1, 12, 0, 0).getTime();
+  out.wall = back;
+  b.observe(snap(back) as any, null);
+  out.wall = back + 15_000;
+  b.observe(snap(back + 15_000, { devices: pcDevices, loaded: pcLoaded }) as any, null);
+  assert.equal(out.saved.length, 0);
+  // the clock comes back before a second look agrees: nothing was dropped, and the earlier
+  // day goes into the notes as a past day with the energy it counted
+  out.wall = T0;
+  b.observe(snap(T0) as any, null);
+  assert.deepEqual(Object.keys(out.file.days).sort(), ['2001-01-01', '2026-11-06', '2026-11-07', '2026-11-08']);
+  assert.deepEqual(out.file.days['2001-01-01'].by, { tower: 0.0625 });   // 15 W × 15 s
+  assert.equal(out.file.days['2026-11-08'].wh, 3);
 });
 
 test('a look without a usable time changes nothing and writes no NaN day key', () => {
@@ -458,6 +619,31 @@ test('a clock an hour ahead then an hour back while idle: the warning ends after
   const v = b.view();
   assert.equal(v.stat, 'all within limits');
   assert.ok(!v.lines.some((x) => x.startsWith('warning:')), v.lines.join('\n'));
+  assert.deepEqual(out.events.filter((e) => /had its break/.test(e)), ['limits: tower had its break']);
+});
+
+test('the rest warning stands 55 s after a far-forward clock is corrected and ends after the break', () => {
+  const { ctx, out } = clockCtx();
+  const b = create(ctx as any);
+  let t = T0 + HOUR;
+  for (let i = 0; i <= 84; i++) {                       // 21 minutes of work on a clock an hour ahead
+    out.wall = t;
+    b.observe(snap(t, { devices: pcDevices, loaded: pcLoaded }) as any, null);
+    t += 15_000;
+  }
+  assert.equal(b.view().lines[0], 'warning: tower should rest: answering for 21 min without a break');
+  const idle = (at: number) => {
+    out.wall = at;
+    b.observe(snap(at, { devices: pcDevices, loaded: loaded([ld({ id: 'pc1', name: 'tower' })]) } as any), null);
+  };
+  // the clock is corrected: the run keeps its 21 minutes and the break is counted from here
+  idle(T0);
+  idle(T0 + 55_000);
+  assert.equal(b.view().stat, '1 warning');
+  assert.equal(b.view().lines[0], 'warning: tower should rest: answering for 21 min without a break');
+  idle(T0 + 75_000);                                    // the break reaches a minute
+  assert.equal(b.view().stat, 'all within limits');
+  assert.ok(!b.view().lines.some((x) => x.startsWith('warning:')));
   assert.deepEqual(out.events.filter((e) => /had its break/.test(e)), ['limits: tower had its break']);
 });
 
@@ -743,6 +929,27 @@ test('answers in the last hour are only those that can be placed: a night and a 
   done += 5;
   look(T0 + 7 * 24 * HOUR);
   assert.match(b.view().lines[0], /0 answers in the last hour/);
+});
+
+test('answers across a gap are counted while the gap is under an hour, and not at an hour or more', () => {
+  const { ctx } = clockCtx();
+  const b = create(ctx as any);
+  let done = 1;
+  const look = (at: number) => b.observe(snap(at, { loaded: loaded([ld({ busy: true, done })]) }) as any, null);
+  look(T0);
+  // thirty minutes between looks: the three answers happened somewhere in the last half hour,
+  // so they can be placed in the hour even though the gap is far longer than a step
+  done += 3;
+  look(T0 + 30 * MIN);
+  assert.equal(b.view().lines[0], 'pixel · memory 2.0 GB of 3.9 GB (50%) ok · answering 0 min, rest at 20 · 3 answers in the last hour');
+  // exactly an hour since the last look: nothing can be placed
+  done += 4;
+  look(T0 + 90 * MIN);
+  assert.equal(b.view().lines[0], 'pixel · memory 2.0 GB of 3.9 GB (50%) ok · answering 0 min, rest at 20 · 0 answers in the last hour');
+  // more than an hour: nothing either
+  done += 2;
+  look(T0 + 90 * MIN + 2 * HOUR);
+  assert.equal(b.view().lines[0], 'pixel · memory 2.0 GB of 3.9 GB (50%) ok · answering 0 min, rest at 20 · 0 answers in the last hour');
 });
 
 test('an answer stamped by a far-forward clock expires an hour after the clock is right again', () => {
