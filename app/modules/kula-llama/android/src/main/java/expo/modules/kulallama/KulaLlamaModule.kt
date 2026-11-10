@@ -177,6 +177,10 @@ class KulaLlamaModule : Module() {
       val key = if (r != null) "api:relay:${r.code}@${r.url}" else "api:$host:$port"
       tunnels[key]?.localPort ?: Gate.Tunnel(host, port, secret, "api", tlsOf(tls), r).let { t -> t.start().also { tunnels[key] = t } }
     }
+    /** The security report on the phone (docs/AUDIT.md): a worker's GET /trust checked here, certificate, key id and every ledger signature (TrustVerify.kt). */
+    AsyncFunction("verifyTrust") { pinnedFp: String?, certB64: String?, id: String?, alg: String?, pubB64: String?, lines: List<String>, expectPrev: String? ->
+      TrustVerify.check(pinnedFp, certB64, id, alg, pubB64, lines, expectPrev).toMap()
+    }
     /** This phone's own certificate fingerprint (what a worker pins once paired). */
     AsyncFunction("gateFingerprint") { identity.fp }
     AsyncFunction("closeTunnels") { tunnels.values.forEach { it.stop() }; tunnels.clear() }
