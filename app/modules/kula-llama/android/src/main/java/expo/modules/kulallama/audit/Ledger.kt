@@ -37,8 +37,13 @@ class Ledger(
   private fun lengthNow(): Long = if (file.exists()) file.length() else -1L
 
   init {
-    torn = cutTorn(file)
-    lastHash = lastHashOfChain(file)
+    // under the lock too: the other process may be half way through a line right now, and
+    // that is not a torn line to cut
+    crossProcess {
+      torn = cutTorn(file)
+      lastHash = lastHashOfChain(file)
+      knownLength = lengthNow()
+    }
     // the cut goes into the chain at once; when that fails the next append tries again
     if (torn > 0) runCatching { synchronized(this) { crossProcess { recordTorn(now()) } } }
   }
