@@ -14,19 +14,23 @@
 // so they never appear as new on every look. Saved at most once a minute and only when something
 // changed. The log never holds an address (where), a reason, trust data, or anything a person
 // wrote: for a project it keeps its id and its new state, never its title, request, line or error.
-// A decision's own at is kept as the notes' watermark (lastDecisionAt); its event is stamped with
-// the look's at, like every other event. The notes also keep the last LOGGED_MAX logged decisions
-// (at + text), so a watermark that has to move backwards never re-logs one of them.
+// A decision's own at is the notes' watermark (lastDecisionAt); its event is stamped with the
+// look's at. The notes keep two lists of at + text, at most LOGGED_MAX each: the last LOGGED_MAX
+// logged decisions, so a watermark moved backwards never re-logs one, and the last LOGGED_MAX
+// stamped later than their look, so a future-stamped decision is logged once and never again after
+// the first list forgets it. A decision is already logged when it is in either list; a snapshot
+// longer than LOGGED_MAX only counts its last LOGGED_MAX decisions (the engine appends newest
+// last); a file from before the future list (memory-1) loads with an empty one.
 // Data time is the snapshot's at (finite, 0..8.64e15); ctx.now() only paces saves and the hourly
-// prune. A clock that jumps backwards by minutes still records. Every high-water mark re-anchors:
-// a look more than KEEP_MS behind the newest t seen (or the decision watermark) means the earlier
-// value was a bad clock, so the log re-anchors to this look and drops the events stamped in the
-// future; a decision stamped later than its look never pushes the watermark past that look's at.
-// A look more than KEEP_MS ahead moves the newest t seen but not the prune anchor: the prune waits
-// until the next look agrees with it, so one bad look cannot wipe the real history. A look with no
-// usable at is skipped, and the next good look compares with the remembered state instead of the
-// skipped snapshot. Snapshot containers and entries are checked: a non-array is empty, a null
-// entry is skipped, and a non-string, non-number field counts as missing.
+// prune. Every look is diffed against the remembered state, so a look with no usable at only
+// returns early and the next good look sees what changed. A clock that jumps backwards by minutes
+// still records. Every high-water mark re-anchors: a look more than KEEP_MS behind the newest t
+// seen (or the watermark) means a bad clock, so the log re-anchors, drops events stamped in the
+// future, and logs every decision in the look not already logged. A decision stamped later than
+// its look never pushes the watermark past that look's at. A look more than KEEP_MS ahead moves
+// the newest t seen but not the prune anchor: the prune waits until the next look agrees, so one
+// bad look cannot wipe the real history. Snapshot containers and entries are checked: a non-array
+// is empty, a null entry is skipped, and a non-string, non-number field counts as missing.
 import type { Branch, BranchCtx, BranchView, Snapshot } from '../types.js';
 import { hhmm } from './util.js';
 
@@ -35,7 +39,7 @@ export const KEEP_MS = 90 * 24 * 3600_000;
 export const STR_MAX = 200;
 const MAX_DEVICES = 100;
 const MAX_PROJECTS = 100;
-const LOGGED_MAX = 30;
+const LOGGED_MAX = 30;               // the engine sends at most its last 30 decisions
 const LINES_MAX = 40;
 const SAVE_EVERY_MS = 60_000;
 const PRUNE_EVERY_MS = 3_600_000;
@@ -89,6 +93,7 @@ export interface MemoryNotes {
   ev: MemoryEvent[];
   lastDecisionAt: number | null;
   logged: LoggedDecision[];
+  future: LoggedDecision[];
   state: Remembered;
 }
 
@@ -106,10 +111,22 @@ const listOf = (x: unknown): unknown[] => (Array.isArray(x) ? x : []);
 const objOf = (x: unknown): Record<string, unknown> | null =>
   x !== null && typeof x === 'object' ? (x as Record<string, unknown>) : null;
 const sig = (at: number, text: string) => `${at}|${text}`;
-const dayKey = (ms: number) => { const d = new Date(ms); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
+/** The non-empty parts of a detail joined with ·: a missing name or mode leaves no gap. */
+const detail = (...parts: string[]): string | null => {
+  const kept = parts.filter((p) => p.length > 0);
+  return kept.length > 0 ? kept.join(' · ') : null;
+};
+
+/** The local calendar day, YYYY-MM-DD. */
+function dayKey(ms: number): string {
+  const d = new Date(ms);
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${d.getFullYear()}-${month}-${day}`;
+}
 
 const freshState = (): Remembered => ({ looked: false, devices: [], work: { loaded: null }, projects: [] });
-const freshNotes = (): MemoryNotes => ({ v: 1, ev: [], lastDecisionAt: null, logged: [], state: freshState() });
+const freshNotes = (): MemoryNotes => ({ v: 1, ev: [], lastDecisionAt: null, logged: [], future: [], state: freshState() });
 
 function sameState(a: Remembered, b: Remembered): boolean {
   return JSON.stringify(a) === JSON.stringify(b);
@@ -163,124 +180,75 @@ function remembered(x: MemoryState): Remembered {
   return { looked: x.looked, devices: x.devices, work: x.work, projects: x.projects };
 }
 
-/** The changes between the last look and this one. `before` is the last snapshot when the eye has a
- *  usable one; after a restart (or a skipped look) it is null and the remembered state stands in
- *  for it. On the very first look (no before and nothing remembered) there is nothing to compare
- *  with: no events. Null containers and entries, duplicates and ids past the caps are ignored here
- *  too, exactly as the notes will not remember them. */
-export function diff(now: Snapshot, before: Snapshot | null, state: Remembered | null): MemoryEvent[] {
-  const was = state ?? freshState();
-  if (before == null && !was.looked) return [];
+/** The changes between what the notes remember and this look. Nothing remembered (the first look)
+ *  means nothing to compare with: no events. Both sides come from stateOf, so the caps and the
+ *  coercion are the same as the notes'. `next` is stateOf(now) when the caller already has it. */
+export function diff(now: Snapshot, rememberedState: Remembered | null, next: Remembered = stateOf(now)): MemoryEvent[] {
+  const was = rememberedState ?? freshState();
+  if (!was.looked) return [];
   const t = now.at;
   const out: MemoryEvent[] = [];
   const push = (k: MemoryKind, d: string | null, n: string | null, x: string | null) =>
     out.push({ t, k, d: cutOrNull(d), n: cutOrNull(n), x: cutOrNull(x) });
 
   const prev = new Map<string, SeenDevice>();
-  if (before) {
-    for (const raw of listOf(before.devices).slice(0, MAX_DEVICES)) {
-      const d = objOf(raw);
-      if (!d) continue;
-      const id = idOf(d.id);
-      if (!id || prev.has(id)) continue;           // first one wins
-      prev.set(id, seenDevice(d, id));
-    }
-  } else {
-    for (const raw of listOf(was.devices)) {
-      const d = objOf(raw);
-      if (!d) continue;
-      const id = idOf(d.id);
-      if (!id || prev.has(id)) continue;           // first one wins
-      prev.set(id, seenDevice(d, id));
-    }
-  }
-
-  const here = new Set<string>();
-  for (const raw of listOf(now.devices).slice(0, MAX_DEVICES)) {
-    const d = objOf(raw);
-    if (!d) continue;
-    const id = idOf(d.id);
-    if (!id || here.has(id)) continue;             // first one wins
-    here.add(id);
-    const name = cut(textOf(d.name) ?? '');
-    const reach = boolOrNull(d.reachable);
-    const plug = boolOrNull(d.plugged);
-    const via = cut(textOf(d.via) ?? '');
-    const rawHolds = textOf(d.holds);
-    const holds = rawHolds === null ? null : cut(rawHolds);
-    const p = prev.get(id);
-    if (!p) { push('appeared', id, name || null, null); continue; }
+  for (const d of was.devices) prev.set(d.id, d);
+  for (const d of next.devices) {
+    const name = d.name || null;
+    const p = prev.get(d.id);
+    if (!p) { push('appeared', d.id, name, null); continue; }
     // null means "not looked at / unknown": it never counts as up/down or plugged/unplugged
-    if (p.reachable !== null && reach !== null && p.reachable !== reach) push(reach ? 'up' : 'down', id, name || null, null);
-    if (p.plugged !== null && plug !== null && p.plugged !== plug) push(plug ? 'plugged' : 'unplugged', id, name || null, null);
-    if (p.via !== via) push('via', id, name || null, `${p.via} → ${via}`);
-    if (p.holds !== holds) push('holds', id, name || null, holds);
+    if (p.reachable !== null && d.reachable !== null && p.reachable !== d.reachable) push(d.reachable ? 'up' : 'down', d.id, name, null);
+    if (p.plugged !== null && d.plugged !== null && p.plugged !== d.plugged) push(d.plugged ? 'plugged' : 'unplugged', d.id, name, null);
+    if (p.via !== d.via) push('via', d.id, name, `${p.via} → ${d.via}`);
+    if (p.holds !== d.holds) push('holds', d.id, name, d.holds);
   }
-  for (const [id, p] of prev) if (!here.has(id)) push('gone', id, p.name || null, null);
+  const here = new Set(next.devices.map((d) => d.id));
+  for (const p of was.devices) if (!here.has(p.id)) push('gone', p.id, p.name || null, null);
 
-  const wasWork = smallWork(before ? before.work : was.work);
-  const isWork = smallWork(now.work);
-  if (!wasWork && isWork) push('loaded', null, null, `${isWork.name} · ${isWork.mode}`);
+  const wasWork = was.work.loaded;
+  const isWork = next.work.loaded;
+  if (!wasWork && isWork) push('loaded', null, null, detail(isWork.name, isWork.mode));
   else if (wasWork && !isWork) push('unloaded', null, null, null);
   else if (wasWork && isWork) {
-    if (wasWork.file !== isWork.file) push('loaded', null, null, `${isWork.name} · ${isWork.mode}`);
+    if (wasWork.file !== isWork.file) push('loaded', null, null, detail(isWork.name, isWork.mode));
     else if (wasWork.mode !== isWork.mode) push('mode', null, null, `${wasWork.mode} → ${isWork.mode}`);
   }
 
   // only the id and the new state: a project's title, request, line and error may hold what a person wrote
   const projects = new Map<string, string>();
-  if (before) {
-    for (const raw of listOf(before.projects).slice(0, MAX_PROJECTS)) {
-      const p = objOf(raw);
-      if (!p) continue;
-      const id = idOf(p.id);
-      const s = textOf(p.state);
-      if (!id || s === null || projects.has(id)) continue;   // first one wins
-      projects.set(id, s);
-    }
-  } else {
-    for (const raw of listOf(was.projects)) {
-      const p = objOf(raw);
-      if (!p) continue;
-      const id = idOf(p.id);
-      const s = textOf(p.state);
-      if (!id || s === null || projects.has(id)) continue;   // first one wins
-      projects.set(id, s);
-    }
-  }
-  const projSeen = new Set<string>();
-  for (const raw of listOf(now.projects).slice(0, MAX_PROJECTS)) {
-    const p = objOf(raw);
-    if (!p) continue;
-    const id = idOf(p.id);
-    const rawState = textOf(p.state);
-    const s = rawState === null ? null : cut(rawState);
-    if (!id || s === null || projSeen.has(id)) continue;     // first one wins
-    projSeen.add(id);
-    const wasState = projects.get(id);
-    if (wasState !== undefined && wasState !== s) push('project', id, null, s);
+  for (const p of was.projects) projects.set(p.id, p.state);
+  for (const p of next.projects) {
+    const wasState = projects.get(p.id);
+    if (wasState !== undefined && wasState !== p.state) push('project', p.id, null, p.state);
   }
 
   return out;
 }
 
-/** Decisions newer than the watermark (or every one the first time), as events, the new watermark
- *  and the ring of the last LOGGED_MAX logged ones. A future-stamped decision is logged once but
- *  never pushes the watermark past the look's own at; when the watermark is later than this look,
- *  it moves to this look's at so real decisions after it are logged, and the ring keeps the ones
- *  already logged from coming back. */
+/** Decisions not already logged, as events, the new watermark and the two bounded lists. Only the
+ *  last LOGGED_MAX decisions of the snapshot count (the engine appends newest last), so a longer
+ *  list cannot outgrow the lists. On a normal look that means decisions newer than the watermark;
+ *  when the watermark is later than this look (a corrected clock), the look re-anchors: every
+ *  decision in the look that is not already in a list is logged, whatever its at. A decision
+ *  stamped later than now.at is logged once and kept in `future`, so the ring rolling over never
+ *  logs it again; the watermark never moves past now.at. */
 export function newDecisions(
   now: Snapshot,
   lastDecisionAt: number | null,
   logged: LoggedDecision[] = [],
-): { events: MemoryEvent[]; last: number | null; logged: LoggedDecision[] } {
+  future: LoggedDecision[] = [],
+): { events: MemoryEvent[]; last: number | null; logged: LoggedDecision[]; future: LoggedDecision[] } {
   const events: MemoryEvent[] = [];
   const ring = logged.slice(-LOGGED_MAX);
-  const seen = new Set(ring.map((l) => sig(l.at, l.text)));
+  const ahead = future.slice(-LOGGED_MAX);
+  const seen = new Set([...ring, ...ahead].map((l) => sig(l.at, l.text)));
   const reanchored = lastDecisionAt !== null && lastDecisionAt > now.at;
-  const anchor = reanchored ? now.at : lastDecisionAt;
-  let last = anchor;
-  for (const raw of listOf(objOf(now.work)?.decisions)) {
+  let last = reanchored ? now.at : lastDecisionAt;
+  // the watermark before this look: the loop's own marks must not hide a decision that came
+  // after a future-stamped one in the list
+  const floor = last;
+  for (const raw of listOf(objOf(now.work)?.decisions).slice(-LOGGED_MAX)) {
     const d = objOf(raw);
     if (!d) continue;
     const at = d.at;
@@ -288,15 +256,22 @@ export function newDecisions(
     if (!isTime(at) || text === null) continue;
     const x = cut(text);
     if (seen.has(sig(at, x))) continue;                        // already logged: never again
-    if (anchor !== null && (reanchored ? at < anchor : at <= anchor)) continue;
+    // the engine stamps and appends a decision in one step, so a first look is at or past its at;
+    // one at or below the watermark is skipped, which only a same-millisecond tie can cause
+    if (!reanchored && floor !== null && at <= floor) continue;
     events.push({ t: now.at, k: 'decision', d: null, n: null, x });
     seen.add(sig(at, x));
-    ring.push({ at, text: x });
-    if (ring.length > LOGGED_MAX) ring.shift();
+    if (at > now.at) {
+      ahead.push({ at, text: x });
+      if (ahead.length > LOGGED_MAX) ahead.shift();
+    } else {
+      ring.push({ at, text: x });
+      if (ring.length > LOGGED_MAX) ring.shift();
+    }
     const mark = Math.min(at, now.at);                         // never push the watermark past this look
     if (last === null || mark > last) last = mark;
   }
-  return { events, last, logged: ring };
+  return { events, last, logged: ring, future: ahead };
 }
 
 /** The log after its bounds: nothing older than KEEP_MS below the prune anchor, at most MAX_EVENTS
@@ -316,7 +291,6 @@ const ev = (x: unknown): MemoryEvent | null => {
 };
 
 function saneLogged(x: unknown): LoggedDecision[] | null {
-  if (x === undefined) return [];                    // notes from before this field: nothing remembered
   if (!Array.isArray(x)) return null;
   const out: LoggedDecision[] = [];
   for (const raw of x.slice(-LOGGED_MAX)) {
@@ -381,9 +355,11 @@ function sane(x: unknown): MemoryNotes {
   if (!(n.lastDecisionAt === null || isTime(n.lastDecisionAt))) return freshNotes();
   const logged = saneLogged(n.logged);
   if (!logged) return freshNotes();
+  const future = n.future === undefined ? [] : saneLogged(n.future);   // memory-1 wrote no list
+  if (!future) return freshNotes();
   const state = saneState(n.state);
   if (!state) return freshNotes();
-  return { v: 1, ev: events.slice(-MAX_EVENTS), lastDecisionAt: n.lastDecisionAt, logged, state };
+  return { v: 1, ev: events.slice(-MAX_EVENTS), lastDecisionAt: n.lastDecisionAt, logged, future, state };
 }
 
 /** One event as the view's line, after the HH:MM. Plain words; never an address. */
@@ -399,7 +375,7 @@ function words(e: MemoryEvent): string {
     case 'unplugged': return `${who} was unplugged`;
     case 'via': return `${who} is reached differently: ${x}`;
     case 'holds': return e.x ? `${who} now holds ${x}` : `${who} holds nothing now`;
-    case 'loaded': return `the model loaded: ${x}`;
+    case 'loaded': return x ? `the model loaded: ${x}` : 'the model loaded';
     case 'unloaded': return 'the model was unloaded';
     case 'mode': return `the mode changed: ${x}`;
     case 'project': return `project ${e.d ?? '?'} is now ${x}`;
@@ -411,11 +387,11 @@ export function create(ctx: BranchCtx): Branch {
   const notes = sane(ctx.load<unknown>(null));
   let state: MemoryState = { ...notes.state, lastDecisionAt: notes.lastDecisionAt };
   let logged = notes.logged;
+  let future = notes.future;
   let events = notes.ev;
   let newestT: number | null = events.reduce<number | null>((m, e) => (m === null || e.t > m ? e.t : m), null);
   let pruneT: number | null = newestT;      // the newest time two agreeing looks have shown
   let snap: Snapshot | null = null;
-  let skipped = false;                      // the last look had no usable at, so `before` was never seen
   let savedAt = Number.NEGATIVE_INFINITY;   // the first change after start is saved at once
   let lastPrune = Number.NEGATIVE_INFINITY;
   let dirty = false;                        // something changed since the last save
@@ -424,6 +400,7 @@ export function create(ctx: BranchCtx): Branch {
     notes.ev = events;
     notes.lastDecisionAt = state.lastDecisionAt;
     notes.logged = logged;
+    notes.future = future;
     notes.state = remembered(state);
     ctx.save(notes);
     dirty = false;
@@ -431,8 +408,8 @@ export function create(ctx: BranchCtx): Branch {
 
   return {
     id: 'memory',
-    observe(now, before) {
-      if (!isTime(now.at)) { skipped = true; return; }    // no usable time: this look says nothing
+    observe(now) {
+      if (!isTime(now.at)) return;             // no usable time: this look says nothing, the state stands
       snap = now;
       const at = now.at;
 
@@ -455,15 +432,15 @@ export function create(ctx: BranchCtx): Branch {
       }
       const anchor = pruneT ?? at;
 
-      const useBefore = skipped ? null : before;          // a skipped look never became the remembered state
-      skipped = false;
-      const changed = diff(now, useBefore, state);
-      const d = newDecisions(now, state.lastDecisionAt, logged);
+      const nextState = stateOf(now);
+      const changed = diff(now, state, nextState);
+      const d = newDecisions(now, state.lastDecisionAt, logged, future);
       changed.push(...d.events);
       logged = d.logged;
-      const next: MemoryState = { ...stateOf(now), lastDecisionAt: d.last };
-      if (!sameState(state, next)) dirty = true;
-      state = next;
+      future = d.future;
+      const after: MemoryState = { ...nextState, lastDecisionAt: d.last };
+      if (!sameState(state, after)) dirty = true;
+      state = after;
 
       const added = changed.length > 0;
       if (added) { events = events.concat(changed); dirty = true; }
