@@ -8,13 +8,19 @@
 //  - brier: BS = mean((p - x)^2), BS0 = mean((p0 - x)^2) (the baseline: the device's own average
 //    as the naive guess);
 //  - skill = 1 - BS / BS0, shown only when there are at least 24 pairs, the baseline Brier shown
-//    to two decimals is not 0.00 (nothing to beat) and some slot has been seen twice (until then
-//    p equals p0 by construction); what is shown is clamped to [-9.99, +1.00], and the feed's
-//    thresholds compare that same shown value, never the raw one;
+//    to two decimals is not 0.00 (nothing to beat) and at least 24 pairs' p differs from p0 to two
+//    decimals (until a slot has been seen twice, p equals p0 by construction); what is shown is
+//    clamped to [-9.99, +1.00], and the feed's thresholds compare that same shown value, never the
+//    raw one;
 //  - calibration: said = mean(p), was = mean(x) over the same pairs (is the chance it gave about
 //    right on average), with the not-enough line under 24 pairs.
-// A feed line when the overall skill (at least 48 pairs) crosses below 0, and one when it comes
-// back above 0.05; the state lives in the notes so a restart does not repeat or skip a line.
+// A feed line when the overall skill (at least 48 pairs) crosses to -0.05 or below, one when it
+// comes back to +0.05, and one when the row stops showing a skill while that state is set; a
+// verdict is said only while the baseline Brier shown is at least 0.05 (under that a few missing
+// hours are noise), and with no forecast view at all the row says "nothing to score yet" and the
+// state is left alone. An α feed line only when α has crossed a factor of two since the last one
+// said, and at most once an hour per device. The state lives in the notes so a restart does not
+// repeat or skip a line.
 // The snapshot and the notes are not trusted: null containers, non-object entries, wrong types and
 // NaN or absurd numbers are skipped or dropped (a bad device is dropped, a bad file starts fresh),
 // device ids are keys in a null-prototype object, and a look at an unusable time changes nothing.
@@ -42,7 +48,11 @@ const FC_DEVICES_MAX = 40;         // the forecast view's own cap: this much of 
 const FC_PAIRS_MAX = 200;          // …and its cap on scored hours per device
 const SKILL_MIN_PAIRS = 24;        // scored hours before the skill is shown
 const FEED_MIN_PAIRS = 48;         // …for the feed lines
-const SKILL_WORSE = -0.01;         // the shown skill at or below this: worse than the device's own average
+const SLOT_DIFF_MIN = 24;          // pairs whose p differs from p0 (two decimals) before a skill is shown:
+                                   // until a slot has been seen twice, p equals p0 by construction
+const BASELINE_MIN = 0.05;         // the baseline Brier as shown must be at least this for a skill verdict
+const HOUR_MS = 3600_000;          // an α feed line at most this often per device
+const SKILL_WORSE = -0.05;         // the shown skill at or below this: worse than the device's own average
 const SKILL_BETTER = 0.05;         // at or above this again: recovered (between the two, nothing happens)
 const SKILL_SHOWN_MIN = -9.99;     // a shown skill never goes below this
 const SKILL_SHOWN_MAX = 1.00;      // …nor above this
@@ -57,7 +67,7 @@ const MAX_N = 1e9;                 // scored guesses beyond this are not plausib
 interface Loop { alpha: number; fast: number; slow: number; n: number; emittedAlpha: number }
 interface Reach extends Loop { p: number; hits: string; at: number | null }
 interface Speed extends Loop { est: number; errs: number[]; done: number }
-interface Dev { name: string; seen: number; reach?: Reach; speed?: Speed }
+interface Dev { name: string; seen: number; reach?: Reach; speed?: Speed; alphaAt: number | null }
 export interface LearningNotes {
   v: 1;
   devices: Record<string, Dev>;
@@ -179,7 +189,8 @@ function sane(x: unknown): LearningNotes {
     if (!d || typeof d !== 'object' || Array.isArray(d)) continue;
     const o = d as any;
     if (!okTime(o.seen)) continue;
-    const out: Dev = { name: cleanName(o.name, id), seen: o.seen };
+    // alphaAt is a new optional field: a file from the version before it loads with no α line said yet
+    const out: Dev = { name: cleanName(o.name, id), seen: o.seen, alphaAt: okTime(o.alphaAt) ? o.alphaAt : null };
     if (o.reach != null) {
       const r = saneReach(o.reach);
       if (!r) continue;                                // a bad device is dropped whole
@@ -229,45 +240,58 @@ function cleanPairs(raw: unknown): { id: string; name: string; scored: ScoredHou
   return out;
 }
 
-/** one list of scored hours: the brier pair, the raw skill (0 when the baseline is exact), whether
- *  every p still equals p0 to two decimals, and the calibration. */
+/** one list of scored hours: the brier pair, the raw skill (0 when the baseline is exact), how many
+ *  pairs' p differs from p0 to two decimals, and the calibration. */
 const scorePairs = (pairs: ScoredHour[]) => {
   const { bs, bs0 } = brier(pairs);
   return {
     n: pairs.length, bs, bs0,
     sk: bs0 > 0 ? skill(bs, bs0) : 0,
-    same: pairs.every(([, p, , , p0]) => r2(p) === r2(p0)),
+    differ: pairs.filter(([, p, , , p0]) => r2(p) !== r2(p0)).length,
     cal: calibration(pairs),
   };
 };
 type Scored = ReturnType<typeof scorePairs>;
 
-/** what the skill row says, decided on the values as shown: nothing under 24 pairs, nothing to beat
- *  when the baseline Brier shown is 0.00, no slot seen twice while p still equals p0, else the shown
- *  skill. The feed compares exactly the same shown value. */
-type SkillShow =
+/** what the skill row says, decided on the values as shown: nothing at all while there is no
+ *  forecast view to read, nothing under 24 pairs, nothing to beat when the baseline Brier shown is
+ *  0.00, no slot seen twice while fewer than 24 pairs' p differs from p0, else the shown skill. The
+ *  feed compares exactly the same shown value. */
+type ShownSkill =
   | { kind: 'less'; n: number }
   | { kind: 'noskill'; n: number; bs: number; bs0: number; cal: Scored['cal'] }
   | { kind: 'noslot'; n: number; cal: Scored['cal'] }
   | { kind: 'skill'; n: number; bs: number; bs0: number; cal: Scored['cal']; shown: number };
+type SkillShow = { kind: 'none' } | ShownSkill;   // none: no forecast view to read at all
 
-function shownOf(s: Scored): SkillShow {
+function shownOf(s: Scored): ShownSkill {
   if (s.n < SKILL_MIN_PAIRS) return { kind: 'less', n: s.n };
   if (r2(s.bs0) === 0) return { kind: 'noskill', n: s.n, bs: s.bs, bs0: s.bs0, cal: s.cal };
-  if (s.same) return { kind: 'noslot', n: s.n, cal: s.cal };
+  if (s.differ < SLOT_DIFF_MIN) return { kind: 'noslot', n: s.n, cal: s.cal };
   return { kind: 'skill', n: s.n, bs: s.bs, bs0: s.bs0, cal: s.cal, shown: shownSkill(s.sk) };
 }
 
-/** the "forecast skill" row */
+/** the "forecast skill" row: "exact" only when both shown Brier values are 0.00 */
 function skillRowText(s: SkillShow): string {
+  if (s.kind === 'none') return 'nothing to score yet';
   if (s.kind === 'less') return `not enough scored hours yet (${s.n} of ${SKILL_MIN_PAIRS})`;
-  if (s.kind === 'noskill') return `no skill to beat: the device's own average was exact (Brier ${fmt2(s.bs)} vs ${fmt2(s.bs0)})`;
+  if (s.kind === 'noskill') return r2(s.bs) === 0
+    ? `no skill to beat: the device's own average was exact (Brier ${fmt2(s.bs)} vs ${fmt2(s.bs0)})`
+    : `no skill to beat: the device's own average leaves nothing to compare (Brier ${fmt2(s.bs)} vs ${fmt2(s.bs0)})`;
   if (s.kind === 'noslot') return 'no slot seen twice yet';
   return `${fmtSkill(s.shown)} against each device's own average (Brier ${fmt2(s.bs)} vs ${fmt2(s.bs0)})`;
 }
 
-/** one device's forecast line, the same in short */
-function devLine(name: string, s: SkillShow): string {
+/** why the row shows no skill (or no skill worth a verdict), in a few words for the feed's line */
+function noSkillWhy(s: ShownSkill): string {
+  if (s.kind === 'less') return 'too few scored hours';
+  if (s.kind === 'noskill') return 'nothing to compare';
+  if (s.kind === 'noslot') return 'no slot seen twice yet';
+  return 'the baseline is too small to compare';
+}
+
+/** one device's forecast line, the same in short; a device line always has pairs to show */
+function devLine(name: string, s: ShownSkill): string {
   if (s.kind === 'less') return `${name} · forecast: not enough scored hours yet (${s.n} of ${SKILL_MIN_PAIRS})`;
   if (s.kind === 'noskill') return `${name} · forecast: no skill to beat (Brier ${fmt2(s.bs)} vs ${fmt2(s.bs0)}) · ${fmtCalShort(s.cal)}`;
   if (s.kind === 'noslot') return `${name} · forecast: no slot seen twice yet`;
@@ -313,17 +337,20 @@ export function create(ctx: BranchCtx): Branch {
     dirty = true;
   };
   /** what one scored guess taught: the miss (if any) and the alpha move (if any), as one note */
-  const taught = (miss: string | null, name: string, what: string, l: Loop, old: number | null) => {
+  const taught = (miss: string | null, d: Dev, what: string, l: Loop, old: number | null, at: number) => {
     const moved = old == null ? null : `${what} ${l.alpha > old ? 'changes, it adapts faster' : 'is steady, it settles'} (α ${r2(old)} → ${r2(l.alpha)})`;
-    if (miss || moved) learned([miss, moved && (miss ? moved : `${name}: ${moved}`)].filter(Boolean).join('; '));
-    if (old != null) alphaMoved(name, what, l);
+    if (miss || moved) learned([miss, moved && (miss ? moved : `${d.name}: ${moved}`)].filter(Boolean).join('; '));
+    if (old != null) alphaMoved(d, what, l, at);
   };
-  const alphaMoved = (name: string, what: string, l: Loop) => {
-    // a feed line only when alpha has moved a lot since the last one (half again, or a third down)
-    if (l.alpha >= l.emittedAlpha * 1.5 || l.alpha <= l.emittedAlpha / 1.5) {
-      ctx.emit(`learning: ${name}'s ${what} ${l.alpha > l.emittedAlpha ? 'is changing, it adapts faster' : 'has settled, it guesses steadier'} (α ${r2(l.emittedAlpha)} → ${r2(l.alpha)})`);
-      l.emittedAlpha = l.alpha;
-    }
+  const alphaMoved = (d: Dev, what: string, l: Loop, at: number) => {
+    // a feed line only when alpha has crossed a factor of two since the last one said, and at most
+    // once an hour per device: a device that flaps every look must not flood the feed
+    if (l.alpha < l.emittedAlpha * 2 && l.alpha > l.emittedAlpha / 2) return;
+    if (d.alphaAt != null && at >= d.alphaAt && at - d.alphaAt < HOUR_MS) return;   // a look behind it re-anchors
+    ctx.emit(`learning: ${d.name}'s ${what} ${l.alpha > l.emittedAlpha ? 'is changing, it adapts faster' : 'has settled, it guesses steadier'} (α ${r2(l.emittedAlpha)} → ${r2(l.alpha)})`);
+    l.emittedAlpha = l.alpha;
+    d.alphaAt = at;
+    dirty = true;
   };
 
   /** at most DEVICES_MAX devices; one in the current snapshot is never evicted in favour of one
@@ -331,7 +358,7 @@ export function create(ctx: BranchCtx): Branch {
   function dev(id: string, name: string, at: number, live: Set<string>): Dev {
     let d = notes.devices[id];
     if (!d) {
-      d = notes.devices[id] = { name: cleanName(name, id), seen: at };
+      d = notes.devices[id] = { name: cleanName(name, id), seen: at, alphaAt: null };
       const ids = Object.keys(notes.devices);
       if (ids.length > DEVICES_MAX) {
         const oldest = ids.filter((x) => x !== id).sort((a, b) =>
@@ -344,7 +371,7 @@ export function create(ctx: BranchCtx): Branch {
     return d;
   }
 
-  function seeReach(d: Dev, reachable: boolean | null, checkedAt: number | null) {
+  function seeReach(d: Dev, reachable: boolean | null, checkedAt: number | null, at: number) {
     if (reachable == null || checkedAt == null) return;
     const y = reachable ? 1 : 0;
     const r = d.reach;
@@ -356,11 +383,11 @@ export function create(ctx: BranchCtx): Branch {
     const miss = guess !== y ? `guessed ${d.name} would ${guess ? 'answer' : 'stay silent'}, it ${y ? 'answered' : 'did not'}` : null;
     const old = tune(r, Math.abs(y - r.p));
     r.p = r3(r.p + r.alpha * (y - r.p));
-    taught(miss, d.name, 'reachability', r, old);
+    taught(miss, d, 'reachability', r, old, at);
     dirty = true;
   }
 
-  function seeSpeed(d: Dev, tps: number, done: number) {
+  function seeSpeed(d: Dev, tps: number, done: number, at: number) {
     const s = d.speed;
     if (!s) { d.speed = { ...loop(), est: tps, errs: [], done }; dirty = true; return; }
     if (done <= s.done) return;                                    // no new answer: no new speed to score
@@ -370,7 +397,7 @@ export function create(ctx: BranchCtx): Branch {
     const miss = off > 0.25 ? `guessed ${d.name} at ${r2(s.est)} tok/s, it ran at ${r2(tps)} (off ${Math.round(off * 100)}%)` : null;
     const old = tune(s, Math.min(1, off));
     s.est = r2(s.est + s.alpha * (tps - s.est));
-    taught(miss, d.name, 'speed', s, old);
+    taught(miss, d, 'speed', s, old, at);
     dirty = true;
   }
 
@@ -418,11 +445,11 @@ export function create(ctx: BranchCtx): Branch {
       for (const s of ldevs) live.add(s.id);
       for (const d of devs) {
         seen.set(d.id, d.name);
-        seeReach(dev(d.id, d.name, at, live), d.reachable, d.checkedAt);
+        seeReach(dev(d.id, d.name, at, live), d.reachable, d.checkedAt, at);
       }
       for (const s of ldevs) {
         seen.set(s.id, s.name);
-        seeSpeed(dev(s.id, s.name, at, live), s.tps, s.done);
+        seeSpeed(dev(s.id, s.name, at, live), s.tps, s.done, at);
       }
       present = [...seen].map(([id, name]) => ({ id, name }));
       for (const [id, d] of Object.entries(notes.devices)) {
@@ -438,10 +465,18 @@ export function create(ctx: BranchCtx): Branch {
       }
 
       // the forecast's own score, from its view: one feed line when the shown overall skill crosses
-      // below -0.01 (at least 48 pairs) and one when it comes back to +0.05, not every look; the
-      // row and this state use the same shown value
-      const shown = shownOf(scorePairs(cleanPairs(ctx.peek('forecast')?.pairs).flatMap((d) => d.scored)));
-      if (shown.kind === 'skill' && shown.n >= FEED_MIN_PAIRS) {
+      // to -0.05 or below (at least 48 pairs) and one when it comes back to +0.05, not every look;
+      // a verdict is said only while the shown baseline Brier is at least 0.05: under that a few
+      // missing hours are noise, not a skill. when the floor no longer holds while the state is
+      // set, one line clears it; with no forecast view at all the state is left alone
+      const fc = ctx.peek('forecast');
+      const shown: SkillShow = fc == null
+        ? { kind: 'none' }
+        : shownOf(scorePairs(cleanPairs(fc.pairs).flatMap((d) => d.scored)));
+      if (shown.kind !== 'none' && notes.skillBad && !(shown.kind === 'skill' && r2(shown.bs0) >= BASELINE_MIN)) {
+        notes.skillBad = false; dirty = true;
+        ctx.emit(`learning: the forecast is no longer doing worse than each device's own average (${noSkillWhy(shown)})`);
+      } else if (shown.kind === 'skill' && r2(shown.bs0) >= BASELINE_MIN && shown.n >= FEED_MIN_PAIRS) {
         if (!notes.skillBad && shown.shown <= SKILL_WORSE) {
           notes.skillBad = true; dirty = true;
           ctx.emit(`learning: the forecast is doing worse than each device's own average (skill ${fmtSkill(shown.shown)} over ${hours(shown.n)})`);
@@ -463,12 +498,12 @@ export function create(ctx: BranchCtx): Branch {
       // the forecast's finished hours, scored from its view alone: three overall rows, and the
       // same in short as one line per device
       const fcDevs = cleanPairs(fc?.pairs);
-      const all = scorePairs(fcDevs.flatMap((d) => d.scored));
-      const allShow = shownOf(all);
+      const all = fc == null ? null : scorePairs(fcDevs.flatMap((d) => d.scored));
+      const allShow: SkillShow = all == null ? { kind: 'none' } : shownOf(all);
       rows.push(
-        ['forecast scored', hours(all.n)],
+        ['forecast scored', hours(all?.n ?? 0)],
         ['forecast skill', skillRowText(allShow)],
-        ['forecast calibration', all.cal.n >= SKILL_MIN_PAIRS ? fmtCal(all.cal) : `not enough scored hours yet (${all.cal.n} of ${SKILL_MIN_PAIRS})`],
+        ['forecast calibration', all && all.cal.n >= SKILL_MIN_PAIRS ? fmtCal(all.cal) : `not enough scored hours yet (${all?.cal.n ?? 0} of ${SKILL_MIN_PAIRS})`],
       );
       const lines = present.map(({ id, name }) => {
         const d = notes.devices[id];
