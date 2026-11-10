@@ -107,3 +107,319 @@ test('god\'s eye imports nothing of kula: it can leave as a program of its own',
     }
   }
 });
+
+// ---- the guard at the eye's door: one hostile look after another, then two normal looks, through
+// the real eye with the real branches. Nothing may throw out of tick, no branch may end up broken,
+// nothing may reach the view as NaN, undefined, [object Object] or with an exponent, and nothing
+// may leak onto Object.prototype.
+
+/** one hostile look per row; `skip: true` rows are not a look at all, so nothing is taken in */
+const hostileLooks: [string, () => any, boolean][] = [
+  ['a null look', () => null, true],
+  ['a string look', () => 'a look', true],
+  ['an empty look', () => ({}), true],
+  ['at NaN', () => ({ ...snap([dev()]), at: NaN }), true],
+  ['devices null', () => ({ ...snap([dev()]), devices: null }), false],
+  ['devices [null]', () => ({ ...snap([dev()]), devices: [null] }), false],
+  ['device id __proto__', () => ({ ...snap([dev()]), devices: [dev({ id: '__proto__' })] }), false],
+  ['device id constructor', () => ({ ...snap([dev()]), devices: [dev({ id: 'constructor' })] }), false],
+  ['device id 300 chars', () => ({ ...snap([dev()]), devices: [dev({ id: 'x'.repeat(300) })] }), false],
+  ['device id 42', () => ({ ...snap([dev()]), devices: [dev({ id: 42 })] }), false],
+  ['device name null', () => ({ ...snap([dev()]), devices: [dev({ name: null })] }), false],
+  ['reachMs NaN', () => ({ ...snap([dev()]), devices: [dev({ reachMs: NaN })] }), false],
+  ['ramMb 1e300', () => ({ ...snap([dev()]), devices: [dev({ ramMb: 1e300 })], models: [{ id: 'm1', name: 'big', file: 'big.gguf', size: 1e9, quant: null, params_b: null, catalog: true, here: true, needMb: 2000 }] }), false],
+  ['work null', () => ({ ...snap([dev()]), work: null }), false],
+  ['work.loaded.model null', () => ({ ...snap([dev()]), work: { loaded: { mode: 'apart', model: null, ctx: 100, since: 900, devices: [{ id: 'p1', name: 'pixel', local: false, busy: true, tps: 3, done: 2 }] }, loading: null, chatting: 1, plan: [], decisions: [], llama: true } }), false],
+  ['work.loaded.devices [null]', () => ({ ...snap([dev()]), work: { ...snap([dev()]).work, loaded: { mode: 'apart', model: { id: 'm1', name: 'model', file: 'f.gguf', size: 1e9 }, ctx: 100, since: 900, devices: [null] } } }), false],
+  ['work.decisions [null]', () => ({ ...snap([dev()]), work: { ...snap([dev()]).work, decisions: [null] } }), false],
+  ['models [null]', () => ({ ...snap([dev()]), models: [null] }), false],
+  ['projects [null]', () => ({ ...snap([dev()]), projects: [null] }), false],
+  ['project title {} and peers null', () => ({ ...snap([dev()]), projects: [{ id: 'n1', title: {}, request: 'x'.repeat(10), start: 500, end: 900, state: 'waiting', mode: 'apart', model: 'm1', peers: null }] }), false],
+  ['trust rejectsLast [null] and lines null', () => ({ ...snap([dev()]), devices: [dev({ trust: { at: 900, error: null, id: 'abc', alg: 'ed25519', pub: 'pub', store: 'keystore', cert: 'cert', certPinned: true, v1: false, paired: 1, self: 'ok', count: 5, head: 'h', lines: null, restartedAt: null, rejectsDay: {}, rejectsLast: [null] } })] }), false],
+];
+
+test('one hostile look after another: no throw, no broken branch, no NaN, undefined, [object Object] or exponent, nothing on Object.prototype', () => {
+  let i = 0;
+  for (const [row, make, skip] of hostileLooks) {
+    let s: any = make();
+    const eye = new GodsEye({ snapshot: () => s, dir: path.join(HOME, `eye-hostile-${i++}`) });
+    assert.doesNotThrow(() => eye.tick(), `${row}: tick threw`);
+    const v = eye.view();                                 // the eye calls view() after every observe
+    const broken = v.branches.filter((b) => b.error !== undefined).map((b) => `${b.id}: ${b.error}`);
+    assert.deepEqual(broken, [], `${row}: a branch broke on the hostile look`);
+    assert.doesNotMatch(JSON.stringify(v), /NaN|undefined|\[object Object\]|e\+\d/, `${row}: garbage reached the view`);
+    assert.equal(({} as any).name, undefined, `${row}: Object.prototype was polluted`);
+    if (skip) assert.equal(v.at, 0, `${row}: a skipped look was taken in`);
+    for (const again of [1, 2]) {                        // two normal looks after the hostile one
+      s = snap([dev()]);
+      assert.doesNotThrow(() => eye.tick(), `${row}: a normal look threw`);
+      assert.ok(eye.view().branches.every((b) => b.error === undefined), `${row}: a branch broke on normal look ${again}`);
+      assert.equal(({} as any).name, undefined, row);
+    }
+  }
+});
+
+test('a run of unusable looks is one log line, the next run logs again, and the eye still ticks', () => {
+  let s: any = null;
+  const lines: string[] = [];
+  const eye = new GodsEye({ snapshot: () => s, dir: path.join(HOME, 'eye-badlog'), log: (x) => lines.push(x) });
+  const skip = () => lines.filter((l) => l === "god's eye: a look was not usable, skipped").length;
+  eye.tick();
+  eye.tick();
+  assert.equal(skip(), 1);
+  assert.equal(eye.view().at, 0);                        // nothing was taken in, nothing was invented
+  s = snap([]);
+  eye.tick();
+  assert.equal(skip(), 1);                               // a good look does not log
+  s = null;
+  eye.tick();
+  assert.equal(skip(), 2);                               // the next run logs once again
+});
+
+test('a null snapshot does not throw out of the timer', () => {
+  const eye = new GodsEye({ snapshot: () => null as any, dir: path.join(HOME, 'eye-null-timer'), everyMs: 10 });
+  assert.doesNotThrow(() => eye.start());
+  eye.stop();
+});
+
+test('a broken branch is not quoted through peek: its last view does not leak', () => {
+  let n = 0;
+  const eye = new GodsEye({
+    snapshot: () => snap([dev()]),
+    dir: path.join(HOME, 'eye-peek'),
+    makers: {
+      forecast: () => ({ id: 'forecast', observe() { n++; if (n > 1) throw new Error('bad maths'); }, view: () => ({ built: true, stat: 'a view', gauge: null, rows: [], lines: [] }) }),
+      limits: (ctx) => ({ id: 'limits', observe() {}, view: () => ({ built: true, stat: ctx.peek('forecast') === null ? 'peek says null' : 'peek leaks', gauge: null, rows: [], lines: [] }) }),
+    },
+  });
+  eye.tick();                                            // forecast has a view now
+  eye.tick();                                            // forecast throws: broken, its view stays behind
+  const v = eye.view();
+  assert.equal(v.branches.find((b) => b.id === 'limits')!.stat, 'peek says null');
+  assert.equal(v.branches.find((b) => b.id === 'forecast')!.stat, 'broken');
+  assert.equal(v.branches.find((b) => b.id === 'forecast')!.error, 'bad maths');
+  eye.tick();
+  assert.equal(eye.view().branches.find((b) => b.id === 'limits')!.stat, 'peek says null');
+});
+
+test('a branch whose create throws is logged and shown broken, like one whose observe throws', () => {
+  const lines: string[] = [];
+  const eye = new GodsEye({
+    snapshot: () => snap([]),
+    dir: path.join(HOME, 'eye-create'),
+    log: (s) => lines.push(s),
+    makers: { review: () => { throw new Error('no desk'); } },
+  });
+  eye.tick();
+  const v = eye.view();
+  assert.equal(v.branches.find((b) => b.id === 'review')!.stat, 'broken');
+  assert.equal(v.branches.find((b) => b.id === 'review')!.error, 'no desk');
+  assert.ok(lines.includes("god's eye review: stopped: no desk"));
+});
+
+test('a view that throws marks the branch broken and the others carry on', () => {
+  const eye = new GodsEye({
+    snapshot: () => snap([dev()]),
+    dir: path.join(HOME, 'eye-view'),
+    makers: { review: () => ({ id: 'review', observe() {}, view() { throw new Error('bad page'); } }) },
+  });
+  eye.tick();
+  const v = eye.view();
+  assert.equal(v.branches.find((b) => b.id === 'review')!.stat, 'broken');
+  assert.equal(v.branches.find((b) => b.id === 'review')!.error, 'bad page');
+  assert.equal(v.branches.find((b) => b.id === 'senses')!.built, true);
+  eye.tick();
+  assert.equal(eye.view().branches.find((b) => b.id === 'senses')!.built, true);
+});
+
+test('ctx.load returns the fallback when the file holds JSON null', () => {
+  const dir = path.join(HOME, 'eye-null-load');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'learning.json'), 'null');
+  let loaded: any = 'unset';
+  const eye = new GodsEye({
+    snapshot: () => snap([]),
+    dir,
+    makers: { learning: (ctx) => ({ id: 'learning', observe() { loaded = ctx.load({ looks: 7 }); }, view: () => dark() }) },
+  });
+  eye.tick();
+  assert.deepEqual(loaded, { looks: 7 });
+});
+
+test('the feed holds at most 60 events, newest first, each cut to 300 chars', () => {
+  const eye = new GodsEye({
+    snapshot: () => snap([]),
+    dir: path.join(HOME, 'eye-events'),
+    makers: { review: (ctx) => ({ id: 'review', observe() { for (let i = 0; i < 64; i++) ctx.emit(`event ${i}`); ctx.emit('x'.repeat(400)); }, view: () => dark() }) },
+  });
+  eye.tick();
+  const events = eye.view().events;
+  assert.equal(events.length, 60);
+  assert.equal(events[0].branch, 'review');
+  assert.equal(events[0].text, 'x'.repeat(300));
+  assert.equal(events[1].text, 'event 63');
+  assert.ok(!events.some((e) => e.text === 'event 4'));  // the cap cut the oldest
+});
+
+test('act reaches a branch; a throwing act returns null and is logged', () => {
+  let got: [string, string] | null = null;
+  const lines: string[] = [];
+  const eye = new GodsEye({
+    snapshot: () => snap([]),
+    dir: path.join(HOME, 'eye-act'),
+    log: (s) => lines.push(s),
+    makers: {
+      review: () => ({ id: 'review', observe() {}, view: () => dark(), act(a, s) { got = [a, s]; return 'noted'; } }),
+      limits: () => ({ id: 'limits', observe() {}, view: () => dark(), act() { throw new Error('no handle'); } }),
+    },
+  });
+  assert.equal(eye.act('review', 'accept', 'p1'), 'noted');
+  assert.deepEqual(got, ['accept', 'p1']);
+  assert.equal(eye.act('limits', 'x', 'y'), null);
+  assert.ok(lines.includes("god's eye limits: no handle"));
+  assert.equal(eye.act('nonsense' as any, 'x', 'y'), null);   // no such branch
+});
+
+test('a save that cannot write is logged and does not throw', () => {
+  const block = path.join(HOME, 'eye-save-block');
+  fs.writeFileSync(block, 'x');                          // the dir's parent is a file: writes must fail
+  const lines: string[] = [];
+  const eye = new GodsEye({
+    snapshot: () => snap([]),
+    dir: path.join(block, 'sub'),
+    log: (s) => lines.push(s),
+    makers: { learning: (ctx) => ({ id: 'learning', observe() { ctx.save({ v: 1 }); }, view: () => dark() }) },
+  });
+  assert.doesNotThrow(() => eye.tick());
+  assert.ok(lines.some((l) => l.includes("god's eye learning: could not save")));
+});
+
+test('a log that throws does not stop the eye', () => {
+  let s: any = null;
+  const eye = new GodsEye({ snapshot: () => s, dir: path.join(HOME, 'eye-log-throw'), log: () => { throw new Error('no log'); } });
+  assert.doesNotThrow(() => eye.tick());                 // the skip line goes to a log that throws
+  s = snap([dev()]);
+  assert.doesNotThrow(() => eye.tick());                 // branches run, their logs throw too
+  assert.equal(eye.view().branches.find((b) => b.id === 'senses')!.built, true);
+});
+
+test('start looks at once and then on the timer; stop ends it', async () => {
+  let looks = 0;
+  const eye = new GodsEye({ snapshot: () => { looks++; return snap([]); }, dir: path.join(HOME, 'eye-timer'), everyMs: 10 });
+  eye.start();
+  assert.equal(looks, 1);                                // the first look is immediate
+  await new Promise((r) => setTimeout(r, 60));
+  assert.ok(looks >= 2, 'the timer kept looking');
+  eye.stop();
+  const n = looks;
+  await new Promise((r) => setTimeout(r, 60));
+  assert.equal(looks, n);                                // stopped: no more looks
+  eye.stop();                                            // twice is fine
+});
+
+test('a skipped look does not touch before: the third look is handed the first look', () => {
+  const befores: any[] = [];
+  let s: any = snap([dev({ name: 'first' })], 1000);
+  const eye = new GodsEye({
+    snapshot: () => s,
+    dir: path.join(HOME, 'eye-before'),
+    makers: { review: () => ({ id: 'review', observe(_now: any, before: any) { befores.push(before); }, view: () => dark() }) },
+  });
+  eye.tick();                                            // the first good look
+  s = null;
+  eye.tick();                                            // skipped: no branch sees it
+  eye.tick();                                            // skipped again
+  s = snap([dev({ name: 'third' })], 2000);
+  eye.tick();                                            // the second good look
+  assert.equal(befores.length, 2);
+  assert.equal(befores[0], null);                        // the first look has nothing before it
+  assert.equal(befores[1].at, 1000);                     // not null: the skipped looks left `before` alone
+  assert.equal(befores[1].devices[0].name, 'first');
+});
+
+test('a thrown null, undefined or text from the snapshot is a skipped look, never a throw out of tick', () => {
+  const bads = [null, undefined, 'text'];
+  for (let i = 0; i < bads.length; i++) {
+    const bad = bads[i];
+    const lines: string[] = [];
+    const eye = new GodsEye({ snapshot: () => { throw bad; }, dir: path.join(HOME, `eye-throw-snap-${i}`), log: (x) => lines.push(x) });
+    assert.doesNotThrow(() => eye.tick());
+    assert.equal(lines[0], `god's eye: no look: ${String(bad)}`);
+    assert.equal(eye.view().at, 0);
+  }
+});
+
+test('a branch that throws null, undefined or text is marked broken; the branches after it still run', () => {
+  const bads = [null, undefined, 'text'];
+  for (let i = 0; i < bads.length; i++) {
+    const bad = bads[i];
+    const eye = new GodsEye({
+      snapshot: () => snap([dev()]),
+      dir: path.join(HOME, `eye-throw-observe-${i}`),
+      makers: { forecast: () => ({ id: 'forecast', observe() { throw bad; }, view: () => dark() }) },
+    });
+    assert.doesNotThrow(() => eye.tick());
+    const v = eye.view();
+    assert.equal(v.branches.find((b) => b.id === 'forecast')!.error, String(bad));
+    assert.equal(v.branches.find((b) => b.id === 'forecast')!.stat, 'broken');
+    assert.equal(v.branches.find((b) => b.id === 'senses')!.built, true);
+    assert.equal(v.branches.find((b) => b.id === 'advisor')!.built, true);   // after forecast: still ran
+    eye.tick();
+    assert.equal(eye.view().branches.find((b) => b.id === 'advisor')!.built, true);
+    assert.equal(eye.view().branches.find((b) => b.id === 'forecast')!.error, String(bad));
+  }
+});
+
+test('a branch whose create throws null, undefined or text does not throw out of the constructor', () => {
+  const bads = [null, undefined, 'text'];
+  for (let i = 0; i < bads.length; i++) {
+    const bad = bads[i];
+    const lines: string[] = [];
+    let eye!: any;
+    assert.doesNotThrow(() => {
+      eye = new GodsEye({ snapshot: () => snap([]), dir: path.join(HOME, `eye-throw-create-${i}`), log: (x) => lines.push(x), makers: { review: () => { throw bad; } } });
+    });
+    eye.tick();
+    const b = eye.view().branches.find((x: any) => x.id === 'review')!;
+    assert.equal(b.stat, 'broken');
+    assert.equal(b.error, String(bad));
+    assert.ok(lines.includes(`god's eye review: stopped: ${String(bad)}`));
+    assert.equal(eye.view().branches.find((x: any) => x.id === 'senses')!.built, true);
+  }
+});
+
+test('an uncloneable look or a throwing getter logs once per run of bad looks', () => {
+  const lines: string[] = [];
+  let s: any = { ...snap([dev()]), extra: () => 1 };     // a function cannot be cloned
+  const eye = new GodsEye({ snapshot: () => s, dir: path.join(HOME, 'eye-clone'), log: (x) => lines.push(x) });
+  const noLook = () => lines.filter((l) => l.startsWith("god's eye: no look:")).length;
+  eye.tick();
+  eye.tick();
+  assert.equal(noLook(), 1);                             // one run of bad looks: one line
+  s = { ...snap([dev()]), get oops() { throw new Error('getter'); } };
+  eye.tick();
+  assert.equal(noLook(), 1);                             // the same run, still silent
+  s = snap([dev()]);
+  eye.tick();                                            // a good look ends the run
+  s = { ...snap([dev()]), extra: () => 1 };
+  eye.tick();
+  assert.equal(noLook(), 2);                             // the next run logs once again
+});
+
+test('a refusal count past the cap is capped, never dropped: the trust alarm stays red through the real eye', () => {
+  const trust = (at: number, rejectsDay: Record<string, number>) => ({
+    at, error: null, id: null, alg: 'ed25519', pub: null, store: 'keystore', cert: null, certPinned: false,
+    v1: false, paired: 1, self: 'ok', count: 0, head: null, lines: [], restartedAt: null, rejectsDay, rejectsLast: [],
+  });
+  let s: any = snap([dev({ tls: true, trust: trust(900, {}) })], 1000);
+  const eye = new GodsEye({ snapshot: () => s, dir: path.join(HOME, 'eye-trust-cap') });
+  eye.tick();                                            // quiet: the device is unknown, not red
+  s = snap([dev({ tls: true, trust: trust(1900, { 'wrong pin': 1_000_000_001 }) })], 2000);
+  eye.tick();
+  const tv: any = eye.view().branches.find((b) => b.id === 'trust')!;
+  assert.equal(tv.report.verdict, 'bad');                // the count was kept, at the cap: not silence
+  assert.equal(tv.report.devices[0].refused, '10000 refused today');
+  const ev = eye.view().events.find((e) => e.branch === 'trust');
+  assert.ok(ev);
+  assert.equal(ev!.text, 'pixel: 10000 wrong codes today: someone may be guessing. all were refused');
+});

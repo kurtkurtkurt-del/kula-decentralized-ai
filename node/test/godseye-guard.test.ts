@@ -1,0 +1,375 @@
+// god's eye guard (src/godseye/branches/guard.ts): the one gate every snapshot passes. Each
+// helper gets hand-made cases, clean() gets hostile ones, and a healthy snapshot comes out
+// exactly as it went in.
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { TIME_MAX, ID_MAX, NAME_MAX, isObj, isTime, num, idOf, nameOf, list, median, clean } from '../src/godseye/branches/guard.ts';
+
+test('isObj: an object (an array too: typeof), nothing else', () => {
+  assert.equal(isObj({}), true);
+  assert.equal(isObj([]), true);
+  assert.equal(isObj({ a: 1 }), true);
+  assert.equal(isObj(null), false);
+  assert.equal(isObj('x'), false);
+  assert.equal(isObj(0), false);
+  assert.equal(isObj(undefined), false);
+});
+
+test('isTime: finite, not negative, date-sized', () => {
+  assert.equal(isTime(0), true);
+  assert.equal(isTime(1000), true);
+  assert.equal(isTime(TIME_MAX), true);
+  assert.equal(isTime(TIME_MAX + 1), false);
+  assert.equal(isTime(-1), false);
+  assert.equal(isTime(NaN), false);
+  assert.equal(isTime(Infinity), false);
+  assert.equal(isTime('1000'), false);
+  assert.equal(isTime(null), false);
+});
+
+test('num: a finite number within [lo, hi], else null', () => {
+  assert.equal(num(5, 0, 10), 5);
+  assert.equal(num(0, 0, 10), 0);
+  assert.equal(num(10, 0, 10), 10);
+  assert.equal(num(-1, 0, 10), null);
+  assert.equal(num(11, 0, 10), null);
+  assert.equal(num(NaN, 0, 10), null);
+  assert.equal(num(Infinity, 0, 10), null);
+  assert.equal(num('5', 0, 10), null);
+  assert.equal(num(null, 0, 10), null);
+});
+
+test('idOf: a non-empty string of at most ID_MAX chars, nothing else', () => {
+  assert.equal(idOf('p1'), 'p1');
+  assert.equal(idOf('x'.repeat(ID_MAX)), 'x'.repeat(ID_MAX));
+  assert.equal(idOf(''), null);
+  assert.equal(idOf('x'.repeat(ID_MAX + 1)), null);
+  assert.equal(idOf(42), null);
+  assert.equal(idOf(null), null);
+});
+
+test('nameOf: a non-empty name cut to NAME_MAX, else the id cut to NAME_MAX', () => {
+  assert.equal(nameOf('pixel', 'p1'), 'pixel');
+  assert.equal(nameOf('x'.repeat(100), 'p1'), 'x'.repeat(NAME_MAX));
+  assert.equal(nameOf('', 'p1'), 'p1');
+  assert.equal(nameOf(42, 'p1'), 'p1');
+  assert.equal(nameOf(null, 'p1'), 'p1');
+  assert.equal(nameOf(42, 'i'.repeat(200)), 'i'.repeat(NAME_MAX));
+});
+
+test('list: the array, or [] when it is not one', () => {
+  assert.deepEqual(list([1, 2]), [1, 2]);
+  assert.deepEqual(list('x'), []);
+  assert.deepEqual(list(null), []);
+  assert.deepEqual(list(42), []);
+  assert.deepEqual(list({}), []);
+});
+
+test('median: the middle value, or the mean of the two middle ones; non-finite entries are skipped', () => {
+  assert.equal(median([1, 2, 3]), 2);
+  assert.equal(median([2, 4]), 3);
+  assert.equal(median([3, 1, 2]), 2);          // sorted, not taken as given
+  assert.equal(median([]), null);
+  assert.equal(median([NaN, 1, 3]), 2);
+  assert.equal(median([1, 3, 'x' as unknown as number]), 2);
+});
+
+test('clean returns null when the raw value is not an object or its at is not a usable time', () => {
+  assert.equal(clean(null), null);
+  assert.equal(clean('a look'), null);
+  assert.equal(clean(42), null);
+  assert.equal(clean({}), null);              // no at at all
+  assert.equal(clean({ at: NaN }), null);
+  assert.equal(clean({ at: -1 }), null);
+  assert.equal(clean({ at: 1e300 }), null);
+  assert.equal(clean({ at: TIME_MAX + 1 }), null);
+  assert.equal(clean({ at: '1000' }), null);
+  assert.equal(clean([]), null);
+});
+
+test('clean: a function is not a snapshot, even with a usable at hanging on it', () => {
+  const f = () => 1;
+  (f as unknown as { at: number }).at = 1000;
+  assert.equal(clean(f), null);
+});
+
+test('clean fills an empty but usable look with the agreed empty shape', () => {
+  assert.deepEqual(clean({ at: 1000 }), {
+    at: 1000,
+    host: { name: 'this computer', freeMb: null },
+    devices: [],
+    work: { loaded: null, loading: null, chatting: 0, plan: [], decisions: [], llama: false },
+    models: [],
+    projects: [],
+  });
+});
+
+test('clean: containers that are not arrays count as empty, entries that are not objects are dropped', () => {
+  const s = clean({ at: 1, devices: null, models: 'x', projects: 42, work: { plan: null, decisions: null } });
+  assert.deepEqual(s!.devices, []);
+  assert.deepEqual(s!.models, []);
+  assert.deepEqual(s!.projects, []);
+  assert.deepEqual(s!.work.plan, []);
+  assert.deepEqual(s!.work.decisions, []);
+  assert.deepEqual(clean({ at: 1, devices: [null, 'x', 42, []] })!.devices, []);
+  assert.deepEqual(clean({ at: 1, models: [null] })!.models, []);
+  assert.deepEqual(clean({ at: 1, projects: [null] })!.projects, []);
+});
+
+test('clean: a device needs a usable id; a duplicated id keeps its first entry', () => {
+  assert.deepEqual(clean({ at: 1, devices: [{ id: 42 }, { id: '' }, { id: 'x'.repeat(201) }, { id: 'a', name: 'one' }, { id: 'a', name: 'two' }, { id: 'b' }] })!.devices, [
+    { id: 'a', name: 'one', kind: '', via: '', where: '', reachable: null, reachMs: null, reason: null, checkedAt: null, lastOk: null, ramMb: null, bwGBs: null, gpu: null, tls: false, waitingPair: false, plugged: null, holds: null, trust: null },
+    { id: 'b', name: 'b', kind: '', via: '', where: '', reachable: null, reachMs: null, reason: null, checkedAt: null, lastOk: null, ramMb: null, bwGBs: null, gpu: null, tls: false, waitingPair: false, plugged: null, holds: null, trust: null },
+  ]);
+});
+
+test('clean: a prototype-key id is dropped at the door, though idOf itself keeps it', () => {
+  assert.equal(idOf('__proto__'), '__proto__');        // the helper's own definition
+  assert.equal(idOf('constructor'), 'constructor');
+  const s = clean({ at: 1, devices: [{ id: '__proto__', name: 'x' }, { id: 'constructor' }, { id: 'toString' }, { id: 'p1' }] });
+  assert.deepEqual(s!.devices.map((d) => d.id), ['p1']);
+  assert.deepEqual(clean({ at: 1, models: [{ id: '__proto__' }] })!.models, []);
+  assert.deepEqual(clean({ at: 1, projects: [{ id: '__proto__' }] })!.projects, []);
+});
+
+test('clean: a device field by field', () => {
+  const [d] = clean({
+    at: 1,
+    devices: [{ id: 'p1', name: 42, kind: 42, via: 42, where: 42, reachable: 'yes', reachMs: NaN, reason: 42,
+      checkedAt: NaN, lastOk: 42, ramMb: 1e300, bwGBs: NaN, gpu: 42, tls: 'yes', waitingPair: 'yes', plugged: 'yes', holds: 42, trust: 'x' }],
+  })!.devices;
+  assert.deepEqual(d, {
+    id: 'p1', name: 'p1', kind: '', via: '', where: '', reachable: null, reachMs: null, reason: null,
+    checkedAt: null, lastOk: null, ramMb: 4 * 1024 * 1024, bwGBs: null, gpu: null, tls: false, waitingPair: false, plugged: null, holds: null, trust: null,
+  });
+});
+
+test('clean: a null work is the empty work; a null loaded or loading is null; a null loaded model is the empty model', () => {
+  assert.deepEqual(clean({ at: 1, work: null })!.work, { loaded: null, loading: null, chatting: 0, plan: [], decisions: [], llama: false });
+  const w = clean({ at: 1, work: { loaded: 'x', loading: 'x', chatting: 'x', plan: 'x', decisions: 'x', llama: 'yes' } })!.work;
+  assert.deepEqual(w, { loaded: null, loading: null, chatting: 0, plan: [], decisions: [], llama: false });
+  const l = clean({ at: 1, work: { loaded: { mode: 42, model: null, ctx: 'x', since: NaN, devices: [null] } } })!.work.loaded;
+  assert.deepEqual(l, { mode: '', model: { id: '', name: '', file: '', size: 0 }, ctx: 0, since: 0, devices: [] });
+  const loading = clean({ at: 1, work: { loading: { mode: 42, model: 42, since: NaN, line: 42 } } })!.work.loading;
+  assert.deepEqual(loading, { mode: '', model: '', since: 0, line: '' });
+});
+
+test('clean: decisions need a usable at; a non-string text is empty', () => {
+  const w = clean({ at: 1, work: { decisions: [null, 'x', { at: NaN, text: 'a' }, { at: 2, text: 42 }, { at: 3, text: 'kept' }] } })!.work;
+  assert.deepEqual(w.decisions, [{ at: 2, text: '' }, { at: 3, text: 'kept' }]);
+});
+
+test('clean: a device\'s trust, field by field', () => {
+  const [d] = clean({
+    at: 1,
+    devices: [{ id: 'p1', trust: { at: NaN, error: 42, id: 42, alg: 42, pub: 42, store: 42, cert: 42, certPinned: 'yes',
+      v1: 'yes', paired: NaN, self: 42, count: 1e300, head: 42, lines: null, restartedAt: NaN, rejectsDay: 'x', rejectsLast: null } }],
+  })!.devices;
+  assert.deepEqual(d.trust, {
+    at: 0, error: null, id: null, alg: null, pub: null, store: null, cert: null, certPinned: null,
+    v1: null, paired: null, self: null, count: 1e9, head: null, lines: [], restartedAt: null,
+    rejectsDay: {},                    // a plain object, as the notes and the view already use
+    rejectsLast: [],
+  });
+  assert.equal(Object.getPrototypeOf(d.trust!.rejectsDay), Object.prototype);
+  assert.deepEqual(clean({ at: 1, devices: [{ id: 'p1', trust: null }] })!.devices[0].trust, null);
+});
+
+test('clean: trust lines and refusals are bounded and checked; a refusal count is capped, never dropped', () => {
+  const day = JSON.parse('{"ok": 2, "bad": -1, "nan": null, "str": "x", "__proto__": 7, "constructor": 8, "prototype": 9}');
+  day.nan = NaN;
+  day.inf = Infinity;
+  day['wrong pin'] = 1_000_000_001;
+  const [d] = clean({
+    at: 1,
+    devices: [{ id: 'p1', trust: { lines: ['a'.repeat(5000), 'b', 42, null], rejectsLast: [null, 'x', { t: NaN, why: 1, peer: 2 }, { t: 2, why: 'w', peer: 'p' }], rejectsDay: day } }],
+  })!.devices;
+  assert.deepEqual(d.trust!.lines, ['a'.repeat(5000), 'b']);   // under 64 KiB: kept as it is
+  assert.deepEqual(d.trust!.rejectsLast, [{ t: 2, why: 'w', peer: 'p' }]);
+  // a count past the cap is kept at the cap; a non-number is unknown (dropped); prototype keys are skipped
+  assert.deepEqual(d.trust!.rejectsDay, { ok: 2, bad: 0, 'wrong pin': 1e9 });
+  assert.equal(Object.getPrototypeOf(d.trust!.rejectsDay), Object.prototype);
+  assert.equal(({} as any).ok, undefined);                     // nothing leaked onto Object.prototype
+});
+
+test('clean: strings are cut to their documented bound', () => {
+  const s = clean({
+    at: 1,
+    host: { name: 'n'.repeat(300), freeMb: 1, ledger: { ok: 'x', count: 'x', problem: 'p'.repeat(600) } },
+    devices: [{ id: 'd', name: 'n'.repeat(100), kind: 'k'.repeat(100), via: 'v'.repeat(100), where: 'w'.repeat(500),
+      reason: 'r'.repeat(300), lastOk: 'l'.repeat(100), gpu: 'g'.repeat(100), holds: 'h'.repeat(400),
+      trust: { alg: 'a'.repeat(100), pub: 'u'.repeat(5000), store: 's'.repeat(100), self: 'f'.repeat(100), cert: 'c'.repeat(9000), error: 'e'.repeat(2000), head: 'd'.repeat(300) } }],
+    work: { loaded: { mode: 'm'.repeat(100), model: { id: 'i', name: 'n'.repeat(400), file: 'f'.repeat(400), size: 1 }, devices: [{ id: 'd2', name: 'n'.repeat(100) }], parts: [{ id: 'p', name: 'n'.repeat(100) }] }, loading: { mode: 'm'.repeat(100), model: 'm'.repeat(400), line: 'l'.repeat(2000) }, plan: ['p'.repeat(2000)], decisions: [{ at: 1, text: 't'.repeat(400) }] },
+    models: [{ id: 'm', name: 'n'.repeat(400), file: 'f'.repeat(400), quant: 'q'.repeat(100) }],
+    projects: [{ id: 'n', title: 't'.repeat(400), request: 'r'.repeat(5000), state: 's'.repeat(100), mode: 'm'.repeat(100), model: 'm'.repeat(400), peers: ['p'.repeat(250)], line: 'l'.repeat(2000), error: 'e'.repeat(2000) }],
+  })!;
+  assert.equal(s.host.name, 'n'.repeat(253));          // a hostname may be that long: never cut shorter
+  assert.equal(s.host.ledger!.problem, 'p'.repeat(500));
+  assert.equal(s.host.ledger!.ok, false);
+  assert.equal(s.host.ledger!.count, 0);
+  const [d] = s.devices;
+  assert.equal(d.name, 'n'.repeat(NAME_MAX));
+  assert.equal(d.kind, 'k'.repeat(80));
+  assert.equal(d.via, 'v'.repeat(80));
+  assert.equal(d.where, 'w'.repeat(400));
+  assert.equal(d.reason, 'r'.repeat(200));
+  assert.equal(d.lastOk, 'l'.repeat(80));
+  assert.equal(d.gpu, 'g'.repeat(80));
+  assert.equal(d.holds, 'h'.repeat(300));
+  assert.equal(d.trust!.alg, 'a'.repeat(80));
+  assert.equal(d.trust!.pub, 'u'.repeat(4096));         // the engine admits a key up to 4096: never cut shorter
+  assert.equal(d.trust!.store, 's'.repeat(80));
+  assert.equal(d.trust!.self, 'f'.repeat(80));
+  assert.equal(d.trust!.cert, 'c'.repeat(8192));        // the engine admits a certificate up to 8192
+  assert.equal(d.trust!.error, 'e'.repeat(1000));
+  assert.equal(d.trust!.head, 'd'.repeat(200));
+  assert.equal(s.work.loaded!.mode, 'm'.repeat(80));
+  assert.equal(s.work.loaded!.model.name, 'n'.repeat(300));
+  assert.equal(s.work.loaded!.model.file, 'f'.repeat(300));
+  assert.equal(s.work.loaded!.devices[0].name, 'n'.repeat(NAME_MAX));
+  assert.equal(s.work.loaded!.parts![0].name, 'n'.repeat(NAME_MAX));
+  assert.equal(s.work.loading!.mode, 'm'.repeat(80));
+  assert.equal(s.work.loading!.model, 'm'.repeat(300));
+  assert.equal(s.work.loading!.line, 'l'.repeat(1000));
+  assert.deepEqual(s.work.plan, ['p'.repeat(1000)]);
+  assert.deepEqual(s.work.decisions, [{ at: 1, text: 't'.repeat(300) }]);
+  const [m] = s.models;
+  assert.equal(m.name, 'n'.repeat(300));
+  assert.equal(m.file, 'f'.repeat(300));
+  assert.equal(m.quant, 'q'.repeat(80));
+  const [p] = s.projects;
+  assert.equal(p.title, 't'.repeat(300));
+  assert.equal(p.request, 'r'.repeat(4000));
+  assert.equal(p.state, 's'.repeat(80));
+  assert.equal(p.mode, 'm'.repeat(80));
+  assert.equal(p.model, 'm'.repeat(300));
+  assert.deepEqual(p.peers, []);                        // an id over 200 chars is not one of ours
+  assert.equal(p.line, 'l'.repeat(1000));
+  assert.equal(p.error, 'e'.repeat(1000));
+});
+
+test('clean: ledger lines are kept as they are, the newest 1000, each at most 65536 chars', () => {
+  const lines = Array.from({ length: 1500 }, (_, i) => `line ${i}`.repeat(60));
+  const [d] = clean({ at: 1, devices: [{ id: 'p1', trust: { lines } }] })!.devices;
+  assert.equal(d.trust!.lines.length, 1000);
+  assert.equal(d.trust!.lines[0], `line ${500}`.repeat(60));    // the newest window, oldest first
+  assert.equal(d.trust!.lines[999], `line ${1499}`.repeat(60));
+  const [long] = clean({ at: 1, devices: [{ id: 'p1', trust: { lines: ['x'.repeat(70_000)] } }] })!.devices;
+  assert.equal(long.trust!.lines[0].length, 65_536);            // the engine admits a line up to 64 KiB
+});
+
+test('clean: a project field by field; a title that is not a string is empty', () => {
+  const [p] = clean({
+    at: 1,
+    projects: [{ id: 'n1', title: {}, request: 42, start: NaN, end: 'x', state: 42, mode: 42, model: 42, peers: null, parts: 'x', done: 'x', line: 42, error: 42 }],
+  })!.projects;
+  assert.deepEqual(p, { id: 'n1', title: '', request: '', start: 0, end: 0, state: '', mode: '', model: '', peers: [], parts: 0, done: 0, line: '', error: '' });
+});
+
+test('counts and sizes past their cap are kept at the cap, never dropped; only a non-number is unknown', () => {
+  const s = clean({
+    at: 1,
+    host: { freeMb: 1e300, ledger: { ok: true, count: 2e9, problem: null } },
+    devices: [{ id: 'p1', ramMb: 1e300, trust: { count: 2e9, paired: 2e6, rejectsDay: { 'wrong pin': 1_000_000_001 } } }],
+    work: { chatting: 2e9, loaded: { model: { size: 1e300 }, ctx: 2e9, devices: [{ id: 'd1', done: 2e9 }], parts: [{ id: 'q', mb: 1e300, layers: 20_000 }] } },
+    models: [{ id: 'm1', size: 1e300, needMb: 1e300, params_b: 1e300 }],
+    projects: [{ id: 'n1', parts: 200_000, done: 2e9 }],
+  })!;
+  assert.equal(s.host.freeMb, 4 * 1024 * 1024);           // 4 TB
+  assert.equal(s.host.ledger!.count, 1e9);
+  const [d] = s.devices;
+  assert.equal(d.ramMb, 4 * 1024 * 1024);
+  assert.equal(d.trust!.count, 1e9);
+  assert.equal(d.trust!.paired, 1e6);
+  assert.equal(d.trust!.rejectsDay['wrong pin'], 1e9);    // the alarm's count stays, at the cap
+  assert.equal(s.work.chatting, 1e6);
+  assert.equal(s.work.loaded!.model.size, 1e13);          // 10 TB
+  assert.equal(s.work.loaded!.ctx, 1e9);
+  assert.equal(s.work.loaded!.devices[0].done, 1e9);
+  assert.equal(s.work.loaded!.parts![0].mb, 4 * 1024 * 1024);
+  assert.equal(s.work.loaded!.parts![0].layers, 10_000);
+  assert.equal(s.models[0].size, 1e13);
+  assert.equal(s.models[0].needMb, 4 * 1024 * 1024);
+  assert.equal(s.models[0].params_b, 10_000);
+  assert.equal(s.projects[0].parts, 100_000);
+  assert.equal(s.projects[0].done, 1e9);
+
+  const t = clean({ at: 1, host: { freeMb: NaN, ledger: { ok: true, count: NaN } }, devices: [{ id: 'p2', ramMb: NaN, trust: { count: NaN, paired: Infinity } }], work: { chatting: NaN, loaded: { ctx: NaN, devices: [{ id: 'd2', done: NaN }] } } })!;
+  assert.equal(t.host.freeMb, null);
+  assert.equal(t.host.ledger!.count, 0);                  // not a number: unknown, the type has no null
+  assert.equal(t.devices[0].ramMb, null);
+  assert.equal(t.devices[0].trust!.count, null);
+  assert.equal(t.devices[0].trust!.paired, null);
+  assert.equal(t.work.chatting, 0);
+  assert.equal(t.work.loaded!.ctx, 0);
+  assert.equal(t.work.loaded!.devices[0].done, 0);
+});
+
+test('measurements and times outside their range are unknown, not guessed', () => {
+  const [d] = clean({ at: 1, devices: [{ id: 'p1', reachMs: 600_001, checkedAt: TIME_MAX + 1, bwGBs: 1e300 }] })!.devices;
+  assert.equal(d.reachMs, null);
+  assert.equal(d.checkedAt, null);
+  assert.equal(d.bwGBs, null);
+  const w = clean({ at: 1, work: { loaded: { since: -1, devices: [{ id: 'd', tps: 1e300 }] } } })!.work;
+  assert.equal(w.loaded!.since, 0);
+  assert.equal(w.loaded!.devices[0].tps, null);
+  const [m] = clean({ at: 1, models: [{ id: 'm', params_b: NaN }] })!.models;
+  assert.equal(m.params_b, null);
+});
+
+test('clean never throws, even when a getter does: such a look cannot be trusted and is null', () => {
+  const hostile: Record<string, unknown> = { at: 1000 };
+  Object.defineProperty(hostile, 'devices', { get() { throw new Error('boom'); } });
+  assert.equal(clean(hostile), null);
+  const hostileAt: Record<string, unknown> = {};
+  Object.defineProperty(hostileAt, 'at', { get() { throw new Error('boom'); } });
+  assert.equal(clean(hostileAt), null);
+  const hostileEntry: Record<string, unknown> = {};
+  Object.defineProperty(hostileEntry, 'id', { get() { throw new Error('boom'); } });
+  assert.equal(clean({ at: 1, devices: [hostileEntry] }), null);
+});
+
+/** a full, valid snapshot: every field set. clean must return it deep-equal, unchanged. */
+const healthy = (): Record<string, unknown> => ({
+  at: 1000,
+  host: { name: 'mac', freeMb: 4000, ledger: { ok: true, count: 12, problem: null } },
+  devices: [{
+    id: 'p1', name: 'pixel', kind: 'phone', via: 'wifi', where: '192.168.1.33:50551', reachable: true,
+    reachMs: 12, reason: null, checkedAt: 900, lastOk: '2026-11-10T08:00:00Z', ramMb: 3400, bwGBs: 60,
+    gpu: null, tls: true, waitingPair: false, plugged: null, holds: null,
+    trust: {
+      at: 900, error: null, id: 'abc123', alg: 'ed25519', pub: 'cHVibGlj', store: 'keystore', cert: 'Y2VydA==',
+      certPinned: true, v1: false, paired: 1, self: 'ok', count: 5, head: 'deadbeef'.repeat(8),
+      lines: ['a ledger line'], restartedAt: null, rejectsDay: { 'wrong pin': 2 },
+      rejectsLast: [{ t: 850, why: 'wrong pin', peer: 'p2' }],
+    },
+  }],
+  work: {
+    loaded: {
+      mode: 'apart', model: { id: 'm1', name: 'model', file: 'm.gguf', size: 1e9 }, ctx: 100, since: 800,
+      devices: [{ id: 'p1', name: 'pixel', local: false, busy: true, tps: 3, done: 2 }],
+      parts: [{ id: 'p1', name: 'pixel', local: false, mb: 500, layers: 10 }],
+    },
+    loading: null, chatting: 1, plan: ['a plan'], decisions: [{ at: 700, text: 'a decision' }], llama: true,
+  },
+  models: [{ id: 'm1', name: 'model', file: 'm.gguf', size: 1e9, quant: 'q4', params_b: 8, catalog: true, here: true, needMb: 2000 }],
+  projects: [{ id: 'n1', title: 'a night', request: 'a request', start: 500, end: 900, state: 'waiting', mode: 'apart', model: 'm1', peers: ['p1'], parts: 2, done: 1, line: 'a line', error: 'an error' }],
+});
+
+test('clean leaves a healthy snapshot exactly as it is, and does not change it on the way', () => {
+  // built the way the eye receives it: plain JSON, cloned, never shaped to match clean's output
+  const s = structuredClone(healthy());
+  assert.deepStrictEqual(clean(s), s);
+  assert.deepStrictEqual(s, structuredClone(healthy()));
+});
+
+test('clean: a project\'s peers keep only usable ids; models and projects keep the first of a duplicated id', () => {
+  const [p] = clean({ at: 1, projects: [{ id: 'n1', peers: ['p1', '', 42, null, 'x'.repeat(250), 'p2'] }] })!.projects;
+  assert.deepEqual(p.peers, ['p1', 'p2']);
+  assert.equal(idOf('x'.repeat(250)), null);
+  const models = clean({ at: 1, models: [{ id: 'm1', name: 'one' }, { id: 'm1', name: 'two' }, { id: 'm2', name: 'three' }] })!.models;
+  assert.deepEqual(models.map((m) => m.id), ['m1', 'm2']);
+  assert.equal(models[0].name, 'one');
+  const projects = clean({ at: 1, projects: [{ id: 'n1', title: 'one' }, { id: 'n1', title: 'two' }, { id: 'n2', title: 'three' }] })!.projects;
+  assert.deepEqual(projects.map((x) => [x.id, x.title]), [['n1', 'one'], ['n2', 'three']]);
+});
