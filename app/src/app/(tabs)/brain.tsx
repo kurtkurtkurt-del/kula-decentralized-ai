@@ -12,11 +12,13 @@ import Ledger, { type Tile } from '@/components/brain/Ledger';
 import Night from '@/components/brain/Night';
 import Now from '@/components/brain/Now';
 import Timeline from '@/components/brain/Timeline';
+import Trust from '@/components/brain/Trust';
 import { STATE_COLOR } from '@/components/brain/colors';
 import { nodeShare } from '@/components/brain/geometry';
 import { big, buckets, nodeState, speedOf, windowProgress, type NodeState } from '@/components/brain/stats';
 import { group } from '@/components/brain/grouping';
 import { networkEstimate, type NetworkEstimate } from '@/data/network';
+import { lastPassport } from '@/data/passport';
 import { useRefreshOnFocus } from '@/hooks/useRefresh';
 import { useLang } from '@/i18n';
 import { parseLedger, peerBadge, summarize, verdictOf, verifyChain, type AuditEntry } from '@/llm/audit';
@@ -24,11 +26,13 @@ import { clearBrainLog, latest, useBrainLog } from '@/llm/brainlog';
 import { useEngine, type Device } from '@/llm/engine';
 import { hasNative, llama } from '@/llm/native';
 import { usePeers } from '@/llm/store';
+import { selfTitle } from '@/llm/trust';
+import { startTrustRhythm, useTrustReport } from '@/llm/trustStore';
 import { nightRules } from '@/data/settings';
 import { accuracy, useReports } from '@/night/report';
 import { useNight } from '@/night/useNight';
 import { VERDICT_COLOR } from '@/theme/audit';
-import { colors, fonts } from '@/theme/tokens';
+import { colors, fonts, radius } from '@/theme/tokens';
 import { brand } from '@/theme/layout';
 
 // The brain (5.11.2026; the network tab's place, in the middle of the bar): beyin at work on
@@ -74,9 +78,12 @@ export default function BrainScreen() {
     useCallback(() => {
       const first = setTimeout(readLedger, 0); // after the render, not inside it
       const every = setInterval(readLedger, 15_000);
+      // the security report: every paired device asked now and each minute (llm/trustStore.ts)
+      const stopTrust = startTrustRhythm();
       return () => {
         clearTimeout(first);
         clearInterval(every);
+        stopTrust();
       };
     }, [readLedger]),
   );
@@ -86,6 +93,7 @@ export default function BrainScreen() {
 
   const entries: AuditEntry[] = useMemo(() => parseLedger(raw ?? []), [raw]);
   const chain = useMemo(() => verifyChain(raw ?? []), [raw]);
+  const trust = useTrustReport(raw ? { ok: chain.ok, lines: raw.length } : null);
 
   // ---- the figure: this phone and every paired device ----
   const loaded = !!engine.model && !engine.loading;
@@ -179,6 +187,11 @@ export default function BrainScreen() {
         {/* the brain, drawn: tap it for the devices */}
         <BrainFigure center={center} peers={nodes} label={heroLabel} onPress={() => router.push('/peers')} hint={t('brain.devices.add')} />
         <Text style={[styles.summary, !!engine.loading && styles.live]} numberOfLines={1} importantForAccessibility="no" accessibilityElementsHidden>{summary}</Text>
+        {hasNative() ? (
+          <Pressable onPress={() => router.push('/share')} accessibilityRole="button" hitSlop={6} style={({ pressed }) => [styles.share, pressed && styles.pressed]}>
+            <Text style={styles.shareText}>{t('share.title')} ›</Text>
+          </Pressable>
+        ) : null}
 
         {/* right now */}
         <Head text={up(t('brain.now'))} action={t('brain.devices.add')} onAction={() => router.push('/peers')} />
@@ -198,6 +211,14 @@ export default function BrainScreen() {
         ) : (
           <Empty kind="model" text={t('brain.empty.model')} a11y={t('brain.idle')} action={t('brain.empty.load')} onAction={() => router.push('/models')} />
         )}
+
+        {/* trust and verification: the master's security report on the devices it uses */}
+        {peers.length ? (
+          <>
+            <Head text={up(t('trust.title'))} action={t('trust.details')} onAction={() => router.push('/trust')} />
+            <Trust report={trust} self={selfTitle(lastPassport()?.device, t('brain.this')).name} onPress={() => router.push('/trust')} />
+          </>
+        ) : null}
 
         {/* what it decided */}
         <Head text={up(t('brain.decisions'))} action={log.length ? t('brain.log.clear') : undefined} onAction={clearBrainLog} />
@@ -268,6 +289,9 @@ const styles = StyleSheet.create({
   body: { paddingTop: brand.top + 40, paddingHorizontal: brand.left },
   summary: { fontFamily: fonts.medium, fontSize: 14, color: colors.paper2, textAlign: 'center', marginTop: 2 },
   live: { color: colors.spotText },
+  share: { alignSelf: 'center', marginTop: 10, paddingHorizontal: 14, height: 32, borderRadius: radius.pill, borderWidth: 1, borderColor: colors.ink3, justifyContent: 'center' },
+  shareText: { fontFamily: fonts.medium, fontSize: 12.5, color: colors.spotText },
+  pressed: { opacity: 0.7 },
   head: { flexDirection: 'row', alignItems: 'baseline', justifyContent: 'space-between', marginTop: 30, marginBottom: 6 },
   section: { fontFamily: fonts.regular, fontSize: 11, letterSpacing: 1.4, color: colors.mute },
   link: { fontFamily: fonts.medium, fontSize: 12, color: colors.spotText },

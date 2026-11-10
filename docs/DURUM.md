@@ -94,8 +94,11 @@ için hiç apk derlenmedi**. Telefonda bakılacaklar:
 3. **MoE desteği ve Gemma 4 26B-A4B:** katalogda MoE modeller (Gemma 4 26B-A4B, Qwen3 30B-A3B),
    sığma ve planlayıcı hızı aktif parametreden hesaplasın (bugün toplam boyuttan hesaplıyor ve
    MoE'yi yavaş sanıyor).
-4. **the brain sekmesinde "bu telefonu paylaş" düğmesi;** cihaz satırında ad iki kez yazıyor
-   ("this phone · this phone").
+4. ~~**the brain sekmesinde "bu telefonu paylaş" düğmesi;** cihaz satırında ad iki kez yazıyor
+   ("this phone · this phone").~~ (10.11): düğme özetin altında, paylaşım ekranını açıyor; çift
+   adlı satır 5.11'deki yeniden çizimle gitmişti, yeni güven ekranında telefonun satırı adı bir
+   kez yazıyor (`selfTitle`). Aynı gün: telefon usta olunca the brain → güven ve doğrulama
+   (AUDIT.md, telefon). Gerçek telefonda denenmedi.
 5. **Geliştirme sürümü (Metro):** JavaScript değişiklikleri apk beklemeden telefona gelsin.
 6. **iOS:** Xcode kurulunca iOS modülünün derlenmesi ve iPhone'a kurulum (kullanıcı Xcode'u
    kuracak).
