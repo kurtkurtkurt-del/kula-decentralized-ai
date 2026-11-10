@@ -147,7 +147,7 @@ test('the same checkedAt seen three times counts once; the line then says the ra
 
   assert.equal(c.saves, 10, 'the two unchanged looks saved nothing; the 9 new probes saved each');
   const k = (c.stored as any).dev[0][1].k;
-  assert.deepEqual(k, [['wifi', { ring: [true, true, true, true, true, true, true, true, true, true], ms: [12, 12, 12, 12, 12, 12, 12, 12, 12, 12] }]]);
+  assert.deepEqual(k, [['wifi', { ring: '1111111111', ms: [12, 12, 12, 12, 12, 12, 12, 12, 12, 12], last: at(671) }]]);
   assert.equal((c.stored as any).dev[0][1].at, 10000);
   assert.deepEqual((c.stored as any).dev[0][1].sw, []);
 
@@ -247,6 +247,71 @@ test('an exact tie says nothing; an equal rate with one kind short of 5 ms value
     'pixel · wifi · 192.168.1.33:50551 · reachable · 30 ms · answers 100% over wifi · usually 30 ms');
 });
 
+test('an old cable era is not compared with this week\'s wi-fi, not even while the device is on a third kind', () => {
+  const WEEK = 7 * DAY;
+  const looks = [];
+  for (let i = 1; i <= 12; i++) looks.push(snap([dev({ via: 'cable', plugged: true, checkedAt: 1000 + i, reachMs: 10 })], at(i)));
+  for (let i = 13; i <= 24; i++) looks.push(snap([dev({ via: 'wifi', checkedAt: 2000 + i, reachMs: 30, reachable: i !== 20 })], WEEK + at(i)));
+  looks.push(snap([dev({ via: 'relay', where: 'relay pc', checkedAt: 9000 })], WEEK + at(100)));   // a third kind now
+  const { b } = drive(looks);
+  // cable was last probed a week before the look: its ring is another era, so nothing is compared
+  assert.equal(b.view().lines[0], 'pixel · relay · relay pc · reachable · 12 ms · not enough looks yet');
+});
+
+test('two kinds both probed within the day are compared as today', () => {
+  const looks = [];
+  for (let i = 1; i <= 12; i++) looks.push(snap([dev({ via: 'cable', plugged: true, checkedAt: 1000 + i, reachMs: 10 })], at(i)));
+  for (let i = 13; i <= 24; i++) looks.push(snap([dev({ via: 'wifi', checkedAt: 2000 + i, reachMs: 30, reachable: i !== 20 })], at(i + 3600)));   // an hour later, same day
+  const { b } = drive(looks);
+  assert.equal(b.view().lines[0],
+    'pixel · wifi · 192.168.1.33:50551 · reachable · 30 ms · answers 92% over wifi · usually 30 ms · cable has been the steadier link (100% vs 92%)');
+});
+
+test('a kind whose last probe is stamped in the future is not compared once the clock is right', () => {
+  const far = T + 400 * DAY;
+  const looks = [];
+  for (let i = 1; i <= 10; i++) looks.push(snap([dev({ via: 'cable', plugged: true, checkedAt: 1000 + i, reachMs: 10 })], at(i)));
+  for (let i = 11; i <= 20; i++) looks.push(snap([dev({ via: 'wifi', checkedAt: 2000 + i, reachMs: 30, reachable: i !== 20 })], at(i)));
+  looks.push(snap([dev({ via: 'cable', plugged: true, checkedAt: far })], far));      // a bad clock on cable
+  looks.push(snap([dev({ via: 'wifi', checkedAt: far + 1000 })], far + 1000));        // and on wi-fi
+  looks.push(snap([dev({ via: 'wifi', checkedAt: T + 30000, reachMs: 30 })], at(30)));   // the clock is right: a new wi-fi probe
+  const { b } = drive(looks);
+  // cable's last probe is still ahead of this look: its ring is a bad-clock era and is not compared
+  assert.equal(b.view().lines[0], 'pixel · wifi · 192.168.1.33:50551 · reachable · 30 ms · answers 92% over wifi · usually 30 ms');
+});
+
+test('a kind whose last probe time is unknown (an old notes file) is not compared', () => {
+  const oldRing = (ok: number) => Array.from({ length: 10 }, (_, i) => i < ok);
+  const file = { v: 1, dev: [['p1', { name: 'pixel', seen: at(0), kind: 'cable', at: 500,
+    k: [['cable', { ring: oldRing(10), ms: [10, 10, 10, 10, 10] }],
+      ['wifi', { ring: oldRing(9), ms: [30, 30, 30, 30, 30] }]],
+    sw: [] }]] };
+  const { c, ctx } = fakeCtx(file);
+  const b = create(ctx);
+  c.t = at(0);
+  b.observe(snap([dev({ via: 'wifi', checkedAt: 600, reachMs: 30 })], at(0)), null);   // one new wi-fi probe
+  // cable's last probe time is unknown (the file predates the field), so its old ring is not compared
+  assert.equal(b.view().lines[0], 'pixel · wifi · 192.168.1.33:50551 · reachable · 30 ms · answers 91% over wifi · usually 30 ms');
+});
+
+test('a far-forward look does not silence the steadier sentence for good, live and after a restart', () => {
+  const far = T + 400 * DAY;
+  const looks = [];
+  for (let i = 1; i <= 12; i++) looks.push(snap([dev({ via: 'cable', plugged: true, checkedAt: 1000 + i, reachMs: 10 })], at(i)));
+  for (let i = 13; i <= 24; i++) looks.push(snap([dev({ via: 'wifi', checkedAt: 2000 + i, reachMs: 30, reachable: i !== 20 })], at(i)));
+  looks.push(snap([dev({ via: 'wifi', checkedAt: far })], far));                      // a bad clock on the current kind
+  looks.push(snap([dev({ via: 'wifi', checkedAt: T + 30000 })], at(30)));             // the clock is right: a new probe
+  looks.push(snap([dev({ via: 'wifi', checkedAt: T + 40000 })], at(90)));             // and the minute's save
+  const { b, c, ctx } = drive(looks);
+  const line = 'pixel · wifi · 192.168.1.33:50551 · reachable · 12 ms · answers 93% over wifi · usually 30 ms · cable has been the steadier link (100% vs 93%)';
+  assert.equal(b.view().lines[0], line);
+
+  const again = create(ctx);
+  c.t = at(95);
+  again.observe(snap([dev({ via: 'wifi', checkedAt: T + 40000 })], at(95)), null);   // the same probe: no new reading
+  assert.equal(again.view().lines[0], line, 'after the restart the sentence still stands, and the bad era was not compared');
+});
+
 test('an empty snapshot is a normal look: built, bounded and empty', () => {
   const { ctx } = fakeCtx();
   const b = create(ctx);
@@ -299,6 +364,8 @@ test('notes of the wrong shape or with a bad time give fresh notes, never a thro
     { v: 1, dev: [['p1', { ...goodDev, k: [['wifi', { ring: 'x', ms: [] }]] }]] },
     { v: 1, dev: [['p1', { ...goodDev, k: [['wifi', { ring: [true, 1], ms: [] }]] }]] },   // an outcome that is not a boolean
     { v: 1, dev: [['p1', { ...goodDev, k: [['wifi', { ring: [true], ms: [Number.NaN] }]] }]] },
+    { v: 1, dev: [['p1', { ...goodDev, k: [['wifi', { ring: [true], ms: [], last: -1 }]] }]] },
+    { v: 1, dev: [['p1', { ...goodDev, k: [['wifi', { ring: [true], ms: [], last: Number.NaN }]] }]] },
     { v: 1, dev: [['p1', { ...goodDev, k: [['wifi', { ring: [true], ms: [-1] }]] }]] },
     { v: 1, dev: [['p1', { ...goodDev, k: [['WIFI', { ring: [true], ms: [] }]] }]] },
     { v: 1, dev: [['p1', { ...goodDev, sw: 'x' }]] },
@@ -319,7 +386,7 @@ test('notes of the wrong shape or with a bad time give fresh notes, never a thro
     c.t = s1.at;
     b.observe(s1, s0);
     assert.equal(b.view().built, true);
-    assert.deepEqual((c.stored as any).dev[0][1].k, [['wifi', { ring: [true, true], ms: [12, 12] }]], 'fresh notes: two looks counted');
+    assert.deepEqual((c.stored as any).dev[0][1].k, [['wifi', { ring: '11', ms: [12, 12], last: at(70) }]], 'fresh notes: two looks counted');
   }
 });
 
@@ -524,7 +591,7 @@ test('a look with an unusable at is skipped: view() works, nothing is saved, the
 
   const again = create(ctx);
   assert.deepEqual((c.stored as any).dev.map((p: any) => p[0]), ['p1'], 'the new device never entered the notes');
-  assert.deepEqual((c.stored as any).dev[0][1].k, [['wifi', { ring: [true, true], ms: [12, 12] }]], 'the earlier history survived');
+  assert.deepEqual((c.stored as any).dev[0][1].k, [['wifi', { ring: '11', ms: [12, 12], last: at(80) }]], 'the earlier history survived');
   c.t = at(85);
   again.observe(snap([dev({ checkedAt: 4000 })], at(85)), null);       // and the branch still records
   assert.equal(again.view().lines[0], 'pixel · wifi · 192.168.1.33:50551 · reachable · 12 ms · not enough looks yet');
@@ -554,6 +621,44 @@ test('the rate comes from the last 200 probes: an old era of failures stops coun
   assert.equal((c.stored as any).dev[0][1].k[0][1].ring.length, RING_MAX, 'the ring never grows past 200');
 });
 
+test('no answer in the last 200 probes leaves out the usual ms: the remembered times are older than the ring', () => {
+  const looks = [];
+  for (let i = 1; i <= 10; i++) looks.push(snap([dev({ checkedAt: 1000 * i, reachable: true, reachMs: 12 })], at(i)));
+  for (let i = 1; i <= 200; i++) looks.push(snap([dev({ checkedAt: 100000 + 1000 * i, reachable: false })], at(10 + i)));
+  const { b } = drive(looks);
+  // the ring is 200 failures, so the 10 remembered answer times are not this window's
+  assert.equal(b.view().lines[0], 'pixel · wifi · 192.168.1.33:50551 · not reachable: no answer · answers 0% over wifi');
+});
+
+test('usually ms comes only from the answers inside the ring', () => {
+  // 10 old answers at 12 ms, then 199 failures and one answer at 99 ms: the ring holds only that answer
+  const one = [];
+  for (let i = 1; i <= 10; i++) one.push(snap([dev({ checkedAt: 1000 * i, reachMs: 12 })], at(i)));
+  for (let i = 11; i <= 209; i++) one.push(snap([dev({ checkedAt: 1000 * i, reachable: false })], at(i)));
+  one.push(snap([dev({ checkedAt: 210000, reachMs: 99 })], at(210)));
+  const a = drive(one);
+  assert.equal(a.b.view().lines[0], 'pixel · wifi · 192.168.1.33:50551 · reachable · 99 ms · answers 1% over wifi');
+
+  // 10 old answers at 12 ms, then 195 failures and 5 answers at 50 ms: the usual is the 5 in the ring
+  const many = [];
+  for (let i = 1; i <= 10; i++) many.push(snap([dev({ checkedAt: 1000 * i, reachMs: 12 })], at(i)));
+  for (let i = 11; i <= 205; i++) many.push(snap([dev({ checkedAt: 1000 * i, reachable: false })], at(i)));
+  for (let i = 206; i <= 210; i++) many.push(snap([dev({ checkedAt: 1000 * i, reachMs: 50 })], at(i)));
+  const m = drive(many);
+  assert.equal(m.b.view().lines[0], 'pixel · wifi · 192.168.1.33:50551 · reachable · 50 ms · answers 3% over wifi · usually 50 ms');
+});
+
+test('the steadier sentence needs an answer in the ring: two all-failure rings say nothing', () => {
+  const looks = [];
+  for (let i = 1; i <= 10; i++) looks.push(snap([dev({ via: 'cable', plugged: true, checkedAt: 1000 * i, reachMs: 10 })], at(i)));
+  for (let i = 11; i <= 20; i++) looks.push(snap([dev({ via: 'wifi', checkedAt: 1000 * i, reachMs: 30 })], at(i)));
+  for (let i = 21; i <= 220; i++) looks.push(snap([dev({ via: 'wifi', checkedAt: 1000 * i, reachable: false })], at(i)));
+  for (let i = 221; i <= 420; i++) looks.push(snap([dev({ via: 'cable', plugged: true, checkedAt: 1000 * i, reachable: false })], at(i)));
+  const { b } = drive(looks);
+  // both rings are all failures: the old answer times cannot set one kind against the other
+  assert.equal(b.view().lines[0], 'pixel · cable · not reachable: no answer · answers 0% over cable');
+});
+
 test('the steadier percents show one decimal when the whole percents collide; 199 of 200 shows 99%', () => {
   const looks = [];
   for (let i = 1; i <= 125; i++) looks.push(snap([dev({ via: 'cable', checkedAt: 10000 + i, reachMs: 10, reachable: i > 2 })], at(i)));   // 123 of 125
@@ -579,6 +684,22 @@ test('the kinds cap evicts the kind with the fewest probes: six stray kinds do n
   const k = (c.stored as any).dev[0][1].k;
   assert.deepEqual(k.map((p: any) => p[0]), ['cable', 'c', 'd', 'e', 'f', 'g'], 'the first two strays went, cable stayed');
   assert.equal(k[0][1].ring.length, 50, 'the 50 cable probes survived');
+});
+
+test('the kinds cap never evicts the kind the device just switched from', () => {
+  const looks = [];
+  let n = 1;
+  for (const via of ['a', 'b', 'c', 'd', 'e']) {
+    for (let j = 0; j < 3; j++) looks.push(snap([dev({ via, checkedAt: 1000 * n })], at(n++)));
+  }
+  looks.push(snap([dev({ via: 'f', checkedAt: 1000 * n })], at(n++)));   // the sixth kind: one probe only
+  looks.push(snap([dev({ via: 'g', checkedAt: 1000 * n })], at(n++)));   // a seventh: the cap is full
+  looks.push(snap([dev({ via: 'g', checkedAt: 1000 * n })], at(120)));   // flush the save
+  const { c } = drive(looks);
+  const kinds = (c.stored as any).dev[0][1].k.map((p: any) => p[0]);
+  // f (one probe each) is the fewest, but it is the kind just switched from: the earliest of the rest goes
+  assert.deepEqual(kinds, ['b', 'c', 'd', 'e', 'f', 'g'], 'f, just switched from, stayed; a went instead');
+  assert.equal(c.feed[c.feed.length - 1], 'pixel is now reached over g (was f)');
 });
 
 test('a reason is a string cut to 120 chars; a non-string reason is left out', () => {
@@ -660,7 +781,7 @@ test('after a restart the counts carry on: the same probe is not counted twice, 
   again.observe(snap([dev({ checkedAt: 5000 })], at(150)), snap([dev({ checkedAt: 4000 })], at(80)));   // saved
 
   assert.deepEqual(c.feed, [], 'the kind never changed: no feed line');
-  assert.deepEqual((c.stored as any).dev[0][1].k, [['wifi', { ring: [true, true, true, true, true], ms: [12, 12, 12, 12, 12] }]]);
+  assert.deepEqual((c.stored as any).dev[0][1].k, [['wifi', { ring: '11111', ms: [12, 12, 12, 12, 12], last: at(150) }]]);
   assert.equal((c.stored as any).dev[0][1].at, 5000);
 });
 
@@ -673,6 +794,53 @@ test('the notes are saved at most once a minute and only when something changed'
     snap([dev({ checkedAt: 4000 })], at(120)),    // a change and the minute is up: save 2
   ]);
   assert.equal(c.saves, 2);
+});
+
+test('a probe ring is packed as a string of 0/1 in the notes, with the look time of its last probe', () => {
+  const looks = [];
+  for (let i = 1; i <= 10; i++) looks.push(snap([dev({ checkedAt: 1000 * i, reachable: i !== 5 })], at(i)));
+  looks.push(snap([dev({ name: 'pixel 2', checkedAt: 10000 })], at(70)));   // the same probe, renamed: the minute's save happens
+  const { c } = drive(looks);
+  assert.deepEqual((c.stored as any).dev[0][1].k,
+    [['wifi', { ring: '1111011111', ms: [12, 12, 12, 12, 12, 12, 12, 12, 12], last: at(10) }]]);
+});
+
+test('a notes file as the merged version wrote it (boolean rings, no last) loads with its history', () => {
+  const oldRing = Array.from({ length: 12 }, (_, i) => i !== 2);   // 11 of 12 answered
+  const file = { v: 1, dev: [['p1', { name: 'pixel', seen: at(0), kind: 'wifi', at: 500,
+    k: [['wifi', { ring: oldRing, ms: [12, 12, 12, 12, 12] }]], sw: [] }]] };
+  const { c, ctx } = fakeCtx(file);
+  const b = create(ctx);
+  c.t = at(0);
+  b.observe(snap([dev({ name: 'pixel 2', checkedAt: 500 })], at(0)), null);   // the same probe: the rename is the only change, so it saves
+  assert.deepEqual((c.stored as any).dev[0][1].k,
+    [['wifi', { ring: '110111111111', ms: [12, 12, 12, 12, 12], last: null }]],
+    'the old ring is packed on the next save; when its last probe was is unknown');
+
+  const again = create(ctx);                                                   // the file this version writes loads too
+  c.t = at(70);
+  again.observe(snap([dev({ name: 'pixel 2', checkedAt: 600 })], at(70)), null);
+  c.t = at(130);
+  again.observe(snap([dev({ name: 'pixel 2', checkedAt: 700 })], at(130)), null);   // saved
+  assert.deepEqual((c.stored as any).dev[0][1].k,
+    [['wifi', { ring: '11011111111111', ms: [12, 12, 12, 12, 12, 12, 12], last: at(130) }]],
+    'the old history is still there; the two new answers are on its end');
+  assert.equal(again.view().lines[0], 'pixel 2 · wifi · 192.168.1.33:50551 · reachable · 12 ms · answers 93% over wifi · usually 12 ms');
+});
+
+test('an old file at the ring and ms caps loads every entry, none dropped', () => {
+  const ring = Array.from({ length: RING_MAX }, (_, i) => i !== 0);        // the old writer's largest ring: 199 of 200 answered
+  const ms = Array.from({ length: MS_MAX }, (_, i) => 12 + (i % 2));       // and its largest ms list: 20 values
+  const file = { v: 1, dev: [['p1', { name: 'pixel', seen: at(0), kind: 'wifi', at: 500,
+    k: [['wifi', { ring, ms }]], sw: [] }]] };
+  const { c, ctx } = fakeCtx(file);
+  const b = create(ctx);
+  c.t = at(0);
+  b.observe(snap([dev({ name: 'pixel 2', checkedAt: 500 })], at(0)), null);   // the same probe: the rename makes it save
+  const k = (c.stored as any).dev[0][1].k[0][1];
+  assert.equal(k.ring, `0${'1'.repeat(RING_MAX - 1)}`, 'the old ring kept all 200 outcomes');
+  assert.equal(k.ms.length, MS_MAX, 'the old 20 answer times are all kept');
+  assert.deepEqual(k.ms, ms.slice(-MS_MAX));
 });
 
 test('bad snapshot values are skipped, and the saved notes still pass their own read-back', () => {
@@ -704,7 +872,7 @@ test('bad snapshot values are skipped, and the saved notes still pass their own 
   c.t = at(140);
   again.observe(snap([dev({ checkedAt: 80000, reachMs: 12 })], at(140)), snap([dev({ checkedAt: 75000 })], at(75)));   // saved
 
-  assert.deepEqual((c.stored as any).dev[0][1].k, [['wifi', { ring: [true, true, true, true, true], ms: [12, 12, 12, 12] }]]);
+  assert.deepEqual((c.stored as any).dev[0][1].k, [['wifi', { ring: '11111', ms: [12, 12, 12, 12], last: at(140) }]]);
   assert.equal(again.view().built, true);
 });
 
