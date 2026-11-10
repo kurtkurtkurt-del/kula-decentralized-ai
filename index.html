@@ -10,8 +10,8 @@
 <link rel="stylesheet" href="site.css">
 </head>
 <body>
-<!-- kula's download page (8.11.2026). Plain html + site.css, no build step, nothing fetched
-     from anywhere else.
+<!-- kula's download page (v0.2.0, 10.11.2026). Plain html + site.css, no build step, nothing
+     fetched from anywhere else.
 
      Downloads use the newest GitHub release by stable asset names, so the release must carry
      exactly: kula-mac-arm64.dmg, kula-node-mac-arm64, kula-android.apk (later kula-windows-x64.exe,
@@ -31,7 +31,7 @@
 
 <main>
   <section class="hero wrap">
-    <p class="kicker"><span class="dot" aria-hidden="true"></span> open models · on your own devices</p>
+    <p class="kicker"><span class="dot" aria-hidden="true"></span> open models · on your own devices · v0.2.0</p>
     <h1>Your devices,<br>one local AI.</h1>
     <p class="lede">kula joins your phones, tablets and computers into one AI cluster that runs open
       models. They talk to each other directly — nothing goes to a cloud.</p>
@@ -121,16 +121,50 @@
       the app: <code>xattr -cr /Applications/kula.app</code> in Terminal.</p>
   </section>
 
+  <section class="news wrap" aria-labelledby="news-h">
+    <h2 id="news-h">what's new in 0.2.0</h2>
+    <ul class="news-list">
+      <li><b>the brain.</b> kula-node runs an observer over your devices, and the chat page draws
+        its twelve branches as a map around this computer. It looks every 5 seconds.</li>
+      <li><b>the black box.</b> A hash-chained record of everything the eye saw and said: a changed
+        line shows. It holds no prompts, answers, keys or addresses.</li>
+      <li><b>photos in the computer's chat.</b> A <b>+</b> takes up to three photos and asks which
+        vision model should see them (SmolVLM 500M, SmolVLM2 2.2B, Gemma 3 4B).</li>
+      <li><b>the phone's security report.</b> The brain tab's trust and verification: one verdict
+        for the cluster, with every paired device's checks under it.</li>
+      <li><b>unpair.</b> A paired phone or computer can have its access removed, from the phone
+        and from kula-node.</li>
+      <li><b>the desktop app.</b> kula's own icon, and a first start that lists what building
+        llama.cpp needs before setup runs.</li>
+    </ul>
+  </section>
+
   <section class="band">
     <figure class="shot">
-      <img src="chat-dark.webp" width="2000" height="1250" alt="The kula chat page on a Mac: a chat with Qwen3 0.6B running on this computer, and the brain panel on the right with its twelve branches.">
+      <picture><source srcset="chat-light.webp" media="(prefers-color-scheme: light)"><img src="chat-dark.webp" width="2000" height="1250" alt="kula on a Mac: the chat with its + for photos, and the brain as a map of twelve branches around this computer."></picture>
     </figure>
     <div class="brain wrap" aria-labelledby="brain-h">
       <h2 id="brain-h"><span class="dot" aria-hidden="true"></span>the brain</h2>
-      <p>God's eye over your devices, on the right of the picture: twelve branches (senses, memory,
-        forecast, planner, trust, limits…) look at the cluster every few seconds and say what they
-        see. It <b>watches and never acts</b>. Its <b>learn</b> tab collects papers, videos and
-        courses on local AI.</p>
+      <p>God's eye over your devices, on the right of the picture: kula-node takes a look every
+        5 seconds and <b>twelve branches</b> say what they see. A <b>guard</b> cleans every look
+        first. It <b>watches and never acts</b>: it never touches a device. A <b>black box</b>
+        keeps a hash-chained record of everything it saw and said — a changed line shows — with
+        no prompts, answers, keys or addresses in it. Its <b>learn</b> tab collects papers, videos
+        and courses on local AI.</p>
+      <ul class="branches" aria-label="the twelve branches">
+        <li><b>senses</b> who is here, how much memory, how fast</li>
+        <li><b>memory</b> what changed, and why</li>
+        <li><b>forecast</b> when each device will be free tonight</li>
+        <li><b>learning loop</b> was the forecast right?</li>
+        <li><b>connections</b> cable, wi-fi or relay, and how steady</li>
+        <li><b>planner</b> where the model sits, and why</li>
+        <li><b>executor</b> who is answering now, how fast</li>
+        <li><b>trust and verification</b> is the cluster safe?</li>
+        <li><b>limits</b> memory, rest, energy; warns, never stops</li>
+        <li><b>models</b> what fits, what is held where</li>
+        <li><b>review</b> is a night job safe to run?</li>
+        <li><b>advisor</b> which model, which devices, which night</li>
+      </ul>
       <nav class="brain-links" aria-label="the brain">
         <a href="https://github.com/kurtkurtkurt-del/kula-decentralized-ai/blob/main/README.md#how-it-works">how it works</a>
         <a href="https://github.com/kurtkurtkurt-del/kula-decentralized-ai/tree/main/node/src/godseye">the code</a>
@@ -160,7 +194,7 @@
     <a href="https://huggingface.co/bartowski/mistralai_Mistral-Small-3.2-24B-Instruct-2506-GGUF">Mistral Small</a>
     <a href="https://huggingface.co/unsloth/GLM-4.7-Flash-GGUF">GLM 4.7</a>
   </nav>
-  <p class="small">kula · runs on <a href="https://github.com/ggml-org/llama.cpp">llama.cpp</a> · type: Inter Tight (SIL OFL)</p>
+  <p class="small">kula v0.2.0 · runs on <a href="https://github.com/ggml-org/llama.cpp">llama.cpp</a> · type: Inter Tight (SIL OFL)</p>
 </footer>
 
 <script>

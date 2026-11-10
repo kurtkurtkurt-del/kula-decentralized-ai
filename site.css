@@ -93,6 +93,15 @@ a.dl-btn:active { transform: translateY(0); }
 .menu a[data-todo] { opacity: .5; cursor: default; }
 .menu a[data-todo] b::after { content: " · later"; font-weight: 400; color: var(--meta); }
 
+/* ---------- what's new: the release's short list, between the downloads and the picture */
+.news { margin-top: 44px; }
+.news h2 { font-size: 22px; }
+.news-list { list-style: none; margin: 14px 0 0; padding: 0; display: grid; gap: 10px 28px; grid-template-columns: 1fr; font-size: 15px; color: var(--mute); }
+@media (min-width: 820px) { .news-list { grid-template-columns: 1fr 1fr; } }
+.news-list li { position: relative; padding-left: 18px; }
+.news-list li::before { content: ""; position: absolute; left: 0; top: .62em; width: 7px; height: 7px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.news-list b { color: var(--words); }
+
 /* ---------- the picture, and the brain under it, on the green band */
 .band { margin-top: 56px; padding-bottom: 48px; background: linear-gradient(to bottom, transparent 0, transparent 22%, var(--rail) 22%, var(--rail) 100%); }
 @media (min-width: 720px) { .band { margin-top: 72px; padding-bottom: 56px; } }
@@ -102,11 +111,14 @@ a.dl-btn:active { transform: translateY(0); }
 @media (min-width: 720px) { .shot img { border-radius: 16px; } }
 
 .brain { margin-top: 32px; color: var(--rail-words); display: grid; gap: 10px; }
-@media (min-width: 820px) { .brain { grid-template-columns: 200px 1fr; column-gap: 32px; align-items: start; } .brain-links { grid-column: 2; } }
+@media (min-width: 820px) { .brain { grid-template-columns: 200px 1fr; column-gap: 32px; align-items: start; } .branches, .brain-links { grid-column: 2; } }
 .brain h2 { display: flex; align-items: center; gap: 10px; font-size: 22px; }
 .brain .dot { background: var(--rail-accent); box-shadow: 0 0 0 3px rgba(111, 207, 151, 0.2); }
 .brain p { margin: 0; max-width: 46em; font-size: 15px; color: var(--rail-mute); }
 .brain b { color: var(--rail-words); }
+.branches { list-style: none; margin: 2px 0 0; padding: 0; display: grid; gap: 5px 28px; grid-template-columns: 1fr; font-size: 13.5px; color: var(--rail-mute); }
+@media (min-width: 620px) { .branches { grid-template-columns: 1fr 1fr; } }
+.branches b { color: var(--rail-words); font-weight: 600; }
 .brain-links { display: flex; flex-wrap: wrap; gap: 8px; }
 .brain-links a { padding: 5px 12px; border: 1px solid rgba(230, 239, 232, 0.2); border-radius: 999px; font-size: 13.5px; color: var(--rail-words); text-decoration: none; }
 .brain-links a:hover { border-color: var(--rail-accent); color: var(--rail-accent); }
