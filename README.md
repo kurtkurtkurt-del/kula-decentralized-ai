@@ -24,6 +24,21 @@ and says when a device alone would be faster. Rule of thumb: jobs are split, mod
 iOS is out of scope for now: the app opens on iOS but runs no models (a Swift module is written
 on a branch, never built).
 
+## what's new in 0.2.0
+
+- **the brain.** kula-node on the computer runs an observer over the cluster, god's eye. The
+  chat page draws its twelve branches as a map around this computer; it looks every 5 seconds.
+- **the black box.** A hash-chained record of everything the eye saw and said. A changed line
+  breaks the chain and the memory branch says so. It holds no prompts, answers, keys or addresses.
+- **photos in the computer's chat.** A **+** in the message box takes up to three photos and asks
+  which vision model should see them (SmolVLM 500M, SmolVLM2 2.2B, Gemma 3 4B).
+- **the phone's security report.** The brain tab's *trust and verification*: one verdict for the
+  cluster (green all clear, red look at this), with every paired device's checks under it.
+- **remove a device's access.** A paired phone or computer can be unpaired, from the phone and
+  from kula-node; the gate refuses it from then on.
+- **the desktop app.** kula's own icon, and a first start that lists what building llama.cpp
+  needs (command line tools, cmake) before setup runs.
+
 ## try it
 
 Everything you need is on the GitHub release page: **Releases → latest** in the repository
@@ -199,14 +214,7 @@ what to do, from when until when, which model, which mode and which devices; the
 awake until it ends and writes the morning report into that project's chat.
 [docs/NIGHT.md](docs/NIGHT.md)
 
-**God's eye (the brain).** The chat page's brain panel: twelve branches (senses, memory,
-forecast, learning loop, connections, planner, executor, trust, limits, models, request review,
-advisor) that look at a snapshot of the cluster every few seconds and say what they see.
-It **watches and never acts**: it never loads or stops a model, never touches a phone, sends
-nothing on the network. Some branches only describe what they will do later. Its **learn** tab
-lists papers, videos, courses and posts on local, decentralized AI, in three levels. Code:
-[node/src/godseye/](node/src/godseye/). The phone app has its own **the brain** tab with the
-planner's decisions and the ledger.
+**The brain.** God's eye, the black box and the twelve branches: [the brain](#the-brain).
 
 **The signed ledger.** Every worker, phone or computer, writes each pairing, connection,
 refusal, model load and health line to a hash-chained ledger signed with the device's own key.
@@ -221,6 +229,57 @@ default. The app's account and demo server is a separate thing that the cluster 
 
 Where the project stands (what is done, what has not yet run on a real phone, open decisions):
 [docs/DURUM.md](docs/DURUM.md) (Turkish).
+
+## the brain
+
+**God's eye.** kula-node on the computer (the chat page, in the terminal or in the Mac app) runs
+an observer called god's eye. Every 5 seconds it takes one look at the cluster — a copy of what
+is there: the devices, the loaded model, the models on offer, the projects — and hands the same
+look to twelve branches. A guard cleans every look before they see it: an entry of the wrong
+shape is left out and counted, a look that makes no sense is skipped whole, and a branch that
+breaks is stopped alone; nothing in a look can throw the eye off its tick.
+
+**The twelve branches.** Each answers one question:
+
+| branch | the question |
+|---|---|
+| senses | is each device there, how much memory is free, how fast does it answer? |
+| memory | what happened and why? A change-only log of the devices, the model, the projects and kula's decisions; the phones keep their own signed ledgers. |
+| forecast | when will each device be free tonight, and how fast? It guesses per hour of the week, with an 80% range. |
+| learning loop | was the forecast right? Every finished hour it scores the guess against what happened, compares it with the device's own average, and tunes itself. |
+| connections | how is each device reached: a usb cable, the wi-fi or a relay? It keeps the reach rate and the usual latency per kind, and says which kind has been steadier. |
+| planner | where does the model sit, and why: on one phone, a copy on each (apart), or one model across them (split)? |
+| executor | who is answering now, and how fast? |
+| trust and verification | is the cluster safe? One verdict: every link encrypted with the pinned certificate, every device proving who it is, what its gate refused, and whether its signed ledger holds together. |
+| limits | are the devices within what they can bear: memory, rest, energy? It warns; it never stops or slows anything. |
+| models and device care | which model fits which device, and what does each device hold right now? |
+| request review | is a night job safe and allowed to run? It looks for personal data, a relay, an unpinned certificate, a plan that does not add up; it says, and never blocks. |
+| advisor | which model, which devices, which night, before you ask? It suggests in words and never loads or moves anything. |
+
+**It watches and never acts on a device.** God's eye never loads or stops a model, never touches
+a phone, sends nothing on the network. The only action a person can take on a branch's page is
+the trust branch's "I cleared it"; the branch records that, and it never reaches a device.
+
+**The black box.** Everything the eye saw and said goes into a hash-chained record in
+`~/.kula-node/godseye/box/`: every look as the change against the last one (with a full picture
+of the cluster now and then), every feed line, every trust verdict, the person's actions, and
+its own start, stop and forget. Each record carries the hash of the record before it, and a
+head file carries the last hash; a record that is changed, removed, inserted or reordered
+breaks the chain from there, and the memory branch says so in the box's words. Nothing private
+is written: no prompts, no answers, no keys, no addresses, no ledger lines, no project titles
+or requests; text that could carry one is scrubbed before it is written. Retention is by size
+(256 MiB), never by time, so a wrong clock cannot delete history.
+
+**What is built, and what is not.** senses, memory, forecast, learning loop, connections, trust
+and limits do real work today. planner, executor, models, request review and advisor are still
+thin: they mostly describe the cluster as it is (where the model sits, who is answering, what is
+held) or give simple advice or checks, and they never act. The chat page's brain panel draws the
+twelve as a map around this computer, then four numbers, the branch that needs you most, the
+notices and a live feed. Its **learn** tab lists papers, videos and courses on local AI.
+
+The phone app has its own **the brain** tab: the cluster drawing, the planner's decisions, the
+ledger, and **trust and verification**, the same security report as the computer's trust branch.
+Code: [node/src/godseye/](node/src/godseye/).
 
 ## build from source
 
