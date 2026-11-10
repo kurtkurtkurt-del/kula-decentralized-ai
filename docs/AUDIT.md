@@ -109,7 +109,7 @@ kula-node's `share --lie-ram <MB>` exists to make this rule fire on purpose.
 ## the security report (10.11.2026)
 
 The first thing beyin will sell, built here first: one screen on the computer's chat page
-(the brain → **trust and verification**) that answers "is my cluster safe?" with one verdict,
+(the brain → **trust and verification**; the phone has it too, below) that answers "is my cluster safe?" with one verdict,
 green **all clear** or red **look at this**, and under it every device's checks.
 
 Every worker answers `GET /trust` on its `api` channel, behind the gate (the contract is in
@@ -139,6 +139,42 @@ connected, on which channel, and whether they were let in.
 Tests: `node/test/godseye-trust.test.ts` (real Ed25519 and P-256 keys, a real certificate,
 real signed lines: a changed line, a forged signature, a dropped line, a restart, too many
 wrong codes, a replay, the old protocol open, the engine's window).
+
+**On the phone** (10.11.2026). When the phone is the master (it has paired devices), the brain
+tab shows the same report: **trust and verification**, one verdict on top (green all clear,
+terracotta look at this, grey not checked yet), a line per device, and behind it a screen
+(`src/app/trust.tsx`) with every device's six checks, this phone's own ledger chain, and **i
+know why (i cleared it)** on a ledger fault. The checks, the red rules and the english words are
+the computer's; a device's pinned check is the peer record's `fp` (a relayed device whose
+certificate is still to be learned is grey, never green).
+
+- Asking: `src/llm/trustStore.ts` opens the same `api` tunnel apart mode and the bench use
+  (`apiTunnel`, reused when open) and asks `GET /trust`, then `?since=` while `more`, at most
+  five pages a look. The brain tab and the trust screen ask when they open and every minute
+  while open (each look is a gate connection the device writes to its ledger, so not at the
+  15 s the tab reads its own ledger); nothing waits on it, and no prompt is involved.
+- Checking: Hermes has no Ed25519 or P-256, so the answer goes to `verifyTrust` in the native
+  module (`TrustVerify.kt`, plain Kotlin): sha256 of the certificate it shows against the pinned
+  fingerprint, sha256(key)[:16] against the id it claims, the certificate's CN against that id,
+  then every line: json, `prev` (the first one against the last line verified at an earlier look),
+  signature. P-256 goes through the JCA; Ed25519 (kula-node's keys) goes through the JCA when the
+  phone has it and otherwise through an RFC 8032 verifier written out in BigInteger arithmetic
+  (Android 15 offers Ed25519 only inside the keystore).
+- Kept: per device in the app's kv-store (`llm.trust`): the last line verified, how many since
+  when, and a fault, so an app restart goes on where it stopped and a ledger that started over
+  while the app was closed is still caught (the device no longer has that line: `found` false).
+  The phone verifies as it receives, so it asks from the last line *verified* (the computer asks
+  from the last line received and keeps a window of 500). A line that fails stays the fault
+  (asking again brings the same line, the same fault) until the person accepts; the chain is then
+  followed from that line. Notes of a device that is no longer paired go.
+- This phone's own ledger: the chain the brain tab already checks (`verifyChain`, the window of
+  200 lines); its signatures are checked where they are read off the phone (the computer, or
+  `kula-node ledger --verify` on an export).
+- Tests: `app/modules/kula-llama/.../TrustVerifyTest.kt` (real P-256 and Ed25519 keys, a real
+  gate certificate, real signed lines; the shared vectors; RFC 8032 vectors and the RFC verifier
+  against the JCA), `app/src/__tests__/trust.test.ts` (the notes, the verdict rules, a whole
+  look through mocks, the notes across a restart) and `trust-render.test.tsx`. Not yet run on a
+  real phone.
 
 ## peer badges
 

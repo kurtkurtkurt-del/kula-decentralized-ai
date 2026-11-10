@@ -32,6 +32,11 @@ export type AutoStatus = {
   batteryUnrestricted: boolean; notifications: boolean; maker: string; sdk: number; hosts: HostEntry[];
 };
 export type Message = { role: 'system' | 'user' | 'assistant'; content: string };
+/** What TrustVerify.kt found in a worker's GET /trust (src/llm/trust.ts words it). problem: json | chain | nosig | sig | key. */
+export type TrustVerified = {
+  certPinned: boolean | null; cnMatches: boolean | null; keyIdMatches: boolean | null; keyId: string | null;
+  verified: number; lastHash: string | null; problem: string | null; problemLine: string | null;
+};
 
 type Module = {
   abi: string;
@@ -55,6 +60,8 @@ type Module = {
   /** null when the peer answered; otherwise the gate's reason. With `relay` the probe goes through the relay (api only), and the learned fingerprint comes back as "ok <fp>". */
   probePeer(host: string, port: number, secret: string, channel: 'rpc' | 'api', tls: PeerTls, relay?: PeerRelay): Promise<string | null>;
   apiTunnel(host: string, port: number, secret: string, tls: PeerTls, relay?: PeerRelay): Promise<number>;
+  /** The security report: a worker's GET /trust checked natively (TrustVerify.kt): its certificate against the pin, its key id, every ledger line's chain and signature from `expectPrev` on. */
+  verifyTrust(pinnedFp: string | null, certB64: string | null, id: string | null, alg: string | null, pubB64: string | null, lines: string[], expectPrev: string | null): Promise<TrustVerified>;
   gateFingerprint(): Promise<string>;
   closeTunnels(): Promise<void>;
   discover(on: boolean): Promise<void>;
