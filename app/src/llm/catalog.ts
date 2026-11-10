@@ -3,6 +3,11 @@
 // download is only kept when its sha256 matches. Sizes are bytes. kv_mb_per_1k is the KV
 // cache per 1 024 tokens of context (layers × heads_kv × (k+v dims) × 2 bytes), read off
 // each model's GGUF header, for the fit estimate before the file is on the phone.
+//
+// A vision model (10.11.2026, photos in night projects) is two files: the language model and
+// its mmproj (the image encoder, for llama.cpp's mtmd), each with its own sha256; both are
+// downloaded and checked. `size` and `sha256` stay the model file's (what every downloader
+// checks, the computer's too); `mmproj` carries the encoder's own file, size and sha256.
 export type Lang = 'en' | 'de' | 'tr';
 export type CatalogModel = {
   id: string;
@@ -29,7 +34,11 @@ export type CatalogModel = {
   blurb: Record<Lang, string>;
   good: Record<Lang, string>;   // what it does well
   use: Record<Lang, string>;    // what to use it for
+  mmproj?: { file: string; size: number; sha256: string }; // a vision model's image encoder, same repo
 };
+
+/** Sees photos: carries an mmproj. */
+export const isVision = (m: { mmproj?: unknown }) => !!m.mmproj;
 
 const hf = (repo: string, file: string) => `https://huggingface.co/${repo}/resolve/main/${file}`;
 export const modelUrl = (m: Pick<CatalogModel, 'repo' | 'file'>) => hf(m.repo, m.file);
@@ -136,6 +145,44 @@ export const CATALOG: CatalogModel[] = [
     blurb: { en: 'google’s mixture of experts: 26B in memory, about 4B per token', de: 'googles mischung aus experten: 26B im speicher, etwa 4B pro token', tr: 'google’ın uzmanlar karışımı: bellekte 26B, token başına yaklaşık 4B' },
     good: { en: 'clean writing in 140 languages, reasoning and code close to the dense 31b, at about the speed of a 4b model. long context (256k).', de: 'saubere texte in 140 sprachen, denken und code nahe am dichten 31b, etwa im tempo eines 4b-modells. langer kontext (256k).', tr: '140 dilde temiz yazı, yoğun 31b’ye yakın akıl yürütme ve kod, 4b bir model hızında. uzun bağlam (256k).' },
     use: { en: 'a computer with 24 gb or more, or split over phones that hold 17 gb together; its kv cache is large, so keep the context short on phones.', de: 'ein computer mit 24 gb oder mehr, oder geteilt über telefone, die zusammen 17 gb halten; sein kv-cache ist groß, also auf telefonen den kontext kurz halten.', tr: '24 gb ya da daha fazla belleği olan bir bilgisayar, ya da birlikte 17 gb tutan telefonlara bölünmüş; kv önbelleği büyük, telefonlarda bağlamı kısa tut.' },
+  },
+  // ---- vision models (10.11.2026): each with its mmproj; the vision-model setting picks the one
+  // that reads photos (llm/vision.ts), the smallest downloaded one by default
+  {
+    // verified against the Hugging Face API on 10.11.2026; sizes are the LFS objects'.
+    // Text side: SmolLM2 360M (llama arch, 32 layers, 5 kv heads: 40 MB per 1k).
+    id: 'smolvlm-500m-q8', name: 'SmolVLM 500M', family: 'smolvlm', params_b: 0.5, quant: 'Q8_0',
+    repo: 'ggml-org/SmolVLM-500M-Instruct-GGUF', file: 'SmolVLM-500M-Instruct-Q8_0.gguf', size: 436806912,
+    sha256: '9d4612de6a42214499e301494a3ecc2be0abdd9de44e663bda63f1152fad1bf4',
+    mmproj: { file: 'mmproj-SmolVLM-500M-Instruct-Q8_0.gguf', size: 108783360, sha256: 'd1eb8b6b23979205fdf63703ed10f788131a3f812c7b1f72e0119d5d81295150' },
+    license: 'apache-2.0', license_url: 'https://huggingface.co/HuggingFaceTB/SmolVLM-500M-Instruct', ctx_max: 8192, kv_mb_per_1k: 40,
+    blurb: { en: 'sees photos; the smallest, any phone', de: 'sieht fotos; das kleinste, jedes telefon', tr: 'fotoğrafları görür; en küçüğü, her telefonda' },
+    good: { en: 'a short, plain description of a photo: what is in it, colours, text on signs and labels. too small to write or reason about it.', de: 'eine kurze, schlichte beschreibung eines fotos: was darauf ist, farben, text auf schildern und etiketten. zu klein, um darüber zu schreiben oder nachzudenken.', tr: 'bir fotoğrafın kısa, sade tarifi: içinde ne var, renkler, tabela ve etiketlerdeki yazı. üzerine yazmak ya da düşünmek için fazla küçük.' },
+    use: { en: 'the vision model on a small phone: it reads the photo, your chat model answers. two files, the model and its image encoder.', de: 'das bildmodell auf einem kleinen telefon: es liest das foto, dein chatmodell antwortet. zwei dateien, das modell und sein bild-encoder.', tr: 'küçük telefonda görüntü modeli: fotoğrafı o okur, sohbet modelin cevaplar. iki dosya: model ve görüntü kodlayıcısı.' },
+  },
+  {
+    // verified against the Hugging Face API on 10.11.2026; sizes are the LFS objects'.
+    // Text side: llama arch, 24 layers, no grouped kv (192 MB per 1k tokens).
+    id: 'smolvlm2-2.2b-q4', name: 'SmolVLM2 2.2B', family: 'smolvlm', params_b: 2.2, quant: 'Q4_K_M',
+    repo: 'ggml-org/SmolVLM2-2.2B-Instruct-GGUF', file: 'SmolVLM2-2.2B-Instruct-Q4_K_M.gguf', size: 1112602656,
+    sha256: '0cf76814555b8665149075b74ab6b5c1d428ea1d3d01c1918c12012e8d7c9f58',
+    mmproj: { file: 'mmproj-SmolVLM2-2.2B-Instruct-Q8_0.gguf', size: 592523200, sha256: 'ae07ea1facd07dd3230c4483b63e8cda96c6944ad2481f33d531f79e892dd024' },
+    license: 'apache-2.0', license_url: 'https://huggingface.co/HuggingFaceTB/SmolVLM2-2.2B-Instruct', ctx_max: 8192, kv_mb_per_1k: 192,
+    blurb: { en: 'sees photos; the middle size, 6 gb phones', de: 'sieht fotos; die mittlere größe, 6-gb-telefone', tr: 'fotoğrafları görür; orta boy, 6 gb telefonlar' },
+    good: { en: 'describing what is in a photo, reading signs and labels, comparing two pictures, answering a question about an image. short, plain english; weak at long writing.', de: 'beschreiben, was auf einem foto ist, schilder und etiketten lesen, zwei bilder vergleichen, eine frage zu einem bild beantworten. kurzes, schlichtes englisch; schwach bei langen texten.', tr: 'bir fotoğrafta ne olduğunu anlatmak, tabela ve etiket okumak, iki resmi karşılaştırmak, bir resim hakkındaki soruyu cevaplamak. kısa, sade ingilizce; uzun yazıda zayıf.' },
+    use: { en: 'the vision model on a 6 gb phone: it reads photos for your chat model and your night projects, or answers about them itself. two files, the model and its image encoder.', de: 'das bildmodell auf einem 6-gb-telefon: es liest fotos für dein chatmodell und deine nachtprojekte oder antwortet selbst dazu. zwei dateien, das modell und sein bild-encoder.', tr: '6 gb telefonda görüntü modeli: fotoğrafları sohbet modelin ve gece projelerin için okur ya da kendisi cevaplar. iki dosya: model ve görüntü kodlayıcısı.' },
+  },
+  {
+    // verified against the Hugging Face API on 10.11.2026; mmproj in f16, the only one ggml-org
+    // ships. 34 layers, 4 kv heads of 256: 136 MB per 1k.
+    id: 'gemma3-4b', name: 'Gemma 3 4B', family: 'gemma3', params_b: 4, quant: 'Q4_K_M',
+    repo: 'ggml-org/gemma-3-4b-it-GGUF', file: 'gemma-3-4b-it-Q4_K_M.gguf', size: 2489757856,
+    sha256: '882e8d2db44dc554fb0ea5077cb7e4bc49e7342a1f0da57901c0802ea21a0863',
+    mmproj: { file: 'mmproj-model-f16.gguf', size: 851251104, sha256: '8c0fb064b019a6972856aaae2c7e4792858af3ca4561be2dbf649123ba6c40cb' },
+    license: 'gemma', license_url: 'https://ai.google.dev/gemma/terms', ctx_max: 131072, kv_mb_per_1k: 136,
+    blurb: { en: 'sees photos and writes well; 8 gb phones', de: 'sieht fotos und schreibt gut; 8-gb-telefone', tr: 'fotoğrafları görür ve iyi yazar; 8 gb telefonlar' },
+    good: { en: 'looks at a photo and talks about it properly: details, reading text, comparing, explaining; also a good chat model on its own, 140 languages.', de: 'sieht sich ein foto an und spricht ordentlich darüber: details, text lesen, vergleichen, erklären; allein auch ein gutes chatmodell, 140 sprachen.', tr: 'bir fotoğrafa bakıp düzgünce anlatır: ayrıntılar, yazı okuma, karşılaştırma, açıklama; tek başına da iyi bir sohbet modeli, 140 dil.' },
+    use: { en: 'photos in chat and night projects on an 8 gb phone, answering itself without a second model. the largest download here.', de: 'fotos im chat und in nachtprojekten auf einem 8-gb-telefon, antwortet selbst ohne zweites modell. der größte download hier.', tr: '8 gb telefonda sohbet ve gece projelerinde fotoğraflar; ikinci bir model olmadan kendisi cevaplar. buradaki en büyük indirme.' },
   },
 ];
 

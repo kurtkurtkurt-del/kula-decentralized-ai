@@ -21,7 +21,7 @@ import { FILE_FILTERS, HfError, SUGGESTED_QUERIES, activeParamsOf, ggufFiles, hf
 import { KEEP_FREE, freeDiskBytes } from '@/llm/disk';
 import { measuredFor } from '@/bench/store';
 import { hasNative, llama } from '@/llm/native';
-import { describe, forgetModel, forgetUnused, initStore, rememberQuery, saveSettings, startDownload, unusedModels, useDownloads, useHfHistory, useLocalModels, usePeers, useSettings, useUxFlags, type LocalModel } from '@/llm/store';
+import { bytesOf, describe, forgetModel, forgetUnused, initStore, rememberQuery, saveSettings, startDownload, unusedModels, useDownloads, useHfHistory, useLocalModels, usePeers, useSettings, useUxFlags, type LocalModel } from '@/llm/store';
 import { tapSelect } from '@/lib/haptics';
 import { colors, fonts, radius } from '@/theme/tokens';
 import { brand } from '@/theme/layout';
@@ -195,7 +195,7 @@ export default function ModelsScreen() {
             <Pressable key={m.id} onPress={() => choose(m)} onLongPress={() => remove(m)} accessibilityRole="button" accessibilityLabel={t('a11y.open', { name: m.name })} accessibilityHint={t('models.delete')} style={({ pressed }) => [styles.row, pressed && styles.pressed]}>
               <View style={styles.rowText}>
                 <Text style={styles.name} numberOfLines={1}>{m.name.toLowerCase()}{running ? <Text style={styles.live}>  ● {t('models.running')}</Text> : chosen ? <Text style={styles.chosen}>  · {t('models.chosen')}</Text> : null}</Text>
-                <Text style={styles.meta}>{[`${m.params_b}B`, m.active_b ? t('model.moe', { n: m.active_b }) : '', m.quant, gb(m.size), m.parts && m.parts.length > 1 ? t('models.parts', { n: m.parts.length }) : '', m.license].filter(Boolean).join(' · ').toLowerCase()}</Text>
+                <Text style={styles.meta}>{[`${m.params_b}B`, m.active_b ? t('model.moe', { n: m.active_b }) : '', m.quant, gb(bytesOf(m)), m.parts && m.parts.length > 1 ? t('models.parts', { n: m.parts.length }) : '', m.mmproj ? t('models.vision') : '', m.license].filter(Boolean).join(' · ').toLowerCase()}</Text>
                 <View style={styles.badges}><TagIcons tags={tagsOf(m)} size={13} /></View>
               </View>
               <Text style={styles.action}>{running ? t('model.openChat') : t('models.run')} ›</Text>
@@ -213,7 +213,7 @@ export default function ModelsScreen() {
             <Pressable key={m.id} onPress={() => router.push(`/model/${encodeURIComponent(m.id)}`)} accessibilityRole="button" accessibilityLabel={t('a11y.open', { name: m.name })} style={({ pressed }) => [styles.row, pressed && styles.pressed]}>
               <View style={styles.rowText}>
                 <Text style={styles.name} numberOfLines={1}>{m.name.toLowerCase()} <Text style={styles.chosen}>›</Text></Text>
-                <Text style={styles.meta}>{[`${m.params_b}B`, m.active_b ? t('model.moe', { n: m.active_b }) : '', m.quant, gb(m.size), m.license].filter(Boolean).join(' · ').toLowerCase()}</Text>
+                <Text style={styles.meta}>{[`${m.params_b}B`, m.active_b ? t('model.moe', { n: m.active_b }) : '', m.quant, gb(bytesOf(m)), m.mmproj ? t('models.vision') : '', m.license].filter(Boolean).join(' · ').toLowerCase()}</Text>
                 <Text style={styles.blurb}>{m.blurb[lang as 'en' | 'de' | 'tr'] ?? m.blurb.en}</Text>
                 {/* 6.11.2026: what it is good at as icons (a tap says the word), then the fit with its mark */}
                 <View style={styles.badges}>

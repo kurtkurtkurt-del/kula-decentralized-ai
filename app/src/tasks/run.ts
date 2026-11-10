@@ -1,6 +1,6 @@
 import type { Message } from '@/llm/native';
 import { stripThink } from '@/voice/text';
-import { stepMessages, stepTokens, stepsOf } from './prompts';
+import { seenFor, stepMessages, stepTokens, stepsOf } from './prompts';
 import type { StepResult, Task } from './types';
 
 // A project's run, step by step (5.11.2026). The pure part: begin a run, which step is
@@ -16,7 +16,8 @@ const runId = (now: number) => `r${now.toString(36)}`;
 /** The task with a run begun (kept when one is already in progress). */
 export function startRun(t: Task, key: string, now: number, model?: string): Task {
   if (t.run) return t;
-  return { ...t, run: { id: runId(now), key, startedAt: now, steps: [], note: t.note, model }, updatedAt: now };
+  const photos = t.photos.length ? { photos: { n: t.photos.length, by: seenFor(t)?.by ?? null } } : {};
+  return { ...t, run: { id: runId(now), key, startedAt: now, steps: [], note: t.note, model, ...photos }, updatedAt: now };
 }
 
 /** The next step of the run in progress, or null when there is none. */
@@ -55,6 +56,7 @@ export function recordStep(t: Task, raw: { text: string; tokens: number; ms: num
     seconds: Math.round(steps.reduce((a, s) => a + s.ms, 0) / 1000),
     model: t.run.model,
     note: t.run.note,
+    ...(t.run.photos ? { photos: t.run.photos } : {}),
   };
   const task: Task = {
     ...t,

@@ -53,6 +53,9 @@ const ARCH: Record<string, { layers: number; hidden: number; vocab: number }> = 
   // mixtures of experts (10.11.2026, read off the headers the same way)
   'qwen3-30b-a3b': { layers: 48, hidden: 2048, vocab: 151936 },
   'gemma4-26b-a4b': { layers: 30, hidden: 2816, vocab: 262144 },
+  'smolvlm-500m-q8': { layers: 32, hidden: 960, vocab: 49280 },
+  'smolvlm2-2.2b-q4': { layers: 24, hidden: 2048, vocab: 49280 },
+  'gemma3-4b': { layers: 34, hidden: 2560, vocab: 262144 },
 };
 
 const bytesPerParam = (quant: string) => (/q8/i.test(quant) ? 1 : /q3/i.test(quant) ? 0.45 : /f16|bf16/i.test(quant) ? 2 : 0.55);

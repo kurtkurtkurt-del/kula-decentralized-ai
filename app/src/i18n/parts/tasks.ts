@@ -32,7 +32,7 @@ export const tasks = {
   'task.f.photos': { en: 'photos', de: 'fotos', tr: 'fotoğraflar' },
   'task.f.camera': { en: 'camera', de: 'kamera', tr: 'kamera' },
   'task.f.library': { en: 'from the library', de: 'aus der galerie', tr: 'galeriden' },
-  'task.f.photos.note': { en: "kept with the project on this phone. the model can't see photos yet; write what matters in them.", de: 'bleiben beim projekt auf diesem handy. das modell sieht fotos noch nicht; schreib auf, was darauf wichtig ist.', tr: 'projeyle bu telefonda saklanır. model henüz fotoğrafları göremiyor; içlerinde önemli olanı yaz.' },
+  'task.f.photos.note': { en: 'kept with the project on this phone. before the night\'s first step a vision model reads them (the one in settings, or the smallest you have); without one the project runs on the text alone.', de: 'bleiben beim projekt auf diesem handy. vor dem ersten schritt der nacht liest ein bildmodell sie (das aus den einstellungen oder dein kleinstes); ohne eins läuft das projekt nur mit dem text.', tr: 'projeyle bu telefonda saklanır. gecenin ilk adımından önce bir görüntü modeli onları okur (ayarlardaki ya da sendeki en küçüğü); yoksa proje yalnız metinle çalışır.' },
   'task.f.photos.denied': { en: 'kula may not open the camera or the photos; allow it in the phone settings.', de: 'kula darf kamera oder fotos nicht öffnen; erlaub es in den einstellungen des handys.', tr: 'kula kamerayı ya da fotoğrafları açamıyor; telefon ayarlarından izin ver.' },
   'task.f.photos.remove': { en: 'remove photo', de: 'foto entfernen', tr: 'fotoğrafı kaldır' },
   'task.f.form': { en: "the answer's form", de: 'form der antwort', tr: 'cevabın biçimi' },

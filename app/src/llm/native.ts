@@ -6,7 +6,7 @@ import { requireOptionalNativeModule, type EventSubscription } from 'expo-module
 // without download buttons. Everything here is a thin, typed wrapper; no logic.
 export type NativeInfo = { available: boolean; abi: string; fastCores: number; ramFreeMb: number; modelsDir: string; freeDiskMb: number; workerId: string; wifiIp: string | null };
 export type LoadResult = { loadMs: number; localLayers: number; layers: number; ctx: number; split: { buffer: string; mb: number | null }[] };
-export type DoneEvent = { id: number; tokens: number; ms: number; firstMs: number; tps: number; stopped: boolean; error: string | null };
+export type DoneEvent = { id: number; tokens: number; ms: number; firstMs: number; tps: number; stopped: boolean; error: string | null; images?: number };
 export type DownloadEvent = { id: string; got: number; total: number; state: 'running' | 'retrying' | 'checking' | 'done' | 'error' | 'cancelled'; error: string | null };
 export type PeerFound = { serviceName: string; name: string; host: string | null; port: number; id: string | null; ram: number | null; bw: number | null; kind: string; v: string | null };
 export type WorkerStatus = { state: 'stopped' | 'starting' | 'running' | 'error'; error: string | null; peer: string | null; heldMb: number; ramMb: number; bandwidth: number; throttled: boolean; connects: number; rejects: number; id: string; batteryUnrestricted: boolean; fp?: string | null; pin?: string | null; paired?: number; relay?: { url: string; code: string } | null; relayError?: string | null; mode?: 'auto' | 'manual' | null; why?: string | null; pairFor?: string | null };
@@ -62,6 +62,14 @@ type Module = {
   clearContext(): Promise<void>;
   generate(messages: Message[], maxTokens: number, temperature: number, topP: number, reset: boolean): number;
   stop(): void;
+  // vision (10.11.2026): a vision model's mmproj after loadModel; prompts with photos
+  /** The mmproj that belongs to the loaded model (llama.cpp mtmd); unload frees it with the model. */
+  loadMmproj(path: string, threads: number): Promise<void>;
+  hasVision(): boolean;
+  /** As generate, with photos (file uris) scaled to maxSide on the long side; always from an empty cache. onDone says how many photos the model saw. */
+  generateWithImages(messages: Message[], images: string[], maxSide: number, maxTokens: number, temperature: number, topP: number): number;
+  /** A vision model that is not the loaded one, loaded next to it for one answer about photos, then freed. Same events as generate. */
+  describeImages(modelPath: string, mmprojPath: string, ctx: number, messages: Message[], images: string[], maxSide: number, maxTokens: number): number;
   /** null when the peer answered; otherwise the gate's reason. With `relay` the probe goes through the relay (api only), and the learned fingerprint comes back as "ok <fp>". */
   probePeer(host: string, port: number, secret: string, channel: 'rpc' | 'api', tls: PeerTls, relay?: PeerRelay): Promise<string | null>;
   apiTunnel(host: string, port: number, secret: string, tls: PeerTls, relay?: PeerRelay): Promise<number>;

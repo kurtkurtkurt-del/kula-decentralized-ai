@@ -78,7 +78,7 @@ export const LINEUP: MakerSpec[] = [
       ] },
       { id: 'gemma3', name: 'Gemma 3', blurb: 'proven on phones', models: [
         { catalog: 'gemma3-1b-q4' },
-        { id: 'gemma3-4b', name: 'Gemma 3 4B', repo: 'ggml-org/gemma-3-4b-it-GGUF', file: 'gemma-3-4b-it-Q4_K_M.gguf', quant: q4, params_b: 4, blurb: 'good writing on 8 GB phones' },
+        { catalog: 'gemma3-4b' }, // the phone's catalog since 10.11.2026: it carries its mmproj (sees photos)
         { id: 'gemma3-12b', name: 'Gemma 3 12B', repo: 'ggml-org/gemma-3-12b-it-GGUF', file: 'gemma-3-12b-it-Q4_K_M.gguf', quant: q4, params_b: 12, blurb: 'a computer' },
         { id: 'gemma3-27b', name: 'Gemma 3 27B', repo: 'ggml-org/gemma-3-27b-it-GGUF', file: 'gemma-3-27b-it-Q4_K_M.gguf', quant: q4, params_b: 27, blurb: 'the big gemma 3' },
       ] },
@@ -173,6 +173,10 @@ export const LINEUP: MakerSpec[] = [
   {
     id: 'more', name: 'more small ones', by: 'Hugging Face, NVIDIA, Liquid', blurb: 'small models from other makers',
     series: [
+      { id: 'vision', name: 'sees photos', blurb: 'vision models: the model and its image encoder (mmproj)', models: [
+        { catalog: 'smolvlm-500m-q8' },
+        { catalog: 'smolvlm2-2.2b-q4' },
+      ] },
       { id: 'small-others', name: 'small and efficient', blurb: 'phones and laptops', models: [
         { id: 'smollm3-3b', name: 'SmolLM3 3B', repo: 'ggml-org/SmolLM3-3B-GGUF', file: 'SmolLM3-Q4_K_M.gguf', quant: q4, params_b: 3, blurb: 'hugging face’s open 3B; phones' },
         { id: 'nemotron-3.5-bolt-e4b', name: 'Nemotron 3.5 Bolt E4B', repo: 'unsloth/NVIDIA-Nemotron-3.5-Bolt-E4B-GGUF', file: 'NVIDIA-Nemotron-3.5-Bolt-E4B-UD-Q4_K_XL.gguf', quant: 'UD-Q4_K_XL', params_b: 4, blurb: 'nvidia’s small one' },

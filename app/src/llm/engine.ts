@@ -3,7 +3,7 @@ import { lastPassport } from '@/data/passport';
 import { native, type LoadResult, type Message } from '@/llm/native';
 import { modelKey, peerArgs, peerRelay, peerTls, planSplit, probeAll, splitSummary, type Plan } from '@/llm/cluster';
 import { measuredFor } from '@/bench/store';
-import { type LocalModel, type Mode, type Peer, registerEngine, saveSettings, saveUxFlags } from '@/llm/store';
+import { type LocalModel, type Mode, type Peer, mmprojPath, registerEngine, saveSettings, saveUxFlags } from '@/llm/store';
 import { assign, estimateAlone, pickDevice } from '@/llm/sim/model';
 import { localFromPassport, modelProfile, workerFromPeer } from '@/llm/sim/profiles';
 import { note, planEntries } from '@/llm/brainlog';
@@ -26,8 +26,9 @@ export type EngineState = {
   split: { name: string; gb: number }[];
   devices: Device[];
   generating: boolean;
+  vision?: boolean; // the loaded model's mmproj is loaded too: this phone can show it photos (loadVision)
 };
-const state: EngineState = { model: null, mode: 'alone', loading: null, error: null, load: null, plan: null, split: [], devices: [], generating: false };
+const state: EngineState = { model: null, mode: 'alone', loading: null, error: null, load: null, plan: null, split: [], devices: [], generating: false, vision: false };
 const listeners = new Set<() => void>();
 const emit = () => listeners.forEach((fn) => fn());
 const set = (patch: Partial<EngineState>) => {
@@ -57,7 +58,7 @@ export const OUT_MS = 5 * 60 * 1000; // a device that dropped a request sits out
 export async function load(model: LocalModel, mode: Mode, ctx: number, peers: Peer[], share = false): Promise<void> {
   const llama = native();
   const t0 = Date.now();
-  set({ loading: 'preparing', error: null, model, mode, plan: null, load: null, split: [], devices: [] });
+  set({ loading: 'preparing', error: null, model, mode, plan: null, load: null, split: [], devices: [], vision: false });
   try {
     const info = await llama.info();
     const bw = Number(lastPassport()?.mem_bw_read_gbs) || Number(lastPassport()?.mem_bw_gbs) || 0;
@@ -116,16 +117,39 @@ export async function load(model: LocalModel, mode: Mode, ctx: number, peers: Pe
 
 export async function unload() {
   await native().unload().catch(() => {});
-  set({ model: null, load: null, plan: null, split: [], devices: [], error: null });
+  set({ model: null, load: null, plan: null, split: [], devices: [], error: null, vision: false });
+}
+
+/**
+ * After load: the loaded vision model's mmproj on this phone (10.11.2026, photos in night
+ * projects). Only this phone sees the photos; in apart mode the peers keep the text side.
+ * Throws 'novision' for a text model, or the native reason; the model stays loaded either way.
+ */
+export async function loadVision(): Promise<void> {
+  const m = state.model;
+  const path = m ? mmprojPath(m) : null;
+  if (!m || !path) throw new Error('novision');
+  if (state.vision) return;
+  try {
+    await native().loadMmproj(path, 0);
+    set({ vision: true });
+    note({ at: Date.now(), kind: 'load', key: 'brain.vision.on', vars: { model: m.name }, tone: 'ok' });
+  } catch (e) {
+    set({ vision: false });
+    note({ at: Date.now(), kind: 'error', key: 'brain.vision.failed', vars: { model: m.name }, detail: (e as Error).message, tone: 'bad' });
+    throw e;
+  }
 }
 // a model's file is deleted only after it is out of memory
 registerEngine({ beforeForget: async (id) => { if (state.model?.id === id) await unload(); }, runningId: () => state.model?.id ?? null });
 
 // ---- generation -----------------------------------------------------------------------
-export type Reply = { tokens: number; ms: number; firstMs: number; tps: number; stopped: boolean; device: string };
+export type Reply = { tokens: number; ms: number; firstMs: number; tps: number; stopped: boolean; device: string; images?: number };
+/** Photos with a request: file uris and the long side they are scaled to (only this phone sees them). */
+export type Photos = { uris: string[]; maxSide: number };
 
 /** Streams a reply on this phone; resolves with the stats. */
-export function chatLocal(messages: Message[], onToken: (t: string) => void, opts: { maxTokens: number; temperature: number; reset?: boolean }): Promise<Reply> & { stop: () => void } {
+export function chatLocal(messages: Message[], onToken: (t: string) => void, opts: { maxTokens: number; temperature: number; reset?: boolean; images?: Photos }): Promise<Reply> & { stop: () => void } {
   const llama = native();
   let id = -1;
   const p = new Promise<Reply>((resolve, reject) => {
@@ -140,11 +164,14 @@ export function chatLocal(messages: Message[], onToken: (t: string) => void, opt
         // reject, not throw: a throw inside the listener never reached the caller and the
         // promise stayed open for good (the night's loop on this phone would hang on it)
         if (e.error) return reject(new Error(e.error));
-        resolve({ tokens: e.tokens, ms: e.ms, firstMs: e.firstMs, tps: e.tps, stopped: e.stopped, device: thisName() });
+        resolve({ tokens: e.tokens, ms: e.ms, firstMs: e.firstMs, tps: e.tps, stopped: e.stopped, device: thisName(), ...(e.images !== undefined ? { images: e.images } : {}) });
       }),
     ];
     set({ generating: true });
-    id = llama.generate(messages, opts.maxTokens, opts.temperature, 0.95, !!opts.reset);
+    const photos = opts.images && opts.images.uris.length && state.vision ? opts.images : null;
+    id = photos
+      ? llama.generateWithImages(messages, photos.uris, photos.maxSide, opts.maxTokens, opts.temperature, 0.95)
+      : llama.generate(messages, opts.maxTokens, opts.temperature, 0.95, !!opts.reset);
   }) as Promise<Reply> & { stop: () => void };
   p.stop = () => llama.stop();
   return p;
@@ -196,7 +223,9 @@ export function chatRemote(dev: Device, messages: Message[], onToken: (t: string
  * OUT_MS and the request goes to the next device, once. A measured reply refines the
  * device's speed for the next pick.
  */
-export function chat(messages: Message[], onToken: (t: string) => void, opts: { maxTokens: number; temperature: number; reset?: boolean; device?: string; now?: () => number }) {
+// With photos (opts.images, and the mmproj loaded) the request goes to this phone: peers have no mmproj.
+export function chat(messages: Message[], onToken: (t: string) => void, opts: { maxTokens: number; temperature: number; reset?: boolean; device?: string; now?: () => number; images?: Photos }) {
+  if (opts.images?.uris.length && state.vision) opts = { ...opts, device: state.devices.find((d) => d.local)?.id ?? opts.device };
   const now = opts.now ?? Date.now;
   const req = { promptTokens: Math.ceil(messages.reduce((a, m) => a + m.content.length, 0) / 4), maxTokens: opts.maxTokens };
   const pick = (except: string | null): Device | null => {

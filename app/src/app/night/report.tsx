@@ -37,7 +37,7 @@ export default function NightReportScreen() {
         <>
           <Section title={t('task.report.title')} />
           <Panel>
-            {done.map((x) => <Row key={x.id} label={x.title} hint={`${at(x.last!.at)} · ${t('task.notify.body', { n: wordsOf(x.last!.answer) })}`} onPress={() => router.push({ pathname: '/task/[id]', params: { id: x.id } })} right={<Value text="" more />} />)}
+            {done.map((x) => <Row key={x.id} label={x.title} hint={`${at(x.last!.at)} · ${t('task.notify.body', { n: wordsOf(x.last!.answer) })}${x.last!.photos ? ` · ${x.last!.photos.by ? t('vision.readBy', { model: x.last!.photos.by }) : t('task.photos.unreadShort')}` : ''}`} onPress={() => router.push({ pathname: '/task/[id]', params: { id: x.id } })} right={<Value text="" more />} />)}
           </Panel>
         </>
       ) : null}

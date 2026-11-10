@@ -3,6 +3,9 @@
 export interface UiModel {
   id: string; name: string; family: string; params_b: number; active_b?: number; read_share?: number; quant: string; repo: string; file: string;
   size: number; sha256: string; license: string; ctx_max: number; kv_mb_per_1k: number; blurb: string; good: string;
+  // a vision model's image encoder (llama.cpp mtmd; llama-server --mmproj), in the same repo:
+  // its own file, size and sha256. size/sha256 above stay the model file's.
+  mmproj?: { file: string; size: number; sha256: string };
 }
 
 export const UI_CATALOG: UiModel[] = [
@@ -185,6 +188,69 @@ export const UI_CATALOG: UiModel[] = [
     "kv_mb_per_1k": 420,
     "blurb": "google’s mixture of experts: 26B in memory, about 4B per token",
     "good": "clean writing in 140 languages, reasoning and code close to the dense 31b, at about the speed of a 4b model. long context (256k)."
+  },
+  {
+    "id": "smolvlm-500m-q8",
+    "name": "SmolVLM 500M",
+    "family": "smolvlm",
+    "params_b": 0.5,
+    "quant": "Q8_0",
+    "repo": "ggml-org/SmolVLM-500M-Instruct-GGUF",
+    "file": "SmolVLM-500M-Instruct-Q8_0.gguf",
+    "size": 436806912,
+    "sha256": "9d4612de6a42214499e301494a3ecc2be0abdd9de44e663bda63f1152fad1bf4",
+    "license": "apache-2.0",
+    "ctx_max": 8192,
+    "kv_mb_per_1k": 40,
+    "blurb": "sees photos; the smallest, any phone",
+    "good": "a short, plain description of a photo: what is in it, colours, text on signs and labels. too small to write or reason about it.",
+    "mmproj": {
+      "file": "mmproj-SmolVLM-500M-Instruct-Q8_0.gguf",
+      "size": 108783360,
+      "sha256": "d1eb8b6b23979205fdf63703ed10f788131a3f812c7b1f72e0119d5d81295150"
+    }
+  },
+  {
+    "id": "smolvlm2-2.2b-q4",
+    "name": "SmolVLM2 2.2B",
+    "family": "smolvlm",
+    "params_b": 2.2,
+    "quant": "Q4_K_M",
+    "repo": "ggml-org/SmolVLM2-2.2B-Instruct-GGUF",
+    "file": "SmolVLM2-2.2B-Instruct-Q4_K_M.gguf",
+    "size": 1112602656,
+    "sha256": "0cf76814555b8665149075b74ab6b5c1d428ea1d3d01c1918c12012e8d7c9f58",
+    "license": "apache-2.0",
+    "ctx_max": 8192,
+    "kv_mb_per_1k": 192,
+    "blurb": "sees photos; the middle size, 6 gb phones",
+    "good": "describing what is in a photo, reading signs and labels, comparing two pictures, answering a question about an image. short, plain english; weak at long writing.",
+    "mmproj": {
+      "file": "mmproj-SmolVLM2-2.2B-Instruct-Q8_0.gguf",
+      "size": 592523200,
+      "sha256": "ae07ea1facd07dd3230c4483b63e8cda96c6944ad2481f33d531f79e892dd024"
+    }
+  },
+  {
+    "id": "gemma3-4b",
+    "name": "Gemma 3 4B",
+    "family": "gemma3",
+    "params_b": 4,
+    "quant": "Q4_K_M",
+    "repo": "ggml-org/gemma-3-4b-it-GGUF",
+    "file": "gemma-3-4b-it-Q4_K_M.gguf",
+    "size": 2489757856,
+    "sha256": "882e8d2db44dc554fb0ea5077cb7e4bc49e7342a1f0da57901c0802ea21a0863",
+    "license": "gemma",
+    "ctx_max": 131072,
+    "kv_mb_per_1k": 136,
+    "blurb": "sees photos and writes well; 8 gb phones",
+    "good": "looks at a photo and talks about it properly: details, reading text, comparing, explaining; also a good chat model on its own, 140 languages.",
+    "mmproj": {
+      "file": "mmproj-model-f16.gguf",
+      "size": 851251104,
+      "sha256": "8c0fb064b019a6972856aaae2c7e4792858af3ca4561be2dbf649123ba6c40cb"
+    }
   }
 ];
 
