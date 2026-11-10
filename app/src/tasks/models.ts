@@ -15,8 +15,9 @@ export function fits(m: LocalModel): boolean {
   return fitOn(lastPassport(), { size: m.size, kv_mb_per_1k: m.kv_mb_per_1k, ctx: CTX }).verdict !== 'no';
 }
 export function bestModel(): LocalModel | null {
-  const all = [...localModels()].sort((a, b) => b.size - a.size);
-  return all.find(fits) ?? all.at(-1) ?? null;
+  // text models first; a vision model (mmproj) writes only when nothing else is here (10.11.2026)
+  const all = [...localModels()].sort((a, b) => Number(!!a.mmproj) - Number(!!b.mmproj) || b.size - a.size);
+  return all.find(fits) ?? all.filter((m) => !m.mmproj).at(-1) ?? all.at(-1) ?? null;
 }
 export function modelFor(t: Pick<Task, 'modelId'>): LocalModel | null {
   return (t.modelId ? localById(t.modelId) : null) ?? bestModel();

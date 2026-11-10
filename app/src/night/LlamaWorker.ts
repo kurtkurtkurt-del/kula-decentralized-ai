@@ -21,7 +21,8 @@ const IDLE_MS = 1000; // how long a device with nothing to do waits before looki
 
 // source gets the night's key and its slug (OWN_SLUG: a night for the person's own projects
 // only, 5.11.2026); prefer names the model a project asked for; ctx the context it wants.
-type Options = { source?: (key?: string, slug?: string) => JobSource; now?: () => number; outMs?: number; idleMs?: number; prefer?: () => string | null; ctx?: () => number | null };
+// prepare (10.11.2026): work before the model is loaded, with nothing else in RAM (the projects' photos read by a vision model)
+type Options = { source?: (key?: string, slug?: string) => JobSource; now?: () => number; outMs?: number; idleMs?: number; prefer?: () => string | null; ctx?: () => number | null; prepare?: () => Promise<unknown> };
 
 const fresh = (): NightStatus => ({ state: 'idle', slug: null, startedAt: null, tokens: 0, seconds: 0, kwh: 0, tps: 0, real: true, units: 0, checked: 0, wrong: 0, devices: [] });
 
@@ -36,7 +37,7 @@ export class LlamaWorker implements NightWorker {
   private night: Promise<void> = Promise.resolve(); // the current begin(): load, loops, end
   private readonly opt: Required<Options>;
   constructor(opt: Options = {}) {
-    this.opt = { source: () => new DemoJobs(), now: () => Date.now(), outMs: OUT_MS, idleMs: IDLE_MS, prefer: () => null, ctx: () => null, ...opt };
+    this.opt = { source: () => new DemoJobs(), now: () => Date.now(), outMs: OUT_MS, idleMs: IDLE_MS, prefer: () => null, ctx: () => null, prepare: async () => {}, ...opt };
   }
 
   start(slug: string, tps: number, key?: string) {
@@ -95,6 +96,8 @@ export class LlamaWorker implements NightWorker {
   private async begin(run: number) {
     llama?.keepScreenOn(true).catch(() => {});
     try {
+      await this.opt.prepare().catch(() => {});
+      if (!this.alive(run)) return;
       const model = pickModel(this.opt.prefer());
       if (!model) throw new Error('nomodel');
       await loadApartOrAlone(model, this.opt.ctx());
@@ -199,7 +202,8 @@ export function pickModel(prefer?: string | null): LocalModel | null {
   if (asked) return asked;
   const chosen = settings().modelId ? localById(settings().modelId!) : null;
   if (chosen) return chosen;
-  const all = [...localModels()].sort((a, b) => b.size - a.size);
+  // text models first; a vision model (mmproj) writes only when nothing else is here (10.11.2026)
+  const all = [...localModels()].sort((a, b) => Number(!!a.mmproj) - Number(!!b.mmproj) || b.size - a.size);
   const p = lastPassport();
   const ctx = settings().ctx;
   return all.find((m) => fitOn(p, { size: m.size, kv_mb_per_1k: m.kv_mb_per_1k, ctx }).verdict !== 'no') ?? all[0] ?? null;

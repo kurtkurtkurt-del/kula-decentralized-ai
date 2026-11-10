@@ -9,7 +9,7 @@ import { wordsOf } from './jobs';
 import { modelFor } from './models';
 import { isThinking } from './prompts';
 import { runPipeline } from './run';
-import { PROJECT_CTX, holdNight } from './night';
+import { PROJECT_CTX, holdNight, readPhotosOf } from './night';
 import { getTask, saveTask } from './store';
 import type { Task } from './types';
 
@@ -57,6 +57,8 @@ export async function runNow(id: string): Promise<Task | null> {
   set({ id, index: 0, total: 0, step: '', text: '' });
   holdNight(true);
   try {
+    // photos first: the vision model reads them (next to the loaded model, or in its place)
+    await readPhotosOf(id);
     if (engine().model?.id !== m.id) {
       const p = lastPassport();
       const fit = fitOn(p, { size: m.size, kv_mb_per_1k: m.kv_mb_per_1k, ctx: PROJECT_CTX });

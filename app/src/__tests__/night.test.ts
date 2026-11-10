@@ -89,6 +89,16 @@ describe('the llama worker', () => {
     expect(s.devices!.reduce((a, d) => a + d.tokens, 0)).toBe(24);
   });
 
+  it('runs prepare (the projects\' photos read by a vision model) before it loads the model; a failing prepare does not stop the night', async () => {
+    const order: string[] = [];
+    (load as jest.Mock).mockImplementationOnce(async () => { order.push('load'); });
+    const w = new LlamaWorker({ source: () => new DemoJobs(units(2)), now: () => clock, idleMs: 2, prepare: async () => { order.push('prepare'); throw new Error('novision'); } });
+    w.start('beyin', 5);
+    await w.settled();
+    expect(order).toEqual(['prepare', 'load']);
+    expect(w.status().units).toBe(2);
+  });
+
   it('puts a failing device out for five minutes and gives its unit to the other', async () => {
     fake.behave = (dev) => (dev === 'p1' ? new Error('peer gone') : { text: 'ok', tokens: 2 });
     const w = make(units(6));

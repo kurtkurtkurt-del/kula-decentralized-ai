@@ -14,7 +14,7 @@ export function uiRows() {
   return CATALOG.map((m) => ({
     id: m.id, name: m.name, family: m.family, params_b: m.params_b, ...(m.active_b ? { active_b: m.active_b } : {}), ...(m.read_share ? { read_share: m.read_share } : {}), quant: m.quant, repo: m.repo, file: m.file,
     size: m.size, sha256: m.sha256, license: m.license, ctx_max: m.ctx_max, kv_mb_per_1k: m.kv_mb_per_1k,
-    blurb: m.blurb.en, good: m.good.en,
+    blurb: m.blurb.en, good: m.good.en, ...(m.mmproj ? { mmproj: { ...m.mmproj } } : {}),
   }));
 }
 
@@ -26,6 +26,9 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
 export interface UiModel {
   id: string; name: string; family: string; params_b: number; active_b?: number; read_share?: number; quant: string; repo: string; file: string;
   size: number; sha256: string; license: string; ctx_max: number; kv_mb_per_1k: number; blurb: string; good: string;
+  // a vision model's image encoder (llama.cpp mtmd; llama-server --mmproj), in the same repo:
+  // its own file, size and sha256. size/sha256 above stay the model file's.
+  mmproj?: { file: string; size: number; sha256: string };
 }
 
 export const UI_CATALOG: UiModel[] = ${JSON.stringify(uiRows(), null, 2)};

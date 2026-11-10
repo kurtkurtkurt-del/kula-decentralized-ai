@@ -1,5 +1,6 @@
 import type { Message } from '@/llm/native';
-import { STEPS, isCritique, type Form, type Length, type StepName, type StepResult, type Task } from './types';
+import { seenNote } from '@/llm/photos';
+import { STEPS, isCritique, type Form, type Length, type StepName, type StepResult, type Task, type TaskSeen } from './types';
 
 // What the model is asked at each step of a run (pure). The writing steps (answer, draft,
 // revise, final) see the project; the ones after a critique also see the text so far and the
@@ -36,15 +37,26 @@ export function stepTokens(name: StepName, length: Length, thinking: boolean): n
   return (isCritique(name) ? CRITIQUE_TOKENS : LENGTH_TOKENS[length]) + (thinking ? THINK_TOKENS : 0);
 }
 
-function theTask(t: Pick<Task, 'title' | 'prompt' | 'photos'>, note?: string): string {
+/** The vision model's reading when it is of the photos the project has now, else null. */
+export function seenFor(t: Pick<Task, 'photos'> & { seen?: TaskSeen | null }): TaskSeen | null {
+  const s = t.seen;
+  if (!s || !t.photos.length || s.photos.length !== t.photos.length) return null;
+  return s.photos.every((p, i) => p === t.photos[i]) ? s : null;
+}
+
+// Photos (10.11.2026): read by a vision model before the run (tasks/seen.ts), its words go
+// into every step, marked as the vision model's; unread photos are named as unseen.
+function theTask(t: Pick<Task, 'title' | 'prompt' | 'photos'> & { seen?: TaskSeen | null }, note?: string): string {
   const lines = [`Project: ${t.title.trim()}`, '', t.prompt.trim()];
-  if (t.photos.length) lines.push('', `(The person attached ${t.photos.length} photo${t.photos.length > 1 ? 's' : ''} you cannot see; work from the text.)`);
+  const seen = seenFor(t);
+  if (seen) lines.push('', seenNote({ text: seen.text, by: seen.by, n: t.photos.length }));
+  else if (t.photos.length) lines.push('', `(The person attached ${t.photos.length} photo${t.photos.length > 1 ? 's' : ''} you cannot see; work from the text.)`);
   if (note?.trim()) lines.push('', `A note for this run: ${note.trim()}`);
   return lines.join('\n');
 }
 
 /** The messages for step i of a run, given the steps before it. */
-export function stepMessages(t: Pick<Task, 'title' | 'prompt' | 'photos' | 'form' | 'length' | 'depth'>, before: StepResult[], i: number, opts: { thinking: boolean; note?: string }): Message[] {
+export function stepMessages(t: Pick<Task, 'title' | 'prompt' | 'photos' | 'form' | 'length' | 'depth' | 'seen'>, before: StepResult[], i: number, opts: { thinking: boolean; note?: string }): Message[] {
   const name = stepsOf(t)[i];
   const tail = opts.thinking ? ' /think' : '';
   const task = theTask(t, opts.note);

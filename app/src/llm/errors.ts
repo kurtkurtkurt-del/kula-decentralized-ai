@@ -19,6 +19,8 @@ export type ErrorKind =
   | 'nopeers'      // a mode that needs a device, with none connected
   | 'nonative'     // not the android app
   | 'nomodel'      // nothing loaded
+  | 'novision'     // a photo, and no model on the phone can see it (llm/vision.ts)
+  | 'nophotos'     // the photo files could not be read
   | 'cancelled'
   | 'unknown';
 
@@ -32,7 +34,7 @@ const text = (e: unknown): string => {
 };
 
 // Exact codes the js layer throws itself (store, engine, cluster, peers).
-const CODES: Record<string, ErrorKind> = { nonative: 'nonative', nopeers: 'nopeers', nomodel: 'nomodel', toobig: 'toobig', interrupted: 'interrupted', cancelled: 'cancelled', busy: 'busy', paused: 'cancelled' };
+const CODES: Record<string, ErrorKind> = { nonative: 'nonative', nopeers: 'nopeers', nomodel: 'nomodel', novision: 'novision', nophotos: 'nophotos', toobig: 'toobig', interrupted: 'interrupted', cancelled: 'cancelled', busy: 'busy', paused: 'cancelled' };
 
 const RULES: [RegExp, ErrorKind][] = [
   [/not enough free space|enospc|no space left|disk full/i, 'disk'],

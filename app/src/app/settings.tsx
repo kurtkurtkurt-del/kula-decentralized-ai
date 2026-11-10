@@ -7,6 +7,7 @@ import Button from '@/components/Button';
 import LangRow from '@/components/LangRow';
 import PickerSheet from '@/components/PickerSheet';
 import TalkSettings from '@/components/TalkSettings';
+import VisionSetting from '@/components/VisionSetting';
 import { Panel, Row, Section, Switch, Value } from '@/components/Row';
 import { useAuth } from '@/auth/AuthContext';
 import { useProfile } from '@/data/profile';
@@ -131,6 +132,7 @@ export default function SettingsScreen() {
         <Row label={t('settings.version')} right={<Value text={Constants.expoConfig?.version ?? '0'} />} />
         <Row label={t('audit.title')} hint={t('audit.hint')} onPress={() => router.push('/audit')} right={<Value text="" more />} />
       </Panel>
+      <VisionSetting />
       <Field label={t('settings.relay')} value={relay ?? llm.relayUrl} onChangeText={setRelay} onBlur={() => { if (relay !== null) { saveLlmSettings({ relayUrl: relay.trim() ? relayUrlOf(relay) : '' }); setRelay(null); } }} placeholder="wss://relay.example" autoCapitalize="none" autoCorrect={false} keyboardType="url" />
       <Text style={styles.hint}>{t('settings.relay.hint')}</Text>
 

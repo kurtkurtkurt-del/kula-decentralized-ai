@@ -135,7 +135,8 @@ export default function TaskScreen() {
           <View style={styles.photos}>
             {task.photos.map((uri) => <Image key={uri} source={{ uri }} style={styles.thumb} contentFit="cover" />)}
           </View>
-          <Quiet text={t('task.f.photos.note')} />
+          {/* the last run: which vision model read the photos, or that none could (10.11.2026) */}
+          <Quiet text={task.last?.photos ? (task.last.photos.by ? t('task.photos.read', { model: task.last.photos.by }) : t('task.photos.unread')) : t('task.f.photos.note')} />
         </>
       ) : null}
 

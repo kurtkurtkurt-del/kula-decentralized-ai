@@ -6,7 +6,9 @@ import { Directory, File, Paths } from 'expo-file-system';
 // (expo-image-picker), made small (1280 px on the long side, JPEG at 0.7, with
 // expo-image-manipulator) and copied into the app's own document folder under
 // tasks/<id>/, where the system does not clear them. They stay on the phone. The model
-// does not see them yet (a text model); the screens say so.
+// photos are read by a vision model before a run (tasks/seen.ts, 10.11.2026). The chat's
+// photos (10.11.2026) are made small the same way and kept in the cache folder chat/: the
+// chat itself is not kept, so neither are they for long.
 
 const LONG_SIDE = 1280;
 export const MAX_PHOTOS = 6;
@@ -28,8 +30,11 @@ export async function pickPhotos(from: PickFrom, room: number): Promise<Picked[]
 }
 
 /** A small JPEG copy of the image in the project's folder; its file uri. */
-export async function keepPhoto(taskId: string, { uri, width, height }: Picked): Promise<string> {
-  const dir = dirOf(taskId);
+export const keepPhoto = (taskId: string, p: Picked) => keepImage(dirOf(taskId), p);
+/** A small JPEG copy of a chat photo, in the cache folder chat/; its file uri. */
+export const keepChatPhoto = (p: Picked) => keepImage(new Directory(Paths.cache, 'chat'), p);
+
+async function keepImage(dir: Directory, { uri, width, height }: Picked): Promise<string> {
   dir.create({ intermediates: true, idempotent: true });
   const ctx = ImageManipulator.manipulate(uri);
   if (width >= height) ctx.resize({ width: Math.min(LONG_SIDE, width || LONG_SIDE), height: null });

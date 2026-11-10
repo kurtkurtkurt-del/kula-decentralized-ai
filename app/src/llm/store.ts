@@ -10,7 +10,10 @@ import { rate } from '@/llm/progress';
 // the downloads in flight, the chosen model and its settings, and the peers paired by qr.
 // Files live in the app's own files/models (the native module owns the bytes). A split
 // model (hf "-00001-of-0000n") is one record with `parts`; `file`/`path`/`sha256` are the
-// first part's (llama.cpp finds the rest next to it) and `size` is the sum.
+// first part's (llama.cpp finds the rest next to it) and `size` is the sum. A vision model
+// (10.11.2026) also has `mmproj`, its image encoder: a file of its own with its own size and
+// sha256, downloaded after the model's parts, kept and deleted with the model; `size` stays
+// the model's (bytesOf counts both).
 export type ModelSource = 'catalog' | 'hf';
 export type ModelPart = { file: string; size: number; sha256: string | null };
 export type LocalModel = {
@@ -21,6 +24,7 @@ export type LocalModel = {
   size: number;
   sha256: string | null;
   parts?: ModelPart[];   // absent or length 1 for a single file
+  mmproj?: ModelPart | null; // a vision model's image encoder (llama.cpp mtmd), next to the model
   layers?: number;       // from the gguf header, once read
   arch?: string;
   meta_read?: boolean;
@@ -58,7 +62,8 @@ export type Peer = {
   last_ok?: string | null;
 };
 export type Mode = 'alone' | 'apart' | 'split';
-export type Settings = { modelId: string | null; ctx: number; temperature: number; maxTokens: number; lastMode: Mode; relayUrl: string };
+// visionModelId (10.11.2026): the vision model that reads photos (llm/vision.ts); null = the smallest downloaded one
+export type Settings = { modelId: string | null; ctx: number; temperature: number; maxTokens: number; lastMode: Mode; relayUrl: string; visionModelId: string | null };
 
 const MODELS = 'llm.models';
 const PEERS = 'llm.peers';
@@ -98,14 +103,20 @@ function useStore<T>(get: () => T): T {
 export const localModels = () => read<LocalModel[]>(MODELS, []);
 export const useLocalModels = () => useStore(localModels);
 export const localById = (id: string) => localModels().find((m) => m.id === id) ?? null;
-export const partsOf = (m: { file: string; size: number; sha256: string | null; parts?: ModelPart[] }): ModelPart[] => (m.parts && m.parts.length ? m.parts : [{ file: m.file, size: m.size, sha256: m.sha256 }]);
+export const partsOf = (m: { file: string; size: number; sha256: string | null; parts?: ModelPart[]; mmproj?: ModelPart | null }): ModelPart[] => (m.parts && m.parts.length ? m.parts : [{ file: m.file, size: m.size, sha256: m.sha256 }]);
+/** Every file a model needs on disk: its parts, then its mmproj when it has one. */
+export const filesOf = (m: Parameters<typeof partsOf>[0]): ModelPart[] => [...partsOf(m), ...(m.mmproj ? [m.mmproj] : [])];
+/** Bytes on disk (and over the wire): the model's and its mmproj's. */
+export const bytesOf = (m: Parameters<typeof partsOf>[0]) => filesOf(m).reduce((a, p) => a + p.size, 0);
+/** Where a vision model's mmproj sits (next to the model), or null for a text model. */
+export const mmprojPath = (m: Pick<LocalModel, 'path' | 'mmproj'>): string | null => (m.mmproj ? m.path.replace(/[^/]+$/, m.mmproj.file) : null);
 export const partPath = (file: string) => `${modelsDir}/${file}`;
 export function rememberModel(m: LocalModel) {
   write(MODELS, [m, ...localModels().filter((x) => x.id !== m.id)]);
 }
 export const patchModel = (id: string, patch: Partial<LocalModel>) => write(MODELS, localModels().map((m) => (m.id === id ? { ...m, ...patch } : m)));
 /** Bytes the models on this phone take. */
-export const usedBytes = () => localModels().reduce((a, m) => a + m.size, 0);
+export const usedBytes = () => localModels().reduce((a, m) => a + bytesOf(m), 0);
 
 // the engine registers these so a loaded model is unloaded before its file goes (no import
 // cycle: the engine already imports this file)
@@ -118,34 +129,39 @@ export function registerEngine(h: { beforeForget: (id: string) => Promise<void>;
 export async function forgetModel(id: string) {
   const m = localById(id);
   await beforeForget(id).catch(() => {});
-  if (m && llama) for (const p of partsOf(m)) await llama.deleteFile(m.path.replace(/[^/]+$/, p.file)).catch(() => {});
+  if (m && llama) for (const p of filesOf(m)) await llama.deleteFile(m.path.replace(/[^/]+$/, p.file)).catch(() => {});
   write(MODELS, localModels().filter((x) => x.id !== id));
   const s = settings();
   if (s.modelId === id) saveSettings({ modelId: null });
+  if (s.visionModelId === id) saveSettings({ visionModelId: null });
 }
 /** The models neither chosen nor running: what "delete unused" would remove. */
 export const unusedModels = () => localModels().filter((m) => m.id !== settings().modelId && m.id !== runningId());
 export async function forgetUnused(): Promise<{ n: number; bytes: number }> {
   const list = unusedModels();
   for (const m of list) await forgetModel(m.id);
-  return { n: list.length, bytes: list.reduce((a, m) => a + m.size, 0) };
+  return { n: list.length, bytes: list.reduce((a, m) => a + bytesOf(m), 0) };
 }
 /** Drops entries whose file is gone (uninstall-reinstall, a manual delete); a split model needs every part. */
 export async function reconcileModels() {
   if (!llama) return;
   const files = await llama.listModels().catch(() => []);
   const names = new Set(files.filter((f) => !f.partial).map((f) => f.name));
-  const kept = localModels().filter((m) => partsOf(m).every((p) => names.has(p.file)));
+  const kept = localModels().filter((m) => filesOf(m).every((p) => names.has(p.file)));
   if (kept.length !== localModels().length) write(MODELS, kept);
   // a download the app was killed in: its .part is still there; show it as interrupted so
   // "retry" continues it (the native side resumes with a Range request)
   for (const f of files.filter((x) => x.partial)) {
     const file = f.name.replace(/\.part$/, '');
     if (downloads.has(file) || dropping.has(file)) continue;
-    const c = CATALOG.find((m) => m.file === file);
+    const c = CATALOG.find((m) => m.file === file || m.mmproj?.file === file);
     const model = c ? describe(c) : null;
     if (!model || downloads.has(model.id) || dropping.has(model.id)) continue;
-    downloads.set(model.id, { id: model.id, got: f.size, total: model.size, state: 'error', error: 'interrupted', model, part: 0, parts: 1, bps: null, at: Date.now() });
+    // a vision model's mmproj comes after the model: "retry" goes on from there
+    const files = filesOf(model);
+    const part = Math.max(0, files.findIndex((p) => p.file === file));
+    const before = files.slice(0, part).reduce((a, p) => a + p.size, 0);
+    downloads.set(model.id, { id: model.id, got: before + f.size, total: bytesOf(model), state: 'error', error: 'interrupted', model, part, parts: files.length, bps: null, at: Date.now() });
   }
   listeners.forEach((fn) => fn());
 }
@@ -169,7 +185,7 @@ export async function readMeta(id: string): Promise<LocalModel | null> {
 }
 
 export function describe(m: CatalogModel): ModelDraft {
-  return { id: m.id, name: m.name, file: m.file, size: m.size, sha256: m.sha256, params_b: m.params_b, ...(m.active_b ? { active_b: m.active_b } : {}), ...(m.read_share ? { read_share: m.read_share } : {}), quant: m.quant, kv_mb_per_1k: m.kv_mb_per_1k, ctx_max: m.ctx_max, license: m.license, source: 'catalog', url: modelUrl(m) };
+  return { id: m.id, name: m.name, file: m.file, size: m.size, sha256: m.sha256, params_b: m.params_b, ...(m.active_b ? { active_b: m.active_b } : {}), ...(m.read_share ? { read_share: m.read_share } : {}), quant: m.quant, kv_mb_per_1k: m.kv_mb_per_1k, ctx_max: m.ctx_max, license: m.license, source: 'catalog', url: modelUrl(m), ...(m.mmproj ? { mmproj: { ...m.mmproj } } : {}) };
 }
 
 // ---- hugging face search history (last 5) -------------------------------------------------
@@ -183,7 +199,8 @@ export function rememberQuery(q: string) {
 
 // ---- downloads in flight (memory only; the native side keeps the .part file) ------------
 // A split model is fetched part by part under native ids "<model id>#<n>"; the record is
-// written only when the last part has passed its sha256.
+// written only when the last part has passed its sha256. A vision model's mmproj is one more
+// part at the end (filesOf), from the same repo, with its own sha256.
 const downloads = new Map<string, Download>();
 let subscribed = false;
 export const useDownloads = () => useStore(() => Array.from(downloads.values()));
@@ -199,7 +216,7 @@ function subscribe() {
     const d = downloads.get(modelIdOf(e.id));
     if (!d) return;
     const now = Date.now();
-    const parts = partsOf(d.model);
+    const parts = filesOf(d.model);
     const before = parts.slice(0, d.part).reduce((a, p) => a + p.size, 0);
     const got = before + e.got;
     d.bps = e.state === 'running' ? rate(d.bps, got - d.got, now - d.at) : null;
@@ -238,17 +255,17 @@ export async function initStore() {
 }
 function startPart(d: Download) {
   if (!llama) throw new Error('nonative');
-  const parts = partsOf(d.model);
+  const parts = filesOf(d.model);
   const p = parts[d.part];
   return llama.download(nativeId(d.id, d.part, parts.length), parts.length > 1 ? partUrl(d.model, p) : d.model.url, p.file, p.sha256, p.size);
 }
 export async function startDownload(model: ModelDraft, fromPart = 0) {
   if (!llama) throw new Error('nonative');
   if (!modelsDir) await initStore();
-  const parts = partsOf(model);
+  const parts = filesOf(model);
   const was = downloads.get(model.id);
   const got = parts.slice(0, fromPart).reduce((a, p) => a + p.size, 0);
-  const d: Download = { id: model.id, got: Math.max(got, was?.got ?? 0), total: model.size, state: 'running', error: null, model, part: fromPart, parts: parts.length, paused: false, bps: null, at: Date.now() };
+  const d: Download = { id: model.id, got: Math.max(got, was?.got ?? 0), total: bytesOf(model), state: 'running', error: null, model, part: fromPart, parts: parts.length, paused: false, bps: null, at: Date.now() };
   downloads.set(model.id, d);
   listeners.forEach((fn) => fn());
   await startPart(d);
@@ -264,7 +281,8 @@ export async function startDownload(model: ModelDraft, fromPart = 0) {
 const dropping = new Set<string>();
 export async function cancelDownload(id: string) {
   const d = downloads.get(id);
-  const files = d ? partsOf(d.model).map((p) => p.file) : [CATALOG.find((m) => m.id === id)?.file].filter((f): f is string => !!f);
+  const c = CATALOG.find((m) => m.id === id);
+  const files = d ? filesOf(d.model).map((p) => p.file) : c ? filesOf(c).map((p) => p.file) : [];
   dropping.add(id);
   files.forEach((f) => dropping.add(f));
   if (d) { d.state = 'cancelled'; d.paused = false; downloads.delete(id); }
@@ -301,7 +319,7 @@ export function retryDownload(id: string) {
 
 // ---- settings --------------------------------------------------------------------------
 // relayUrl: the relay "share far away" registers with and "add by code" reaches; empty until set (docs/RELAY.md)
-const DEFAULTS: Settings = { modelId: null, ctx: 2048, temperature: 0.7, maxTokens: 512, lastMode: 'alone', relayUrl: '' };
+const DEFAULTS: Settings = { modelId: null, ctx: 2048, temperature: 0.7, maxTokens: 512, lastMode: 'alone', relayUrl: '', visionModelId: null };
 export const settings = () => ({ ...DEFAULTS, ...read<Partial<Settings>>(SETTINGS, {}) });
 export const useSettings = () => useStore(settings);
 export const saveSettings = (patch: Partial<Settings>) => write(SETTINGS, { ...settings(), ...patch });

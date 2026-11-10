@@ -167,15 +167,6 @@ export const LINEUP_FILES: Record<string, FileFacts> = {
     "kv_mb_per_1k": 1680,
     "license": "apache-2.0"
   },
-  "gemma3-4b": {
-    "size": 2489757856,
-    "sha256": "882e8d2db44dc554fb0ea5077cb7e4bc49e7342a1f0da57901c0802ea21a0863",
-    "parts": 1,
-    "arch": "gemma3",
-    "ctx_max": 131072,
-    "kv_mb_per_1k": 136,
-    "license": "gemma"
-  },
   "gemma3-12b": {
     "size": 7300574976,
     "sha256": "7bb69bff3f48a7b642355d64a90e481182a7794707b3133890646b1efa778ff5",

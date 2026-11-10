@@ -13,7 +13,7 @@ import { useLang } from '@/i18n';
 import { catalogById } from '@/llm/catalog';
 import { explain } from '@/llm/errors';
 import { tapSelect } from '@/lib/haptics';
-import { describe, downloadOf, readMeta, startDownload, useDownloads } from '@/llm/store';
+import { bytesOf, describe, downloadOf, readMeta, startDownload, useDownloads } from '@/llm/store';
 import { licenseUrl, repoOfId, repoUrl } from '@/llm/hf';
 import { load, unload, useEngine } from '@/llm/engine';
 import { defaultCtx, suggestCtx } from '@/llm/fit';
@@ -98,7 +98,7 @@ export default function ModelScreen() {
 
   const header = model.meta_read && model.layers ? ` · ${t('model.fromHeader')}` : '';
   const rows: [string, string][] = [
-    [t('model.size'), `${gb(model.size)}${model.parts && model.parts.length > 1 ? ` · ${t('models.parts', { n: model.parts.length })}` : ''}`],
+    [t('model.size'), `${gb(bytesOf(model))}${model.parts && model.parts.length > 1 ? ` · ${t('models.parts', { n: model.parts.length })}` : ''}${model.mmproj ? ` · ${t('models.vision')}` : ''}`],
     [t('model.params'), model.params_b ? `${model.params_b}B${model.active_b ? ` · ${t('model.moe', { n: model.active_b })}` : ''}` : '—'],
     [t('model.quant'), model.quant || '—'],
     ...(model.layers ? [[t('model.layers'), `${model.layers}${model.arch ? ` · ${model.arch}` : ''}`] as [string, string]] : []),
@@ -180,7 +180,7 @@ export default function ModelScreen() {
           dl ? (
             <DownloadCard d={dl} />
           ) : (
-            <Button label={`${t('models.download')} · ${gb(model.size)}`} onPress={() => { tapSelect(); startDownload(describe(cat!)).catch((e) => setErr(explain(e, tx))); }} kind="red" />
+            <Button label={`${t('models.download')} · ${gb(bytesOf(model))}`} onPress={() => { tapSelect(); startDownload(describe(cat!)).catch((e) => setErr(explain(e, tx))); }} kind="red" />
           )
         ) : running ? (
           <>

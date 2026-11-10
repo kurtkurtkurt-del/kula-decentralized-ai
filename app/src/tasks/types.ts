@@ -37,16 +37,25 @@ export type StepResult = { name: StepName; text: string; tokens: number; ms: num
 
 /** A run in progress: the steps so far are kept, so a run cut by the plug or the window
  * goes on from the next step the next time. */
-export type Run = { id: string; key: string; startedAt: number; steps: StepResult[]; note?: string; model?: string };
+export type Run = { id: string; key: string; startedAt: number; steps: StepResult[]; note?: string; model?: string; photos?: RunPhotos };
+
+/** A run's photos (10.11.2026): how many, and the vision model that read them (null: none
+ * could, the run went on the text alone; the morning report says so). */
+export type RunPhotos = { n: number; by: string | null };
+
+/** A vision model's reading of the project's photos (llm/vision.ts), kept until the photos
+ * change: `photos` is the list it read. */
+export type TaskSeen = { photos: string[]; text: string; by: string; at: number };
 
 /** The last finished run: the answer and the work behind it. */
-export type Done = { runId: string; at: number; key: string; answer: string; steps: StepResult[]; tokens: number; seconds: number; model?: string; note?: string };
+export type Done = { runId: string; at: number; key: string; answer: string; steps: StepResult[]; tokens: number; seconds: number; model?: string; note?: string; photos?: RunPhotos };
 
 export type Task = {
   id: string;
   title: string;
   prompt: string; // "what do you want"
-  photos: string[]; // file uris in the app's document folder; the model does not see them yet
+  photos: string[]; // file uris in the app's document folder; a vision model reads them before a run (seen)
+  seen?: TaskSeen | null;
   form: Form;
   length: Length;
   // the calibration

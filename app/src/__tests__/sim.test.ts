@@ -40,8 +40,9 @@ describe('calibration: the simulator reproduces what was measured', () => {
     for (const m of CATALOG) {
       const p = modelProfile(m);
       expect(p.layers).toBeGreaterThan(10);
-      expect(p.hidden % 128).toBe(0);
-      expect(embedMb(p)).toBeGreaterThan(50);
+      // SmolVLM 500M (10.11.2026): hidden 960, a 49k vocabulary; the rest have 128-wide hiddens and 128k+
+      expect(p.hidden % 64).toBe(0);
+      if (p.vocab >= 100_000) expect(embedMb(p)).toBeGreaterThan(50);
       expect(embedMb(p)).toBeLessThan(p.fileMb / 3);
     }
     // an unknown hugging face model gets a plausible guess

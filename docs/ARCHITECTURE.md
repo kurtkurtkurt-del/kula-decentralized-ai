@@ -50,7 +50,7 @@ downloads, the night falls back to the simulation.
 | file | role |
 |---|---|
 | `native.ts` | a typed, logic-free wrapper over the Expo module (`info`, `download`, `loadModel`, `generate`, `probePeer`, `apiTunnel`, `startWorker`, `gateLedger`, …) |
-| `catalog.ts` | nine chosen GGUF models with size, sha256, license, context limit, KV cost per 1k tokens, and three-language blurbs |
+| `catalog.ts` | the chosen GGUF models with size, sha256, license, context limit, KV cost per 1k tokens, and three-language blurbs; vision models also carry `mmproj` (the image encoder's file, size, sha256), see [NIGHT.md](NIGHT.md#photos-10112026) |
 | `hf.ts` | Hugging Face search and file trees (size and sha256 from the LFS object), multi-part files, back-off on 429, gated and license info |
 | `fit.ts` | does a model fit this phone, how fast would it go: file + KV + overhead against the passport's budget |
 | `store.ts` | kv-store: local models, downloads in flight, settings, paired peers |

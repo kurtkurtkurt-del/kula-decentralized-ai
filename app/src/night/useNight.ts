@@ -17,7 +17,7 @@ import { kept } from '@/data/friends';
 import { lastPassport } from '@/data/passport';
 import { nightRules } from '@/data/settings';
 import { t } from '@/i18n/core';
-import { makeOwnDue, nightHeld, preferredModel, projectJobs, wantedCtx } from '@/tasks/night';
+import { makeOwnDue, nightHeld, preferredModel, preparePhotos, projectJobs, wantedCtx } from '@/tasks/night';
 
 // One night for the app, planned by the Scheduler (scheduler.ts) over one of two workers:
 // the real one (LlamaWorker, a model on this phone and its peers, the pile kept on the
@@ -37,6 +37,7 @@ const real = new LlamaWorker({
   source: (key, slug) => (slug === OWN_SLUG ? projectJobs() : new FirstOf([projectJobs(), new ResumableJobs(key ?? 'tonight')])),
   prefer: preferredModel,
   ctx: wantedCtx,
+  prepare: preparePhotos,
 });
 const TONIGHT = 'night.project';
 

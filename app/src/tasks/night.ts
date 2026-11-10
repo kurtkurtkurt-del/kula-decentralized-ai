@@ -7,6 +7,8 @@ import { notifyTaskDone } from './notify';
 import { isThinking } from './prompts';
 import { dueTasks } from './schedule';
 import { getTask, listTasks, saveTask } from './store';
+import { readAllPhotos, readTaskPhotos, type SeenDeps } from './seen';
+import { describePhotos } from '@/llm/vision';
 
 // The projects wired into the night (night/useNight.ts): is one due (the conditions'
 // projectWindow), which model and context the night should load for them, and the job
@@ -34,6 +36,16 @@ export const preferredModel = (): string | null => {
 /** A larger context while projects are due: their drafts and critiques are long. */
 export const PROJECT_CTX = 8192;
 export const wantedCtx = (): number | null => (due().length ? PROJECT_CTX : null);
+
+// photos (10.11.2026): the chosen vision model reads them before the night loads its model
+export const seenDeps: SeenDeps = { describe: (uris, question) => describePhotos(uris, { question }), save: saveTask, log: note, now: Date.now };
+/** The due projects' photos, read before the night's model is loaded (LlamaWorker prepare). */
+export const preparePhotos = () => readAllPhotos(due(), seenDeps);
+/** One project's photos, before "run now" loads its model. */
+export const readPhotosOf = (id: string) => {
+  const t = getTask(id);
+  return t ? readTaskPhotos(t, seenDeps) : Promise.resolve(null);
+};
 
 export function projectJobs(): ProjectJobs {
   return new ProjectJobs({

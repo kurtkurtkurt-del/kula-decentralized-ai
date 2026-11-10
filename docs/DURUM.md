@@ -89,6 +89,9 @@ için hiç apk derlenmedi**. Telefonda bakılacaklar:
    bildirimde, sabah raporunda. Fotoğraf için llama.cpp'nin `mtmd`'si native modülde açılmalı
    ve telefona sığan bir görsel model (SmolVLM gibi, mmproj ile) kataloğa girmeli; olmazsa
    fotoğraf saklanır, metin işleri yine çalışır. (Bir ajan başladı, kullanıcı durdurdu; geride iş yok.)
+   **10.11:** yazıldı, ayrı dalda: `mtmd` Android derlemesinde, katalogda üç görsel model
+   (SmolVLM 500M, SmolVLM2 2.2B, Gemma 3 4B, mmproj ile), sohbette fotoğraf, ayarlarda "görüntü
+   modeli", gece projelerinde fotoğrafı önce görüntü modeli okur ([NIGHT.md](NIGHT.md)); telefonda denenmedi.
 2. **Alt çubuk:** models · connect · the brain · projects · passport. "connect" messages'ın
    yerine geçer, mesajlar connect'in içine girer.
 3. **MoE desteği ve Gemma 4 26B-A4B:** katalogda MoE modeller (Gemma 4 26B-A4B, Qwen3 30B-A3B),

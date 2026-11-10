@@ -3,11 +3,15 @@ import { KeyboardAvoidingView, Pressable, ScrollView, StyleSheet, Text, TextInpu
 import * as Clipboard from 'expo-clipboard';
 import { StatusBar } from 'expo-status-bar';
 import { router } from 'expo-router';
+import { Image } from 'expo-image';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { EdgeBack } from '@/components/BackButton';
 import EmptyState from '@/components/EmptyState';
+import PickerSheet from '@/components/PickerSheet';
 import { useLang } from '@/i18n';
-import { chat, useEngine, type Reply } from '@/llm/engine';
+import { chat, useEngine, type Photos, type Reply } from '@/llm/engine';
+import { photoSide, photoTurn, useReading, withPhotos, type Seen } from '@/llm/vision';
+import { keepChatPhoto, pickPhotos, type PickFrom } from '@/tasks/photos';
 import { explain } from '@/llm/errors';
 import { tapLight, tapSelect } from '@/lib/haptics';
 import type { Message } from '@/llm/native';
@@ -18,7 +22,15 @@ import { brand } from '@/theme/layout';
 // The chat: a streaming reply, stop, new chat; under every reply its numbers (tok/s, first
 // token, which device). "batch test" sends eight short prompts to every device at once:
 // the small rehearsal of what a kula night does (apart mode). Nothing is kept.
-type Turn = { role: 'user' | 'assistant'; text: string; stats?: Reply; error?: string; stopped?: boolean };
+// Photos (10.11.2026): a message can carry up to MAX_PHOTOS photos (kept with the turn, like
+// its text; small copies in the cache). llm/vision.ts answers them: a chat model that sees
+// photos gets them directly ("seen by"); otherwise the chosen vision model reads them first
+// and its words go into the prompt ("read by"). The reading always happens on this phone;
+// in apart or split mode only the text goes to the other devices.
+type Turn = { role: 'user' | 'assistant'; text: string; stats?: Reply; error?: string; stopped?: boolean; photos?: string[]; seen?: Seen; seenBy?: string };
+const MAX_PHOTOS = 3;
+/** The conversation as text for the model: earlier photos become the vision model's notes. */
+const asMessages = (turns: Turn[]): Message[] => turns.map((x) => ({ role: x.role, content: x.role === 'user' ? withPhotos(x.text, x.photos?.length ?? 0, x.seen) : x.text }));
 // qwen3 reasons inside <think>…</think>; shown as a dot until the answer starts, then dropped
 const shown = (t: string) => (t.includes('<think>') ? (t.includes('</think>') ? t.slice(t.indexOf('</think>') + 8).trim() : '…') : t);
 const r1 = (x: number) => Math.round(x * 10) / 10;
@@ -32,6 +44,10 @@ export default function ChatScreen() {
   const [turns, setTurns] = useState<Turn[]>([]);
   const [text, setText] = useState('');
   const [batch, setBatch] = useState<{ n: number; s: number; tps: number; lines: string[] } | null>(null);
+  const [photos, setPhotos] = useState<string[]>([]);
+  const [picking, setPicking] = useState(false);
+  const [preparing, setPreparing] = useState(false);
+  const reading = useReading();
   const running = useRef<ReturnType<typeof chat> | null>(null);
   const scroll = useRef<ScrollView>(null);
   const resetNext = useRef(true);
@@ -59,7 +75,7 @@ export default function ChatScreen() {
 
   // asks the model with `history`, streaming into the last turn; `prior` is the list the
   // turns are rebuilt from (regenerate drops the old answer first)
-  const ask = async (history: Message[], prior: Turn[]) => {
+  const ask = async (history: Message[], prior: Turn[], images?: Photos) => {
     setTurns([...prior, { role: 'assistant', text: '' }]);
     let acc = '';
     try {
@@ -67,7 +83,7 @@ export default function ChatScreen() {
         acc += piece;
         setTurns((xs) => xs.map((x, i) => (i === xs.length - 1 ? { ...x, text: acc } : x)));
         if (atEndRef.current) scroll.current?.scrollToEnd({ animated: false });
-      }, { maxTokens: settings.maxTokens, temperature: settings.temperature, reset: resetNext.current });
+      }, { maxTokens: settings.maxTokens, temperature: settings.temperature, reset: resetNext.current || !!images, images });
       resetNext.current = false;
       running.current = run;
       const stats = await run;
@@ -79,11 +95,37 @@ export default function ChatScreen() {
     }
   };
   const send = async () => {
-    const q = text.trim();
-    if (!q || !engine.load || engine.generating) return;
+    const pics = photos;
+    const q = text.trim() || (pics.length ? t('vision.ask') : '');
+    if (!q || !engine.load || engine.generating || preparing) return;
     setText('');
-    const history: Message[] = [...turns.map((x) => ({ role: x.role, content: x.text })), { role: 'user', content: q }];
-    await ask(history, [...turns, { role: 'user', text: q }]);
+    setPhotos([]);
+    const mine: Turn = { role: 'user', text: q, ...(pics.length ? { photos: pics } : {}) };
+    const history: Message[] = [...asMessages(turns), { role: 'user', content: q }];
+    if (!pics.length) return ask(history, [...turns, mine]);
+    // photos: read first (or handed to a chat model that sees), then the answer
+    setTurns([...turns, mine, { role: 'assistant', text: '' }]);
+    setPreparing(true);
+    try {
+      const p = await photoTurn(history, pics);
+      const done: Turn = { ...mine, ...(p.seen ? { seen: p.seen } : { seenBy: engine.model?.name }) };
+      if (p.seen) resetNext.current = true; // the vision model may have taken the chat model's place
+      await ask(p.messages, [...turns, done], p.images);
+    } catch (e) {
+      setTurns([...turns, mine, { role: 'assistant', text: '', error: explain(e, tx) }]);
+    } finally {
+      setPreparing(false);
+    }
+  };
+  const addPhotos = async (from: PickFrom) => {
+    try {
+      const picked = await pickPhotos(from, MAX_PHOTOS - photos.length);
+      const kept: string[] = [];
+      for (const p of picked) kept.push(await keepChatPhoto(p));
+      if (kept.length) setPhotos((xs) => [...xs, ...kept].slice(0, MAX_PHOTOS));
+    } catch (e) {
+      setTurns((xs) => [...xs, { role: 'assistant', text: '', error: (e as Error).message === 'denied' ? t('task.f.photos.denied') : explain(e, tx) }]);
+    }
   };
   // the last answer again: same question, a fresh draw (the kv cache is rebuilt)
   const again = async () => {
@@ -93,7 +135,10 @@ export default function ChatScreen() {
     if (!prior.length || prior[prior.length - 1].role !== 'user') return;
     tapSelect();
     resetNext.current = true;
-    await ask(prior.map((x) => ({ role: x.role, content: x.text })), prior);
+    // a photo the chat model saw itself goes to it again; a read one is in the text already
+    const u = prior[prior.length - 1];
+    const images = u.photos?.length && !u.seen ? { uris: u.photos, maxSide: photoSide(u.photos.length) } : undefined;
+    await ask(asMessages(prior), prior, images);
   };
   const copy = async (i: number, body: string) => {
     tapLight();
@@ -108,6 +153,7 @@ export default function ChatScreen() {
     stop();
     setTurns([]);
     setBatch(null);
+    setPhotos([]);
     resetNext.current = true;
   };
   const runBatch = async () => {
@@ -135,6 +181,7 @@ export default function ChatScreen() {
     resetNext.current = true;
   };
 
+  const canSend = !!engine.load && !preparing && (!!text.trim() || photos.length > 0);
   return (
     <View style={styles.root}>
       <StatusBar style="dark" />
@@ -167,7 +214,14 @@ export default function ChatScreen() {
             const isReply = x.role === 'assistant';
             return (
               <Pressable key={i} onLongPress={() => body && copy(i, body)} delayLongPress={350} accessibilityRole="text" accessibilityLabel={`${isReply ? t('chat.title') : t('word.you')}: ${body || t('chat.thinking')}`} accessibilityHint={t('chat.holdHint')} accessibilityActions={[{ name: 'copy', label: t('chat.copy') }]} onAccessibilityAction={() => body && copy(i, body)} style={[styles.turn, isReply ? styles.them : styles.me]}>
-                <Text style={[styles.text, !isReply && styles.textMe]} selectable>{body || t('chat.thinking')}</Text>
+                {x.photos?.length ? (
+                  <View style={styles.pics}>
+                    {x.photos.map((uri) => <Image key={uri} source={{ uri }} style={styles.pic} contentFit="cover" accessibilityLabel={t('vision.attach')} />)}
+                  </View>
+                ) : null}
+                <Text style={[styles.text, !isReply && styles.textMe]} selectable>{body || (last && reading ? t('vision.reading', { model: reading.by.toLowerCase() }) : t('chat.thinking'))}</Text>
+                {x.seen ? <Text style={styles.by}>{t('vision.readBy', { model: x.seen.by.toLowerCase() })}</Text> : x.seenBy ? <Text style={styles.by}>{t('vision.seenBy', { model: x.seenBy.toLowerCase() })}</Text> : null}
+                {isReply && last && reading?.swap ? <Text style={styles.small}>{t('vision.swapping', { model: reading.by.toLowerCase() })}</Text> : null}
                 {x.error ? <Text style={styles.err}>{x.error}</Text> : null}
                 {x.stats || copied === i || (isReply && last && !engine.generating) ? (
                   <View style={styles.statsRow}>
@@ -207,19 +261,31 @@ export default function ChatScreen() {
           ) : (
             <View style={styles.tools}>
               <Pressable onPress={fresh} hitSlop={8} accessibilityRole="button" accessibilityLabel={t('chat.new')} style={styles.toolHit}><Text style={styles.tool}>{t('chat.new')}</Text></Pressable>
+              <Pressable onPress={() => setPicking(true)} disabled={!engine.load || photos.length >= MAX_PHOTOS || preparing} hitSlop={8} accessibilityRole="button" accessibilityLabel={t('vision.attach')} accessibilityState={{ disabled: !engine.load || photos.length >= MAX_PHOTOS }} style={styles.toolHit} testID="chat-photo"><Text style={[styles.tool, (!engine.load || photos.length >= MAX_PHOTOS) && styles.off]}>+ {t('vision.attach')}</Text></Pressable>
               <Pressable onPress={runBatch} disabled={!engine.load} hitSlop={8} accessibilityRole="button" accessibilityLabel={t('chat.batch')} accessibilityHint={t('chat.batchHint')} accessibilityState={{ disabled: !engine.load }} style={styles.toolHit}><Text style={[styles.tool, !engine.load && styles.off]}>{t('chat.batch')}</Text></Pressable>
             </View>
           )}
+          {photos.length ? (
+            <View style={styles.pics}>
+              {photos.map((uri) => (
+                <Pressable key={uri} onPress={() => setPhotos((xs) => xs.filter((p) => p !== uri))} accessibilityRole="button" accessibilityLabel={t('vision.remove')} style={styles.picWrap}>
+                  <Image source={{ uri }} style={styles.pic} contentFit="cover" />
+                  <Text style={styles.picX}>×</Text>
+                </Pressable>
+              ))}
+            </View>
+          ) : null}
           <View style={styles.inputRow}>
             <TextInput value={text} onChangeText={setText} placeholder={t('chat.placeholder')} placeholderTextColor={colors.meta} multiline style={styles.input} editable={!!engine.load} onSubmitEditing={send} blurOnSubmit accessibilityLabel={t('chat.placeholder')} />
             {engine.generating ? (
               <Pressable onPress={stop} accessibilityRole="button" accessibilityLabel={t('a11y.stop')} style={({ pressed }) => [styles.send, styles.stop, pressed && styles.pressed]}><Text style={[styles.sendText, styles.stopGlyph]}>■</Text></Pressable>
             ) : (
-              <Pressable onPress={send} disabled={!engine.load || !text.trim()} accessibilityRole="button" accessibilityLabel={t('a11y.send')} accessibilityState={{ disabled: !engine.load || !text.trim() }} style={({ pressed }) => [styles.send, (!engine.load || !text.trim()) && styles.off, pressed && styles.pressed]}><Text style={styles.sendText}>↑</Text></Pressable>
+              <Pressable onPress={send} disabled={!canSend} accessibilityRole="button" accessibilityLabel={t('a11y.send')} accessibilityState={{ disabled: !canSend }} style={({ pressed }) => [styles.send, !canSend && styles.off, pressed && styles.pressed]}><Text style={styles.sendText}>↑</Text></Pressable>
             )}
           </View>
         </View>
       </KeyboardAvoidingView>
+      <PickerSheet open={picking} title={t('vision.attach')} options={[{ id: 'camera', label: t('vision.camera') }, { id: 'library', label: t('vision.library') }]} selected={null} onSelect={(id) => { setPicking(false); void addPhotos(id as PickFrom); }} onClose={() => setPicking(false)} note={engine.devices.length > 1 ? t('vision.local') : undefined} />
     </View>
   );
 }
@@ -265,5 +331,10 @@ const styles = StyleSheet.create({
   stop: { backgroundColor: colors.violet },
   sendText: { fontFamily: fonts.semibold, fontSize: 18, color: colors.ink },
   off: { opacity: 0.35 },
+  pics: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  picWrap: { width: 64, height: 64, borderRadius: radius.sm, overflow: 'hidden', backgroundColor: colors.ink2 },
+  pic: { width: 64, height: 64, borderRadius: radius.sm },
+  picX: { position: 'absolute', top: 2, right: 6, fontFamily: fonts.semibold, fontSize: 16, color: '#fff' },
+  by: { fontFamily: fonts.regular, fontSize: 11, color: colors.meta },
   pressed: { opacity: 0.7 },
 });
