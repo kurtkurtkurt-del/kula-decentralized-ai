@@ -5,27 +5,27 @@
 class KulaNode < Formula
   desc "Make this computer a worker in a kula phone cluster"
   homepage "https://github.com/kurtkurtkurt-del/kula-decentralized-ai"
-  version "0.1.0"
+  version "0.2.0"
   license "MIT"
 
   on_macos do
     on_arm do
-      url "https://github.com/kurtkurtkurt-del/kula-decentralized-ai/releases/download/v0.1.0/kula-node-mac-arm64"
+      url "https://github.com/kurtkurtkurt-del/kula-decentralized-ai/releases/download/v0.2.0/kula-node-mac-arm64"
       sha256 "REPLACE_WITH_SHA256_OF_kula-node-mac-arm64"
     end
     on_intel do
-      url "https://github.com/kurtkurtkurt-del/kula-decentralized-ai/releases/download/v0.1.0/kula-node-mac-x64"
+      url "https://github.com/kurtkurtkurt-del/kula-decentralized-ai/releases/download/v0.2.0/kula-node-mac-x64"
       sha256 "REPLACE_WITH_SHA256_OF_kula-node-mac-x64"
     end
   end
 
   on_linux do
     on_arm do
-      url "https://github.com/kurtkurtkurt-del/kula-decentralized-ai/releases/download/v0.1.0/kula-node-linux-arm64"
+      url "https://github.com/kurtkurtkurt-del/kula-decentralized-ai/releases/download/v0.2.0/kula-node-linux-arm64"
       sha256 "REPLACE_WITH_SHA256_OF_kula-node-linux-arm64"
     end
     on_intel do
-      url "https://github.com/kurtkurtkurt-del/kula-decentralized-ai/releases/download/v0.1.0/kula-node-linux-x64"
+      url "https://github.com/kurtkurtkurt-del/kula-decentralized-ai/releases/download/v0.2.0/kula-node-linux-x64"
       sha256 "REPLACE_WITH_SHA256_OF_kula-node-linux-x64"
     end
   end

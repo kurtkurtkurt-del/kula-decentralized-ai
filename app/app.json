@@ -2,7 +2,7 @@
   "expo": {
     "name": "kula decentralized ai",
     "slug": "kula-decentralized-ai",
-    "version": "0.1.0",
+    "version": "0.2.0",
     "orientation": "default",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
