@@ -1141,15 +1141,36 @@ function renderDevices() {
       cr.use.textContent = cr.use.textContent === 'working…' ? 'working…' : g.cablePeer ? 'use again' : 'use';
       tools.appendChild(cr.use);
     }
+    // two directions, two buttons (10.11.2026): "forget" = this computer stops using the
+    // device (its peer book); "remove its access" = the device may no longer use this computer
+    // (this computer's own gate, kula-node share). The second shows only when it applies.
+    const usesMe = g.peers.some((p) => p.usesThisComputer);
+    if (usesMe) {
+      who.appendChild(el('span', '', 'can use this computer too (kula-node share)'));
+      const cut = el('button', 'pill unpair', 'remove its access');
+      cut.type = 'button';
+      cut.setAttribute('aria-label', `remove ${g.name}'s access to this computer`);
+      cut.title = `${g.name} can no longer use this computer`;
+      cut.addEventListener('click', async () => {
+        if (!confirm(`remove ${g.name}'s access to this computer?\n\nit can no longer use this computer: a running kula-node share refuses it and closes what it has open. this computer can still use ${g.name} (that is "forget"). to let it back in, pair it again with a new code.`)) return;
+        const id = g.peers.find((p) => p.usesThisComputer).id;
+        try { await postJson('peers/unpair', { id }); toast(`${g.name} can no longer use this computer`); } catch (err) { toast(err.message); }
+        refreshPeers(false);
+      });
+      tools.appendChild(cut);
+    }
     if (g.peers.length) {
       const x = el('button', 'icon x');
       x.type = 'button';
       x.setAttribute('aria-label', `forget ${g.name}`);
-      x.title = 'forget';
+      x.title = 'forget: this computer stops using it';
       x.appendChild(svg(ICON.x));
       x.addEventListener('click', async () => {
         const both = [w.cable && 'cable', w.wifi && 'wi-fi', w.relay && 'relay'].filter(Boolean);
-        if (!confirm(`forget ${g.name}?${both.length > 1 ? ` every way (${both.join(' and ')}) is forgotten.` : ''} you would pair it again to use it.`)) return;
+        // forgetting here takes nothing away on the phone: it still knows this computer's
+        // certificate until it is removed there (share this phone › devices that can use this phone)
+        const still = g.peers.some((p) => p.tls) ? `\n\n${g.name} still lets this computer in until you remove this computer there: on ${g.name}, kula › share this phone › devices that can use this phone › remove.` : '';
+        if (!confirm(`forget ${g.name}? this computer stops using it.${both.length > 1 ? ` every way (${both.join(' and ')}) is forgotten.` : ''} you would pair it again to use it.${still}`)) return;
         for (const p of g.peers) await postJson('peers/remove', { id: p.id }).catch((err) => toast(err.message));
         const gone = new Set(g.peers.flatMap((p) => p.routes ?? [p.id]));
         settings.peers = settings.peers.filter((id) => !gone.has(id));

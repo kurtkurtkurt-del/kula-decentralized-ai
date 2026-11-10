@@ -450,6 +450,9 @@ ul.wiz-steps li::before { content: "› "; color: var(--meta); }
 #dev-list .dev.cable .who span:first-of-type { color: var(--via-cable); }
 #dev-list .dev.wifi .who span:first-of-type { color: var(--via-wifi); }
 #dev-list .dev-tools { display: flex; align-items: center; gap: 4px; position: relative; }
+/* "remove its access" (the device may no longer use this computer), apart from the × that forgets */
+#dev-list .pill.unpair { font-size: 12px; padding: 4px 10px; white-space: nowrap; color: var(--red); margin-right: 4px; }
+#dev-list .pill.unpair:hover { border-color: var(--red); }
 #dev-list .dev .cable-steps, .dev .cable-code { grid-column: 2 / -1; position: relative; padding-left: 0; margin-top: 6px; }
 #dev-list .dev .cable-steps:empty { display: none; }
 

@@ -15,8 +15,9 @@ import { openApart, openPeerDevice, type Cluster, type Message, type ModelRef, t
 import { readPeers, writePeers, parsePeerText, upsertPeer, findPeer, probePeers, peersFile, whereIs, discover, type Peer, type PeerProbe, type Found, type PeerKind } from '../peers.js';
 import { connectRemote, handshake, peekGate, GateRefused, type GatePeek } from '../gate.js';
 import { Adb, isSerial, stateHelp, NO_ADB_HELP, type CableDevice } from './cable.js';
-import { loadOrCreateIdentity, fingerprint, type GateIdentity } from '../tls.js';
-import { sha256Hex } from '../audit/ledger.js';
+import { loadOrCreateIdentity, fingerprint, Paired, type GateIdentity } from '../tls.js';
+import { Ledger, sha256Hex } from '../audit/ledger.js';
+import { Seen, pairedFile, removePaired } from '../unpair.js';
 import { loadOrCreate as loadDeviceKey } from '../audit/key.js';
 import { home, repoRoots } from '../paths.js';
 import { findLlama, sha256File, type LlamaBinaries } from '../llama.js';
@@ -95,6 +96,11 @@ export interface PeerRow {
   ways: Ways;
   routes: string[];
   heardAt: number | null;
+  // the other direction (10.11.2026): this device is paired with this computer's own gate
+  // (`kula-node share`, ~/.kula-node/paired) and may use this computer without a code. Forget
+  // (removePeer) stops this computer using it; removing its access (unpairPeer) stops it using
+  // this computer. Two different things, two buttons on the page.
+  usesThisComputer: boolean;
 }
 export interface Way { id: string; where: string; ok: boolean | null; ms: number | null; reason: string | null }
 export interface Ways {
@@ -200,6 +206,7 @@ export interface EngineOptions {
   hostId?: string;                       // the id in this computer's qr; default: the device key's id
   now?: () => number;                    // tests: the clock the qr's code expires by
   usage?: Usage;                         // where answers are counted; default: ~/.kula-node/usage.json
+  pairedFile?: string;                   // this computer's own gate's paired list; default ~/.kula-node/paired (ledger and seen.json beside it)
 }
 
 // What a model takes in memory, run whole: the file, the kv cache for ctx, some slack.
@@ -222,7 +229,7 @@ export function peerRow(p: Peer, probe?: Reach | null, probedAt: number | null =
     reach: probe ?? null, probedAt,
     cable: p.cable ? { serial: p.cable.serial, plugged } : null,
     holds,
-    via: viaOf(p), ways: { cable: null, wifi: null, relay: null }, routes: [p.id], heardAt: null,
+    via: viaOf(p), ways: { cable: null, wifi: null, relay: null }, routes: [p.id], heardAt: null, usesThisComputer: false,
   };
 }
 
@@ -298,6 +305,9 @@ export class Engine {
     return l === undefined ? findLlama() : l;
   }
   private file(): string { return this.opts.peersFile ?? peersFile(); }
+  // the devices paired with this computer's own gate (kula-node share): read again whenever the file changes
+  private pairedBook: Paired | null = null;
+  private paired(): Paired { return (this.pairedBook ??= new Paired(this.opts.pairedFile ?? pairedFile())); }
   private dirs(): string[] { return this.opts.modelDirs ?? defaultModelDirs(); }
 
   // ---- peers: one row per device (devices.ts), its ways side by side
@@ -353,6 +363,7 @@ export class Engine {
       },
       routes: g.map((p) => p.id),
       heardAt,
+      usesThisComputer: g.some((p) => !!p.fp && this.paired().has(p.fp)),
     };
   }
 
@@ -602,6 +613,25 @@ export class Engine {
     }
     const ways = [row.ways.cable && 'cable', row.ways.wifi && 'wi-fi', row.ways.relay && 'relay'].filter(Boolean);
     this.note(`forgot ${row.name}${ways.length > 1 ? ` (${ways.join(' and ')})` : ''}`);
+    return true;
+  }
+
+  // Takes a device's access to this computer away (docs/GATE.md "remove a device's access"):
+  // its certificate leaves this computer's own paired list, a running `kula-node share` refuses
+  // it at once and closes what it has open, one signed ledger line. The peer book is not
+  // touched: this computer can still use the device. False when it was not paired here.
+  unpairPeer(id: string): boolean {
+    const g = groupOf(groupPeers(readPeers(this.file())), id);
+    if (!g) return false;
+    const book = this.paired();
+    const fps = [...new Set(g.map((p) => p.fp).filter((fp): fp is string => !!fp && book.has(fp)))];
+    if (!fps.length) return false;
+    const dir = path.dirname(this.opts.pairedFile ?? pairedFile());
+    const ledger = new Ledger(path.join(dir, 'ledger.jsonl'), loadDeviceKey());
+    const seen = new Seen(path.join(dir, 'seen.json'));
+    for (const fp of fps) removePaired(fp, book, seen, ledger);
+    const row = this.deviceRow(g);
+    this.note(`${row.name} can no longer use this computer`);
     return true;
   }
 

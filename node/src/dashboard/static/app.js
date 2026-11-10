@@ -100,6 +100,15 @@
       return '<tr><td class="name">' + esc(p.name) + '</td><td>' + p.badges.map(function (b) { return '<span class="badge">' + esc(b) + '</span>'; }).join('') + '</td><td>' + esc(p.host + ':' + p.port) + '</td><td>' + mb(p.ram) + '</td><td>' + (p.bw == null ? '?' : p.bw + ' gb/s') + '</td><td>' + dot(p.reach && p.reach.rpc) + '</td><td>' + dot(p.reach && p.reach.api) + '</td><td>' + (p.probedAt ? ago(p.probedAt) + ' önce' : (p.last_ok ? String(p.last_ok).slice(0, 16).replace('T', ' ') : '—')) + '</td></tr>';
     }).join('');
   }
+  // share mode: the devices paired with this gate, each with "erişimi kaldır" (remove its access)
+  function rPaired() {
+    var list = S.paired || [];
+    $('c-paired').hidden = S.mode !== 'share';
+    $('paired-empty').hidden = !!list.length;
+    $('paired').innerHTML = list.map(function (d) {
+      return '<tr><td class="name">' + esc(d.name || 'adsız cihaz') + '</td><td><code>' + esc(d.fp.slice(0, 8) + ' ' + d.fp.slice(8, 16)) + '</code></td><td>' + esc(d.address || '?') + '</td><td>' + (d.pairedAt ? esc(new Date(d.pairedAt).toISOString().slice(0, 16).replace('T', ' ')) : '?') + '</td><td>' + (d.lastSeen ? ago(d.lastSeen) + ' önce' : 'hiç') + '</td><td><button class="line" data-unpair="' + esc(d.fp) + '" data-name="' + esc(d.name || d.fp.slice(0, 16)) + '">erişimi kaldır</button></td></tr>';
+    }).join('');
+  }
   function rDevices() {
     var sel = $('chat-dev'), cur = sel.value;
     var opts = '<option value="">en hızlı boş cihaz</option>' + S.devices.map(function (d) { return '<option value="' + esc(d.name) + '"' + (d.name === cur ? ' selected' : '') + '>' + esc(d.name) + (d.tps ? ' · ' + d.tps + ' tok/s' : '') + (d.busy ? ' · meşgul' : '') + '</option>'; }).join('');
@@ -124,7 +133,7 @@
     $('up').textContent = 'açık ' + ago(S.startedAt);
     $('probe').hidden = !S.peers.length && S.mode === 'chat';
   }
-  function rAll() { rMode(); rSelf(); rGate(); rTraffic(); rModel(); rPeers(); rDevices(); rLedger(); rQr(); rLog(); }
+  function rAll() { rMode(); rSelf(); rGate(); rTraffic(); rModel(); rPeers(); rPaired(); rDevices(); rLedger(); rQr(); rLog(); }
 
   // ---- live ------------------------------------------------------------------
   var es = new EventSource('events');
@@ -135,6 +144,7 @@
   on('traffic', 'traffic', rTraffic);
   on('api', 'api', rModel);
   on('peers', 'peers', rPeers);
+  on('paired', 'paired', rPaired);
   on('devices', 'devices', rDevices);
   on('ledger', 'ledger', rLedger);
   on('models', 'models', rModel);
@@ -151,6 +161,14 @@
   $('verify').onclick = function () {
     var b = $('verify'); b.disabled = true;
     post('verify').then(function (r) { return r.json(); }).then(function (o) { if (o.error) alert(o.error); }).catch(function (e) { alert(e.message); }).then(function () { b.disabled = false; });
+  };
+  $('paired').onclick = function (e) {
+    var b = e.target && e.target.closest ? e.target.closest('button[data-unpair]') : null;
+    if (!b) return;
+    var name = b.getAttribute('data-name');
+    if (!confirm(name + ' bu bilgisayarı artık kullanamasın mı?\n\nyeni bağlantıları reddedilir, açık bağlantıları kapanır. geri gelmesi için yeni bir kodla yeniden eşleşmesi gerekir.')) return;
+    b.disabled = true;
+    post('unpair', { fp: b.getAttribute('data-unpair') }).then(function (r) { return r.json(); }).then(function (o) { if (o.error) alert(o.error); }).catch(function (err) { alert(err.message); }).then(function () { b.disabled = false; });
   };
   $('model-go').onclick = function () {
     var b = $('model-go'), m = $('model-pick').value; b.disabled = true; $('model-msg').textContent = 'yükleniyor…';

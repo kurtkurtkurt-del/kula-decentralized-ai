@@ -148,6 +148,11 @@ export class Ledger {
 
   append(kind: Kind, peer: string, fields: Fields = {}): Entry {
     if (this.dirty) this.repair();
+    // the file is not as this object left it: another process wrote to it (a `kula-node
+    // paired remove` while `share` runs) or rotated it. The chain goes on from what is there.
+    let now = -1;
+    try { now = fs.statSync(this.file).size; } catch {}
+    if (now !== this.size && !(now === -1 && this.size === 0)) this.resync();
     if (this.size >= this.rotateBytes) this.rotate();
     const { line, entry } = makeLine(this.key, this.now(), kind, peer, fields, this.prev);
     try {
@@ -159,6 +164,13 @@ export class Ledger {
     this.prev = sha256Hex(line);
     this.size += Buffer.byteLength(line) + 1;
     return entry;
+  }
+
+  private resync() {
+    let last: string | null = null;
+    for (const f of chainFiles(this.file).reverse()) { last = lastLine(f); if (last) break; }
+    this.prev = last ? sha256Hex(last) : GENESIS;
+    try { this.size = fs.statSync(this.file).size; } catch { this.size = 0; }
   }
 
   private repair() {

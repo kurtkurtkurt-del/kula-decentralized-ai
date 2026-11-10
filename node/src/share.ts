@@ -7,7 +7,7 @@ import path from 'node:path';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { Bonjour } from 'bonjour-service';
 import qrcode from 'qrcode-terminal';
-import { startGateServer, v1Open, PIN_TTL_MS, type GateEvent, type Channel, type TlsServer } from './gate.js';
+import { startGateServer, v1Open, PIN_TTL_MS, type GateEvent, type GateServer, type Channel, type TlsServer } from './gate.js';
 import { loadOrCreateIdentity, newPin, Paired } from './tls.js';
 import { findLlama, TAG } from './llama.js';
 import { home, expandHome } from './paths.js';
@@ -23,6 +23,7 @@ import { startDashboard, type Dashboard, type ChatSource } from './dashboard/ser
 import { selfView, peerActions, ledgerActions, modelsIn, DASHBOARD_PORT } from './dashboard/wire.js';
 import { apiChat, apiLoad, type Device, type Reply, type Message } from './apart.js';
 import { sha256File } from './llama.js';
+import { Seen, seenFile, pairedDevices, removePaired, removedSince } from './unpair.js';
 
 export interface ShareOptions {
   port: number;
@@ -115,13 +116,16 @@ export async function share(opts: ShareOptions): Promise<ShareHandle> {
   const { key, broken } = loadOrCreateKey(undefined, log);
   log(`device key ${key.alg} ${key.id}`);
   const ledgerFile = path.join(home(), 'ledger.jsonl');
-  const auditor = new Auditor({ ledger: new Ledger(ledgerFile, key), log });
+  const ledger = new Ledger(ledgerFile, key);
+  const auditor = new Auditor({ ledger, log });
+  // when each paired device was last here (the dashboard's and `kula-node paired list`'s "last seen")
+  const seen = new Seen(seenFile());
   // the old key is not readable: the lines it signed no longer verify, and the ledger says why
   if (broken) auditor.health('self', { key: 'replaced' });
   const onEvent = (e: GateEvent) => {
     state.gate(e);
-    if (e.type === 'pair') { auditor.pair(e.peer, { fp: e.fp, channel: e.channel }); log(`paired ${e.peer} (certificate ${e.fp.slice(0, 16)}…)`); }
-    else if (e.type === 'open') { auditor.connect(e.peer, e.channel); log(`${e.channel} open from ${e.peer}${e.v === 2 ? ' (tls)' : ''}`); }
+    if (e.type === 'pair') { auditor.pair(e.peer, { fp: e.fp, channel: e.channel }); seen.saw(e.fp, e.peer); log(`paired ${e.peer} (certificate ${e.fp.slice(0, 16)}…)`); showPaired(); }
+    else if (e.type === 'open') { auditor.connect(e.peer, e.channel); if (e.fp && seen.saw(e.fp, e.peer)) showPaired(); log(`${e.channel} open from ${e.peer}${e.v === 2 ? ' (tls)' : ''}`); }
     else if (e.type === 'close') { auditor.end(e.peer, e.channel, e.ms, e.bytesIn, e.bytesOut); log(`${e.channel} closed from ${e.peer} after ${e.ms} ms, in ${e.bytesIn} out ${e.bytesOut} bytes`); }
     else {
       // replay and clock are written by the auditor itself when it refuses the hello
@@ -174,8 +178,17 @@ export async function share(opts: ShareOptions): Promise<ShareHandle> {
   process.on('uncaughtException', (e) => log(`error: ${e.message}`));
   process.on('unhandledRejection', (e) => log(`error: ${e instanceof Error ? e.message : String(e)}`));
 
-  // the api's state, and how much of memory the loaded file takes, every two seconds
+  // the api's state, and how much of memory the loaded file takes, every two seconds; and a
+  // device whose access was removed (kula-node paired remove, in another process) loses
+  // what it still has open
   const apiTimer = setInterval(() => {
+    if (tlsServer && goneSince) {
+      for (const fp of goneSince()) {
+        const n = liveGate?.drop(fp) ?? 0;
+        log(`access removed for ${fp.slice(0, 16)}…${n ? `, ${n} open connection${n === 1 ? '' : 's'} closed` : ''}`);
+      }
+      showPaired();
+    }
     if (!api) return;
     const st = api.status();
     let heldMB = 0;
@@ -186,6 +199,9 @@ export async function share(opts: ShareOptions): Promise<ShareHandle> {
 
   // protocol v2: this computer's certificate, the phones it has paired with, a one-time code per qr
   let tlsServer: TlsServer | undefined;
+  let goneSince: (() => string[]) | null = null;
+  let liveGate: GateServer | null = null; // the gate, once it listens (the timer and the dashboard cut connections through it)
+  const showPaired = () => { if (tlsServer) state.paired(pairedDevices(tlsServer.paired, seen, ledgerFile)); };
   let relay: RelayWorker | null = null;
   let qrText = ''; // the last qr printed: the dashboard shows the same one
   const printQr = (port: number) => {
@@ -205,10 +221,13 @@ export async function share(opts: ShareOptions): Promise<ShareHandle> {
     tlsServer = { identity, paired, pin: newPin(), pinExpiresAt: Date.now() + PIN_TTL_MS };
     // the code is spent by the phone that used it, or by time; the next qr gets a fresh one
     tlsServer.onPinUsed = () => { tlsServer!.pin = newPin(); tlsServer!.pinExpiresAt = Date.now() + PIN_TTL_MS; log('pairing code used or expired; a new qr follows'); printQr(opts.port); };
+    goneSince = removedSince(paired);
+    showPaired();
     log(`tls certificate ${identity.fp.slice(0, 16)}… (${paired.size} paired); ${!secret ? 'v1 off' : paired.size ? 'v1 off (a device is paired; --secret is not used)' : 'v1 on (--secret) until the first device pairs'}`);
   }
 
   const gate = await startGateServer({ port: opts.port, secret, targets, onEvent, admit: (peer, nonceC, unixMs) => auditor.hello(peer, nonceC, unixMs), tls: tlsServer });
+  liveGate = gate;
   log(`gate listening on 0.0.0.0:${gate.port}${tlsServer ? (v1Open(secret, tlsServer) ? ' (v1 and v2 tls)' : ' (v2 tls only)') : ' (v1 only, no tls)'}`);
   if (opts.relay) {
     // the relay sees this computer's id, name and certificate fingerprint, nothing more; a
@@ -241,6 +260,14 @@ export async function share(opts: ShareOptions): Promise<ShareHandle> {
         actions: {
           probe: peersUi.probe,
           verify: ledgerUi.verify,
+          unpair: tlsServer ? (fp) => {
+            const r = removePaired(fp, tlsServer!.paired, seen, ledger);
+            if (!r.ok) throw new Error('that device is not paired');
+            goneSince?.(); // this removal is handled here, not again by the timer
+            const n = liveGate?.drop(r.device.fp) ?? 0;
+            log(`access removed for ${r.device.fp.slice(0, 16)}…${n ? `, ${n} open connection${n === 1 ? '' : 's'} closed` : ''} (dashboard)`);
+            showPaired();
+          } : undefined,
           load: async (file) => {
             const port = await targets('api');
             if (!port) throw new Error('the api did not start (is llama.cpp installed? kula-node setup)');

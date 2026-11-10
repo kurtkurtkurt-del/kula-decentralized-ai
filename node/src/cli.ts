@@ -1,4 +1,4 @@
-// The command line: setup, share, probe, peers, chat, ledger; a short menu when run bare.
+// The command line: setup, share, probe, peers, paired, chat, ledger; a short menu when run bare.
 import fs from 'node:fs';
 import readline from 'node:readline';
 import { probe, type Channel, type TlsClient } from './gate.js';
@@ -9,6 +9,7 @@ import { share } from './share.js';
 import { home, packageRoot } from './paths.js';
 import { version, isPacked } from './build.js';
 import { ledgerCommand } from './ledgercmd.js';
+import { pairedCommand } from './unpair.js';
 import { collectInfo, infoText } from './info.js';
 import { peersCommand, chatCommand } from './mastercmd.js';
 import { benchCommand } from './bench.js';
@@ -41,6 +42,11 @@ usage:
   kula-node probe <host> <port> <secret> [--json]   handshake on both channels, print OK/NO
       secret "env" reads $KULA_SECRET (a secret typed here shows in ps); "-" is none
       --fp <hex> [--pin <code>]   probe over tls (v2) against that certificate fingerprint; secret may be "-"
+  kula-node paired list [--json]     the devices (phones, computers) that can use this computer
+                                     without a code: fingerprint, name, address, when paired, last seen
+  kula-node paired remove <fp prefix>   take one device's access away (6+ hex characters of its
+                                     fingerprint): a running share refuses it at once and closes its
+                                     connections; one signed ledger line. it pairs again only with a fresh code
   kula-node ledger [--verify] [--tail N]   print the signed ledger; --verify checks the chain and signatures
   kula-node --version [--json]
   kula-node info [--json] [--no-bandwidth]   address, ram, memory bandwidth, gpu, llama.cpp: what a cluster would see
@@ -269,6 +275,7 @@ export async function main(argv: string[]): Promise<number> {
   }
 
   if (cmd === 'peers') return peersCommand(rest[0], rest.slice(1), flags);
+  if (cmd === 'paired') return pairedCommand(rest[0], rest.slice(1), flags);
   if (cmd === 'chat') return chatCommand(flags);
   if (cmd === 'bench') return benchCommand(flags);
   if (cmd === 'ui') return uiCommand(flags);

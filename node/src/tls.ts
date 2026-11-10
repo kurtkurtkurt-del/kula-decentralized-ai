@@ -173,36 +173,91 @@ function loadOrCreateGateKey(keyFile: string, log: (s: string) => void): KeyObje
   return writeOnce(keyFile, key.export({ type: 'pkcs8', format: 'pem' }) as string) ? key : loadOrCreateGateKey(keyFile, log);
 }
 
+// One paired client: its certificate fingerprint, when it paired (null: a line without a
+// time) and a name when one was given.
+export interface PairedEntry { fp: string; at: number | null; name: string | null }
+
 // The worker's record of the clients it has paired with (two-way TOFU): one
-// certificate fingerprint per line with the time. A client on this list connects
-// with its certificate alone; any other needs the one-time code from the qr.
+// certificate fingerprint per line with the time and, when known, a name
+// ("<fp> <unix ms> [name]"). A client on this list connects with its certificate
+// alone; any other needs the one-time code from the qr.
+//
+// Removing a line takes the client's access away (`kula-node paired remove`, the
+// dashboard, docs/GATE.md). The running `share` and the command that removes are two
+// processes over one file, so every read first compares the file's size and time with
+// what this object last saw and reads it again when they differ: the gate refuses a
+// removed client at its next handshake. Same as Paired in GateCert.kt.
 export class Paired {
-  private readonly fps = new Set<string>();
+  private entries = new Map<string, PairedEntry>();
+  private seen = '';
 
   constructor(private readonly file: string | null) {
-    if (!file) return;
-    try {
-      for (const line of fs.readFileSync(file, 'utf8').split('\n')) {
-        const fp = line.trim().split(' ')[0];
-        if (fp.length === 64) this.fps.add(fp);
-      }
-    } catch {}
+    this.load();
   }
 
-  has(fp: string): boolean { return this.fps.has(fp); }
-  get size(): number { return this.fps.size; }
+  private stamp(): string {
+    if (!this.file) return '';
+    try { const st = fs.statSync(this.file); return `${st.mtimeMs}:${st.size}`; } catch { return 'none'; }
+  }
+
+  private load(): void {
+    this.entries = new Map();
+    if (!this.file) return;
+    let text = '';
+    try { text = fs.readFileSync(this.file, 'utf8'); } catch {}
+    for (const line of text.split('\n')) {
+      const m = /^([0-9a-fA-F]{64})(?: +(\d+))?(?: +(.*))?$/.exec(line.trim());
+      if (!m) continue;
+      const fp = m[1].toLowerCase();
+      const at = m[2] ? Number(m[2]) : 0;
+      this.entries.set(fp, { fp, at: at > 0 ? at : null, name: m[3]?.trim() || null });
+    }
+    this.seen = this.stamp();
+  }
+
+  // Reads the file again when another process changed it; true when it did.
+  refresh(): boolean {
+    if (!this.file || this.stamp() === this.seen) return false;
+    this.load();
+    return true;
+  }
+
+  has(fp: string): boolean { this.refresh(); return this.entries.has(fp); }
+  get size(): number { this.refresh(); return this.entries.size; }
+  // every paired client, oldest first
+  list(): PairedEntry[] { this.refresh(); return [...this.entries.values()]; }
+  // the paired clients whose fingerprint starts with `prefix` (any case)
+  find(prefix: string): PairedEntry[] { const p = prefix.toLowerCase(); return this.list().filter((e) => e.fp.startsWith(p)); }
 
   add(fp: string, name?: string): void {
-    if (this.fps.has(fp)) return;
-    this.fps.add(fp);
+    this.refresh();
+    if (this.entries.has(fp)) return;
+    const e: PairedEntry = { fp, at: Date.now(), name: name?.replace(/[\r\n]+/g, ' ').trim() || null };
+    this.entries.set(fp, e);
     if (!this.file) return;
     fs.mkdirSync(path.dirname(this.file), { recursive: true });
-    fs.appendFileSync(this.file, `${fp} ${Date.now()}${name ? ' ' + name : ''}\n`);
+    fs.appendFileSync(this.file, Paired.line(e));
+    this.seen = this.stamp();
   }
 
-  forget(fp: string): void {
-    if (!this.fps.delete(fp)) return;
-    if (this.file) fs.writeFileSync(this.file, [...this.fps].map((f) => f + '\n').join(''));
+  // Takes `fp`'s access away; true when it was paired. The other lines keep their times and names.
+  remove(fp: string): boolean {
+    this.refresh();
+    if (!this.entries.delete(fp)) return false;
+    if (this.file) {
+      const text = [...this.entries.values()].map(Paired.line).join('');
+      const tmp = this.file + '.tmp';
+      fs.writeFileSync(tmp, text);
+      try { fs.renameSync(tmp, this.file); } catch { fs.writeFileSync(this.file, text); try { fs.unlinkSync(tmp); } catch {} }
+      this.seen = this.stamp();
+    }
+    return true;
+  }
+
+  forget(fp: string): void { this.remove(fp); }
+
+  private static line(e: PairedEntry): string {
+    return `${e.fp}${e.at ? ' ' + e.at : e.name ? ' 0' : ''}${e.name ? ' ' + e.name : ''}\n`;
   }
 }
 
