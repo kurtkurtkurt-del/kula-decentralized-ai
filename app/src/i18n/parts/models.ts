@@ -54,6 +54,8 @@ export const models = {
   'models.prune': { en: 'delete unused', de: 'ungenutzte löschen', tr: 'kullanılmayanları sil' },
   'models.noDiskFor': { en: 'not enough free space: {need} gb needed, {free} gb free (200 mb stays for android).', de: 'nicht genug freier platz: {need} gb nötig, {free} gb frei (200 mb bleiben für android).', tr: 'yeterli boş yer yok: {need} gb gerekli, {free} gb boş (200 mb android’e kalır).' },
   'model.params': { en: 'parameters', de: 'parameter', tr: 'parametre' },
+  // a mixture of experts: all of it in memory, this much read per token (fit.ts activeShare)
+  'model.moe': { en: 'MoE · {n}B active', de: 'MoE · {n}B aktiv', tr: 'MoE · {n}B etkin' },
   'model.quant': { en: 'quantization', de: 'quantisierung', tr: 'kuantizasyon' },
   'model.layers': { en: 'layers', de: 'schichten', tr: 'katman' },
   'model.kv': { en: 'kv cache', de: 'kv-cache', tr: 'kv önbelleği' },

@@ -114,10 +114,20 @@ export function groupGguf(rows: TreeRow[]): HfFile[] {
 export const isSplit = (f: HfFile) => f.parts.length > 1;
 /** Reads the quant from a file name: "...-Q4_K_M.gguf", "...-Q4_K_M-00001-of-00002.gguf" → "Q4_K_M". */
 export const quantOf = (file: string) => (file.replace(/-\d{5}-of-\d{5}\.gguf$/i, '.gguf').match(/(IQ\d_[A-Z_]+|Q\d(?:_[A-Z0-9]+)*|F16|BF16|F32)\.gguf$/i)?.[1] ?? '').toUpperCase();
-/** A rough parameter count from the name: "7B", "1.5B", "0.6b", "A3B" is skipped in favour of the total. */
+/** A rough parameter count from the name: "7B", "1.5B", "0.6b"; "A3B" is skipped in favour of the total (activeParamsOf reads it). */
 export const paramsOf = (name: string) => {
   const all = [...name.matchAll(/(\d+(?:\.\d+)?)\s*[bB](?![a-zA-Z])/g)].map((m) => Number(m[1])).filter((n) => n > 0);
   return all.length ? Math.max(...all) : 0;
+};
+/**
+ * The active parameters of a mixture of experts from its name: "Qwen3-30B-A3B" → 3,
+ * "gemma-4-26B-A4B-it" → 4, "LFM2.5-24B-A2B" → 2. 0 when the name says none (a dense model, or
+ * an MoE whose name does not tell, like gpt-oss); then speed is estimated from the whole file.
+ */
+export const activeParamsOf = (name: string) => {
+  const m = name.match(/(?:^|[^a-z0-9])A(\d+(?:\.\d+)?)B(?![a-z0-9])/i);
+  const active = m ? Number(m[1]) : 0;
+  return active > 0 && active < paramsOf(name) ? active : 0;
 };
 /** The KV estimate for a model we only know by size: 32 MB per 1k ctx per billion params, roughly. */
 export const kvGuess = (paramsB: number) => Math.round(Math.max(24, paramsB * 32));

@@ -29,6 +29,10 @@ export type SimModel = {
   vocab: number;
   bytesPerParam: number; // 0.5 for q4_k_m, 1 for q8_0
   kvMbPer1k: number;     // kv cache per 1 024 tokens of context
+  // mixture of experts: the share of the weights one token reads (active ÷ total parameters,
+  // e.g. 3.3 / 30.5 for Qwen3 30B-A3B). Absent or 1 for a dense model. Speed follows it, memory
+  // never does: every expert has to be in memory, any of them can be picked by the next token.
+  activeShare?: number;
 };
 export type SimDevice = {
   id: string;
@@ -79,13 +83,30 @@ export const spreadMb = (m: SimModel, ctx: number) => m.fileMb * FILE_FACTOR - e
 
 const tpsOf = (d: SimDevice, gb: number) => (d.bw * (d.eff || DEFAULT_EFF)) / gb;
 
+/** The share of the weights a token reads: 1 for a dense model, active ÷ total for a mixture of experts. */
+export const activeShareOf = (m: SimModel) => (m.activeShare && m.activeShare > 0 && m.activeShare < 1 ? m.activeShare : 1);
+/** The MB one decoding step streams on one device holding the whole model: the active weights. */
+export const readMb = (m: SimModel) => m.fileMb * FILE_FACTOR * activeShareOf(m);
+/**
+ * The share of the blocks' weights (the file less the embedding and output matrices) a token
+ * reads: the output layer is always read whole, so the blocks carry the rest of the active
+ * bytes. 1 for a dense model.
+ */
+export function blockShareOf(m: SimModel): number {
+  const s = activeShareOf(m);
+  if (s >= 1) return 1;
+  const blocks = m.fileMb - embedMb(m);
+  if (blocks <= 0) return 1;
+  return Math.min(1, Math.max(0.01, (m.fileMb * s - embedMb(m)) / blocks));
+}
+
 /**
  * The efficiency that makes estimateAlone give back a measured tok/s on this model (bench:
  * docs/BENCH.md). It carries over to other models on the same device as well as anything
- * does: the decode step streams the weights either way.
+ * does: the decode step streams the (active) weights either way.
  */
 export function effFromTps(m: SimModel, bw: number, tps: number): number {
-  const gb = (m.fileMb * FILE_FACTOR) / 1024;
+  const gb = readMb(m) / 1024;
   return (tps * gb) / (bw || DEFAULT_BW);
 }
 
@@ -97,8 +118,9 @@ export function withMeasured(d: SimDevice, m: SimModel, tps: number | null | und
 
 /** Decoding on one device alone, and the time to open the file from disk. */
 export function estimateAlone(m: SimModel, d: SimDevice): Estimate {
-  const gb = (m.fileMb * FILE_FACTOR) / 1024;
+  const gb = readMb(m) / 1024; // a mixture of experts streams its active weights only
   const perTokenMs = 1000 / tpsOf(d, gb);
+  // the load reads the whole file: every expert has to be there
   return fin({ perTokenMs, loadS: LOAD_FIXED_S + m.fileMb / DISK_MBPS, hops: 0, netMsPerToken: 0 });
 }
 
@@ -108,13 +130,22 @@ export function estimateAlone(m: SimModel, d: SimDevice): Estimate {
  * worker a run of layers. Per token every device streams its own bytes once; every worker
  * costs RPC_ROUND_TRIPS round trips plus the activation there and back. The upload is the
  * workers' bytes over the network, the local part from disk.
+ *
+ * A mixture of experts: each device reads only the active share of its blocks per token
+ * (blockShareOf), so the compute part shrinks; the network part does not. What crosses
+ * between devices per token is the activation (hidden × 4 bytes, there and back) and the
+ * round trips, the same for 3B active out of 30B as for a dense 30B. With the compute
+ * small, the hops are most of the token: splitting an MoE pays off less than splitting a
+ * dense model of the same size, and the estimate says so instead of scaling everything
+ * down. The upload still carries every expert (they all have to be on the worker).
  */
 export function estimateSplit(m: SimModel, rows: { dev: SimDevice; mb: number }[], net: SimNet): Estimate {
   const total = rows.reduce((a, r) => a + r.mb, 0) || 1;
   const weightMb = m.fileMb - embedMb(m); // the bytes that really move: the file less the embedding
+  const readShare = blockShareOf(m);      // 1 for a dense model
   let computeMs = 1000 / tpsOf(rows[0].dev, embedMb(m) / 1024); // the output layer, always here
   for (const r of rows) {
-    const gb = (weightMb * (r.mb / total)) / 1024;
+    const gb = (weightMb * readShare * (r.mb / total)) / 1024;
     if (gb > 0) computeMs += 1000 / tpsOf(r.dev, gb);
   }
   const workers = rows.slice(1).filter((r) => r.mb > 0);

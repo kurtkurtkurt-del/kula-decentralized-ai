@@ -15,6 +15,10 @@ export interface GgufShape {
   quant: string;       // 'Q8_0', 'Q4_K_M', … or '?'
   bytesPerParam: number;
   guessed: boolean;
+  // a mixture of experts: the share of the file's weight bytes one token reads (the shared
+  // tensors plus expert_used_count of expert_count routed experts), from the tensor table.
+  // Absent for a dense model, or when the table cannot be read (then speed counts every byte).
+  activeShare?: number;
 }
 
 // llama.cpp's LLAMA_FTYPE numbers for the common ones
@@ -49,6 +53,8 @@ class Cursor {
   u32() { this.need(4); const v = this.buf.readUInt32LE(this.at); this.at += 4; return v; }
   u64() { this.need(8); const v = Number(this.buf.readBigUInt64LE(this.at)); this.at += 8; return v; }
   skip(n: number) { this.need(n); this.at += n; }
+  /** The file offset of the next byte to read. */
+  pos() { return this.filePos - (this.buf.length - this.at); }
   str() { const n = this.u64(); if (n > 1 << 24) throw new Error('gguf: string too long'); this.need(n); const s = this.buf.toString('utf8', this.at, this.at + n); this.at += n; return s; }
   scalar(type: number): number | string | boolean {
     switch (type) {
@@ -71,13 +77,23 @@ class Cursor {
 
 /** The metadata keys of a gguf file; arrays come back as their length only. */
 export function readGgufMeta(file: string): Record<string, number | string | boolean> {
+  return readGguf(file, false).meta;
+}
+
+export type GgufTensor = { name: string; offset: number; bytes: number };
+
+/**
+ * The metadata and, with `tensors`, the tensor table: each tensor's name and its bytes in the
+ * file (the distance to the next tensor's data, the last one to the end of the file).
+ */
+export function readGguf(file: string, tensors = true): { meta: Record<string, number | string | boolean>; tensors: GgufTensor[] } {
   const fd = fs.openSync(file, 'r');
   try {
     const c = new Cursor(fd);
     if (c.u32() !== 0x46554747) throw new Error('not a gguf file');
     const version = c.u32();
     if (version < 2) throw new Error(`gguf v${version}`);
-    c.u64(); // tensors
+    const tensorCount = c.u64();
     const kvCount = c.u64();
     const out: Record<string, number | string | boolean> = {};
     for (let i = 0; i < kvCount; i++) {
@@ -91,7 +107,21 @@ export function readGgufMeta(file: string): Record<string, number | string | boo
         out[key] = n;
       } else out[key] = c.scalar(type);
     }
-    return out;
+    if (!tensors) return { meta: out, tensors: [] };
+    const list: { name: string; offset: number }[] = [];
+    for (let i = 0; i < tensorCount; i++) {
+      const name = c.str();
+      const dims = c.u32();
+      if (dims > 8) throw new Error('gguf: tensor dims');
+      c.skip(8 * dims); // the shape
+      c.u32();          // the ggml type
+      list.push({ name, offset: c.u64() });
+    }
+    const align = typeof out['general.alignment'] === 'number' && out['general.alignment'] > 0 ? (out['general.alignment'] as number) : 32;
+    const dataStart = Math.ceil(c.pos() / align) * align;
+    const end = fs.fstatSync(fd).size - dataStart;
+    const sorted = [...list].sort((a, b) => a.offset - b.offset);
+    return { meta: out, tensors: sorted.map((t, i) => ({ ...t, bytes: Math.max(0, (sorted[i + 1]?.offset ?? end) - t.offset) })) };
   } finally {
     fs.closeSync(fd);
   }
@@ -106,10 +136,27 @@ export function guessShape(sizeBytes: number, quant = '?'): GgufShape {
   return { arch: null, layers, hidden, vocab: 151936, kvMbPer1k: Math.round((2 * layers * (hidden / 4) * 2 * 1024) / MB), quant, bytesPerParam: bpp, guessed: true };
 }
 
+/**
+ * A mixture of experts' active share from its tensor table: the routed experts are the
+ * `*_exps` tensors (llama.cpp's name for routed expert weights: ffn_gate_exps, ffn_up_exps,
+ * ffn_down_exps, ffn_gate_up_exps); shared experts and attention are not; a token reads the rest
+ * whole and `used` of `count` experts. Null for a dense model or a table without experts.
+ */
+export function activeShareOf(tensors: GgufTensor[], count: number, used: number): number | null {
+  if (!(count > 1) || !(used > 0) || used >= count) return null;
+  const total = tensors.reduce((a, t) => a + t.bytes, 0);
+  const experts = tensors.filter((t) => /_exps\./.test(t.name)).reduce((a, t) => a + t.bytes, 0);
+  if (!(total > 0) || !(experts > 0)) return null;
+  return Math.round(((total - experts * (1 - used / count)) / total) * 1000) / 1000;
+}
+
 export function ggufShape(file: string): GgufShape {
   const size = fs.statSync(file).size;
   let meta: Record<string, number | string | boolean>;
-  try { meta = readGgufMeta(file); } catch { return guessShape(size, quantFromName(file)); }
+  let tensors: GgufTensor[] = [];
+  try { ({ meta, tensors } = readGguf(file)); } catch {
+    try { meta = readGgufMeta(file); } catch { return guessShape(size, quantFromName(file)); }
+  }
   const arch = typeof meta['general.architecture'] === 'string' ? (meta['general.architecture'] as string) : null;
   const n = (k: string): number | null => { const v = arch ? meta[`${arch}.${k}`] : undefined; return typeof v === 'number' ? v : null; };
   const ft = meta['general.file_type'];
@@ -124,7 +171,8 @@ export function ggufShape(file: string): GgufShape {
   const vocabMeta = n('vocab_size') ?? (typeof meta['tokenizer.ggml.tokens'] === 'number' ? (meta['tokenizer.ggml.tokens'] as number) : null);
   // kv cache in f16: layers × kv heads × (key + value) × 2 bytes per token
   const kvMbPer1k = Math.round((layers * kvHeads * (keyLen + valLen) * 2 * 1024) / MB);
-  return { arch, layers, hidden, vocab: vocabMeta ?? 151936, kvMbPer1k, quant, bytesPerParam: bytesPerParamOf(quant), guessed: false };
+  const active = activeShareOf(tensors, n('expert_count') ?? 0, n('expert_used_count') ?? 0);
+  return { arch, layers, hidden, vocab: vocabMeta ?? 151936, kvMbPer1k, quant, bytesPerParam: bytesPerParamOf(quant), guessed: false, ...(active != null && active < 1 ? { activeShare: active } : {}) };
 }
 
 function quantFromName(file: string): string {
@@ -136,5 +184,5 @@ function quantFromName(file: string): string {
 export function simModelOf(file: string): SimModel & { guessed: boolean } {
   const s = ggufShape(file);
   const size = fs.statSync(file).size;
-  return { id: path.basename(file).replace(/\.gguf$/i, '').toLowerCase(), fileMb: size / MB, layers: s.layers, hidden: s.hidden, vocab: s.vocab, bytesPerParam: s.bytesPerParam, kvMbPer1k: s.kvMbPer1k, guessed: s.guessed };
+  return { id: path.basename(file).replace(/\.gguf$/i, '').toLowerCase(), fileMb: size / MB, layers: s.layers, hidden: s.hidden, vocab: s.vocab, bytesPerParam: s.bytesPerParam, kvMbPer1k: s.kvMbPer1k, guessed: s.guessed, ...(s.activeShare ? { activeShare: s.activeShare } : {}) };
 }

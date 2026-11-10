@@ -1751,9 +1751,10 @@ function modelButton(m, phone) {
   b.type = 'button';
   b.setAttribute('aria-pressed', String(settings.model === m.id));
   const size = m.size ? gb(m.size) : '';
-  const params = m.active_b && !/per token/.test(m.blurb ?? '') ? `${m.params_b ? `${m.params_b}B, ` : ''}${m.active_b}B per token` : '';
-  b.append(el('b', '', `${m.name}${m.quant ? ` · ${m.quant}` : ''}`), el('span', 'size', size), el('span', 'blurb', [m.catalog === false ? 'a file on this computer: only this computer can run it (here or split)' : m.blurb, params].filter(Boolean).join(' · ')));
+  b.append(el('b', '', `${m.name}${m.quant ? ` · ${m.quant}` : ''}`), el('span', 'size', size), el('span', 'blurb', m.catalog === false ? 'a file on this computer: only this computer can run it (here or split)' : m.blurb));
   const fit = el('span', 'fit');
+  // a mixture of experts (10.11.2026): all of it in memory, only the active part read per token
+  if (m.active_b) fit.appendChild(el('span', 'info', `MoE · ${m.active_b}B active${m.params_b ? ` of ${m.params_b}B` : ''}`));
   if (m.off) fit.appendChild(el('span', 'no', m.off));
   else {
     if (m.onPhone) fit.appendChild(el('span', 'yes', `on ${phone.name} now`));

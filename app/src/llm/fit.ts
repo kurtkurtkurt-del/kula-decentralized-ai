@@ -1,3 +1,4 @@
+import { activeParamsOf } from '@/llm/hf';
 import { COMBINE, type Passport } from '@/passport/contract';
 
 // Does this model fit this phone, and how fast would it go? Pure functions over the
@@ -6,7 +7,10 @@ import { COMBINE, type Passport } from '@/passport/contract';
 // and the passport's own budget rule (app_mem_cap, ram_free × 0.8). Once a file is on the
 // phone its GGUF header gives the true layer and KV figures (kvFromMeta); they win over
 // the catalog's or the name-based guess.
-export type FitInput = { size: number; kv_mb_per_1k: number; ctx: number };
+//
+// A mixture of experts (10.11.2026): `active` is the share of the weights one token reads
+// (activeShare). The speed follows it, the memory never does: every expert has to be loaded.
+export type FitInput = { size: number; kv_mb_per_1k: number; ctx: number; active?: number };
 export type Fit = {
   needMb: number;          // file + kv + overhead at this ctx
   haveMb: number;          // what this device can give a model
@@ -18,6 +22,22 @@ export type Fit = {
 
 export const OVERHEAD_MB = 300;
 const MB = 1024 * 1024;
+
+/**
+ * The share of a model's weights one token reads, for a mixture of experts: the measured
+ * `read_share` (bytes, from the file's tensor table) when the catalog has it, else active ÷ total
+ * parameters (Qwen3 30B-A3B: 3.3 / 30.5), else the name's "A3B". 1 for a dense model or when
+ * nothing is known. A file without `active_b` (fetched from Hugging Face before it was kept) is
+ * read by its name.
+ */
+export function activeShare(m: { params_b?: number | null; active_b?: number | null; read_share?: number | null; file?: string }): number {
+  const read = Number(m.read_share) || 0;
+  if (read > 0 && read < 1) return read;
+  const total = Number(m.params_b) || 0;
+  const active = Number(m.active_b) || (m.file ? activeParamsOf(m.file) : 0);
+  return total > 0 && active > 0 && active < total ? active / total : 1;
+}
+const shareOf = (m: FitInput) => (m.active && m.active > 0 && m.active < 1 ? m.active : 1);
 
 /** Memory a model takes at a context size, in MB. */
 export function needMb(m: FitInput, ctx = m.ctx): number {
@@ -46,8 +66,9 @@ export function fitOn(p: Passport | null, m: FitInput, measured?: number | null)
   for (let c = 512; c <= m.ctx * 4 && c <= 32768; c *= 2) if (needMb(m, c) <= have) maxCtx = c;
   const verdict: Fit['verdict'] = need <= have * 0.85 ? 'fits' : need <= have ? 'tight' : 'no';
   const bw = p ? Number(p.mem_bw_read_gbs) || Number(p.mem_bw_gbs) || 0 : 0;
-  const gb = m.size / 1024 ** 3;
-  // a token streams the weights once: tok/s ≈ bandwidth × efficiency / size; hot phones at half
+  // a token streams the weights once (a mixture of experts: its active ones):
+  // tok/s ≈ bandwidth × efficiency / bytes read; hot phones at half
+  const gb = (m.size * shareOf(m)) / 1024 ** 3;
   const isMeasured = !!measured && measured > 0;
   const high = isMeasured ? r1(measured) : bw > 0 ? r1((bw * COMBINE.efficiency) / gb) : 0;
   const tps = high > 0 ? { low: r1(high * COMBINE.hot), high } : null;
@@ -74,7 +95,11 @@ export function fitTogether(ps: Passport[], m: FitInput): Fit & { shares: { name
   }
   let tps: Fit['tps'] = null;
   if (shares.length && shares.every((s) => s.bw > 0)) {
-    const cool = shares.reduce((a, s) => a + s.mb / 1024 / (s.bw * COMBINE.efficiency), 0) + Math.max(0, shares.length - 1) * COMBINE.hopS;
+    // each device holds its whole share but reads only the active part of it per token; the
+    // hops between devices cost the same for a mixture of experts as for a dense model (the
+    // activation crosses either way), so with MoE they weigh more (sim/model.ts estimateSplit)
+    const read = shareOf(m);
+    const cool = shares.reduce((a, s) => a + (s.mb * read) / 1024 / (s.bw * COMBINE.efficiency), 0) + Math.max(0, shares.length - 1) * COMBINE.hopS;
     tps = { low: r1(COMBINE.hot / cool), high: r1(1 / cool) };
   }
   return { needMb: need, haveMb: have, verdict, maxCtx, tps, measured: false, shares: shares.map(({ name, mb }) => ({ name, mb })) };
@@ -125,9 +150,9 @@ export function factsFromMeta(meta: GgufMeta | null | undefined): MetaFacts | nu
 }
 
 /** A model's fit input with the header's figures over the stored ones, when there is a header. */
-export function fitInput(m: { size: number; kv_mb_per_1k: number }, ctx: number, meta?: GgufMeta | null): FitInput {
+export function fitInput(m: { size: number; kv_mb_per_1k: number; params_b?: number | null; active_b?: number | null; read_share?: number | null }, ctx: number, meta?: GgufMeta | null): FitInput {
   const kv = kvFromMeta(meta);
-  return { size: m.size, kv_mb_per_1k: kv ?? m.kv_mb_per_1k, ctx };
+  return { size: m.size, kv_mb_per_1k: kv ?? m.kv_mb_per_1k, ctx, active: activeShare(m) };
 }
 
 /**

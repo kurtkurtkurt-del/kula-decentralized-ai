@@ -16,8 +16,8 @@ import { useLang } from '@/i18n';
 import { CATALOG, type CatalogModel } from '@/llm/catalog';
 import { useEngine } from '@/llm/engine';
 import { explain } from '@/llm/errors';
-import { fitOn, fitTogether } from '@/llm/fit';
-import { FILE_FILTERS, HfError, SUGGESTED_QUERIES, ggufFiles, hfUrl, isSplit, kvGuess, licenseUrl, paramsOf, quantOf, repoUrl, searchGguf, type HfFile, type HfRepo } from '@/llm/hf';
+import { activeShare, fitOn, fitTogether } from '@/llm/fit';
+import { FILE_FILTERS, HfError, SUGGESTED_QUERIES, activeParamsOf, ggufFiles, hfUrl, isSplit, kvGuess, licenseUrl, paramsOf, quantOf, repoUrl, searchGguf, type HfFile, type HfRepo } from '@/llm/hf';
 import { KEEP_FREE, freeDiskBytes } from '@/llm/disk';
 import { measuredFor } from '@/bench/store';
 import { hasNative, llama } from '@/llm/native';
@@ -75,8 +75,8 @@ export default function ModelsScreen() {
 
   const rows = useMemo(() => {
     const list = CATALOG.map((m) => {
-      const f = fitOn(passport, { size: m.size, kv_mb_per_1k: m.kv_mb_per_1k, ctx: 2048 }, measuredFor('self', { id: m.id }));
-      const tog = pool.length > 1 && f.verdict === 'no' ? fitTogether(pool, { size: m.size, kv_mb_per_1k: m.kv_mb_per_1k, ctx: 2048 }) : null;
+      const f = fitOn(passport, { size: m.size, kv_mb_per_1k: m.kv_mb_per_1k, ctx: 2048, active: activeShare(m) }, measuredFor('self', { id: m.id }));
+      const tog = pool.length > 1 && f.verdict === 'no' ? fitTogether(pool, { size: m.size, kv_mb_per_1k: m.kv_mb_per_1k, ctx: 2048, active: activeShare(m) }) : null;
       return { m, f, tog, rank: f.verdict === 'fits' ? 0 : f.verdict === 'tight' ? 1 : tog && tog.verdict !== 'no' ? 2 : 3 };
     });
     // without a passport nothing fits on paper: small first, so the first download is a sure one
@@ -124,9 +124,10 @@ export default function ModelsScreen() {
   const downloadHf = (repo: HfRepo, f: HfFile) => {
     if (repo.gated) return;
     const params = paramsOf(f.file) || paramsOf(repo.id);
+    const active = activeParamsOf(f.file) || activeParamsOf(repo.id);
     const id = `hf:${repo.id}/${f.file}`;
     if (!roomFor(f.size)) return;
-    startDownload({ id, name: `${repo.id.split('/')[1] ?? repo.id} ${quantOf(f.file)}`.trim(), file: f.file, size: f.size, sha256: f.sha256, parts: isSplit(f) ? f.parts : undefined, params_b: params, quant: quantOf(f.file), kv_mb_per_1k: kvGuess(params), ctx_max: 8192, license: repo.license, source: 'hf', url: hfUrl(repo.id, f.file) }).catch((e) => Alert.alert(explain(e, tx)));
+    startDownload({ id, name: `${repo.id.split('/')[1] ?? repo.id} ${quantOf(f.file)}`.trim(), file: f.file, size: f.size, sha256: f.sha256, parts: isSplit(f) ? f.parts : undefined, params_b: params, ...(active ? { active_b: active } : {}), quant: quantOf(f.file), kv_mb_per_1k: kvGuess(params), ctx_max: 8192, license: repo.license, source: 'hf', url: hfUrl(repo.id, f.file) }).catch((e) => Alert.alert(explain(e, tx)));
   };
   const download = (m: CatalogModel) => {
     if (!roomFor(m.size)) return;
@@ -194,7 +195,7 @@ export default function ModelsScreen() {
             <Pressable key={m.id} onPress={() => choose(m)} onLongPress={() => remove(m)} accessibilityRole="button" accessibilityLabel={t('a11y.open', { name: m.name })} accessibilityHint={t('models.delete')} style={({ pressed }) => [styles.row, pressed && styles.pressed]}>
               <View style={styles.rowText}>
                 <Text style={styles.name} numberOfLines={1}>{m.name.toLowerCase()}{running ? <Text style={styles.live}>  ● {t('models.running')}</Text> : chosen ? <Text style={styles.chosen}>  · {t('models.chosen')}</Text> : null}</Text>
-                <Text style={styles.meta}>{[`${m.params_b}B`, m.quant, gb(m.size), m.parts && m.parts.length > 1 ? t('models.parts', { n: m.parts.length }) : '', m.license].filter(Boolean).join(' · ').toLowerCase()}</Text>
+                <Text style={styles.meta}>{[`${m.params_b}B`, m.active_b ? t('model.moe', { n: m.active_b }) : '', m.quant, gb(m.size), m.parts && m.parts.length > 1 ? t('models.parts', { n: m.parts.length }) : '', m.license].filter(Boolean).join(' · ').toLowerCase()}</Text>
                 <View style={styles.badges}><TagIcons tags={tagsOf(m)} size={13} /></View>
               </View>
               <Text style={styles.action}>{running ? t('model.openChat') : t('models.run')} ›</Text>
@@ -212,7 +213,7 @@ export default function ModelsScreen() {
             <Pressable key={m.id} onPress={() => router.push(`/model/${encodeURIComponent(m.id)}`)} accessibilityRole="button" accessibilityLabel={t('a11y.open', { name: m.name })} style={({ pressed }) => [styles.row, pressed && styles.pressed]}>
               <View style={styles.rowText}>
                 <Text style={styles.name} numberOfLines={1}>{m.name.toLowerCase()} <Text style={styles.chosen}>›</Text></Text>
-                <Text style={styles.meta}>{[`${m.params_b}B`, m.quant, gb(m.size), m.license].join(' · ').toLowerCase()}</Text>
+                <Text style={styles.meta}>{[`${m.params_b}B`, m.active_b ? t('model.moe', { n: m.active_b }) : '', m.quant, gb(m.size), m.license].filter(Boolean).join(' · ').toLowerCase()}</Text>
                 <Text style={styles.blurb}>{m.blurb[lang as 'en' | 'de' | 'tr'] ?? m.blurb.en}</Text>
                 {/* 6.11.2026: what it is good at as icons (a tap says the word), then the fit with its mark */}
                 <View style={styles.badges}>

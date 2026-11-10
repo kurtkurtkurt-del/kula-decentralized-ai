@@ -99,7 +99,7 @@ export default function ModelScreen() {
   const header = model.meta_read && model.layers ? ` · ${t('model.fromHeader')}` : '';
   const rows: [string, string][] = [
     [t('model.size'), `${gb(model.size)}${model.parts && model.parts.length > 1 ? ` · ${t('models.parts', { n: model.parts.length })}` : ''}`],
-    [t('model.params'), model.params_b ? `${model.params_b}B` : '—'],
+    [t('model.params'), model.params_b ? `${model.params_b}B${model.active_b ? ` · ${t('model.moe', { n: model.active_b })}` : ''}` : '—'],
     [t('model.quant'), model.quant || '—'],
     ...(model.layers ? [[t('model.layers'), `${model.layers}${model.arch ? ` · ${model.arch}` : ''}`] as [string, string]] : []),
     [t('model.kv'), `${t('model.perK', { mb: model.kv_mb_per_1k })}${header}`],
