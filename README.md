@@ -31,15 +31,18 @@ Everything you need is on the GitHub release page: **Releases → latest** in th
 
 | for | file |
 |---|---|
-| an Android phone or tablet (arm64, Android 7+) | `kula-decentralized-ai-<version>.apk` |
-| a Mac with Apple silicon / an Intel Mac | `kula-node-mac-arm64` / `kula-node-mac-x64` |
-| Linux (x86-64 / arm64) | `kula-node-linux-x64` / `kula-node-linux-arm64` |
-| Windows | `kula-node-win-x64.exe` |
+| an Android phone or tablet (arm64, Android 7+) | `kula-android.apk` |
+| a Mac with Apple silicon, as an app | `kula-mac-arm64.dmg` |
+| a Mac with Apple silicon, in the terminal | `kula-node-mac-arm64` |
 | checking the downloads | `sha256sums.txt` |
 
-**While the repository is private**, the one-line installers in [docs/NODE.md](docs/NODE.md)
-(`curl … | sh`, `irm … | iex`) cannot download anything: GitHub wants a login for a private
-repo's files. Sign in on github.com and download the files in the browser instead.
+Intel Mac, Linux and Windows files are not on the release yet; build them from source
+(`cd node && npm install && npm run pack:bin -- --target linux-x64,win-x64`).
+
+**While the repository is private**, every file needs a GitHub login with access to the
+repository (accept the invite first), and the one-line installers in [docs/NODE.md](docs/NODE.md)
+(`curl … | sh`, `irm … | iex`) cannot download anything. Sign in on github.com and download the
+files in the browser.
 
 ### the phone (and tablet)
 
@@ -60,7 +63,17 @@ repo's files. Sign in on github.com and download the files in the browser instea
 
 Which model for which phone, and troubleshooting: [docs/GUIDE.en.md](docs/GUIDE.en.md).
 
-### the computer (macOS shown; Linux and Windows the same with their file)
+### the computer, the easy way: the Mac app
+
+Open `kula-mac-arm64.dmg` and drag **kula** to Applications. The app is not signed by an Apple
+developer account, so the first time: right-click it → **Open** (on macOS 15: System Settings →
+Privacy & Security → **Open Anyway**; if macOS still refuses, run
+`xattr -cr /Applications/kula.app` in Terminal). The first start builds llama.cpp once on a start
+screen (5–10 minutes). It needs Apple's command line tools and cmake, once, before that:
+`xcode-select --install` and `brew install cmake ninja` (Homebrew: https://brew.sh). Then the
+chat page opens in its own window.
+
+### the computer, in the terminal (macOS shown; Linux and Windows the same with their file)
 
 Checked on 8.11.2026 on an 8 GB MacBook Air (Apple silicon), starting from nothing in a fresh
 folder, exactly as below:

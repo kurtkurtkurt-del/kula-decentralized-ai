@@ -4,7 +4,7 @@ The few static files kula still serves from a browser. No build step.
 
 | path | what |
 |---|---|
-| `site/` | kula's one-page download site: four buttons on the latest GitHub release's stable asset names (live: `kula-mac-arm64.dmg`, `kula-android.apk`; Windows and iOS dimmed as coming later), each with an arrow menu (GitHub release, build it yourself; links not there yet are `data-todo` items to fill in), a real screenshot of the chat page, a short part on the brain, the links; `index.html` + `site.css`, fonts and images beside them |
+| `site/` | kula's one-page download site: four buttons on the latest GitHub release's stable asset names (live: `kula-mac-arm64.dmg`, `kula-node-mac-arm64`, `kula-android.apk`; downloads need a GitHub login with access while the repository is private; Windows and iOS dimmed as coming later), each with an arrow menu (GitHub release, build it yourself; links not there yet are `data-todo` items to fill in), a real screenshot of the chat page, a short part on the brain, the links; `index.html` + `site.css`, fonts and images beside them |
 | `config.js` | the live Supabase project's public address and anon key, read by `tools/passport-mac.py` and `backend/tools/health.mjs` / `backup.mjs` |
 | `pc/index.html` | a computer's passport for the phone in three steps: run one Terminal command, paste the json, show it as a qr code (Turkish; nothing leaves the page) |
 | `passport/mac.sh` | the Mac's passport script (`curl … /passport/mac.sh \| bash`); **generated** by `python3 tools/passport-mac.py` from `mac.template.sh`, `mac-bench.c`, `qr.js` and `config.js`; the gate runs `--check` |

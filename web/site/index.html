@@ -14,7 +14,8 @@
      from anywhere else.
 
      Downloads use the newest GitHub release by stable asset names, so the release must carry
-     exactly: kula-mac-arm64.dmg, kula-android.apk (later kula-windows-x64.exe, kula-mac-x64.dmg).
+     exactly: kula-mac-arm64.dmg, kula-node-mac-arm64, kula-android.apk (later kula-windows-x64.exe,
+     kula-mac-x64.dmg). The repository is private: every download needs a GitHub login with access.
 
      Each button's arrow opens a small menu: the GitHub release, and building it yourself. An
      item whose link does not exist yet has no href, a data-slot name and data-todo: to fill it
@@ -49,12 +50,13 @@
             <div class="menu">
               <a data-slot="mac-release" href="https://github.com/kurtkurtkurt-del/kula-decentralized-ai/releases/latest/download/kula-mac-arm64.dmg"><b>GitHub release</b><span>kula-mac-arm64.dmg</span></a>
               <a data-slot="mac-release-page" href="https://github.com/kurtkurtkurt-del/kula-decentralized-ai/releases/latest"><b>release page</b><span>notes, sha256, every file</span></a>
-              <a data-slot="mac-build" data-todo><b>build it yourself</b><span>desktop/ · npm run dist:mac</span></a>
+              <a data-slot="mac-terminal" href="https://github.com/kurtkurtkurt-del/kula-decentralized-ai/releases/latest/download/kula-node-mac-arm64"><b>for the terminal</b><span>kula-node-mac-arm64 · the same chat page, no app</span></a>
+              <a data-slot="mac-build" href="https://github.com/kurtkurtkurt-del/kula-decentralized-ai/tree/main/desktop"><b>build it yourself</b><span>desktop/ · npm run dist:mac</span></a>
               <a data-slot="mac-intel" data-todo><b>Intel Mac</b><span>kula-mac-x64.dmg · not built yet</span></a>
             </div>
           </details>
         </div>
-        <p class="dl-how">First open: right-click the app → <b>Open</b>. On macOS 15: System Settings → Privacy &amp; Security → <b>Open Anyway</b>. Intel Macs: later.</p>
+        <p class="dl-how">Drag kula to Applications. First open: right-click it → <b>Open</b> (macOS 15: Privacy &amp; Security → <b>Open Anyway</b>).</p>
       </li>
       <li class="dl is-later" data-os="windows">
         <div class="dl-row">
@@ -110,6 +112,13 @@
         <p class="dl-how">Open the apk and <b>allow installing from this source</b> when Android asks.</p>
       </li>
     </ul>
+    <p class="closed-test"><b>A closed test for now.</b> The files live in a private GitHub repository: the buttons work
+      once you are signed in to GitHub with an account that was invited to it. No access yet? Ask whoever sent you this
+      page for an invite, accept it on github.com, then come back.</p>
+    <p class="closed-test"><b>On a Mac, once.</b> The app builds llama.cpp on its first start (5–10 minutes) and needs
+      Apple's command line tools and cmake for it: <code>xcode-select --install</code>, then
+      <code>brew install cmake ninja</code> (<a href="https://brew.sh">Homebrew</a>). If macOS still refuses to open
+      the app: <code>xattr -cr /Applications/kula.app</code> in Terminal.</p>
   </section>
 
   <section class="band">
