@@ -3,9 +3,12 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { BRANCHES, BRANCH_IDS, dark, type Branch, type BranchCtx, type BranchEvent, type BranchId, type BranchMaker, type BranchView, type Snapshot } from './types.js';
 import { MAKERS } from './branches/index.js';
-import { clean } from './branches/guard.js';
+import { clean, dropped, type Dropped } from './branches/guard.js';
 
 const EVENTS_MAX = 60;
+
+/** the left-out counts the eye says, one line per kind per run of looks that leave one out */
+const LEFT_OUT: [keyof Dropped, string][] = [['devices', 'device'], ['models', 'model'], ['projects', 'project']];
 
 /** what a thrown value says: a caught value may be null or undefined, which has no .message */
 const why = (e: unknown): string => (e instanceof Error ? e.message : String(e));
@@ -36,6 +39,7 @@ export class GodsEye {
   private lastAt = 0;
   private readonly now: () => number;
   private skipping = false;   // a run of looks that were not usable, being logged once
+  private dropping: Record<keyof Dropped, boolean> = { devices: false, models: false, projects: false };
 
   constructor(private readonly opts: EyeOptions) {
     this.now = opts.now ?? Date.now;
@@ -107,10 +111,12 @@ export class GodsEye {
    *  here may throw out of it: a bad look is skipped whole, a throwing branch is stopped alone. */
   tick(): void {
     let snap: Snapshot | null = null;
+    let left: Dropped = { devices: 0, models: 0, projects: 0 };
     let notLook: string | null = null;
     try {
-      const raw = this.opts.snapshot();
-      snap = clean(structuredClone(raw));
+      const copy = structuredClone(this.opts.snapshot());
+      snap = clean(copy);
+      if (snap !== null) left = dropped(copy);   // what the guard left out, counted the same way
     } catch (e) { notLook = why(e); }
     if (snap === null) {
       // thrown, uncloneable, not an object, or no usable at: no branch sees it and `before`
@@ -120,6 +126,14 @@ export class GodsEye {
       return;
     }
     this.skipping = false;
+    // nothing the guard leaves out may vanish without a word: one line per kind per run of looks
+    // that leave one out, not one every few seconds
+    for (const [kind, word] of LEFT_OUT) {
+      if (left[kind] > 0) {
+        if (!this.dropping[kind]) this.log(`god's eye: ${left[kind]} ${word}(s) in the look had no usable id and were left out`);
+        this.dropping[kind] = true;
+      } else this.dropping[kind] = false;
+    }
     try {
       this.lastAt = snap.at;
       for (const id of BRANCH_IDS) {

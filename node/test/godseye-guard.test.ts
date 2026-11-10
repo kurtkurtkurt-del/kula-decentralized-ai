@@ -3,7 +3,13 @@
 // exactly as it went in.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { TIME_MAX, ID_MAX, NAME_MAX, isObj, isTime, num, idOf, nameOf, list, median, clean } from '../src/godseye/branches/guard.ts';
+import { createHash } from 'node:crypto';
+import { TIME_MAX, ID_MAX, NAME_MAX, isObj, isTime, num, idOf, nameOf, list, median, clean, dropped, safeId } from '../src/godseye/branches/guard.ts';
+
+const hash = (id: string) => createHash('sha256').update(id).digest('hex').slice(0, 16);
+/** the stand-in the guard prescribes for an unsafe id: '~' + 16 hex of sha256(id) + '~' + its first
+ *  40 chars with every char outside [A-Za-z0-9._:-] replaced by '_'. worked out here, not copied */
+const stand = (id: string) => `~${hash(id)}~${id.slice(0, 40).replace(/[^A-Za-z0-9._:-]/g, '_')}`;
 
 test('isObj: an object (an array too: typeof), nothing else', () => {
   assert.equal(isObj({}), true);
@@ -116,20 +122,125 @@ test('clean: containers that are not arrays count as empty, entries that are not
   assert.deepEqual(clean({ at: 1, projects: [null] })!.projects, []);
 });
 
-test('clean: a device needs a usable id; a duplicated id keeps its first entry', () => {
+test('clean: only an entry with no usable id, or a second entry with the same id, is dropped', () => {
+  const cut = stand('x'.repeat(201));                  // an id over 200 chars is kept under its stand-in
   assert.deepEqual(clean({ at: 1, devices: [{ id: 42 }, { id: '' }, { id: 'x'.repeat(201) }, { id: 'a', name: 'one' }, { id: 'a', name: 'two' }, { id: 'b' }] })!.devices, [
+    { id: cut, name: cut.slice(0, NAME_MAX), kind: '', via: '', where: '', reachable: null, reachMs: null, reason: null, checkedAt: null, lastOk: null, ramMb: null, bwGBs: null, gpu: null, tls: false, waitingPair: false, plugged: null, holds: null, trust: null },
     { id: 'a', name: 'one', kind: '', via: '', where: '', reachable: null, reachMs: null, reason: null, checkedAt: null, lastOk: null, ramMb: null, bwGBs: null, gpu: null, tls: false, waitingPair: false, plugged: null, holds: null, trust: null },
     { id: 'b', name: 'b', kind: '', via: '', where: '', reachable: null, reachMs: null, reason: null, checkedAt: null, lastOk: null, ramMb: null, bwGBs: null, gpu: null, tls: false, waitingPair: false, plugged: null, holds: null, trust: null },
   ]);
 });
 
-test('clean: a prototype-key id is dropped at the door, though idOf itself keeps it', () => {
+test('safeId: a real id passes; a prototype key, an overlong id or a leading "~" gets a stand-in', () => {
+  assert.equal(safeId('p1'), 'p1');
+  assert.equal(safeId('cable:R3C'), 'cable:R3C');
+  assert.equal(safeId('a.b_c-d:e'), 'a.b_c-d:e');
+  assert.equal(safeId('x'.repeat(ID_MAX)), 'x'.repeat(ID_MAX));   // 200 chars is still a real id
+  assert.equal(safeId('valueOf'), stand('valueOf'));
+  assert.equal(safeId('__proto__'), stand('__proto__'));
+  assert.equal(safeId('~valueOf'), stand('~valueOf'));            // a real id starting with '~' is escaped
+  assert.equal(safeId(''), stand(''));                            // an empty id is no id; entryId drops it first
+  const long = 'x'.repeat(300);
+  assert.equal(safeId(long), `~${hash(long)}~${'x'.repeat(40)}`);
+  const odd = 'a b~c/d' + 'e'.repeat(300);                        // over 200: a stand-in, its first 40 masked
+  assert.equal(safeId(odd), `~${hash(odd)}~a_b_c_d${'e'.repeat(33)}`);
+  assert.equal(safeId(odd).length, 58);                           // 1 + 16 + 1 + 40
+  // stable: the same id gives the same stand-in, whatever else is in the list
+  for (const id of ['valueOf', '~valueOf', long]) assert.equal(safeId(id), safeId(id));
+  // a stand-in is never a key of Object.prototype
+  for (const k of Object.getOwnPropertyNames(Object.prototype)) {
+    assert.equal(safeId(k) in {}, false, k);
+    assert.notEqual(safeId(k), k, k);
+  }
+});
+
+test('clean: a prototype-key id is kept under a stand-in, though idOf itself keeps it', () => {
   assert.equal(idOf('__proto__'), '__proto__');        // the helper's own definition
   assert.equal(idOf('constructor'), 'constructor');
   const s = clean({ at: 1, devices: [{ id: '__proto__', name: 'x' }, { id: 'constructor' }, { id: 'toString' }, { id: 'p1' }] });
-  assert.deepEqual(s!.devices.map((d) => d.id), ['p1']);
-  assert.deepEqual(clean({ at: 1, models: [{ id: '__proto__' }] })!.models, []);
-  assert.deepEqual(clean({ at: 1, projects: [{ id: '__proto__' }] })!.projects, []);
+  const [proto, ctor, str] = ['__proto__', 'constructor', 'toString'].map(stand);
+  assert.deepEqual(s!.devices.map((d) => d.id), [proto, ctor, str, 'p1']);
+  assert.deepEqual(s!.devices.map((d) => d.name), ['x', ctor, str, 'p1']);
+  assert.deepEqual(clean({ at: 1, models: [{ id: '__proto__' }] })!.models.map((m) => m.id), [proto]);
+  assert.deepEqual(clean({ at: 1, projects: [{ id: 'constructor' }] })!.projects.map((p) => p.id), [ctor]);
+  // the same stand-in everywhere an id is read, so a loaded row and a peer point at the same device
+  const w = clean({ at: 1, work: { loaded: { model: { id: 'valueOf' }, devices: [{ id: 'valueOf', name: 'v' }], parts: [{ id: 'constructor' }] } } })!.work.loaded!;
+  assert.equal(w.model.id, stand('valueOf'));
+  assert.deepEqual(w.devices.map((d) => d.id), [stand('valueOf')]);
+  assert.deepEqual(w.parts!.map((p) => p.id), [stand('constructor')]);
+  assert.equal(({} as any).valueOf, Object.prototype.valueOf);           // nothing leaked onto Object.prototype
+  assert.equal(({} as any).constructor, Object.prototype.constructor);
+  assert.equal(({} as any).toString, Object.prototype.toString);
+  assert.equal(({} as any).__proto__, Object.prototype);
+  assert.equal(stand('valueOf') in Object.prototype, false);             // a stand-in is never a prototype key
+});
+
+test('clean: a device, a loaded row and a project peer with the same unsafe id get the same stand-in', () => {
+  const id = 'valueOf';
+  const s = clean({ at: 1, devices: [{ id }], work: { loaded: { devices: [{ id }] } }, projects: [{ id: 'n1', peers: [id] }] })!;
+  assert.equal(s.devices[0].id, stand(id));
+  assert.equal(s.work.loaded!.devices[0].id, s.devices[0].id);
+  assert.deepEqual(s.projects[0].peers, [s.devices[0].id]);
+  const long = 'y'.repeat(300);
+  const l = clean({ at: 1, devices: [{ id: long }], projects: [{ id: 'n2', peers: [long] }] })!;
+  assert.equal(l.projects[0].peers[0], l.devices[0].id);
+});
+
+test('clean: an id longer than 200 chars is kept under its stand-in, for devices, models and projects', () => {
+  const id = 'y'.repeat(300);
+  const expected = stand(id);
+  assert.equal(clean({ at: 1, devices: [{ id }] })!.devices[0].id, expected);
+  assert.equal(clean({ at: 1, models: [{ id }] })!.models[0].id, expected);
+  assert.equal(clean({ at: 1, projects: [{ id }] })!.projects[0].id, expected);
+  assert.equal(expected.length, 58);
+  assert.ok(expected.startsWith('~'));
+});
+
+test('clean: a stand-in depends on the id alone, never on the rest of the list or its order', () => {
+  const a = 'z'.repeat(290) + 'a' + 'q'.repeat(9);   // two 300-char ids differing at the end
+  const b = 'z'.repeat(290) + 'b' + 'q'.repeat(9);
+  assert.notEqual(stand(a), stand(b));                // same first 40 chars, different sha256
+  const ab = clean({ at: 1, devices: [{ id: a, name: 'one' }, { id: b, name: 'two' }] })!.devices;
+  const ba = clean({ at: 1, devices: [{ id: b, name: 'two' }, { id: a, name: 'one' }] })!.devices;
+  assert.deepEqual(ab.map((d) => d.id), [stand(a), stand(b)]);
+  assert.deepEqual(ba.map((d) => d.id), [stand(b), stand(a)]);
+  assert.deepEqual(clean({ at: 1, devices: [{ id: b }] })!.devices.map((d) => d.id), [stand(b)]);   // alone: the same
+  // a real id that starts with '~' is escaped, so it can never be taken by a stand-in
+  const three = ['valueOf', '~valueOf', '~valueOf~2'];
+  const ds = clean({ at: 1, devices: three.map((id) => ({ id, name: id })) })!.devices;
+  assert.deepEqual(ds.map((d) => d.id), three.map(stand));
+  assert.equal(new Set(ds.map((d) => d.id)).size, 3);
+  // the same id twice is one device: the first wins, as before
+  const dup = clean({ at: 1, devices: [{ id: a, name: 'one' }, { id: a, name: 'two' }] })!.devices;
+  assert.deepEqual(dup.map((d) => d.name), ['one']);
+});
+
+test('dropped: counts every entry clean leaves out, including a repeated id', () => {
+  const raw = {
+    at: 1,
+    devices: [{ id: 42 }, { id: '' }, { id: {} }, null, 'x', { id: 'a' }, { id: 'a' }, { id: 'valueOf' }, { id: 'x'.repeat(300) }],
+    models: [{ id: null }, { id: 'm' }],
+    projects: [null, { id: 'n' }],
+  };
+  assert.deepEqual(dropped(raw), { devices: 6, models: 1, projects: 1 });   // the second 'a' is left out too
+  // the count matches the snapshot: every entry that is not left out is there
+  assert.deepEqual(clean(raw)!.devices.map((d) => d.id), ['a', stand('valueOf'), stand('x'.repeat(300))]);
+  assert.deepEqual(clean(raw)!.models.map((m) => m.id), ['m']);
+  assert.deepEqual(clean(raw)!.projects.map((p) => p.id), ['n']);
+  // nothing to count: not an object, no such lists, a list that is not an array
+  assert.deepEqual(dropped(null), { devices: 0, models: 0, projects: 0 });
+  assert.deepEqual(dropped('a look'), { devices: 0, models: 0, projects: 0 });
+  assert.deepEqual(dropped({ at: 1, devices: 'x', models: null, projects: 42 }), { devices: 0, models: 0, projects: 0 });
+});
+
+test('dropped never throws: a getter that throws is no look, so nothing is counted', () => {
+  const hostile: Record<string, unknown> = { at: 1 };
+  Object.defineProperty(hostile, 'devices', { get() { throw new Error('boom'); } });
+  assert.doesNotThrow(() => dropped(hostile));
+  assert.deepEqual(dropped(hostile), { devices: 0, models: 0, projects: 0 });
+  const entry: Record<string, unknown> = {};
+  Object.defineProperty(entry, 'id', { get() { throw new Error('boom'); } });
+  assert.doesNotThrow(() => dropped({ at: 1, devices: [entry] }));
 });
 
 test('clean: a device field by field', () => {
@@ -243,7 +354,7 @@ test('clean: strings are cut to their documented bound', () => {
   assert.equal(p.state, 's'.repeat(80));
   assert.equal(p.mode, 'm'.repeat(80));
   assert.equal(p.model, 'm'.repeat(300));
-  assert.deepEqual(p.peers, []);                        // an id over 200 chars is not one of ours
+  assert.deepEqual(p.peers, [stand('p'.repeat(250))]);  // a peer gets the same stand-in as its device
   assert.equal(p.line, 'l'.repeat(1000));
   assert.equal(p.error, 'e'.repeat(1000));
 });
@@ -363,10 +474,10 @@ test('clean leaves a healthy snapshot exactly as it is, and does not change it o
   assert.deepStrictEqual(s, structuredClone(healthy()));
 });
 
-test('clean: a project\'s peers keep only usable ids; models and projects keep the first of a duplicated id', () => {
+test('clean: a project\'s peers get a stand-in too; models and projects keep the first of a duplicated id', () => {
   const [p] = clean({ at: 1, projects: [{ id: 'n1', peers: ['p1', '', 42, null, 'x'.repeat(250), 'p2'] }] })!.projects;
-  assert.deepEqual(p.peers, ['p1', 'p2']);
-  assert.equal(idOf('x'.repeat(250)), null);
+  assert.deepEqual(p.peers, ['p1', stand('x'.repeat(250)), 'p2']);
+  assert.equal(idOf('x'.repeat(250)), null);            // idOf itself still calls it not one of ours
   const models = clean({ at: 1, models: [{ id: 'm1', name: 'one' }, { id: 'm1', name: 'two' }, { id: 'm2', name: 'three' }] })!.models;
   assert.deepEqual(models.map((m) => m.id), ['m1', 'm2']);
   assert.equal(models[0].name, 'one');
