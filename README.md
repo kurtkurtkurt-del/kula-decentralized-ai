@@ -26,6 +26,30 @@ and says when a device alone would be faster. Rule of thumb: jobs are split, mod
 iOS is out of scope for now: the app opens on iOS but runs no models (a Swift module is written
 on a branch, never built).
 
+## what's new in 0.3.0
+
+- **the brain suggests, you decide.** Every branch may now suggest or warn as a card on the brain
+  panel (computer and phone). Nothing happens until you press it: then kula loads, unloads, fetches
+  or looks again exactly as your own buttons would. The planner, executor, models and advisor
+  branches make real cards from what they measured ("Gemma 3 4B would run faster split over mac and
+  tablet").
+- **your devices and your friends', nobody else.** A device is *home* (yours) or *circle* (a
+  friend's); strangers take no part. The review branch sorts every request into private,
+  friends-ok or world-ok by named rules and keeps a key, a password or an injected order from going
+  anywhere unseen.
+- **the phone has the same brain.** The twelve branches run on the phone too, from the same source
+  as the computer's, with the cards on the brain tab.
+- **night replay.** Play last night back in 30 seconds: which devices worked, on what, how many
+  tokens (*replay* on the brain panel, or `kula-node brain replay`).
+- **"its owner cannot see the job".** A phone proves it with Android's hardware key attestation
+  (a locked bootloader, verified boot, the official kula build); the security report shows it.
+  0.3.0 is the first apk signed with kula's own release key, so this can say yes. Uninstall the
+  0.2.0 app first: Android does not update an app signed with another key.
+- **between homes.** The design of friends lending their devices' nights to each other (offers,
+  asks, checks with known answers, signed receipts, credit along friendships, no money):
+  [docs/BEYIN-NET.md](docs/BEYIN-NET.md), with a 20-home simulation. No network code yet.
+- **MIT licence** for kula's own code.
+
 ## what's new in 0.2.0
 
 - **the brain.** kula-node on the computer runs an observer over the cluster, god's eye. The
@@ -56,10 +80,7 @@ Everything you need is on the GitHub release page: **Releases → latest** in th
 Intel Mac, Linux and Windows files are not on the release yet; build them from source
 (`cd node && npm install && npm run pack:bin -- --target linux-x64,win-x64`).
 
-**While the repository is private**, every file needs a GitHub login with access to the
-repository (accept the invite first), and the one-line installers in [docs/NODE.md](docs/NODE.md)
-(`curl … | sh`, `irm … | iex`) cannot download anything. Sign in on github.com and download the
-files in the browser.
+The repository is public: every file downloads without a login.
 
 ### the phone (and tablet)
 

@@ -10,7 +10,7 @@
 <link rel="stylesheet" href="site.css">
 </head>
 <body>
-<!-- kula's download page (v0.2.0, 10.11.2026). Plain html + site.css, no build step, nothing
+<!-- kula's download page (v0.3.0, 11.11.2026). Plain html + site.css, no build step, nothing
      fetched from anywhere else.
 
      Downloads use the newest GitHub release by stable asset names, so the release must carry
@@ -31,7 +31,7 @@
 
 <main>
   <section class="hero wrap">
-    <p class="kicker"><span class="dot" aria-hidden="true"></span> open models · on your own devices · v0.2.0</p>
+    <p class="kicker"><span class="dot" aria-hidden="true"></span> open models · on your own devices · v0.3.0</p>
     <h1>Your devices,<br>one local AI.</h1>
     <p class="lede">kula joins your phones, tablets and computers into one AI cluster that runs open
       models. They talk to each other directly — nothing goes to a cloud.</p>
@@ -112,9 +112,6 @@
         <p class="dl-how">Open the apk and <b>allow installing from this source</b> when Android asks.</p>
       </li>
     </ul>
-    <p class="closed-test"><b>A closed test for now.</b> The files live in a private GitHub repository: the buttons work
-      once you are signed in to GitHub with an account that was invited to it. No access yet? Ask whoever sent you this
-      page for an invite, accept it on github.com, then come back.</p>
     <p class="closed-test"><b>On a Mac, once.</b> The app builds llama.cpp on its first start (5–10 minutes) and needs
       Apple's command line tools and cmake for it: <code>xcode-select --install</code>, then
       <code>brew install cmake ninja</code> (<a href="https://brew.sh">Homebrew</a>). If macOS still refuses to open
@@ -122,7 +119,23 @@
   </section>
 
   <section class="news wrap" aria-labelledby="news-h">
-    <h2 id="news-h">what's new in 0.2.0</h2>
+    <h2 id="news-h">what's new in 0.3.0</h2>
+    <ul class="news-list">
+      <li><b>the brain suggests, you decide.</b> Every branch can now put a card on the brain panel,
+        on the computer and on the phone. Nothing happens until you press it.</li>
+      <li><b>your devices and your friends', nobody else.</b> A device is yours or a friend's;
+        strangers take no part. Every request is checked before it leaves your devices.</li>
+      <li><b>the phone has the same brain.</b> The twelve branches run on the phone too, from the
+        same source as the computer's.</li>
+      <li><b>night replay.</b> Play last night back in 30 seconds: which devices worked, on what,
+        and how many tokens.</li>
+      <li><b>"its owner cannot see the job".</b> A phone proves it with its hardware; 0.3.0 is the
+        first apk signed with kula's own key (uninstall 0.2.0 first).</li>
+    </ul>
+  </section>
+
+  <section class="news wrap" aria-labelledby="news-h2">
+    <h2 id="news-h2">what's new in 0.2.0</h2>
     <ul class="news-list">
       <li><b>the brain.</b> kula-node runs an observer over your devices, and the chat page draws
         its twelve branches as a map around this computer. It looks every 5 seconds.</li>
@@ -147,7 +160,7 @@
       <h2 id="brain-h"><span class="dot" aria-hidden="true"></span>the brain</h2>
       <p>God's eye over your devices, on the right of the picture: kula-node takes a look every
         5 seconds and <b>twelve branches</b> say what they see. A <b>guard</b> cleans every look
-        first. It <b>watches and never acts</b>: it never touches a device. A <b>black box</b>
+        first. It <b>never acts by itself</b>: it suggests, as cards, and only your tap carries one out. A <b>black box</b>
         keeps a hash-chained record of everything it saw and said — a changed line shows — with
         no prompts, answers, keys or addresses in it. Its <b>learn</b> tab collects papers, videos
         and courses on local AI.</p>
@@ -194,7 +207,7 @@
     <a href="https://huggingface.co/bartowski/mistralai_Mistral-Small-3.2-24B-Instruct-2506-GGUF">Mistral Small</a>
     <a href="https://huggingface.co/unsloth/GLM-4.7-Flash-GGUF">GLM 4.7</a>
   </nav>
-  <p class="small">kula v0.2.0 · runs on <a href="https://github.com/ggml-org/llama.cpp">llama.cpp</a> · type: Inter Tight (SIL OFL)</p>
+  <p class="small">kula v0.3.0 · runs on <a href="https://github.com/ggml-org/llama.cpp">llama.cpp</a> · type: Inter Tight (SIL OFL)</p>
 </footer>
 
 <script>

@@ -2,13 +2,13 @@
 # yaml-language-server: $schema=https://aka.ms/winget-manifest.installer.1.6.0.schema.json
 
 PackageIdentifier: Kula.KulaNode
-PackageVersion: 0.2.0
+PackageVersion: 0.3.0
 InstallerType: portable
 Commands:
   - kula-node
 Installers:
   - Architecture: x64
-    InstallerUrl: https://github.com/kurtkurtkurt-del/kula-decentralized-ai/releases/download/v0.2.0/kula-node-win-x64.exe
+    InstallerUrl: https://github.com/kurtkurtkurt-del/kula-decentralized-ai/releases/download/v0.3.0/kula-node-win-x64.exe
     InstallerSha256: REPLACE_WITH_SHA256_OF_kula-node-win-x64.exe
 ManifestType: installer
 ManifestVersion: 1.6.0
