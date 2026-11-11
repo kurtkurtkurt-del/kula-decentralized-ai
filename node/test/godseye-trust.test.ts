@@ -5,6 +5,7 @@ import assert from 'node:assert/strict';
 import { generateKeyPairSync } from 'node:crypto';
 
 const { create, identityCheck, lineProblem, GUESS_LIMIT } = await import('../src/godseye/branches/trust.ts');
+const { nodeKeys, nodeKey } = await import('../src/godseye/node.ts');   // the computer's signatures (platform.ts)
 const { generate, fromPrivateKey, publicKeyDer } = await import('../src/audit/key.ts');
 const { makeLine, GENESIS, sha256Hex } = await import('../src/audit/ledger.ts');
 const { selfSigned, newP256, fingerprint } = await import('../src/tls.ts');
@@ -44,7 +45,7 @@ const snap = (devices: any[], ledger: any = { ok: true, count: 3, problem: null 
 function branch() {
   let notes: unknown = {};
   const events: string[] = [];
-  const b = create({ now: () => 9_000, load: <T>(f: T) => (structuredClone(notes) as T) ?? f, save: (x: unknown) => { notes = structuredClone(x); }, emit: (t: string) => events.push(t), peek: () => null });
+  const b = create({ now: () => 9_000, load: <T>(f: T) => (structuredClone(notes) as T) ?? f, save: (x: unknown) => { notes = structuredClone(x); }, emit: (t: string) => events.push(t), peek: () => null, keys: nodeKeys });
   return { b, events, notes: () => notes as any };
 }
 const check = (v: any, k: string, dev = 0) => v.report.devices[dev].checks.find((c: any) => c.k === k);
@@ -69,20 +70,20 @@ test('identity: another certificate than the pinned one, a key that is not the c
   const d = device();
   d.add();
   const t = trustOf(d);
-  assert.equal(identityCheck(t as any).ok, true);
-  assert.match(identityCheck({ ...t, certPinned: false } as any).text, /not the one pinned/);
-  assert.equal(identityCheck({ ...t, id: 'a'.repeat(32) } as any).ok, false);
+  assert.equal(identityCheck(t as any, nodeKeys).ok, true);
+  assert.match(identityCheck({ ...t, certPinned: false } as any, nodeKeys).text, /not the one pinned/);
+  assert.equal(identityCheck({ ...t, id: 'a'.repeat(32) } as any, nodeKeys).ok, false);
   const other = selfSigned(newP256(), 'b'.repeat(32));
-  const r = identityCheck({ ...t, cert: other.toString('base64') } as any);
+  const r = identityCheck({ ...t, cert: other.toString('base64') } as any, nodeKeys);
   assert.equal(r.ok, false);
   assert.match(r.text, /names another device/);
-  assert.equal(identityCheck({ ...t, certPinned: null } as any).ok, null);
+  assert.equal(identityCheck({ ...t, certPinned: null } as any, nodeKeys).ok, null);
 });
 
 test('a changed line, a forged signature and a dropped line are each caught, and the device turns red', () => {
   const d = device();
   d.add(); d.add(); d.add();
-  const key = d.key.publicKey;
+  const key = nodeKey(d.key.publicKey);
   assert.equal(lineProblem(d.lines[1], key, sha256Hex(d.lines[0])), null);
   const changed = d.lines[1].replace('"connect"', '"reject"');
   assert.match(lineProblem(changed, key, sha256Hex(d.lines[0]))!, /signature/);

@@ -1,12 +1,17 @@
 // god's eye: one look every few seconds, handed to every branch. See types.ts.
-import { createHash } from 'node:crypto';
-import fs from 'node:fs';
-import path from 'node:path';
+// Platform-neutral (11.11.2026): no node: module here. The notes go through EyeNotes, the trust
+// branch's signatures through EyeKeys, the black box is handed in opened (platform.ts); a
+// computer's eye is node.ts, a phone's is app/src/eye/.
 import { BRANCHES, BRANCH_IDS, dark, type Branch, type BranchCtx, type BranchEvent, type BranchId, type BranchMaker, type BranchView, type Snapshot, type SuggestAction, type Suggestion } from './types.js';
 import { MAKERS } from './branches/index.js';
 import { clean, dropped, type Dropped } from './branches/guard.js';
-import { openBox, type Box, type BoxStatus } from './box.js';
+import type { Box, BoxStatus, EyeKeys, EyeNotes } from './platform.js';
+import { sha256Hex } from './hash.js';
 import { facts, diff, keyChunks, lookPayload, makeScrubber, secretScan, trimVerdicts, type Facts, type Scrubber, type Scrubbed } from './boxfacts.js';
+
+/** a deep copy of plain data: structuredClone where the platform has it (node), json elsewhere
+ *  (Hermes); either throws on what is not plain, and the look is skipped */
+const copyOf = <T>(x: T): T => (typeof structuredClone === 'function' ? structuredClone(x) : (JSON.parse(JSON.stringify(x)) as T));
 
 const EVENTS_MAX = 60;
 
@@ -86,25 +91,15 @@ const payloadLength = (x: unknown): number => {
   try { return JSON.stringify(x)?.length ?? 0; } catch { return 0; }
 };
 
-/** the box the eye writes: one given, or one opened in the given dir; no option means no box */
-function makeBox(x: EyeOptions['box']): Box | null {
-  if (x === null || x === undefined) return null;
-  try {
-    if (typeof (x as Box).append === 'function') return x as Box;
-    const dir = (x as { dir?: unknown }).dir;
-    if (typeof dir === 'string') return openBox({ dir });
-  } catch {}
-  return null;   // a box the eye cannot use is no box, never a stopped eye
-}
-
 export interface EyeOptions {
   snapshot: () => Snapshot;        // one look, plain data; the eye clones it once more anyway
-  dir: string;                     // where branches keep their notes
+  notes: EyeNotes;                 // where branches keep their notes (platform.ts)
+  keys?: EyeKeys | null;           // signatures and certificates for the trust branch; none: it says so
   everyMs?: number;                // 5 s
   now?: () => number;
   log?: (s: string) => void;
   makers?: Partial<Record<BranchId, BranchMaker>>;  // tests, or a branch from elsewhere
-  box?: Box | { dir: string };     // the black box; absent means none, so nothing is written
+  box?: Box | null;                // the black box, opened; absent means none, so nothing is written
 }
 
 export type EyeBranchView = BranchView & { n: number; id: BranchId; name: string; what: string; error?: string };
@@ -124,7 +119,7 @@ export class GodsEye {
   private views = new Map<BranchId, BranchView>();
   private events: (BranchEvent & { branch: BranchId })[] = [];
   private before: Snapshot | null = null;
-  private timer: NodeJS.Timeout | null = null;
+  private timer: ReturnType<typeof setInterval> | null = null;
   private lastAt = 0;
   private readonly now: () => number;
   private skipping = false;   // a run of looks that were not usable, being logged once
@@ -147,7 +142,7 @@ export class GodsEye {
 
   constructor(private readonly opts: EyeOptions) {
     this.now = opts.now ?? Date.now;
-    this.box = makeBox(opts.box);
+    this.box = opts.box && typeof opts.box.append === 'function' ? opts.box : null;
     this.make();
   }
 
@@ -166,16 +161,13 @@ export class GodsEye {
     }
   }
 
-  /** Forgets every note: each branch's file in `dir` and what it learned in memory; the
-   *  branches start again from nothing at the next look. The black box is kept: its own dir has
-   *  no branch's name, and the forget tells the record what went. Returns how many files went. */
+  /** Forgets every note: each branch's notes and what it learned in memory; the branches start
+   *  again from nothing at the next look. The black box is kept: it holds no branch's notes, and
+   *  the forget tells the record what went. Returns how many stored pieces (files) went. */
   forget(): number {
     let n = 0;
-    let names: string[] = [];
-    try { names = fs.readdirSync(this.opts.dir); } catch {}
-    for (const f of names) {
-      if (!BRANCH_IDS.some((id) => f === `${id}.json` || (f.startsWith(`${id}.json.`) && f.endsWith('.tmp')))) continue;
-      try { fs.rmSync(path.join(this.opts.dir, f), { force: true }); n++; } catch {}
+    for (const id of BRANCH_IDS) {
+      try { n += this.opts.notes.remove(id); } catch {}
     }
     this.branches.clear();
     this.broken.clear();
@@ -200,23 +192,22 @@ export class GodsEye {
   }
 
   private ctx(id: BranchId): BranchCtx {
-    const file = path.join(this.opts.dir, `${id}.json`);
+    const notes = this.opts.notes;
     return {
       now: () => this.now(),
       load: <T>(fallback: T): T => {
         try {
-          const v = JSON.parse(fs.readFileSync(file, 'utf8')) as T;
-          return v === null ? fallback : v;   // a file holding JSON null is no notes
+          const text = notes.read(id);
+          if (text === null) return fallback;
+          const v = JSON.parse(text) as T;
+          return v === null ? fallback : v;   // notes holding JSON null are no notes
         } catch { return fallback; }
       },
       save: (data: unknown) => {
-        try {
-          fs.mkdirSync(this.opts.dir, { recursive: true, mode: 0o700 });
-          const tmp = `${file}.${process.pid}.tmp`;
-          fs.writeFileSync(tmp, JSON.stringify(data), { mode: 0o600 });
-          fs.renameSync(tmp, file);
-        } catch (e) { this.log(`god's eye ${id}: could not save: ${why(e)}`); }
+        try { notes.write(id, JSON.stringify(data)); }
+        catch (e) { this.log(`god's eye ${id}: could not save: ${why(e)}`); }
       },
+      keys: this.opts.keys ?? null,
       emit: (text: string) => {
         const ev = { at: this.now(), text: String(text).slice(0, 300), branch: id };
         this.events.unshift(ev);
@@ -238,7 +229,7 @@ export class GodsEye {
     let left: Dropped = { devices: 0, models: 0, projects: 0 };
     let notLook: string | null = null;
     try {
-      const copy = structuredClone(this.opts.snapshot());
+      const copy = copyOf(this.opts.snapshot());
       snap = clean(copy);
       if (snap !== null) left = dropped(copy);   // what the guard left out, counted the same way
     } catch (e) { notLook = why(e); }
@@ -477,7 +468,7 @@ export class GodsEye {
       // the forecast's pairs are not in this json: they never ride in a view, and hashing them
       // every look would cost more than the record they are left out of
       let digest = '';
-      try { digest = createHash('sha256').update(JSON.stringify(plain), 'utf8').digest('hex').slice(0, 16); } catch {}
+      try { digest = sha256Hex(JSON.stringify(plain)).slice(0, 16); } catch {}
       if (this.digests.get(meta.id) === digest) continue;
       out ??= {};
       const gauge = typeof plain.gauge === 'number' && Number.isFinite(plain.gauge) ? plain.gauge : null;

@@ -72,6 +72,27 @@ const isNumber = (x: unknown): x is number => typeof x === 'number' && Number.is
 const rawOf = (x: unknown): Record<string, unknown> | null => (isObject(x) ? x : null);
 
 /** a field that should be an array; null or anything else counts as empty */
+/** the host's battery (0..100) and heat, when the look carries them; anything not plain is unknown */
+export const LOW_BATTERY = 20;
+type Power = { battery: number | null; charging: boolean | null; hot: boolean | null };
+const powerOf = (x: unknown): Power | null => {
+  const h = isObject(x) && isObject(x.host) ? x.host : null;
+  const p = h && isObject(h.power) ? h.power : null;
+  if (!p) return null;
+  const b = typeof p.battery === 'number' && Number.isFinite(p.battery) ? Math.min(100, Math.max(0, p.battery)) : null;
+  const tri = (v: unknown) => (v === true || v === false ? v : null);
+  return { battery: b, charging: tri(p.charging), hot: tri(p.hot) };
+};
+const hostNameOf = (x: unknown): string => {
+  const h = isObject(x) && isObject(x.host) ? x.host : null;
+  return h && typeof h.name === 'string' && h.name.length > 0 ? h.name.slice(0, NAME_MAX) : 'this device';
+};
+const powerWords = (p: Power): string => [
+  p.battery == null ? 'battery unknown' : `battery ${Math.round(p.battery)}%`,
+  p.charging === true ? 'charging' : p.charging === false ? 'not charging' : '',
+  p.hot === true ? 'hot' : p.hot === false ? 'not hot' : '',
+].filter(Boolean).join(' · ');
+
 const arrayOf = (raw: Record<string, unknown> | null, key: string): unknown[] => {
   const v = raw?.[key];
   return Array.isArray(v) ? (v as unknown[]) : [];
@@ -438,6 +459,21 @@ export function create(ctx: BranchCtx): Branch {
         }
       }
 
+      // the host's own battery and heat (11.11.2026): a phone running the cluster says them, a
+      // computer does not. hot is the phone's own flag (its thermal status), never a guess here
+      const pw = powerOf(raw);
+      if (pw) {
+        const host = hostNameOf(raw);
+        if (pw.hot === true) {
+          heads.push(0);
+          next.set('heat:host', { text: `${host} is hot: let it cool before more work`, ended: `${host} cooled down` });
+        }
+        if (pw.battery != null && pw.battery < LOW_BATTERY && pw.charging !== true) {
+          heads.push(pw.battery);
+          next.set('battery:host', { text: `${host} is at ${Math.round(pw.battery)}% and not charging`, ended: `${host} is charging or above ${LOW_BATTERY}% again` });
+        }
+      }
+
       for (const [k, w] of next) if (!warns.has(k)) ctx.emit(`limits: ${w.text}`);
       for (const [k, w] of warns) if (!next.has(k)) ctx.emit(`limits: ${w.ended}`);
       warns = next;
@@ -460,6 +496,7 @@ export function create(ctx: BranchCtx): Branch {
       const day = (early && early.key === key ? early.day : notes.days[key]) ?? blankDay();
       const yesterday = notes.days[dayKey(at - 24 * HOUR)];
       const l = loadedOf(s);
+      const pw = powerOf(s);
       const all = l && Array.isArray(l.devices) ? (l.devices as unknown[]) : [];
       const devs = all.filter(usableNamed);
       const memByName = new Map<string, Mem>();
@@ -491,10 +528,11 @@ export function create(ctx: BranchCtx): Branch {
           ['energy today', `${round1(day.wh)} Wh (a guess)`],
           ['busy today', `${Math.round(day.busyMin)} min`],
           ...(yesterday ? [['energy yesterday', `${round1(yesterday.wh)} Wh`] as [string, string]] : []),
-          ['rules', `memory tight over ${TIGHT_PERCENT}% · rest after ${REST_AFTER_MS / 60_000} min · phone ${WATTS.phone} W, pc ${WATTS.pc} W`],
+          ...(pw ? [[hostNameOf(s), powerWords(pw)] as [string, string]] : []),
+          ['rules', `memory tight over ${TIGHT_PERCENT}% · rest after ${REST_AFTER_MS / 60_000} min · phone ${WATTS.phone} W, pc ${WATTS.pc} W${pw ? ` · battery under ${LOW_BATTERY}%` : ''}`],
         ],
         lines,
-        note: `it only warns, it never stops a device. it cannot see battery or heat yet${devs.length ? '' : '; no model loaded, nothing is working'}.`,
+        note: `it only warns, it never stops a device. ${pw ? 'battery and heat are this device\'s own; the others\' it cannot see yet' : 'it cannot see battery or heat yet'}${devs.length ? '' : '; no model loaded, nothing is working'}.`,
         what: 'keeps devices within their limits: memory, rest, the night window and an energy guess. battery and heat come later.',
       };
     },

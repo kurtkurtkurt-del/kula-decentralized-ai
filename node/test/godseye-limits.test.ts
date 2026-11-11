@@ -1083,3 +1083,26 @@ test('notes stay bounded: old days dropped, a bad file is ignored', () => {
   assert.ok(!keys.includes('nonsense') && !keys.includes('2026-10-01'));
   assert.doesNotThrow(() => create(fakeCtx({ days: 'broken' }).ctx as any).view());
 });
+
+test('a phone host says its battery and heat: a row, a warning when hot or low and not charging, a line when it ends', () => {
+  const { ctx, out } = fakeCtx();
+  const b = create(ctx as any);
+  const withPower = (at: number, power: unknown) => ({ ...snap(at), host: { name: 'pixel 8', freeMb: 3000, power } });
+  b.observe(withPower(T0, { battery: 64, charging: false, hot: false }) as any, null);
+  let v = b.view();
+  assert.equal(v.stat, 'all within limits');
+  assert.deepEqual(v.rows.find((r) => r[0] === 'pixel 8'), ['pixel 8', 'battery 64% · not charging · not hot']);
+  assert.doesNotMatch(v.note!, /cannot see battery or heat yet/);
+  b.observe(withPower(T0 + MIN, { battery: 12, charging: false, hot: true }) as any, null);
+  v = b.view();
+  assert.equal(v.stat, '2 warnings');
+  assert.ok(v.lines.some((l) => /pixel 8 is hot/.test(l)));
+  assert.ok(v.lines.some((l) => /pixel 8 is at 12% and not charging/.test(l)));
+  assert.equal(v.gauge, 0);
+  b.observe(withPower(T0 + 2 * MIN, { battery: 12, charging: true, hot: false }) as any, null);
+  assert.equal(b.view().stat, 'all within limits');
+  assert.ok(out.events.some((e) => /pixel 8 cooled down/.test(e)));
+  // junk is unknown, never a warning
+  b.observe(withPower(T0 + 3 * MIN, { battery: 'low', charging: 1, hot: 'yes' }) as any, null);
+  assert.equal(b.view().stat, 'all within limits');
+});

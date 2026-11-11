@@ -72,7 +72,7 @@
 //   skipped (they are never reason words).
 //   the engine's loaded.sees and a trust's upTo are not in the Snapshot type and no branch reads
 //   them: they are dropped.
-import { createHash } from 'node:crypto';
+import { sha256Hex } from '../hash.js';
 import type { EyeDevice, EyeModel, EyeProject, EyeTrust, EyeWork, Snapshot } from '../types.js';
 
 export const TIME_MAX = 8.64e15;     // the largest ms a Date can hold (ECMAScript)
@@ -161,7 +161,7 @@ const bool2 = (x: unknown): boolean => x === true;
  *  starts with '~' is escaped too, so a stand-in can never equal a real id. */
 export function safeId(id: string): string {
   if (id.length > 0 && id.length <= ID_MAX && !id.startsWith('~') && !(id in {})) return id;
-  return `~${createHash('sha256').update(id).digest('hex').slice(0, HASHED)}~${id.slice(0, SHOWN).replace(SHOWN_SAFE, '_')}`;
+  return `~${sha256Hex(id).slice(0, HASHED)}~${id.slice(0, SHOWN).replace(SHOWN_SAFE, '_')}`;
 }
 
 /** an entry's id: safeId of a non-empty string; null when there is no id at all (the entry is left out) */
@@ -372,6 +372,11 @@ function hostOf(raw: unknown): Snapshot['host'] {
   if (h && h.ledger !== undefined) {
     host.ledger = isObj(h.ledger)
       ? { ok: bool2(h.ledger.ok), count: capped(h.ledger.count, 0, COUNT_MAX) ?? 0, problem: wordOrNull(h.ledger.problem, PROBLEM) }
+      : null;
+  }
+  if (h && h.power !== undefined) {
+    host.power = isObj(h.power)
+      ? { battery: capped(h.power.battery, 0, 100), charging: bool3(h.power.charging), hot: bool3(h.power.hot) }
       : null;
   }
   return host;

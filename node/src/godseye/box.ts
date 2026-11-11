@@ -51,6 +51,10 @@ import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { isObj, isTime, num } from './branches/guard.js';
+import type { Box, BoxQuery, BoxRecord, BoxStatus, BoxVerify } from './platform.js';
+// the box's shape lives with the eye's other platform pieces (platform.ts): the eye itself is
+// platform-neutral and only ever holds a Box, opened here on a computer
+export type { Box, BoxQuery, BoxRecord, BoxStatus, BoxVerify } from './platform.js';
 
 export const SEGMENT_BYTES = 1024 * 1024;            // a segment passes this: the next record starts a new one
 export const KEEP_BYTES = 256 * 1024 * 1024;         // the segments together pass this: the oldest goes
@@ -66,44 +70,6 @@ const LIMIT = 200;                                   // read's default
 const LIMIT_MAX = 5000;                              // read's bound
 const PROBLEM_MAX = 1000;                            // a problem kept in a head file is not unbounded
 
-export interface BoxRecord {
-  n: number;
-  t: number;
-  k: string;
-  b: string | null;
-  x: unknown;
-  p: string;
-  h: string;
-}
-
-export interface BoxQuery {
-  fromN?: number;
-  toN?: number;
-  fromT?: number;
-  toT?: number;
-  kind?: string;
-  branch?: string;
-  limit?: number;
-}
-
-export interface BoxVerify {
-  ok: boolean;
-  from: number;
-  count: number;
-  head: string | null;
-  problem: string | null;
-}
-
-export interface BoxStatus {
-  count: number;
-  from: number;
-  head: string | null;
-  bytes: number;
-  segments: number;
-  ok: boolean;
-  problem: string | null;
-}
-
 export interface BoxOptions {
   dir: string;
   segmentBytes?: number;
@@ -111,13 +77,6 @@ export interface BoxOptions {
   payloadMax?: number;
 }
 
-export interface Box {
-  append(t: number, kind: string, branch: string | null, payload: unknown): boolean;
-  verify(): BoxVerify;
-  read(q?: BoxQuery): BoxRecord[];
-  status(): BoxStatus;
-  accept(): void;
-}
 
 /** what a caught value says: a caught value may be null or undefined, which has no .message */
 const why = (e: unknown): string => (e instanceof Error ? e.message : String(e));
