@@ -83,7 +83,10 @@ function linesBetween(files: string[], scans: FileScan[], from: number, to: numb
 }
 
 // The /trust answer. `since`: null (not asked) or 64 lowercase hex, checked by the caller.
-export function trustBody(src: TrustSource, since: string | null) {
+// `challenge` (64 lowercase hex, checked by the caller; attest.ts): a phone answers it with its
+// keystore's attestation (app Attest.kt); a computer has no such hardware to vouch for it, so its
+// answer is `"attest":null`, "a computer cannot prove this" (docs/GATE.md). Not asked: no field.
+export function trustBody(src: TrustSource, since: string | null, challenge: string | null = null) {
   const files = chainFiles(src.ledgerFile);
   const scans: FileScan[] = [];
   let prev = GENESIS;
@@ -137,5 +140,6 @@ export function trustBody(src: TrustSource, since: string | null) {
       lines: linesBetween(files, scans, from, to),
     },
     rejects: { day, last: recent.slice(-TRUST_LAST_REJECTS).map((r) => ({ t: r.t, why: r.why, peer: r.peer })) },
+    ...(challenge !== null ? { attest: null } : {}),
   };
 }

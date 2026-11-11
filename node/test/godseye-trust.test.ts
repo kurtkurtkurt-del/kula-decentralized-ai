@@ -192,3 +192,80 @@ test('the engine folds /trust answers: new lines join the window, a ledger that 
   assert.equal(foldTrust(null, withCert, 1, null).certPinned, null);
   assert.ok(!JSON.stringify(foldTrust(null, withCert, 1, fingerprint(der))).includes(fingerprint(der)));
 });
+
+// ---- owner-blind (11.11.2026): can the device's owner read the jobs it runs ---------------------
+
+const DEBUG = 'hardware key, locked, verified boot, but a debug build (signed with the public debug key): its owner could still read jobs';
+const proof = (ok: boolean | null, text: string, at = 8_000) => ({ at, ok, why: ok ? 'ok' : 'unofficial', text });
+const running = (ids: string[]) => ({ loaded: { mode: 'apart', model: { id: 'm', name: 'm', file: 'm.gguf', size: 1 }, ctx: 4096, since: 1, devices: ids.map((id) => ({ id, name: id, local: id === 'mac', busy: false, tps: null, done: 0 })) }, loading: null, chatting: 0, plan: [], decisions: [], llama: true });
+
+test('owner-blind: one line per device, shown and never counted in the verdict', () => {
+  const d = device();
+  d.add();
+  const look = (attest: unknown, o: Record<string, unknown> = {}) => {
+    const { b } = branch();
+    b.observe(snap([eyeDev(d, trustOf(d, { attest }), o)]) as any, null);
+    return b.view();
+  };
+  const debug = look(proof(false, DEBUG));
+  assert.deepEqual(check(debug, 'owner-blind'), { k: 'owner-blind', ok: false, text: DEBUG });
+  assert.equal(debug.report!.verdict, 'ok', 'informational: the device stays all clear');
+  assert.equal(debug.lines[0], 'pixel · all clear');
+  const ok = look(proof(true, 'hardware key, locked, verified boot, official kula build: its owner cannot read jobs'));
+  assert.equal(check(ok, 'owner-blind').ok, true);
+  // never asked; a computer; an older kula; a proof older than a day; a field out of shape
+  assert.equal(check(look(undefined), 'owner-blind').text, 'not asked yet whether its owner can read jobs');
+  assert.deepEqual(check(look(null, { kind: 'pc' }), 'owner-blind'), { k: 'owner-blind', ok: null, text: 'a computer cannot prove this' });
+  assert.equal(check(look({ at: 8_000, ok: null, why: 'computer', text: 'a computer cannot prove this' }, { kind: 'pc' }), 'owner-blind').ok, null);
+  assert.equal(check(look({ at: 8_000, ok: null, why: 'old', text: 'an older kula: it cannot prove this yet' }), 'owner-blind').text, 'an older kula: it cannot prove this yet');
+  const { b } = branch();
+  b.observe(snap([eyeDev(d, trustOf(d, { attest: proof(true, 'fine', 9_000 - 27 * 3_600_000) }))]) as any, null);
+  assert.deepEqual([check(b.view(), 'owner-blind').ok, /not asked again since/.test(check(b.view(), 'owner-blind').text)], [null, true]);
+  for (const bad of [{ at: 'x', ok: true, text: 't' }, { at: 1, ok: 'yes', text: 't' }, { at: 1, ok: true, text: '' }, { at: 1, ok: true, text: 'x'.repeat(301) }, 'proof']) {
+    assert.equal(check(look(bad), 'owner-blind').text, typeof bad === 'string' ? 'not asked yet whether its owner can read jobs' : 'its last proof could not be read');
+  }
+  // a device red for something else: the feed and the headline name that, not owner-blind
+  const red = branch();
+  red.b.observe(snap([eyeDev(d, trustOf(d, { attest: proof(false, DEBUG), rejectsDay: { replay: 1 } }))]) as any, null);
+  assert.match(red.b.view().report!.headline, /replayed/);
+});
+
+test('owner-blind: a warning card for a device in the running cluster that fails it, none for the others', () => {
+  const a = device(), c = device();
+  a.add(); c.add();
+  const { b } = branch();
+  const devs = [eyeDev(a, trustOf(a, { attest: proof(false, DEBUG) })), eyeDev(c, trustOf(c, { attest: proof(false, DEBUG) }), { id: 'p2', name: 'tablet' })];
+  b.observe({ ...snap(devs), work: running([]) } as any, null);
+  assert.deepEqual(b.view().suggestions, [], 'nothing runs: no card');
+  b.observe({ ...snap(devs), work: running(['p1', 'mac']) } as any, null);
+  const cards = b.view().suggestions!;
+  assert.equal(cards.length, 1);
+  assert.deepEqual(cards[0], {
+    id: 'trust:owner-blind:p1', kind: 'warn', weight: 1, title: 'pixel could read the jobs it runs',
+    why: `${DEBUG}. Prompts reach it in plain text, so only give it work you would show its owner.`,
+    action: { do: 'open', panel: 'branch', branch: 'trust' }, label: 'look',
+  });
+  // a device that passes, or cannot say (a computer), gets no card
+  const ok = branch();
+  ok.b.observe({ ...snap([eyeDev(a, trustOf(a, { attest: proof(true, 'fine') })), eyeDev(c, trustOf(c, { attest: null }), { id: 'p2', kind: 'pc' })]), work: running(['p1', 'p2']) } as any, null);
+  assert.deepEqual(ok.b.view().suggestions, []);
+});
+
+test('the engine asks for a proof once an hour, and keeps only what the check found', async () => {
+  const { attestDue, foldAttest, ATTEST_EVERY } = await import('../src/ui/engine.ts');
+  assert.equal(attestDue(null, 1), true);
+  const look = { ...foldTrust(null, {}, 1), attest: { at: 1_000, ok: false, why: 'unofficial' as const, text: DEBUG } };
+  assert.equal(attestDue(look, 1_000 + ATTEST_EVERY - 1), false);
+  assert.equal(attestDue(look, 1_000 + ATTEST_EVERY), true);
+  assert.equal(attestDue(look, 500), true, 'a clock that went back asks again');
+  // the proof is kept across the looks that do not ask for one
+  assert.deepEqual(foldTrust(look, { ledger: {} }, 2).attest, look.attest);
+  const policy = { signers: [], pkg: 'app.pasaport.android', status: null };
+  const ch = 'ab'.repeat(32);
+  assert.deepEqual(foldAttest({ id: 'x' }, ch, 5, policy), { at: 5, ok: null, why: 'old', text: 'an older kula: it cannot prove this yet' });
+  assert.deepEqual(foldAttest({ id: 'x', attest: null }, ch, 5, policy), { at: 5, ok: null, why: 'computer', text: 'a computer cannot prove this' });
+  const no = foldAttest({ attest: { v: 1, error: 'no keystore on this device' } }, ch, 5, policy);
+  assert.equal(no.ok, false);
+  assert.equal(no.why, 'cannot');
+  assert.deepEqual(Object.keys(no), ['at', 'ok', 'why', 'text'], 'no chain kept');
+});

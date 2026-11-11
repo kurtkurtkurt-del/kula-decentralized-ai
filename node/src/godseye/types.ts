@@ -75,6 +75,10 @@ export interface EyeTrust {
   restartedAt: number | null;      // when its ledger last no longer held the line seen before
   rejectsDay: Record<string, number>;               // refusals of the last 24 h, by reason
   rejectsLast: { t: number; why: string; peer: string }[];
+  // owner-blind (attest.ts): whether its owner cannot see the work, as its hardware proved when
+  // last asked (this computer checked the proof when it came); null: never asked. `why` is
+  // attest.ts's Why, `ok` null where nothing can be proven (a computer, an older kula)
+  attest?: { at: number; ok: boolean | null; why: string; text: string } | null;
 }
 
 /** The trust branch's one screen: one verdict over every device, and each device's checks. */

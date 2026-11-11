@@ -893,7 +893,7 @@ const BRANCHES = BRANCH_MAP.map(([n, id, name]) => ({
 // device names come from the devices' own qrs: escaped before they go into any html string
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 const TRUST_WORD = { ok: 'all clear', bad: 'look at this', unknown: 'not checked yet' };
-const TRUST_K = { pinned: 'pinned', encrypted: 'encrypted', identity: 'identity', refused: 'refused', ledger: 'ledger', key: 'key' };
+const TRUST_K = { pinned: 'pinned', encrypted: 'encrypted', identity: 'identity', refused: 'refused', ledger: 'ledger', key: 'key', 'owner-blind': 'owner-blind' };
 const verdictOf = (checks) => (checks.some((c) => c.ok === false) ? 'bad' : checks.some((c) => c.ok === null) ? 'unknown' : 'ok');
 function trustCard(name, verdict, checks, sub, acceptId) {
   const card = el('section', `tr-card ${verdict}`);
@@ -924,7 +924,7 @@ function trustReport(r) {
   const out = [top];
   for (const d of r.devices) out.push(trustCard(d.name, d.verdict, d.checks, d.refused, d.accept ? d.id : null));
   out.push(trustCard(`${r.host.name} · this computer`, verdictOf(r.host.checks), r.host.checks, ''));
-  out.push(el('p', 'bd-note', 'checked here, not taken on trust: each certificate against the fingerprint pinned from its qr, each ledger line’s chain and signature. no prompts, no answers: only who connected and whether it was let in.'));
+  out.push(el('p', 'bd-note', 'checked here, not taken on trust: each certificate against the fingerprint pinned from its qr, each ledger line’s chain and signature, each phone’s hardware proof that its owner cannot read the jobs it runs (shown, not counted in the verdict yet). no prompts, no answers: only who connected and whether it was let in.'));
   return out;
 }
 

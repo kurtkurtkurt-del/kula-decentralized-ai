@@ -13,8 +13,14 @@
 // the device; kept red until the person accepts it), and a burst of refusals against the device's
 // own usual rate (a Poisson tail over its finished hours; a replay and many wrong codes still come
 // first). Both only watch and report, as always.
+//
+// Owner-blind (11.11.2026): can this device's owner read the jobs it runs? A phone proves it cannot
+// with its keystore's attestation (attest.ts checked it when it came: a hardware key, a locked
+// bootloader, green verified boot, the official kula app); a computer cannot prove it. One line per
+// device, informational for now: it never turns the verdict red or grey. A device in the running
+// cluster that fails it gets a warning card.
 import { createHash, createPublicKey, verify, X509Certificate, type KeyObject } from 'node:crypto';
-import type { Branch, BranchCtx, EyeDevice, EyeTrust, Snapshot, TrustCheck, TrustReport, Verdict } from '../types.js';
+import type { Branch, BranchCtx, EyeDevice, EyeTrust, Snapshot, Suggestion, TrustCheck, TrustReport, Verdict } from '../types.js';
 import { hhmm, pct } from './util.js';
 
 const sha = (s: string | Buffer) => createHash('sha256').update(s).digest('hex');
@@ -33,6 +39,10 @@ const DAY_CAP = 10_000;        // a day's refusals per reason: past this a reaso
 const PER_ANSWER = 10_000;     // refusals one answer counts into the hour at most
 const K_MAX = 9999;            // the burst K shown at most
 const LAMBDA_MAX = 9999.9;     // the usual rate shown at most
+const ATTEST_STALE = 26 * HOUR; // an owner-blind proof older than this is not taken as today's
+/** checks shown but never counted in a verdict: the device's word (its key's place), and owner-blind for now */
+const INFO = new Set(['key', 'owner-blind']);
+const firstBad = (cs: TrustCheck[]) => cs.find((c) => c.ok === false && !INFO.has(c.k))!;
 
 /** a device id the notes can take as a key: a non-empty string of at most 200 chars */
 const okId = (id: unknown): id is string => typeof id === 'string' && id.length > 0 && id.length <= 200;
@@ -181,6 +191,20 @@ export function identityCheck(t: EyeTrust): TrustCheck {
   try { cn = /CN=([0-9a-fA-F]{32})/.exec(new X509Certificate(der).subject)?.[1]?.toLowerCase() ?? null; } catch {}
   if (cn !== keyId) return { k, ok: false, text: 'its certificate names another device than its ledger key' };
   return { k, ok: true, text: `certificate matches the pin and names its ledger key (${keyId.slice(0, 8)}…)` };
+}
+
+/** Owner-blind: what the device's last proof showed (attest.ts), as kula's engine kept it. The
+ *  snapshot is not trusted: a field out of shape is no proof. */
+export function ownerBlindCheck(d: Pick<EyeDevice, 'kind'>, t: EyeTrust, now: number): TrustCheck {
+  const k = 'owner-blind';
+  const a = t.attest as unknown;
+  if (a == null || typeof a !== 'object') return { k, ok: null, text: d.kind === 'phone' ? 'not asked yet whether its owner can read jobs' : 'a computer cannot prove this' };
+  const x = a as { at?: unknown; ok?: unknown; text?: unknown };
+  if (typeof x.at !== 'number' || !Number.isFinite(x.at) || (x.ok !== true && x.ok !== false && x.ok !== null) || typeof x.text !== 'string' || !x.text || x.text.length > 300) {
+    return { k, ok: null, text: 'its last proof could not be read' };
+  }
+  if (x.ok !== null && (now - x.at > ATTEST_STALE || x.at > now + HOUR)) return { k, ok: null, text: `its last proof is from ${day(x.at)}: not asked again since` };
+  return { k, ok: x.ok as boolean | null, text: x.text };
 }
 
 const plural = (n: number, w: string) => `${n} ${w}${n === 1 ? '' : 's'}`;
@@ -390,9 +414,11 @@ export function create(ctx: BranchCtx): Branch {
       checks.push(t!.store === 'keystore'
         ? { k: 'key', ok: true, text: 'its key is in the phone’s keystore and cannot be copied out' }
         : { k: 'key', ok: null, text: t!.store === 'file' ? 'its key is in a file on the device' : 'it did not say where its key is' });
+      checks.push(ownerBlindCheck(d, t!, ctx.now()));
     }
-    // the key's place is the device's word, not checked: it never turns a device red or green
-    const counted = checks.filter((c) => c.k !== 'key');
+    // the key's place is the device's word, not checked, and owner-blind is informational for now:
+    // neither turns a device red or green
+    const counted = checks.filter((c) => !INFO.has(c.k));
     const verdict: Verdict = counted.some((c) => c.ok === false) ? 'bad' : !answered || counted.some((c) => c.ok === null && c.k !== 'ledger') ? 'unknown' : 'ok';
     const rd = answered ? dayTotal(rejects) : 0;
     return { id: d.id, name, verdict, checks, refused: rd ? `${rd} refused today` : '', accept: !!s.fault };
@@ -417,7 +443,7 @@ export function create(ctx: BranchCtx): Branch {
     let headline: string;
     if (bad.length || hostBad) {
       verdict = 'bad';
-      const first = bad[0] ? `${bad[0].name}: ${bad[0].checks.find((c) => c.ok === false)!.text}` : `this computer: ${host.find((c) => c.ok === false)!.text}`;
+      const first = bad[0] ? `${bad[0].name}: ${firstBad(bad[0].checks).text}` : `this computer: ${host.find((c) => c.ok === false)!.text}`;
       const n = bad.length + (hostBad ? 1 : 0);
       headline = n > 1 ? `${n} things to look at. first, ${first}` : first;
     } else if (!devices.length) {
@@ -433,7 +459,7 @@ export function create(ctx: BranchCtx): Branch {
       if (was && was !== d.verdict && d.verdict === 'bad') {
         // every check that turned red says its line once, so a burst and a shorter ledger in the
         // same look both reach the feed
-        for (const c of d.checks) if (c.ok === false) ctx.emit(`${d.name}: ${c.text}`);
+        for (const c of d.checks) if (c.ok === false && !INFO.has(c.k)) ctx.emit(`${d.name}: ${c.text}`);
       }
       if (was === 'bad' && d.verdict === 'ok') ctx.emit(`${d.name}: all clear again`);
       said.set(d.id, d.verdict);
@@ -455,6 +481,25 @@ export function create(ctx: BranchCtx): Branch {
       left.sort((a, b) => notes[a].seen - notes[b].seen);
       for (const id of left.slice(0, left.length - MAX_DEVICES)) delete notes[id];
     }
+  }
+
+  // a warning card for each device running the loaded model whose owner could read its jobs
+  function ownerBlindCards(): Suggestion[] {
+    const loaded = snap?.work && typeof snap.work === 'object' ? snap.work.loaded : null;
+    const running = new Set((Array.isArray(loaded?.devices) ? loaded!.devices : []).filter((x) => x && !x.local && okId(x.id)).map((x) => x.id));
+    const out: Suggestion[] = [];
+    for (const d of report?.devices ?? []) {
+      if (!running.has(d.id)) continue;
+      const c = d.checks.find((x) => x.k === 'owner-blind');
+      if (!c || c.ok !== false) continue;
+      out.push({
+        id: `trust:owner-blind:${d.id}`, kind: 'warn', weight: 1,
+        title: `${d.name} could read the jobs it runs`,
+        why: `${c.text}. Prompts reach it in plain text, so only give it work you would show its owner.`,
+        action: { do: 'open', panel: 'branch', branch: 'trust' }, label: 'look',
+      });
+    }
+    return out;
   }
 
   return {
@@ -501,9 +546,10 @@ export function create(ctx: BranchCtx): Branch {
         stat: report.verdict === 'ok' ? `all clear · ${plural(devs.length, 'device')}` : report.verdict === 'bad' ? `${plural(bad, 'thing')} to look at` : 'not checked yet',
         gauge: pct(ok, devs.length),
         rows: [],
-        lines: report.devices.map((d) => `${d.name} · ${d.verdict === 'ok' ? 'all clear' : d.verdict === 'bad' ? d.checks.find((c) => c.ok === false)!.text : 'not checked yet'}`),
+        lines: report.devices.map((d) => `${d.name} · ${d.verdict === 'ok' ? 'all clear' : d.verdict === 'bad' ? firstBad(d.checks).text : 'not checked yet'}`),
         note: 'nothing private goes into these checks: no prompts, no answers, only who connected and whether it was let in.',
         report,
+        suggestions: ownerBlindCards(),
       };
     },
   };

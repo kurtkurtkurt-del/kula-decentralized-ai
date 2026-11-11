@@ -177,6 +177,64 @@ certificate is still to be learned is grey, never green).
   look through mocks, the notes across a restart) and `trust-render.test.tsx`. Not yet run on a
   real phone.
 
+## owner-blind (11.11.2026)
+
+A phone running a job for someone else sees the prompt in plain text; its owner could read it.
+The first step against that is to *know*: one more line per device in the security report,
+**owner-blind**, saying whether the device's hardware vouches that its owner cannot read the
+jobs it runs. It proves this with Android hardware key attestation.
+
+How (the wire is in [GATE.md](GATE.md#get-trust), under `challenge`): once an hour kula's engine
+asks the device `GET /trust?challenge=<32 random bytes>`; the phone makes a fresh keystore key
+whose attestation challenge folds in that question and its device id, signs the leaf certificate
+with its device key, and answers with the chain. `node/src/attest.ts` checks, on this computer:
+
+| what | how |
+|---|---|
+| the chain | each certificate names the next as issuer and is signed by it; the last one carries one of Google's two root public keys (`GOOGLE_ROOTS`, from `https://android.googleapis.com/attestation/root`: the RSA-4096 root, reissued 2016–2022 over one key, and the ECDSA P-384 "Key Attestation CA1" that signs chains from 1 February 2026) |
+| dates | every certificate but the leaf is in its validity period. Remote-provisioned (RKP) certificates live days on purpose; factory-provisioned chains (the certificate under the root names a `serialNumber`) are trusted past their end, as Google says |
+| revocation | each certificate's serial against Google's status list, *when there is a copy*: fetching it (`https://android.googleapis.com/attestation/status`) is an internet call, so nothing fetches it unless the person runs `kula-node attestation refresh` (kept in `~/.kula-node/attestation-status.json`). Without it the green line says "revocation not checked". Its keys are lowercase hex as documented, and (seen 11.11.2026) about a thousand all-digit ones that read as decimal serials: both spellings match |
+| the key description | OID 1.3.6.1.4.1.11129.2.1.17 in the leaf and nowhere else (one further down was not made by the hardware), read with a small DER reader |
+| this question, this device | its `attestationChallenge` is sha256(`"kula-attest-1\n" + challenge + "\n" + device id`); `sig` verifies under the ledger key whose sha256[:16] is that id |
+| hardware | the lower of `attestationSecurityLevel` and `keyMintSecurityLevel` is TEE or StrongBox |
+| boot | `rootOfTrust` (hardware list): `deviceLocked` true and `verifiedBootState` Verified (green) |
+| the app | `attestationApplicationId`: exactly one package, kula's (`app.pasaport.android`), and a signing certificate digest on the official list |
+
+The official list is empty today: kula's apks (debug and release) are signed with the React
+Native template's public debug key (SHA-256 `fac61745…3b9c`), which anyone can sign an app with,
+so a phone that passes everything else says honestly *"hardware key, locked, verified boot, but a
+debug build (signed with the public debug key): its owner could still read jobs"*. When kula has
+a release key, its digest goes into `OFFICIAL_SIGNERS` in `attest.ts`; a person who builds kula
+with their own key may name it in `~/.kula-node/attestation.json` (`{"signers":["<sha256>"]}`).
+
+The line is `true` (all of it holds), `false` (with the first reason, in plain words: no proof,
+not Google's root, expired, revoked, not this question, not its ledger key, software keystore,
+unlocked, verified boot yellow/orange/red, another app, not an official build) or `null`: a
+computer ("a computer cannot prove this"), an older kula, not asked yet, or a proof more than 26
+hours old. **It does not change the verdict colour yet**: it is shown, never counted. A device in
+the running cluster (the loaded model's devices) that fails it gets a warning card on the brain
+panel (`trust:owner-blind:<device>`), which the person can dismiss.
+
+What it does not say: whether kula itself leaks a prompt (logs, files, a debuggable build: the
+reason the signing key matters), and whether the phone has a hole Google has not revoked yet. It
+says what the hardware vouches for, no more. Google's provisioning-info extension
+(1.3.6.1.4.1.11129.2.1.30: certificates issued lately, a device reported lost) is not read yet.
+
+**On the phone** the report does not show the line yet: checking a chain there needs the same
+DER reading and X.509 path in Kotlin (`TrustVerify.kt`), which is not written. The computer's
+report has it.
+
+Tests: `node/test/attest.test.ts` (real chains from Google's verification library,
+`github.com/android/keyattestation` testdata, Apache-2.0, in `node/test/fixtures/attestation/`: a
+Pixel 9a on the 2026 ECDSA root in TEE and StrongBox, a Pixel 9 Pro under RKP and the RSA root, a
+Pixel 2's factory chain past its date, the software root; then chains made in the test under a
+test root for every rule: debug key, official key, software level, unlocked, no root of trust,
+yellow and orange boot, another app, a uid shared with another app, another question, another
+device's proof, another key's signature, Ed25519 device keys, a key description in an
+intermediate, revoked in hex and in decimal, the status list file), `godseye-trust.test.ts` (the
+line, never counted, the cards, the hourly ask), `trust.test.ts` (a computer's `attest: null`),
+`AttestTest.kt` (the request and answer shape). Not yet run on a real phone.
+
 ## peer badges
 
 Beside each device on the peers screen: **verified** (sage), **warning** (gold), **refused**
@@ -195,8 +253,8 @@ anything else verified (`peerBadge` in `app/src/llm/audit.ts`).
 
 ## what v0 does not do
 
-No routing, no server, no scoring, no sharing of the ledger between devices, no hardware
-key, no pruning beyond rotation.
+No routing, no server, no scoring, no sharing of the ledger between devices, no pruning
+beyond rotation. (Hardware key attestation came on 11.11.2026: owner-blind, above.)
 
 Fixed on 10.11.2026: a half last line (the process died mid-append) is cut off on open
 and before each append, and the cut is itself a signed `health` line `{"torn":<bytes>}`; a
