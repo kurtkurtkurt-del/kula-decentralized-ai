@@ -65,6 +65,7 @@ running a cluster from this computer:
   kula-node peers add <6 digits> [pin] --relay <wss://…>    a worker far away, by its relay code (and pairing code); $KULA_RELAY is the default relay
   kula-node peers list [--code] [--json]   the peer book; --code prints each peer as a pasteable code
   kula-node peers rm <id | name>     forget a worker
+  kula-node peers ring <id | name> <home|circle|world>   how far you trust it: your own, a friend's, a stranger's (default home)
   kula-node peers probe [id…] [--json]   tcp + handshake on both channels, 2 s each (--timeout <ms>)
   kula-node peers scan               listen for _kula._tcp on the lan for 3 s (--timeout <ms>)
   kula-node chat --model <file.gguf> --mode apart|split [options]

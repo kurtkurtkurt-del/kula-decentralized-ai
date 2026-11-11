@@ -13,7 +13,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { openApart, openPeerDevice, startLlamaServer, type Cluster, type Message, type ModelRef, type Reply, type StartBackend, type WireMessage } from '../apart.js';
-import { readPeers, writePeers, parsePeerText, upsertPeer, findPeer, probePeers, peersFile, whereIs, discover, reachedBy, type AddrVia, type Peer, type PeerProbe, type Found, type PeerKind } from '../peers.js';
+import { readPeers, writePeers, parsePeerText, upsertPeer, findPeer, probePeers, peersFile, whereIs, discover, reachedBy, isRing, ringOf, widestRing, type AddrVia, type Peer, type PeerProbe, type Found, type PeerKind, type Ring } from '../peers.js';
 import { connectRemote, handshake, peekGate, GateRefused, type GatePeek } from '../gate.js';
 import { Adb, isSerial, stateHelp, NO_ADB_HELP, type CableDevice } from './cable.js';
 import { loadOrCreateIdentity, fingerprint, Paired, type GateIdentity } from '../tls.js';
@@ -125,6 +125,9 @@ export interface PeerRow {
   usesThisComputer: boolean;
   // the kind of address the record in use answered at (peers.ts reachedBy); null: cable, relay
   reachedBy: AddrVia | null;
+  // how far the person trusts it (11.11.2026): home (their own), circle (a friend's), world (a
+  // stranger's); the widest over its records. God's eye's request review reads it.
+  ring: Ring;
 }
 export interface Way { id: string; where: string; ok: boolean | null; ms: number | null; reason: string | null }
 export interface Ways {
@@ -269,6 +272,7 @@ export function peerRow(p: Peer, probe?: Reach | null, probedAt: number | null =
     holds,
     via: viaOf(p), ways: { cable: null, wifi: null, relay: null }, routes: [p.id], heardAt: null, usesThisComputer: false,
     reachedBy: p.cable || p.relay ? null : reachedBy(p),
+    ring: ringOf(p),
   };
 }
 
@@ -405,6 +409,7 @@ export class Engine {
       routes: g.map((p) => p.id),
       heardAt,
       usesThisComputer: g.some((p) => !!p.fp && this.paired().has(p.fp)),
+      ring: widestRing(g),
     };
   }
 
@@ -640,6 +645,22 @@ export class Engine {
     for (const x of g) { x.name = clean; x.named = true; }
     writePeers(list, file);
     this.note(`renamed ${was} to ${clean}`);
+    return true;
+  }
+
+  // How far the person trusts a device (11.11.2026): home, circle or world. Every way of the
+  // device gets it; god's eye's request review then says what may go there. False: no such device.
+  setRing(id: string, ring: string): boolean {
+    if (!isRing(ring)) throw new Error('a ring is home, circle or world');
+    const file = this.file();
+    const list = readPeers(file);
+    const hit = findPeer(list, id);
+    const g = hit ? groupOf(groupPeers(list), hit.id) : null;
+    if (!g) return false;
+    const was = widestRing(g);
+    for (const x of g) x.ring = ring;
+    writePeers(list, file);
+    if (was !== ring) this.note(`${this.deviceRow(g).name} is now ${ring} (was ${was})`);
     return true;
   }
 

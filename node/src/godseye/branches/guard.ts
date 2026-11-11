@@ -70,6 +70,9 @@
 //   a device's trust.rejectsDay is a plain object; its keys are reason words from the snapshot, so
 //   the three names that change an object's shape ("__proto__", "constructor", "prototype") are
 //   skipped (they are never reason words).
+//   a device's ring: absent (or null) stays absent, which means home; home, circle and world are
+//   kept; any other value is world, the strictest reading (a ring nobody can read is no reason to
+//   send private work there).
 //   the engine's loaded.sees and a trust's upTo are not in the Snapshot type and no branch reads
 //   them: they are dropped.
 import { createHash } from 'node:crypto';
@@ -233,6 +236,7 @@ function devOf(raw: Record<string, unknown>, id: string): EyeDevice {
     trust: isObj(raw.trust) ? trustOf(raw.trust) : null,
     // only when the snapshot has it (an older one does not): one of the three kinds, else null
     ...('reachedBy' in raw ? { reachedBy: raw.reachedBy === 'lan' || raw.reachedBy === 'ipv6' || raw.reachedBy === 'mapped' ? raw.reachedBy : null } : {}),
+    ...(raw.ring == null ? {} : { ring: raw.ring === 'home' || raw.ring === 'circle' ? raw.ring : 'world' }),
   };
 }
 

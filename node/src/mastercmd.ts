@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import readline from 'node:readline';
-import { discover, findPeer, maskSecret, parsePeerText, peerCode, peersFile, probePeers, readPeers, removePeer, upsertPeer, writePeers, whereIs, type Peer } from './peers.js';
+import { discover, findPeer, isRing, maskSecret, parsePeerText, peerCode, peersFile, probePeers, readPeers, removePeer, ringOf, setRing, upsertPeer, writePeers, whereIs, type Peer } from './peers.js';
 import { loadOrCreateIdentity } from './tls.js';
 import { loadOrCreate as loadDeviceKey } from './audit/key.js';
 import { home } from './paths.js';
@@ -34,7 +34,7 @@ function row(p: Peer, extra = ''): string {
   const ram = p.ram != null ? `${p.ram} MB` : '?';
   const bw = p.bw != null ? `${p.bw} GB/s` : '?';
   const trust = p.fp ? `cert ${p.fp.slice(0, 8)}${p.pin ? ' +pin' : ''}` : p.relay ? (p.pin ? 'pin, cert to learn' : 'no pin, no cert') : `secret ${maskSecret(p.secret)}`;
-  return `${p.id.slice(0, 8)}  ${p.name.padEnd(18)} ${p.kind.padEnd(6)} ${whereIs(p)}  ${trust}  ram ${ram}  bw ${bw}${p.last_ok ? `  ok ${p.last_ok.slice(0, 16)}` : ''}${extra}`;
+  return `${p.id.slice(0, 8)}  ${p.name.padEnd(18)} ${p.kind.padEnd(6)} ${ringOf(p).padEnd(6)} ${whereIs(p)}  ${trust}  ram ${ram}  bw ${bw}${p.last_ok ? `  ok ${p.last_ok.slice(0, 16)}` : ''}${extra}`;
 }
 
 // This computer's certificate (protocol v2): made on first use, kept in ~/.kula-node.
@@ -77,6 +77,17 @@ export async function peersCommand(sub: string | undefined, rest: string[], flag
     console.log(`removed: ${row(removed)}`);
     return 0;
   }
+  if (sub === 'ring') {
+    // home: your own device (everything may go there); circle: a friend's (work you trust them
+    // with); world: a stranger's (only pieces with nothing private). Every way of the device gets it.
+    const [ref, ring] = rest;
+    if (!ref || !isRing(ring)) { console.error('usage: kula-node peers ring <id | id prefix | name> <home|circle|world>'); return 2; }
+    const r = setRing(readPeers(file), ref, ring);
+    if (!r) { console.error(`no such peer: ${ref}`); return 1; }
+    writePeersSafe(r.list, file);
+    for (const p of r.peers) console.log(`${ring}: ${row(p)}`);
+    return 0;
+  }
   if (sub === 'probe') {
     const all = readPeers(file);
     const wanted = rest.length ? rest.map((r) => findPeer(all, r)).filter((p): p is Peer => !!p) : all;
@@ -106,7 +117,7 @@ export async function peersCommand(sub: string | undefined, rest: string[], flag
     }
     return 0;
   }
-  console.error('usage: kula-node peers add <qr json | code | host:port:secret | 6-digit relay code [pin] --relay wss://…> | list [--code] | rm <id> | probe [id…] | scan');
+  console.error('usage: kula-node peers add <qr json | code | host:port:secret | 6-digit relay code [pin] --relay wss://…> | list [--code] | rm <id> | ring <id> <home|circle|world> | probe [id…] | scan');
   return 2;
 }
 

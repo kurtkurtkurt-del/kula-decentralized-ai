@@ -82,7 +82,7 @@ test('facts keeps the whitelist and drops where, reason, keys, lines, titles and
   assert.deepEqual(f.devices.map((d) => d.id), ['a', 'b']);          // sorted by id
   assert.deepEqual(Object.keys(f.devices[0]), [
     'id', 'name', 'kind', 'via', 'reachable', 'reachMs', 'checkedAt', 'lastOk',
-    'ramMb', 'bwGBs', 'gpu', 'tls', 'waitingPair', 'plugged', 'holds', 'down', 'trust',
+    'ramMb', 'bwGBs', 'gpu', 'tls', 'waitingPair', 'plugged', 'holds', 'down', 'trust', 'ring',
   ]);
   assert.equal(f.devices[0].down, false);
   assert.equal(f.devices[0].trust, null);
@@ -112,7 +112,7 @@ test('diff names only the changed fields, a new device whole, a gone device null
     b: null,
     c: {
       id: 'c', name: 'device c', kind: 'phone', via: 'wifi', reachable: true, reachMs: 12, checkedAt: 900,
-      lastOk: null, ramMb: 3400, bwGBs: 60, gpu: null, tls: true, waitingPair: false, plugged: null, holds: null, down: false, trust: null,
+      lastOk: null, ramMb: 3400, bwGBs: 60, gpu: null, tls: true, waitingPair: false, plugged: null, holds: null, down: false, trust: null, ring: 'home',
     },
   }));
   // nothing changed: an empty delta, so the look is only its at

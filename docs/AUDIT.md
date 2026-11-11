@@ -235,6 +235,71 @@ intermediate, revoked in hex and in decimal, the status list file), `godseye-tru
 line, never counted, the cards, the hourly ask), `trust.test.ts` (a computer's `attest: null`),
 `AttestTest.kt` (the request and answer shape). Not yet run on a real phone.
 
+## rings and request review (11.11.2026)
+
+Three rings say how far a device is trusted: **home** (your own devices: everything may go
+there, a private chat included), **circle** (a friend's: work you trust them with), **world**
+(a stranger's: only pieces with nothing private, because a stranger's phone sees the prompt in
+plain text while it runs). Every device paired before this is home.
+
+- **Where the ring lives.** `ring` in the peer book (`~/.kula-node/peers.json`, absent = home),
+  set with `kula-node peers ring <id> <home|circle|world>`, the engine's `setRing` or
+  `POST /api/peers/ring {id, ring}`. Every record of one device (its cable and its wi-fi) gets
+  it; a device whose records disagree counts as the widest. It reaches god's eye as
+  `EyeDevice.ring`; the eye's guard reads an unknown value as world, and the black box records
+  it. The phone keeps its own peer book and has no ring yet.
+- **How private a job is.** `node/src/godseye/branches/sensitivity.ts` rates a request
+  **private**, **circle-ok** or **world-ok** with rules that each have a name the person can
+  read:
+
+  | level | kinds |
+  |---|---|
+  | private | e-mail, iban (mod 97), card (luhn), turkish id (T.C. kimlik, both check digits), phone (tr, intl, us), password/key/token (env lines, urls with a password, provider key shapes, private keys, long random runs), street address, birth date, a named person (Dr./Sayın/…, "Ayşe Hanım", "my friend Mehmet", "annem Ayşe"), your own files and photos (paths, file names, "my photos", "fotoğraflarım"), something marked confidential, your own health or money (a health or money word next to "my", "ben", "annem", a name, or a turkish first-person ending: "kanserim", "maaşım", "borcumu", "depresyondayım") |
+  | circle-ok | a health topic with nobody named, pasted code, your own company or clients |
+  | world-ok | none of the above |
+
+  A text that tries to give the model new orders ("ignore all previous instructions", "önceki
+  talimatları unut") is a flag, not a level: look again on any ring. The request is also cut
+  into pieces (blank lines, list items, sentences; not after "Dr."; a code fence whole) and
+  each piece is rated on its own and against the whole text, so the branch can say how many
+  pieces a friend or a stranger could still take.
+- **What the review branch says.** home takes everything, circle no private material, world
+  only world-ok material. Cards (all `warn`, never acting by themselves):
+  `review:send-private:<project>` (private material on a circle or world device; weight 3 for
+  world), `review:send-circle:<project>` (circle-ok material on a world device), both opening
+  the branch page and saying how many pieces could go there instead;
+  `review:private-chat` (a chat runs while a circle or world device is in the loaded work;
+  its button loads the same model on the home devices only, or here); and
+  `review:world-in-cluster` (weight 1: a stranger's device is in the loaded work, no chat yet).
+  A key in a request or an injection is to be looked at again even at home; other private data
+  at home is fine. The page has one row per ring: its devices, how many projects (and pieces of
+  the others) may go there now and how many are held back, by level, and whether the chat is.
+  Nothing private enters the view, a card, the feed, the black box or a notes file: kinds and
+  counts only, titles masked.
+
+**Why rules and not a model (research, 11.11.2026).** The common open PII tool, Microsoft
+Presidio, is built the same way for its structured entities: a pattern, a checksum where one
+exists and context words, with a model only for names
+([supported entities](https://microsoft.github.io/presidio/supported_entities)); it has no
+Turkish id recognizer, and the TCKN checksum is the usual way to tell an id from any 11 digits
+([Septum's benchmark](https://byerlikaya.github.io/Septum/benchmark)). Secret scanners
+(gitleaks, TruffleHog) are regex rules plus entropy; only TruffleHog's verification calls out,
+which kula does not want ([comparison](https://appsecsanta.com/secret-scanning-tools)). For
+injection, the small local classifier is Meta's Llama Prompt Guard 2 (22M on DeBERTa-xsmall,
+English only; the 86M one is multilingual)
+([model card](https://huggingface.co/meta-llama/Llama-Prompt-Guard-2-22M),
+[LlamaFirewall](https://arxiv.org/pdf/2505.03574)); it gives a label and no reason, is a model
+to ship, and is reported to miss indirect injection in tool results
+([StackOne](https://www.stackone.com/blog/training-22mb-prompt-injection-classifier/)). The
+special categories (health, among others) follow GDPR art. 9 and KVKK art. 6. So: rules now,
+each one explainable; a local name recognizer or Prompt Guard can come later as one more rule
+with its own name. What rules miss: a name nobody points at ("ask Elif"), a health story told
+without a first-person word, context that crosses a piece cut without a detectable word.
+
+Tests: `node/test/godseye-rings.test.ts` (classification in Turkish and English, pieces, the ring
+table, the guard, the peer book, the cli, the engine and the page's route, every card and its
+`cleanCard`, no private text anywhere), `godseye-review.test.ts`.
+
 ## peer badges
 
 Beside each device on the peers screen: **verified** (sage), **warning** (gold), **refused**

@@ -10,6 +10,7 @@ import { probe, peekGate, type Channel, type ProbeResult, type TlsClient } from 
 import { probeRelay, CODE_RE, normalizeRelayUrl, type RelayRef } from './relay.js';
 import type { GateIdentity } from './tls.js';
 import { home } from './paths.js';
+import { groupOf, groupPeers } from './ui/devices.js';
 
 export type PeerKind = 'phone' | 'tablet' | 'pc';
 
@@ -20,6 +21,16 @@ export type AddrVia = 'lan' | 'ipv6' | 'mapped';
 export interface PeerAddr { host: string; port: number; via: AddrVia }
 export const ADDR_VIAS: AddrVia[] = ['lan', 'ipv6', 'mapped'];
 export const MAX_ADDRS = 8;
+// How far the person trusts a device (11.11.2026): home is their own (everything may go there,
+// a private chat included), circle a friend's (work they trust them with), world a stranger's
+// (only pieces with nothing private: a stranger's phone sees the prompt in plain text while it
+// runs). Every device paired so far is home; the person says otherwise (`peers ring`).
+export type Ring = 'home' | 'circle' | 'world';
+export const RINGS: Ring[] = ['home', 'circle', 'world'];
+export const isRing = (v: unknown): v is Ring => v === 'home' || v === 'circle' || v === 'world';
+export const ringOf = (p: Pick<Peer, 'ring'>): Ring => (isRing(p.ring) ? p.ring : 'home');
+/** a device's ring over all its records: the widest one, so a record added later cannot narrow it */
+export const widestRing = (list: Pick<Peer, 'ring'>[]): Ring => list.map(ringOf).reduce((a, b) => (RINGS.indexOf(b) > RINGS.indexOf(a) ? b : a), 'home' as Ring);
 
 export interface Peer {
   id: string;
@@ -54,6 +65,7 @@ export interface Peer {
   wid?: string | null;
   added_at: string;
   last_ok?: string | null;
+  ring?: Ring;           // absent: home
 }
 
 export function peersFile(): string {
@@ -266,6 +278,17 @@ export function removePeer(list: Peer[], ref: string): { list: Peer[]; removed: 
   const hit = findPeer(list, ref);
   if (!hit) return { list, removed: null };
   return { list: list.filter((p) => p !== hit), removed: hit };
+}
+
+// Sets the ring of a device: the record found by ref and every other record of the same device
+// (the same certificate or the same worker id: its cable and its wi-fi). Null when none is found.
+export function setRing(list: Peer[], ref: string, ring: Ring): { list: Peer[]; peers: Peer[] } | null {
+  if (!isRing(ring)) throw new Error('a ring is home, circle or world');
+  const hit = findPeer(list, ref);
+  if (!hit) return null;
+  const group = new Set(groupOf(groupPeers(list), hit.id) ?? [hit]);
+  const next = list.map((p) => (group.has(p) ? { ...p, ring } : p));
+  return { list: next, peers: next.filter((_, i) => group.has(list[i])) };
 }
 
 export function findPeer(list: Peer[], ref: string): Peer | null {

@@ -1,106 +1,42 @@
 // 11 request review: it looks at each night project before it runs, and at the work loaded now,
 // and says what it thinks: ok, or look again with the reasons in plain words. Simple rules only:
-//   - personal data in the request (an e-mail, a phone number, an iban, a card number, something
-//     that looks like a password, an api key or a token);
+//   - how private the request is (sensitivity.ts): private, circle-ok or world-ok, with the kinds
+//     that made it so, and how many of its pieces carry nothing private;
+//   - the rings (11.11.2026): home devices take everything, a friend's (circle) device takes no
+//     private material, a stranger's (world) device only world-ok material. A job whose material
+//     would go further than its level allows is to be looked at again, and so is a private chat
+//     running while a circle or world device is in the loaded work;
+//   - a password, key or token in a request, or text that tries to give the model new orders, is
+//     to be looked at again on any ring;
 //   - where it would go: a device reached over a relay, or one without a pinned certificate;
 //   - sanity: a start already past while it still waits, an end before the start, an empty or very
 //     short request, a model this computer does not know, a model too big for the chosen devices.
-// It never blocks, edits or delays a job; it only says. It never keeps or emits the request text:
-// its verdicts are reason kinds, held in memory only (nothing goes into its notes file), and a
-// title is shown with anything that looks personal masked out.
-import type { Branch, BranchCtx, EyeDevice, EyeModel, EyeProject, Snapshot } from '../types.js';
+// It never blocks, edits or delays a job; it only says, and its cards only open its page or offer
+// to load the same model on home devices. It never keeps or emits the request text: its verdicts
+// are reason kinds and counts, held in memory only (nothing goes into its notes file), and a title
+// is shown with anything a sensitivity rule finds masked out.
+import type { Branch, BranchCtx, EyeDevice, EyeModel, EyeProject, Ring, Snapshot, Suggestion, SuggestAction } from '../types.js';
 import { hhmm, pct } from './util.js';
+import { RINGS, kindWords, masked, mayGo, parts, privateKinds, ringOf, sense, widest, type Level, type Parts } from './sensitivity.js';
+
+export { masked } from './sensitivity.js';
+/** the private kinds of a text (e-mail, iban, card, phone, secret, …), in a fixed order */
+export const personalKinds = privateKinds;
 
 const PAST_GRACE_MS = 2 * 60_000;  // the runner starts a job at its time; give it a moment
 const SHORT_REQUEST = 12;          // characters: shorter than this is hardly a night's work
 const LINES_MAX = 14;
 
-// ---- personal data: each finder returns the spans it found
-
-type Span = [number, number];
-type Finder = (text: string) => Span[];
-
-const all = (re: RegExp, text: string, keep: (m: string) => boolean = () => true): Span[] => {
-  const out: Span[] = [];
-  for (const m of text.matchAll(re)) if (keep(m[0])) out.push([m.index!, m.index! + m[0].length]);
-  return out;
-};
-const digits = (s: string) => s.replace(/\D/g, '');
-
-function luhn(num: string): boolean {
-  let sum = 0;
-  for (let i = 0; i < num.length; i++) {
-    let d = Number(num[num.length - 1 - i]);
-    if (i % 2 === 1) { d *= 2; if (d > 9) d -= 9; }
-    sum += d;
-  }
-  return sum % 10 === 0;
-}
-
-function ibanOk(raw: string): boolean {
-  const s = raw.replace(/\s/g, '').toUpperCase();
-  if (s.length < 15 || s.length > 34) return false;
-  const moved = s.slice(4) + s.slice(0, 4);
-  let rest = 0;
-  for (const ch of moved) {
-    const v = ch >= 'A' && ch <= 'Z' ? String(ch.charCodeAt(0) - 55) : ch;
-    for (const c of v) rest = (rest * 10 + Number(c)) % 97;
-  }
-  return rest === 1;
-}
-
-const SECRETS: RegExp[] = [
-  /(?<![\p{L}\d])(?:password|passwd|pwd|passcode|passphrase|parola|şifre|sifre)\s*[:=]\s*\S+/giu,
-  /\b(?:api[ _-]?key|apikey|access[ _-]?key|secret|token|auth)\s*[:=]\s*\S{8,}/gi,
-  /\bbearer\s+[A-Za-z0-9._~+/=-]{16,}/gi,
-  /\b(?:sk|pk|rk)[-_](?:live[-_]|test[-_]|proj[-_]|ant[-_])?[A-Za-z0-9_-]{16,}/g,
-  /\bgh[pousr]_[A-Za-z0-9]{20,}/g,
-  /\bgithub_pat_[A-Za-z0-9_]{20,}/g,
-  /\bAKIA[0-9A-Z]{16}\b/g,
-  /\bAIza[0-9A-Za-z_-]{30,}/g,
-  /\bxox[abprs]-[A-Za-z0-9-]{10,}/g,
-  /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]*/g,   // a jwt
-  /-----BEGIN [A-Z ]*PRIVATE KEY-----/g,
-  /\b[A-Fa-f0-9]{32,}\b/g,                                          // a long hex key
-];
-// a long run that mixes upper, lower and digits looks like a key, not a word
-const RANDOMISH = /[A-Za-z0-9+/_-]{28,}/g;
-const randomish = (m: string) => /[A-Z]/.test(m) && /[a-z]/.test(m) && /\d/.test(m) && !/^[a-z]+(?:[-_][a-z]+)+$/i.test(m);
-
-export const PERSONAL: { kind: string; words: string; find: Finder }[] = [
-  { kind: 'email', words: 'an e-mail address', find: (t) => all(/[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}/g, t) },
-  { kind: 'iban', words: 'an iban', find: (t) => all(/\b[A-Z]{2}\d{2}(?: ?[A-Z0-9]{4}){2,7}(?: ?[A-Z0-9]{1,4})?\b/gi, t, ibanOk) },
-  { kind: 'card', words: 'a card number', find: (t) => all(/\b\d(?:[ -]?\d){12,18}\b/g, t, (m) => luhn(digits(m))) },
-  { kind: 'phone', words: 'a phone number', find: (t) => all(/(?:\+|\b00|\b0)\d[\d ().-]{6,}\d\b/g, t, (m) => { const n = digits(m).length; return n >= 10 && n <= 15; }) },
-  { kind: 'secret', words: 'something like a password, key or token', find: (t) => [...SECRETS.flatMap((re) => all(re, t)), ...all(RANDOMISH, t, randomish)] },
-];
-
-/** The kinds of personal data found in a text, in a fixed order; a span counts once, for the first kind that claims it. */
-export function personalKinds(text: string): string[] {
-  const taken: Span[] = [];
-  const kinds: string[] = [];
-  for (const p of PERSONAL) {
-    const spans = p.find(text).filter(([a, b]) => !taken.some(([x, y]) => a < y && x < b));
-    if (spans.length) { kinds.push(p.kind); taken.push(...spans); }
-  }
-  return kinds;
-}
-
-/** The text with everything that looks personal replaced by "…". */
-export function masked(text: string): string {
-  const spans = PERSONAL.flatMap((p) => p.find(text)).sort((a, b) => a[0] - b[0]);
-  let out = '', at = 0;
-  for (const [a, b] of spans) {
-    if (b <= at) continue;
-    out += text.slice(at, Math.max(a, at)) + (a >= at ? '…' : '');
-    at = b;
-  }
-  return out + text.slice(at);
-}
-
 // ---- the reasons, as kinds (kept) and words (shown)
 
+const RING_WORDS: Record<Ring, string> = { home: 'your own devices (home)', circle: 'a friend’s device (circle)', world: 'a stranger’s device (world)' };
 const WORDS: Record<string, string> = {
+  secret: 'it carries a password, key or token',
+  injection: 'it carries text that tries to give the model new orders',
+  'send:circle': `private material would go to ${RING_WORDS.circle}`,
+  'send:world': `material that is not for strangers would go to ${RING_WORDS.world}`,
+  'chat:circle': `a private chat would reach ${RING_WORDS.circle}`,
+  'chat:world': `a private chat would reach ${RING_WORDS.world}`,
   relay: 'it would go over a relay',
   'no-tls': 'it would go to a device without a pinned certificate',
   'gone-device': 'a chosen device is no longer paired',
@@ -111,14 +47,16 @@ const WORDS: Record<string, string> = {
   'unknown-model': 'this computer does not know its model',
   'too-big': 'the model does not fit the chosen devices',
 };
-const personalWord = (kind: string) => PERSONAL.find((p) => p.kind === kind)?.words ?? kind;
-export const reasonWords = (reasons: string[]): string[] => {
-  const pers = reasons.filter((r) => r.startsWith('personal:')).map((r) => personalWord(r.slice(9)));
-  const rest = reasons.filter((r) => !r.startsWith('personal:')).map((r) => WORDS[r] ?? r);
-  return [...(pers.length ? [`contains personal data (${pers.join(', ')})`] : []), ...rest];
-};
+export const reasonWords = (reasons: string[]): string[] => reasons.map((r) => WORDS[r] ?? r);
 
-export interface Verdict { ok: boolean; reasons: string[] }
+export interface Verdict {
+  ok: boolean;
+  reasons: string[];
+  level: Level;                    // how private its request is
+  kinds: string[];                 // what made it so (kind names, never the text)
+  parts: Parts | null;             // its pieces per ring, counted
+  rings: Ring[];                   // the rings its devices are in ('home' for this computer)
+}
 
 const FINISHED = new Set(['done', 'failed', 'cancelled', 'missed']);
 
@@ -131,12 +69,22 @@ function whereReasons(devs: (EyeDevice | undefined)[]): string[] {
   return out;
 }
 
+/** What a level may not do on these rings: the send reasons. */
+function sendReasons(level: Level, rings: Ring[]): string[] {
+  const out: string[] = [];
+  if (rings.includes('circle') && !mayGo(level, 'circle')) out.push('send:circle');
+  if (rings.includes('world') && !mayGo(level, 'world')) out.push('send:world');
+  return out;
+}
+
 /** The devices a project would use: the chosen ones; with none chosen in "apart", every paired one; "here" uses only this computer. */
 function projectDevices(p: EyeProject, s: Snapshot): (EyeDevice | undefined)[] {
   if (p.mode === 'here') return [];
   if (!p.peers.length) return p.mode === 'apart' ? s.devices : [];
   return p.peers.map((id) => s.devices.find((d) => d.id === id));
 }
+
+const ringsOf = (devs: (EyeDevice | undefined)[]): Ring[] => RINGS.filter((r) => r === 'home' || devs.some((d) => d && ringOf(d) === r));
 
 function fits(m: EyeModel, p: EyeProject, devs: EyeDevice[], s: Snapshot): boolean | null {
   const host = s.host.freeMb;
@@ -155,8 +103,12 @@ function fits(m: EyeModel, p: EyeProject, devs: EyeDevice[], s: Snapshot): boole
 export function reviewProject(p: EyeProject, s: Snapshot): Verdict {
   const reasons: string[] = [];
   const req = String(p.request ?? '').trim();
-  for (const k of personalKinds(req)) reasons.push(`personal:${k}`);
+  const sn = sense(`${String(p.title ?? '')}\n\n${req}`);
   const devs = projectDevices(p, s);
+  const rings = ringsOf(devs);
+  if (sn.kinds.includes('secret')) reasons.push('secret');
+  if (sn.flags.includes('injection')) reasons.push('injection');
+  reasons.push(...sendReasons(sn.level, rings));
   reasons.push(...whereReasons(devs));
   if (p.state === 'waiting' && p.start < s.at - PAST_GRACE_MS) reasons.push('past-start');
   if (p.end <= p.start) reasons.push('end-before-start');
@@ -165,20 +117,105 @@ export function reviewProject(p: EyeProject, s: Snapshot): Verdict {
   const m = s.models.find((x) => x.id === p.model);
   if (!m) reasons.push('unknown-model');
   else if (fits(m, p, devs.filter((d): d is EyeDevice => !!d), s) === false) reasons.push('too-big');
-  return { ok: reasons.length === 0, reasons };
+  return { ok: reasons.length === 0, reasons, level: sn.level, kinds: sn.kinds, parts: req ? parts(req) : null, rings };
+}
+
+/** a person's own chat runs now: something is being written and no night project is running */
+const chatRuns = (s: Snapshot): boolean => s.work.chatting > 0 && !s.projects.some((p) => p.state === 'running');
+
+/** the remote devices of the work loaded now, as the snapshot's devices (a device gone from the book stays undefined) */
+function loadedDevices(s: Snapshot): (EyeDevice | undefined)[] {
+  const l = s.work.loaded;
+  if (!l) return [];
+  const ids = [...new Set([...l.devices, ...(l.parts ?? [])].filter((d) => !d.local).map((d) => d.id))];
+  return ids.map((id) => s.devices.find((x) => x.id === id));
 }
 
 function reviewLoaded(s: Snapshot): Verdict | null {
-  const l = s.work.loaded;
-  if (!l) return null;
-  const remote = [...l.devices, ...(l.parts ?? [])].filter((d) => !d.local).map((d) => s.devices.find((x) => x.id === d.id));
-  const reasons = whereReasons(remote);
-  return { ok: reasons.length === 0, reasons };
+  if (!s.work.loaded) return null;
+  const devs = loadedDevices(s);
+  const rings = ringsOf(devs);
+  // a chat is the person's own: private by its nature, home only
+  const reasons = chatRuns(s) ? rings.filter((r) => r !== 'home').map((r) => `chat:${r}`) : [];
+  reasons.push(...whereReasons(devs));
+  return { ok: reasons.length === 0, reasons, level: chatRuns(s) ? 'private' : 'world-ok', kinds: [], parts: null, rings };
 }
 
 const key = (v: Verdict) => (v.ok ? 'ok' : v.reasons.join(','));
 const say = (v: Verdict) => (v.ok ? 'ok' : `look again: ${reasonWords(v.reasons).join('; ')}`);
 const titleOf = (p: EyeProject) => `“${masked(String(p.title ?? '')).slice(0, 60) || 'untitled'}”`;
+const kindsSaid = (kinds: string[]) => kinds.map(kindWords).join(', ');
+const levelSaid = (v: Verdict) => (v.level === 'world-ok' ? 'world-ok' : `${v.level} (${kindsSaid(v.kinds)})`);
+const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
+// a card id may carry only [\w.:@/-]: a stand-in id from the guard ('~…~') is made to fit
+const cardKey = (id: string) => id.replace(/[^\w.@-]/g, '_').slice(0, 60) || '_';
+
+/** what a stranger or a friend could still take of a project held back from them */
+function splitSaid(v: Verdict, ring: Ring): string {
+  const n = v.parts ? (ring === 'world' ? v.parts.world : v.parts.circle) : 0;
+  if (!v.parts || !n) return 'keep it home: run it here or on your own devices.';
+  return `${n} of ${plural(v.parts.total, 'piece')} carry nothing ${ring === 'world' ? 'that is not for strangers' : 'private'} and could go there; keep the rest home.`;
+}
+
+function projectCard(p: EyeProject, v: Verdict, s: Snapshot): Suggestion | null {
+  const ring = v.reasons.includes('send:world') ? 'world' : v.reasons.includes('send:circle') ? 'circle' : null;
+  if (!ring) return null;
+  const names = projectDevices(p, s).filter((d): d is EyeDevice => !!d && ringOf(d) === ring).map((d) => d.name);
+  const kind = v.level === 'private' ? 'send-private' : 'send-circle';
+  return {
+    id: `review:${kind}:${cardKey(p.id)}`,
+    kind: 'warn',
+    title: `${v.level === 'private' ? 'private material' : 'material not for strangers'} would go to ${RING_WORDS[ring]}`,
+    why: `the night project ${titleOf(p)} (${hhmm(p.start)}) carries ${kindsSaid(v.kinds)} and is set to run on ${names.join(', ') || 'a device'}. ${splitSaid(v, ring)}`,
+    action: { do: 'open', panel: 'branch', branch: 'review' },
+    label: 'look',
+    weight: ring === 'world' ? 3 : 2,
+  };
+}
+
+/** the same model again, on the home devices of the loaded work only, or here; null when there is no such way */
+function homeOnly(s: Snapshot): SuggestAction | null {
+  const l = s.work.loaded!;
+  const home = loadedDevices(s).filter((d): d is EyeDevice => !!d && ringOf(d) === 'home').map((d) => d.id);
+  const mode = l.mode === 'phone' || l.mode === 'apart' || l.mode === 'split' || l.mode === 'here' ? l.mode : null;
+  if (!mode) return null;
+  if (home.length && mode !== 'here') return { do: 'load', model: l.model.id, mode, devices: mode === 'phone' ? home.slice(0, 1) : home, ctx: l.ctx };
+  const here = s.models.find((m) => m.id === l.model.id)?.here;
+  if (s.work.llama && here) return { do: 'load', model: l.model.id, mode: 'here', devices: [], ctx: l.ctx };
+  return null;
+}
+
+function loadedCards(s: Snapshot): Suggestion[] {
+  const l = s.work.loaded;
+  if (!l) return [];
+  const devs = loadedDevices(s).filter((d): d is EyeDevice => !!d);
+  const far = widest(devs.map(ringOf));
+  if (far === 'home') return [];
+  const names = devs.filter((d) => ringOf(d) !== 'home').map((d) => `${d.name} (${ringOf(d)})`).join(', ');
+  const keep = homeOnly(s);
+  const ctx = (n: number) => (n >= 512 && n <= 262144 ? n : undefined);
+  const action: SuggestAction = keep ? (keep.do === 'load' ? { ...keep, ctx: ctx(keep.ctx ?? 0) } : keep) : { do: 'open', panel: 'branch', branch: 'review' };
+  if (action.do === 'load' && action.ctx === undefined) delete action.ctx;
+  if (chatRuns(s)) {
+    return [{
+      id: 'review:private-chat',
+      kind: 'warn',
+      title: `a private chat runs while ${RING_WORDS[far]} is in the loaded work`,
+      why: `a chat is yours: it belongs at home. ${names} ${devs.filter((d) => ringOf(d) !== 'home').length === 1 ? 'is' : 'are'} in ${l.model.name} (${l.mode}) and ${far === 'world' ? 'a stranger’s phone sees the prompt in plain text while it answers' : 'a friend’s device sees what it answers'}. ${keep ? 'load it again on your own devices only.' : 'unload it, or chat on your own devices only.'}`,
+      action, ...(keep ? { label: 'keep it home' } : { label: 'look' }),
+      weight: far === 'world' ? 3 : 2,
+    }];
+  }
+  if (far !== 'world') return [];
+  return [{
+    id: 'review:world-in-cluster',
+    kind: 'warn',
+    title: 'a stranger’s device is in the loaded work',
+    why: `${names} ${devs.filter((d) => ringOf(d) === 'world').length === 1 ? 'is' : 'are'} in ${l.model.name} (${l.mode}): a chat now would reach a stranger’s phone in plain text. fine for world-ok work; ${keep ? 'load it again on your own devices before you chat.' : 'unload it before you chat.'}`,
+    action, ...(keep ? { label: 'keep it home' } : { label: 'look' }),
+    weight: 1,
+  }];
+}
 
 export function create(ctx: BranchCtx): Branch {
   let snap: Snapshot | null = null;
@@ -221,12 +258,37 @@ export function create(ctx: BranchCtx): Branch {
       const open = sorted.filter((p) => !FINISHED.has(p.state));
       const again = open.filter((p) => verdicts.get(p.id) && !verdicts.get(p.id)!.ok).length;
 
+      // per ring, a row: its devices, what of the open work and the chat may go there now and what
+      // is held back from it. Counts and kind levels only, never a word of the work itself.
+      const chat = !!snap && chatRuns(snap);
+      const vs = open.map((p) => verdicts.get(p.id)).filter((v): v is Verdict & { state: string } => !!v);
+      const ringRows: [string, string][] = RINGS.map((r) => {
+        const devs = (snap?.devices ?? []).filter((d) => ringOf(d) === r);
+        const named = `${r === 'home' ? `this computer + ${plural(devs.length, 'device')}` : plural(devs.length, 'device')}${devs.length ? ` (${devs.map((d) => d.name).join(', ')})` : ''}`;
+        if (r === 'home') {
+          const what = [vs.length ? plural(vs.length, 'project') : '', chat ? 'the chat' : ''].filter(Boolean).join(', ');
+          return [`ring home`, `${named} · may go: everything${what ? ` (${what})` : ''}`];
+        }
+        const held = vs.filter((v) => !mayGo(v.level, r));
+        const pieces = held.reduce((n, v) => n + (v.parts ? (r === 'world' ? v.parts.world : v.parts.circle) : 0), 0);
+        const heldBy = (['private', 'circle-ok'] as Level[]).map((l) => [l, held.filter((v) => v.level === l).length] as const).filter(([, n]) => n);
+        const mayText = `${plural(vs.length - held.length, 'project')}${pieces ? ` + ${plural(pieces, 'piece')} of the others` : ''}`;
+        const heldText = [held.length ? `${plural(held.length, 'project')} (${heldBy.map(([l, n]) => `${n} ${l}`).join(', ')})` : '', chat ? 'the chat' : ''].filter(Boolean).join(', ') || 'nothing';
+        return [`ring ${r}`, `${named} · may go: ${mayText} · held back: ${heldText}`];
+      });
+
       const lines: string[] = [];
       if (snap?.work.loaded && loaded) lines.push(`loaded now · ${snap.work.loaded.model.name} (${snap.work.loaded.mode}) · ${say(loaded)}`);
       for (const p of sorted) {
         const v = verdicts.get(p.id);
         if (!v) continue;
-        lines.push(`${titleOf(p)} · ${p.state} · ${hhmm(p.start)}–${hhmm(p.end)} · ${say(v)}`);
+        lines.push(`${titleOf(p)} · ${p.state} · ${hhmm(p.start)}–${hhmm(p.end)} · ${levelSaid(v)} · ${say(v)}`);
+      }
+
+      const suggestions: Suggestion[] = [];
+      if (snap) {
+        suggestions.push(...loadedCards(snap));
+        for (const p of open) { const v = verdicts.get(p.id); const c = v && projectCard(p, v, snap); if (c) suggestions.push(c); }
       }
 
       const stat = waiting.length || again
@@ -241,9 +303,11 @@ export function create(ctx: BranchCtx): Branch {
           ['running', String(sorted.filter((p) => p.state === 'running').length)],
           ['to look at again', String(again)],
           ['looked at', String(verdicts.size)],
+          ...ringRows,
         ],
         lines: lines.slice(0, LINES_MAX),
-        note: 'it only says what it thinks; it never stops or changes a job. it keeps no request text, only its verdicts, in memory.',
+        note: 'it only says what it thinks; it never stops or changes a job. it keeps no request text, only its verdicts and counts, in memory. home takes everything, circle no private material, world only what is fine for strangers.',
+        suggestions,
       };
     },
   };
