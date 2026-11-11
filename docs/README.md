@@ -26,6 +26,7 @@ progress log and a few pages written on Turkish branches are in Turkish (marked 
 | [SERVERS.md](SERVERS.md) | which build talks to which server, the demo world, setting up the live project |
 | [SECURITY.md](SECURITY.md) | the security review: threat model, findings and fixes, remaining risks |
 | [BEYIN.md](BEYIN.md) | kula and beyin: free joining, the brain as a service, what stays open protocol |
+| [BEYIN-NET.md](BEYIN-NET.md) | brain to brain between homes: rings, offers and asks, verification, receipts, credit along friendships, the 20-home simulation |
 
 ## background
 
