@@ -174,8 +174,8 @@ test('in the eye: the review tile is lit, no request text reaches the view, the 
   const secret = 'ayse.yilmaz@example.com';
   const request = `collect every invoice sent to ${secret} and total them, card 4111 1111 1111 1111`;
   const dir = path.join(HOME, 'eye');
-  // on a friend's phone (circle): private material may not go there
-  const eye = new GodsEye({ snapshot: () => snap({ devices: [dev({ ring: 'circle' })], projects: [project({ title: `invoices ${secret}`, request })] }) as any, dir, now: () => NOW });
+  // on a stranger's phone (world): private material may not go there (a friend's may take it since 11.11.2026)
+  const eye = new GodsEye({ snapshot: () => snap({ devices: [dev({ ring: 'world' })], projects: [project({ title: `invoices ${secret}`, request })] }) as any, dir, now: () => NOW });
   eye.tick();
   eye.tick();
   const v = eye.view();
@@ -183,7 +183,7 @@ test('in the eye: the review tile is lit, no request text reaches the view, the 
   assert.equal(r.built, true);
   assert.equal(r.stat, '1 waiting · 1 to look at again');
   assert.equal(r.gauge, 0);
-  assert.match(r.lines[0], /“invoices …”.*· private \(an e-mail address, a card number.*private material would go to a friend’s device \(circle\)/);
+  assert.match(r.lines[0], /“invoices …”.*· private \(an e-mail address, a card number.*would go to a stranger’s device \(world\)/);
   assert.equal(v.cards[0].id, 'review:send-private:a1');
   const all = JSON.stringify(v);
   assert.ok(!all.includes(secret) && !all.includes('4111') && !all.includes('invoice sent'), 'no request text, no personal data');

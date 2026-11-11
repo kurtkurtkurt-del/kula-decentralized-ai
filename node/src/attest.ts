@@ -28,10 +28,12 @@ export const PREFIX = 'kula-attest-1';
 export const CHALLENGE_RE = /^[0-9a-f]{64}$/;
 /** kula's android package (app/app.json android.package) */
 export const KULA_PACKAGE = 'app.pasaport.android';
-/** Official kula signing certificates, sha256 of the certificate, lowercase hex. None yet: today's
- *  apks are signed with the public React Native debug key, which anyone can sign with. Add the
- *  release key's digest here (or in ~/.kula-node/attestation.json, "signers") once there is one. */
-export const OFFICIAL_SIGNERS: readonly string[] = [];
+/** Official kula signing certificates, sha256 of the certificate, lowercase hex. The release key
+ *  (11.11.2026, the person's decision: EC P-256, CN=kula, kept outside the repository on the
+ *  person's own computer; app/tools/apk.mjs signs with it). An apk signed with anything else, the
+ *  public debug key included, is "not an official build". More may be named in
+ *  ~/.kula-node/attestation.json ("signers"). */
+export const OFFICIAL_SIGNERS: readonly string[] = ['288a4bb27b1dfe3a97b3b7f1c3c430c918e57406c0feae81fe17f30905c0a72d'];
 /** The public debug key of the React Native template (app/android/app/debug.keystore,
  *  androiddebugkey): `keytool -list -v` says SHA256 FA:C6:17:45:…:3B:9C. */
 export const DEBUG_SIGNER = 'fac61745dc0903786fb9ede62a962b399f7348f0bb6f899b8332667591033b9c';

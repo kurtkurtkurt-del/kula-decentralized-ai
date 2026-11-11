@@ -38,6 +38,15 @@ run("npx", ["expo", "prebuild", "--platform", "android", ...(fast && existsSync(
 writeFileSync(join(app, "android/local.properties"), `sdk.dir=${sdk}\n`);
 const props = join(app, "android/gradle.properties");
 if (!readFileSync(props, "utf8").includes("android.disableResourceValidation")) appendFileSync(props, "\nandroid.disableResourceValidation=true\n");
+// the release key (11.11.2026): with nothing in the environment, the key the person made on this
+// Mac signs, its password read from the macOS Keychain (never printed, never written to a file)
+const ownKey = join(homedir(), ".kula-signing", "kula-release.p12");
+if (!process.env.KULA_KEYSTORE_FILE && process.platform === "darwin" && existsSync(ownKey)) {
+  try {
+    const pw = execFileSync("security", ["find-generic-password", "-s", "kula-release-keystore", "-a", "kula", "-w"], { encoding: "utf8" }).trim();
+    Object.assign(process.env, { KULA_KEYSTORE_FILE: ownKey, KULA_KEYSTORE_PASSWORD: pw, KULA_KEY_ALIAS: "kula", KULA_KEY_PASSWORD: pw });
+  } catch { console.log("release signing: the key in ~/.kula-signing has no password in the Keychain (kula-release-keystore)"); }
+}
 const keystore = process.env.KULA_KEYSTORE_FILE;
 if (keystore && readFileSync(join(app, "android/app/build.gradle"), "utf8").includes("kula: release signing")) {
   console.log(`release signing: keystore ${keystore} (already in android/app/build.gradle)`);

@@ -28,7 +28,8 @@ const offer = (home: string, ring: 'home' | 'circle' | 'world', units = 100, gif
   devices: [{ id: `${home}1`, maxB: 8, rate: 50, units }],
 });
 const view = (rel: Record<string, any>, back: Record<string, any>, room: Record<string, number> = {}) =>
-  ({ rel, back, room: Object.fromEntries(Object.entries(room).map(([k, u]) => [k, { units: u, path: ['B', k] }])) });
+  // the matcher's mechanics with the world open, as a study; the default is closed (next test)
+  ({ rel, back, worldOpen: true, room: Object.fromEntries(Object.entries(room).map(([k, u]) => [k, { units: u, path: ['B', k] }])) });
 
 test('rings: a home piece never leaves, a circle piece goes only to a home the asker trusts', () => {
   const tasks = [task(piece('h', 'home')), task(piece('c', 'circle')), task(piece('w', 'world'))];
@@ -195,4 +196,11 @@ test('cards: the brain suggests, the person picks; a caught liar comes first', (
   assert.deepEqual(cards.map((c) => c.id), ['net:caught:d', 'net:ask:j', 'net:offer', 'net:owe:B']);
   assert.equal(cards[2].title, '3 devices idle 01:00–06:00: lend them?');
   assert.ok(cards.every((c) => c.choices.length >= 1));
+});
+
+test('the world is closed by default (the person\'s decision, 11.11.2026): a stranger gets no grant, a friend does', () => {
+  const t = [task(piece('w', 'world'))];
+  const closed = (rel: Record<string, any>) => ({ rel, back: rel, room: {} });
+  assert.equal(net.match(offer('C', 'world', 100, 1), t, closed({ A: 'world' }), NOW).length, 0);
+  assert.equal(net.match(offer('B', 'world', 100, 1), t, closed({ A: 'circle' }), NOW).length, 1);
 });

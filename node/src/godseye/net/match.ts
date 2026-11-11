@@ -22,6 +22,9 @@ export interface GiverView {
   balance?: Record<string, Units>;
   /** homes the giver no longer works for (one of their devices lied to it) */
   refuse?: string[];
+  /** strangers' work, and work to strangers: off. The person decided (11.11.2026) that only their
+   *  own and their friends' devices take part; true only for a "what if" study like the simulation */
+  worldOpen?: boolean;
 }
 
 export const HOUR = 3_600_000;
@@ -32,6 +35,7 @@ export function allowed(task: Task, offer: Offer, view: GiverView): boolean {
   const asker = task.piece.home;
   const rel = view.rel[asker] ?? 'world';
   const back = view.back[asker] ?? 'world';
+  if (!view.worldOpen && (rel === 'world' || back === 'world')) return false;   // no strangers (11.11.2026)
   if (!within(back, task.piece.ring)) return false;      // the asker's piece may not travel this far
   if (!within(rel, offer.ring)) return false;            // the giver does not take work from this far
   if (task.exclude.includes(offer.home)) return false;

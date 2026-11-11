@@ -247,6 +247,22 @@ Results (deterministic, run 11.11.2026):
   three days nearly every device stays in burn-in in nearly every home's book (8 checked answers
   per pair, 20 homes × 60 devices). In a steady state the cost falls to the 10 % + 5 % floor.
 
+## the person's decisions (11.11.2026)
+
+- **No strangers.** Only the person's own devices (home) and their friends' (circle) take part;
+  the world ring is off. `match()` grants nothing across a `world` relation unless a study sets
+  `worldOpen` (the simulation keeps the open world as a "what if"; a second run checks the closed
+  default), and no device can be put in the world ring (`kula-node peers ring` refuses it).
+- **Every home tests for itself.** A friend's clean history of a device does not shorten my own
+  checks (burn-in stays per home, as built).
+- **A lie travels two hops**, with its proof: the catcher's friends and their friends
+  (`warnReach()`), each checking the evidence before it believes it.
+- **What is the person's may go to their friends.** Private material is held back only from
+  strangers (review: `mayGo`), and strangers take no part today.
+
+The questions below were asked before these decisions; 1, 2, 3 (gifts to strangers) and 7 are
+answered by them, 4 to 6 wait.
+
 ## open questions for the person
 
 1. **Burn-in is per home.** Should a friend's clean history count in my book (a vouch for a

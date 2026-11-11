@@ -200,12 +200,15 @@ with its device key, and answers with the chain. `node/src/attest.ts` checks, on
 | boot | `rootOfTrust` (hardware list): `deviceLocked` true and `verifiedBootState` Verified (green) |
 | the app | `attestationApplicationId`: exactly one package, kula's (`app.pasaport.android`), and a signing certificate digest on the official list |
 
-The official list is empty today: kula's apks (debug and release) are signed with the React
-Native template's public debug key (SHA-256 `fac61745…3b9c`), which anyone can sign an app with,
-so a phone that passes everything else says honestly *"hardware key, locked, verified boot, but a
-debug build (signed with the public debug key): its owner could still read jobs"*. When kula has
-a release key, its digest goes into `OFFICIAL_SIGNERS` in `attest.ts`; a person who builds kula
-with their own key may name it in `~/.kula-node/attestation.json` (`{"signers":["<sha256>"]}`).
+Since 11.11.2026 kula has a release key, the person's decision: EC P-256, `CN=kula`, kept on the
+person's own Mac outside the repository (`~/.kula-signing/kula-release.p12`, its password in the
+macOS Keychain, never in a file); `npm run apk` signs with it when nothing else is set. Its
+certificate digest (`288a4bb2…a72d`) is the one entry of `OFFICIAL_SIGNERS` in `attest.ts`. Apks
+signed with the React Native template's public debug key (SHA-256 `fac61745…3b9c`), anyone's to
+sign with, still say *"not an official build: its owner could still read jobs"*. A phone that has
+the debug-signed apk installed must uninstall it before the first release-signed one goes on (Android
+refuses an update signed with another key). A person who builds kula with their own key may name it
+in `~/.kula-node/attestation.json` (`{"signers":["<sha256>"]}`).
 
 The line is `true` (all of it holds), `false` (with the first reason, in plain words: no proof,
 not Google's root, expired, revoked, not this question, not its ledger key, software keystore,
@@ -263,12 +266,13 @@ plain text while it runs). Every device paired before this is home.
   into pieces (blank lines, list items, sentences; not after "Dr."; a code fence whole) and
   each piece is rated on its own and against the whole text, so the branch can say how many
   pieces a friend or a stranger could still take.
-- **What the review branch says.** home takes everything, circle no private material, world
-  only world-ok material. Cards (all `warn`, never acting by themselves):
+- **What the review branch says.** home and circle take everything (the person's decision,
+  11.11.2026: what is theirs may go to their friends), world only world-ok material, and no
+  device can be put in the world ring today (strangers take no part). Cards (all `warn`, never acting by themselves):
   `review:send-private:<project>` (private material on a circle or world device; weight 3 for
   world), `review:send-circle:<project>` (circle-ok material on a world device), both opening
   the branch page and saying how many pieces could go there instead;
-  `review:private-chat` (a chat runs while a circle or world device is in the loaded work;
+  `review:private-chat` (a chat runs while a world device is in the loaded work; a friend's is fine;
   its button loads the same model on the home devices only, or here); and
   `review:world-in-cluster` (weight 1: a stranger's device is in the loaded work, no chat yet).
   A key in a request or an injection is to be looked at again even at home; other private data

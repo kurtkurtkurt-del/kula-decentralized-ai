@@ -323,6 +323,6 @@ Without the native module (Expo Go, iOS, the web) the app runs but downloads no 
 
 ## license
 
-MIT for kula's own code (a LICENSE file at the root is still to be added). llama.cpp (MIT), the
+MIT for kula's own code ([LICENSE](LICENSE)). llama.cpp (MIT), the
 port from PrivateLM / llama_flutter_android (MIT), and the models under their own licenses:
 [app/CREDITS.md](app/CREDITS.md).

@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import readline from 'node:readline';
-import { discover, findPeer, isRing, maskSecret, parsePeerText, peerCode, peersFile, probePeers, readPeers, removePeer, ringOf, setRing, upsertPeer, writePeers, whereIs, type Peer } from './peers.js';
+import { WORLD_CLOSED, discover, findPeer, isRing, maskSecret, parsePeerText, peerCode, peersFile, probePeers, readPeers, removePeer, ringOf, setRing, upsertPeer, writePeers, whereIs, type Peer } from './peers.js';
 import { loadOrCreateIdentity } from './tls.js';
 import { loadOrCreate as loadDeviceKey } from './audit/key.js';
 import { home } from './paths.js';
@@ -81,7 +81,8 @@ export async function peersCommand(sub: string | undefined, rest: string[], flag
     // home: your own device (everything may go there); circle: a friend's (work you trust them
     // with); world: a stranger's (only pieces with nothing private). Every way of the device gets it.
     const [ref, ring] = rest;
-    if (!ref || !isRing(ring)) { console.error('usage: kula-node peers ring <id | id prefix | name> <home|circle|world>'); return 2; }
+    if (!ref || !isRing(ring)) { console.error('usage: kula-node peers ring <id | id prefix | name> <home|circle>'); return 2; }
+    if (ring === 'world') { console.error(WORLD_CLOSED); return 2; }
     const r = setRing(readPeers(file), ref, ring);
     if (!r) { console.error(`no such peer: ${ref}`); return 1; }
     writePeersSafe(r.list, file);

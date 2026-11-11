@@ -282,8 +282,14 @@ export function removePeer(list: Peer[], ref: string): { list: Peer[]; removed: 
 
 // Sets the ring of a device: the record found by ref and every other record of the same device
 // (the same certificate or the same worker id: its cable and its wi-fi). Null when none is found.
+// strangers' devices take no part: the person decided (11.11.2026) that only their own and their
+// friends' devices do. The world ring stays in the code (review, the brain-to-brain study) but no
+// device can be put in it.
+export const WORLD_CLOSED = 'strangers\' devices are off: only your own (home) and your friends\' (circle) devices take part';
+
 export function setRing(list: Peer[], ref: string, ring: Ring): { list: Peer[]; peers: Peer[] } | null {
   if (!isRing(ring)) throw new Error('a ring is home, circle or world');
+  if (ring === 'world') throw new Error(WORLD_CLOSED);
   const hit = findPeer(list, ref);
   if (!hit) return null;
   const group = new Set(groupOf(groupPeers(list), hit.id) ?? [hit]);

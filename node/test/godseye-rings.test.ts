@@ -130,9 +130,9 @@ test('pieces: sentences, list items and fences; not after "Dr."; a piece is held
 
 // ---------- the rings
 
-test('what a ring takes: home everything, circle no private, world world-ok only; a device without a ring is home', () => {
+test('what a ring takes: home and circle everything (the person\'s decision, 11.11.2026), world world-ok only; a device without a ring is home', () => {
   const table = (['private', 'circle-ok', 'world-ok'] as const).map((l) => (['home', 'circle', 'world'] as const).map((r) => mayGo(l, r)));
-  assert.deepEqual(table, [[true, false, false], [true, true, false], [true, true, true]]);
+  assert.deepEqual(table, [[true, true, false], [true, true, false], [true, true, true]]);
   assert.equal(ringOf({}), 'home');
   assert.equal(ringOf({ ring: 'world' }), 'world');
   assert.equal(widest(['home', 'world', 'circle']), 'world');
@@ -161,8 +161,10 @@ test('peer book: home by default, setRing sets every record of the device, a new
   const wifi = rec({ id: '192.168.1.20:50551' });
   const tab = rec({ id: 'tab', fp: 'b2'.repeat(32), name: 'tab' });
   assert.equal(peerRing(cable), 'home');
-  const r = setRing([cable, wifi, tab], 'cable:R3C', 'world')!;
-  assert.deepEqual(r.list.map((p) => p.ring ?? null), ['world', 'world', null]);
+  const r = setRing([cable, wifi, tab], 'cable:R3C', 'circle')!;
+  assert.deepEqual(r.list.map((p) => p.ring ?? null), ['circle', 'circle', null]);
+  // strangers' devices are off (the person's decision, 11.11.2026)
+  assert.throws(() => setRing([cable, wifi, tab], 'cable:R3C', 'world'), /strangers' devices are off/);
   assert.deepEqual(r.peers.map((p) => p.id), ['cable:R3C', '192.168.1.20:50551']);
   assert.equal(setRing([tab], 'nope', 'circle'), null);
   assert.throws(() => setRing([tab], 'tab', 'galaxy' as any), /home, circle or world/);
@@ -182,7 +184,8 @@ test('kula-node peers ring <id> <ring>: sets it, says it, refuses a word that is
   try {
     assert.equal(await peersCommand('ring', ['friend phone', 'circle'], { file }), 0);
     assert.equal(await peersCommand('ring', ['p2', 'everywhere'], { file }), 2);
-    assert.equal(await peersCommand('ring', ['nobody', 'world'], { file }), 1);
+    assert.equal(await peersCommand('ring', ['nobody', 'circle'], { file }), 1);
+    assert.equal(await peersCommand('ring', ['p2', 'world'], { file }), 2, 'no device goes to the world ring');
   } finally { console.log = log; console.error = err; }
   assert.deepEqual(readPeers(file).map((p) => p.ring ?? 'home'), ['circle', 'home']);
   assert.match(out[0], /^circle: p1 +friend phone +phone +circle /);
@@ -196,11 +199,12 @@ test('the engine and POST peers/ring: the row carries the ring, the eye\'s devic
   writePeers([rec({ id: 'cable:R3C', host: '127.0.0.1', port: 41000, cable: { serial: 'R3C' } }), rec({ id: 'w-1' })], peersFile);
   assert.equal(e.peers()[0].ring, 'home');
   assert.equal(deviceOf(e.peers()[0]).ring, 'home');
-  assert.equal(e.setRing('w-1', 'world'), true);
-  assert.deepEqual(readPeers(peersFile).map((p) => p.ring), ['world', 'world']);
-  assert.equal(e.peers()[0].ring, 'world');
-  assert.equal(deviceOf(e.peers()[0]).ring, 'world');
-  assert.ok(e.status().decisions.some((d: { text: string }) => /is now world \(was home\)/.test(d.text)));
+  assert.throws(() => e.setRing('w-1', 'world'), /strangers' devices are off/);
+  assert.equal(e.setRing('w-1', 'circle'), true);
+  assert.deepEqual(readPeers(peersFile).map((p) => p.ring), ['circle', 'circle']);
+  assert.equal(e.peers()[0].ring, 'circle');
+  assert.equal(deviceOf(e.peers()[0]).ring, 'circle');
+  assert.ok(e.status().decisions.some((d: { text: string }) => /is now circle \(was home\)/.test(d.text)));
   assert.equal(e.setRing('nobody', 'home'), false);
   assert.throws(() => e.setRing('w-1', 'galaxy'), /home, circle or world/);
 
@@ -245,18 +249,13 @@ const cards = (s: unknown) => look(s).v.suggestions ?? [];
 const PRIVATE = 'Kanserim var. Tedavi seçeneklerini ve beslenmeyi özetle. Also list ten easy recipes.';
 const TOPIC = 'Write a general article about diabetes for a school magazine, 1500 words.';
 
-test('a private project stays ok at home; on a friend\'s or a stranger\'s device it is a warning card', () => {
+test('a private project stays ok at home and on a friend\'s device; on a stranger\'s device it is a warning card', () => {
   assert.deepEqual(cards(snap({ projects: [project({ request: PRIVATE })] })), []);
   const home = look(snap({ projects: [project({ request: PRIVATE })] })).v;
   assert.match(home.lines[0], /· private \(your own health, a health topic\) · ok$/);
 
-  const circle = cards(snap({ devices: [dev({ ring: 'circle', name: 'ali’s phone' })], projects: [project({ request: PRIVATE })] }));
-  assert.equal(circle.length, 1);
-  assert.equal(circle[0].id, 'review:send-private:a1');
-  assert.equal(circle[0].weight, 2);
-  assert.match(circle[0].title, /private material would go to a friend’s device \(circle\)/);
-  assert.match(circle[0].why, /carries your own health, a health topic and is set to run on ali’s phone\. 2 of 3 pieces carry nothing private/);
-  assert.deepEqual(circle[0].action, { do: 'open', panel: 'branch', branch: 'review' });
+  // a friend's device may take it (the person's decision, 11.11.2026): no card
+  assert.deepEqual(cards(snap({ devices: [dev({ ring: 'circle', name: 'ali’s phone' })], projects: [project({ request: PRIVATE })] })), []);
 
   const world = cards(snap({ devices: [dev({ ring: 'world', name: 'stranger' })], projects: [project({ request: PRIVATE })] }));
   assert.equal(world[0].id, 'review:send-private:a1');
@@ -299,14 +298,9 @@ test('a private chat with a stranger in the loaded work: a weight-3 card that lo
   assert.match(events[0], /a private chat would reach a stranger’s device/);
 });
 
-test('a friend in the loaded work while you chat: weight 2; only strangers left: load here; idle with a stranger: a quiet weight-1 card', () => {
+test('a friend in the loaded work while you chat: no card (your decision, 11.11.2026); idle with a stranger: a quiet weight-1 card', () => {
   const friend = [dev({ ring: 'circle', name: 'ali' })];
-  const c = cards(snap({ devices: friend, projects: [], work: { ...idle, chatting: 2, loaded: loadedOn(['p1']) } }));
-  assert.equal(c[0].id, 'review:private-chat');
-  assert.equal(c[0].weight, 2);
-  assert.deepEqual(c[0].action, { do: 'load', model: 'qwen-1.5b', mode: 'here', devices: [], ctx: 4096 });
-  const noLlama = cards(snap({ devices: friend, projects: [], work: { ...idle, llama: false, chatting: 2, loaded: loadedOn(['p1']) } }));
-  assert.deepEqual(noLlama[0].action, { do: 'open', panel: 'branch', branch: 'review' });
+  assert.deepEqual(cards(snap({ devices: friend, projects: [], work: { ...idle, chatting: 2, loaded: loadedOn(['p1']) } })), []);
   const quiet = cards(snap({ devices: [dev({ ring: 'world' })], projects: [], work: { ...idle, loaded: loadedOn(['p1']) } }));
   assert.equal(quiet[0].id, 'review:world-in-cluster');
   assert.equal(quiet[0].weight, 1);
@@ -324,7 +318,7 @@ test('the page: per ring, what may go now and what is held back, in counts', () 
   const { v } = look(snap({ devices, projects, work: { ...idle, chatting: 1, loaded: loadedOn(['p1']) } }));
   const row = (k: string) => v.rows.find(([key]) => key === k)?.[1];
   assert.equal(row('ring home'), 'this computer + 1 device (my phone) · may go: everything (3 projects, the chat)');
-  assert.equal(row('ring circle'), '1 device (ali) · may go: 2 projects + 2 pieces of the others · held back: 1 project (1 private), the chat');
+  assert.equal(row('ring circle'), '1 device (ali) · may go: everything (3 projects, the chat)');
   assert.equal(row('ring world'), '1 device (stranger) · may go: 1 project + 1 piece of the others · held back: 2 projects (1 private, 1 circle-ok), the chat');
 });
 

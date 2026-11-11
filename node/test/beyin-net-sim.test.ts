@@ -45,7 +45,9 @@ interface Accepted { piece: string; device: string; checked: boolean; at: number
 
 const pad = (n: number) => String(n).padStart(2, '0');
 
-function simulate() {
+// WORLD_OPEN: strangers take part. The person decided against it (11.11.2026); the simulation keeps
+// the open world as a study of what it would take, and a second run checks the closed default.
+function simulate(WORLD_OPEN = true) {
   const pubs: Record<string, KeyObject> = {};
   const keyed = (id: string) => {
     const { privateKey, publicKey } = generateKeyPairSync('ed25519');
@@ -127,8 +129,9 @@ function simulate() {
       m.recalled++;
     }
     accepted[asker] = accepted[asker].filter((a) => !(a.device === device && !a.checked));
-    // friends hear of it, with the proof
-    for (const t of trust) if (t.from === asker) books[t.to][device] = net.observe(books[t.to][device], 'warned', now);
+    // friends and their friends hear of it, with the proof (the person's decision, 11.11.2026)
+    const friendsOf = (x: string) => trust.filter((t) => t.from === x).map((t) => t.to);
+    for (const h of net.warnReach(asker, d.home, friendsOf)) books[h][device] = net.observe(books[h][device], 'warned', now);
   }
 
   function judgeOutcomes(asker: string, outcomes: { device: string; outcome: import('../src/godseye/net/index.ts').Outcome }[], now: number) {
@@ -213,7 +216,7 @@ function simulate() {
         refuse: shut[offer.home],
       };
       const tasks = open.map((t) => ({ ...t, exclude: [...t.exclude, ...shut[t.piece.home]], avoid: avoid[t.piece.home] }));
-      const grants = net.match(offer, tasks, view, now);
+      const grants = net.match(offer, tasks, { ...view, worldOpen: WORLD_OPEN }, now);
       for (const g of grants) {
         const i = open.findIndex((t) => t.piece.id === g.piece && t.copy === g.copy);
         const task = open[i];
@@ -413,4 +416,20 @@ test('sim: the night follows the sun', () => {
   // a project thought of at 09:00 is done by others' nights long before the home's own night (15 h away)
   assert.ok(median(m.latency.world) < 10, `world pieces median ${median(m.latency.world)} h`);
   assert.ok(median(m.latency.home) >= 15, `home pieces median ${median(m.latency.home)} h`);
+});
+
+test('the default world is closed (the person\'s decision, 11.11.2026): no work goes to or comes from a stranger, and friends still do theirs', () => {
+  const C = simulate(false);
+  const trusts = (x: string, y: string) => C.trust.some((t) => t.from === x && t.to === y);
+  // with the world closed, work crosses only where both homes trust each other
+  const strangers = C.receipts.filter((r: any) => r.body.giver !== r.body.taker && !(trusts(r.body.giver, r.body.taker) && trusts(r.body.taker, r.body.giver)));
+  assert.equal(strangers.length, 0, `${strangers.length} receipts between strangers`);
+  assert.ok(C.receipts.length > 0, 'friends still worked for each other');
+});
+
+test('a lie reaches the catcher\'s friends and their friends, with the proof, and nobody else', () => {
+  const friends: Record<string, string[]> = { a: ['b', 'c'], b: ['a', 'd'], c: ['e'], d: ['f'], e: [], f: [] };
+  assert.deepEqual(net.warnReach('a', 'x', (h) => friends[h] ?? []), ['b', 'c', 'd', 'e']);
+  assert.deepEqual(net.warnReach('a', 'd', (h) => friends[h] ?? []), ['b', 'c', 'e'], 'the liar\'s own home is not told');
+  assert.deepEqual(net.warnReach('a', 'x', (h) => friends[h] ?? [], 1), ['b', 'c']);
 });

@@ -62,3 +62,21 @@ export function observe(r: Rep | undefined, outcome: Outcome, now: number): Rep 
   }
   return out;
 }
+
+/** Who hears of a lie, with the proof (11.11.2026, the person's decision: friends of friends too).
+ *  The homes `hops` steps from the catcher along trust, nearest first, the catcher and the liar's own
+ *  home left out. Each of them checks the evidence itself before it believes it (warned in its book). */
+export function warnReach(catcher: string, liarHome: string, friendsOf: (home: string) => string[], hops = 2): string[] {
+  const seen = new Set<string>([catcher, liarHome]);
+  const out: string[] = [];
+  let ring = [catcher];
+  for (let h = 0; h < hops; h++) {
+    const next: string[] = [];
+    for (const at of ring) for (const f of friendsOf(at)) {
+      if (seen.has(f)) continue;
+      seen.add(f); out.push(f); next.push(f);
+    }
+    ring = next;
+  }
+  return out;
+}

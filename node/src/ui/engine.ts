@@ -13,7 +13,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { openApart, openPeerDevice, startLlamaServer, type Cluster, type Message, type ModelRef, type Reply, type StartBackend, type WireMessage } from '../apart.js';
-import { readPeers, writePeers, parsePeerText, upsertPeer, findPeer, probePeers, peersFile, whereIs, discover, reachedBy, isRing, ringOf, widestRing, type AddrVia, type Peer, type PeerProbe, type Found, type PeerKind, type Ring } from '../peers.js';
+import { readPeers, writePeers, parsePeerText, upsertPeer, findPeer, probePeers, peersFile, whereIs, discover, reachedBy, isRing, ringOf, widestRing, WORLD_CLOSED, type AddrVia, type Peer, type PeerProbe, type Found, type PeerKind, type Ring } from '../peers.js';
 import { connectRemote, handshake, peekGate, GateRefused, type GatePeek } from '../gate.js';
 import { Adb, isSerial, stateHelp, NO_ADB_HELP, type CableDevice } from './cable.js';
 import { loadOrCreateIdentity, fingerprint, Paired, type GateIdentity } from '../tls.js';
@@ -652,6 +652,7 @@ export class Engine {
   // device gets it; god's eye's request review then says what may go there. False: no such device.
   setRing(id: string, ring: string): boolean {
     if (!isRing(ring)) throw new Error('a ring is home, circle or world');
+    if (ring === 'world') throw new Error(WORLD_CLOSED);
     const file = this.file();
     const list = readPeers(file);
     const hit = findPeer(list, id);

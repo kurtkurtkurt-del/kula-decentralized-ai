@@ -16,7 +16,7 @@ import path from 'node:path';
 import { createHash, generateKeyPairSync, sign, X509Certificate, type KeyObject } from 'node:crypto';
 import {
   ownerBlind, parseKeyDescription, extension, googleRoots, keyChallenge, bindMessage, parseStatusList, loadStatusList,
-  refreshStatusList, serialForms, loadAttestConfig, DEBUG_SIGNER, KULA_PACKAGE, STATUS_URL, type AttestInput, type Root,
+  refreshStatusList, serialForms, loadAttestConfig, DEBUG_SIGNER, OFFICIAL_SIGNERS, KULA_PACKAGE, STATUS_URL, type AttestInput, type Root,
 } from '../src/attest.ts';
 
 const FIX = path.join(import.meta.dirname, 'fixtures', 'attestation');
@@ -145,12 +145,14 @@ test('the status list is a file the person refreshes: none by default, read when
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
-test('signers: none official yet; the person may name theirs in attestation.json', () => {
+test('signers: the release key is official (11.11.2026), never the public debug key; the person may name more in attestation.json', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kula-attest-'));
   const f = path.join(dir, 'attestation.json');
-  assert.deepEqual(loadAttestConfig(f), { signers: [], pkg: KULA_PACKAGE });
+  assert.deepEqual(loadAttestConfig(f), { signers: [...OFFICIAL_SIGNERS], pkg: KULA_PACKAGE });
+  assert.equal(OFFICIAL_SIGNERS.length, 1);
+  assert.ok(!OFFICIAL_SIGNERS.includes(DEBUG_SIGNER));
   fs.writeFileSync(f, JSON.stringify({ signers: ['FA:C6:17:45:DC:09:03:78:6F:B9:ED:E6:2A:96:2B:39:9F:73:48:F0:BB:6F:89:9B:83:32:66:75:91:03:3B:9C', 'nonsense'] }));
-  assert.deepEqual(loadAttestConfig(f).signers, [DEBUG_SIGNER]);
+  assert.deepEqual(loadAttestConfig(f).signers, [...OFFICIAL_SIGNERS, DEBUG_SIGNER]);
   fs.rmSync(dir, { recursive: true, force: true });
 });
 

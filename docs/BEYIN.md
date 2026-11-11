@@ -139,6 +139,11 @@ decisions, listed in [DURUM.md](DURUM.md).
 
 ## the brain's cards (11.11.2026)
 
+The order the cards weigh things in, the person's choice (11.11.2026): **privacy first, then the
+devices' health, then speed.** A card never offers a device that review keeps a job from (privacy),
+nor one that limits says should rest or trust does not vouch for (health), before it compares
+speeds. Strangers take no part at all.
+
 God's eye (`node/src/godseye/`, the brain on the Mac) still decides nothing by itself and never
 touches a device. Since 11.11 its branches may suggest or warn as cards on the brain panel; the
 person's tap asks kula's engine to load, fetch or look again, the same way the person's own buttons

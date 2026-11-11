@@ -146,14 +146,14 @@ için hiç apk derlenmedi**. Telefonda bakılacaklar:
    Öneri: bir cihaz v3 ile eşleşince ona v1'i kapat; `kula-node share` varsayılanı `--tls` olsun.
 2. **Aktarıcı nerede barınacak.** `node/relay/` Fly, Render ya da Docker ile hazır; genel bir
    adres yok. Kim işletecek, hangi alan adı (beyin'in barındırılan aktarıcısı mı?).
-3. **apk imza anahtarı.** `KULA_KEYSTORE_*` secret'ları yoksa apk debug imzalı çıkar. Keystore'u
+3. ~~**apk imza anahtarı.**~~ Karar (11.11): kendi anahtarı; `~/.kula-signing/kula-release.p12`, parolası Anahtar Zinciri'nde, `npm run apk` onunla imzalar. Eski not: `KULA_KEYSTORE_*` secret'ları yoksa apk debug imzalı çıkar. Keystore'u
    kim üretecek, nerede saklanacak (repoda asla).
 4. **Canlı Supabase projesi.** kula'nın kendi projesi var (`web/config.js`); `18_night.sql` ve
    kenar fonksiyonları canlıya girmedi (`npm run migrate -- --write`). Hesap / e-posta / yönlendirme
    ayarları [SERVERS.md](SERVERS.md)'de.
 5. **beyin v1.** Defter başlıklarının toplanması, tahmin, internet üzerinden zamanlama:
    ne zaman ve hangi sırayla. Sınır [BEYIN.md](BEYIN.md)'de; şimdilik her şey açık kaynak.
-6. **Lisans dosyası.** Kökte LICENSE yok; `app/LICENSE` Expo şablonunun (650 Industries) MIT
+6. ~~**Lisans dosyası.**~~ Karar (11.11): kökte MIT `LICENSE`. Eski not: Kökte LICENSE yok; `app/LICENSE` Expo şablonunun (650 Industries) MIT
    metni. kula için kimin adıyla bir MIT LICENSE konacak.
 7. **Yasal sayfalar ve paket adı.** Uygulama şartları, gizliliği, e-posta onayını ve davetleri
    `kurtkurtkurt-del.github.io/pasaport/` üstünden açıyor (başka bir repo). kula'nın kendi

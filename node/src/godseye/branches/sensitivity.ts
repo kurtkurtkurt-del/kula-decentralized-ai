@@ -29,7 +29,9 @@ export const widest = (rings: Ring[]): Ring => rings.reduce((a, b) => (RINGS.ind
 /** the stricter of levels */
 export const strictest = (levels: Level[]): Level => levels.reduce((a, b) => (LEVELS.indexOf(b) > LEVELS.indexOf(a) ? b : a), 'world-ok' as Level);
 /** may material of this level go to a device of this ring */
-export const mayGo = (level: Level, ring: Ring): boolean => ring === 'home' || (ring === 'circle' ? level !== 'private' : level === 'world-ok');
+// the person's decision (11.11.2026): what is theirs may go to their friends' devices too; only
+// strangers would be held to world-ok pieces (and strangers take no part today)
+export const mayGo = (level: Level, ring: Ring): boolean => ring !== 'world' || level === 'world-ok';
 
 // ---- finders: each returns the spans it found
 

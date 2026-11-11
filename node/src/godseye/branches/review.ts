@@ -190,7 +190,8 @@ function loadedCards(s: Snapshot): Suggestion[] {
   if (!l) return [];
   const devs = loadedDevices(s).filter((d): d is EyeDevice => !!d);
   const far = widest(devs.map(ringOf));
-  if (far === 'home') return [];
+  // a friend's device may see a private chat (the person's decision, 11.11.2026): only a stranger's warns
+  if (far !== 'world') return [];
   const names = devs.filter((d) => ringOf(d) !== 'home').map((d) => `${d.name} (${ringOf(d)})`).join(', ');
   const keep = homeOnly(s);
   const ctx = (n: number) => (n >= 512 && n <= 262144 ? n : undefined);
@@ -265,9 +266,9 @@ export function create(ctx: BranchCtx): Branch {
       const ringRows: [string, string][] = RINGS.map((r) => {
         const devs = (snap?.devices ?? []).filter((d) => ringOf(d) === r);
         const named = `${r === 'home' ? `this computer + ${plural(devs.length, 'device')}` : plural(devs.length, 'device')}${devs.length ? ` (${devs.map((d) => d.name).join(', ')})` : ''}`;
-        if (r === 'home') {
+        if (r !== 'world') {   // home and circle take everything (the person's decision, 11.11.2026)
           const what = [vs.length ? plural(vs.length, 'project') : '', chat ? 'the chat' : ''].filter(Boolean).join(', ');
-          return [`ring home`, `${named} · may go: everything${what ? ` (${what})` : ''}`];
+          return [`ring ${r}`, `${named} · may go: everything${what ? ` (${what})` : ''}`];
         }
         const held = vs.filter((v) => !mayGo(v.level, r));
         const pieces = held.reduce((n, v) => n + (v.parts ? (r === 'world' ? v.parts.world : v.parts.circle) : 0), 0);
@@ -306,7 +307,7 @@ export function create(ctx: BranchCtx): Branch {
           ...ringRows,
         ],
         lines: lines.slice(0, LINES_MAX),
-        note: 'it only says what it thinks; it never stops or changes a job. it keeps no request text, only its verdicts and counts, in memory. home takes everything, circle no private material, world only what is fine for strangers.',
+        note: 'it only says what it thinks; it never stops or changes a job. it keeps no request text, only its verdicts and counts, in memory. home and circle take everything (your decision, 11.11), world only what is fine for strangers; strangers take no part today.',
         suggestions,
       };
     },
