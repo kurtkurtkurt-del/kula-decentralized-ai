@@ -496,6 +496,8 @@ export function create(ctx: BranchCtx): Branch {
         lines,
         note: `it only warns, it never stops a device. it cannot see battery or heat yet${devs.length ? '' : '; no model loaded, nothing is working'}.`,
         what: 'keeps devices within their limits: memory, rest, the night window and an energy guess. battery and heat come later.',
+        // for the deciding branches (peek): a device that should rest gets no new work suggested
+        hints: [...warns.keys()].filter((k) => k.startsWith('rest:')).map((k) => ({ id: k.slice(5), no: 'should rest (limits)' })),
       };
     },
   };

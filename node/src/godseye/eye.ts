@@ -486,10 +486,11 @@ export class GodsEye {
     return out;
   }
 
-  /** a branch's view as the eye hands it out: broken or not built yet, and without the forecast's pairs */
+  /** a branch's view as the eye hands it out: broken or not built yet, and without the forecast's
+   *  pairs or any branch's hints (both are for the other branches, through peek) */
   private plainView(id: BranchId): BranchView {
     const v = this.broken.has(id) ? dark('broken') : (this.views.get(id) ?? dark('looking…'));
-    const { pairs: _pairs, ...plain } = v;
+    const { pairs: _pairs, hints: _hints, ...plain } = v;
     return plain;
   }
 

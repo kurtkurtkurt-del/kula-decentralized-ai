@@ -74,3 +74,39 @@ interface BeyinClient {
 All of kula and all of beyin are public. No repository is split, no code is withheld, no
 feature is paywalled. Where a hosted relay runs and what beyin v1 contains are open
 decisions, listed in [DURUM.md](DURUM.md).
+
+## the brain's cards (11.11.2026)
+
+God's eye (`node/src/godseye/`, the brain on the Mac) still decides nothing by itself and never
+touches a device. Since 11.11 its branches may suggest or warn as cards on the brain panel; the
+person's tap asks kula's engine to load, fetch or look again, the same way the person's own buttons
+do (`POST brain/apply`). The four deciding branches make theirs from the look alone, with the
+maths of kula's planner copied small into `branches/decide.ts` (the eye imports nothing of kula):
+
+| branch | cards | example |
+|---|---|---|
+| planner | split (fits only split, or GAIN 1.15× faster than the fastest place alone), apart (n answers at once), alone (split is slower: load it alone), barred (a device in the split should rest or is not trusted) | "Gemma 3 4B would run faster split over mac and tablet: ~11 tok/s; alone here on mac ~8.8" |
+| executor | slow (apart: under a third of the fastest tok/s), rest (limits says so), failing (3 of its last 12 checks unreachable), idle (took no prompt for two minutes while another answered) | "galaxy answers at ~3 tok/s, this computer at ~14" → leave it out |
+| models | pick (nothing loaded: the biggest that fits a place), bigger (1.3× and fits the same places), tight (memory dropped since the load, it no longer fits), fetch (a catalog model clearly bigger than anything here), vision (photos came that nothing here could see) | "photos came but nothing here sees them: fetch SmolVLM 500M (0.5 GB)" |
+| advisor | night (a waiting project whose device is gone or whose model does not fit), tonight (the hour the forecast has most devices there), first (of the others' cards, which one first, said plainly) | "tonight 3 devices are likely free: plan the project for 02:00" |
+
+The rules every card keeps:
+
+- **evidence only.** A speed is quoted only when measured (the tok/s a device really answered with,
+  kept by the planner; never a split's, which is the whole chain's) or estimated from the memory
+  bandwidth a device measured (and then the card says so). This computer's bandwidth is not in the
+  look, so until a model ran here its speed is "not measured yet" on the branch's page and no card
+  quotes a number for it.
+- **never a device someone said no to.** Limits (should rest) and trust (a bad verdict) hand the
+  deciding branches their word as `hints` (peek only, never drawn); the forecast hands them each
+  device's tonight, hour by hour. Such a device is left out and the page says why.
+- **steady.** A card shows once its reason held 3 looks and goes 4 looks after it went; every
+  threshold is looser by 5% to stay than to show, so a number hovering at a line does not flap.
+  Its id stays the same while its reason holds (`<branch>:<topic>:<model or device>`), so a dismissal sticks.
+- **the eye never acts.** A card carries only what a tap would ask (`SuggestAction`); kula's engine
+  does it, and refuses what it would refuse from the person.
+
+The snapshot grew by three small fields for this: `models[].vision`, `models[].active_b` (a mixture
+of experts reads only its active weights per token) and `work.photos` (photos sent in chats since
+kula-node started, and how many nothing could see). Tests: `node/test/godseye-decide.test.ts`,
+`node/test/godseye-advisor.test.ts`.

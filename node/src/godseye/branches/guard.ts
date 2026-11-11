@@ -311,6 +311,7 @@ function workOf(raw: unknown): EyeWork {
     plan: list(raw.plan).map((p) => word(p, LINE)),
     decisions,
     llama: bool2(raw.llama),
+    ...(isObj(raw.photos) ? { photos: { n: capped(raw.photos.n, 0, COUNT_MAX) ?? 0, unseen: capped(raw.photos.unseen, 0, COUNT_MAX) ?? 0, at: timeOr(raw.photos.at, null) } } : {}),
   };
 }
 
@@ -332,6 +333,8 @@ function modelsOf(raw: unknown): EyeModel[] {
       catalog: bool2(m.catalog),
       here: bool2(m.here),
       needMb: capped(m.needMb, 0, MB_MAX) ?? 0,
+      ...(m.active_b !== undefined ? { active_b: capped(m.active_b, 0, PARAMS_MAX) } : {}),
+      ...(m.vision !== undefined ? { vision: bool2(m.vision) } : {}),
     });
   }
   return out;

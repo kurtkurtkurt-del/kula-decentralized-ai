@@ -112,6 +112,8 @@ test('kula\'s engine turned into the eye\'s snapshot: devices, work, models, pro
   assert.equal(s.devices[0].tls, true);
   assert.ok(s.models.length > 0);
   assert.equal(s.work.loaded, null);
+  assert.deepEqual(s.work.photos, { n: 0, unseen: 0, at: null }, 'no photo came yet');
+  assert.ok(s.models.some((m) => m.vision === true), 'the models that see photos are marked');
   assert.ok(!/deadbeef|abab/.test(JSON.stringify(s)));
 });
 
