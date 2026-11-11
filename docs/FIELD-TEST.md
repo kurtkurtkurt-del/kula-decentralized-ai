@@ -41,7 +41,8 @@ Speak with the person in their language, in short plain sentences. They may not 
    stays on the home network, encrypted, with nothing opened to the internet.
 4. **Nothing personal in the report**: no names, e-mail, IP or MAC addresses, serial numbers,
    pairing codes, QR contents, certificate fingerprints, tokens, file paths with a user name, and
-   no text the person typed other than the fixed test prompts. Call devices A, B, C.
+   no text the person typed other than the fixed test prompts. Call devices A, B, C. (The one
+   exception: the first name or nickname the person picks for the file name, section 0.)
 5. **Only the fixed prompts** below go into a model. Do not read the person's chats or files.
 6. **Stop a device's tests** when its battery is under 20% and not charging, or it feels hot to the
    person (or reports over 45 °C). Write that down as a result.
@@ -68,6 +69,26 @@ Speak with the person in their language, in short plain sentences. They may not 
 | 55–60 | 6. write the report, tidy up |
 
 Note the clock time when each phase starts and ends.
+
+## 0. the live report (before anything else)
+
+The person watches the report fill in while you test. Before the inventory:
+
+- Ask the person's first name (or a nickname) and which test this is for them (1, 2, …). The
+  report is named `<name>v<n>`, for example `selcukv1.pdf`; the name is the only personal thing
+  in it, and only because the person chose it.
+- Get the renderer: `docs/field-test/render.mjs` and `docs/field-test/template.html` from the
+  repository (or `curl -LO` them from
+  `https://raw.githubusercontent.com/kurtkurtkurt-del/kula-decentralized-ai/main/docs/field-test/<file>`).
+  It needs Node 18 or newer and, for the pdf, any Chromium-family browser (Chrome, Edge, Brave,
+  Chromium); without one it still writes the html.
+- Write `<name>v<n>.json` in the shape of the data block (section 6) with `"status": "running"`,
+  the date and start time, and whatever you know so far, then run
+  `node render.mjs <name>v<n>.json`. It writes `<name>v<n>.pdf` (page 1: the score sheet; then
+  this protocol), `<name>v<n>.html` (refreshes itself every 5 s while the status is running) and
+  `<name>v<n>.md` (the report file of section 6). Open the pdf or the html for the person now.
+- **After every T step**: put its result into the json and run `render.mjs` again, so the page the
+  person is looking at is never more than one step behind. At the end set `"status": "done"`.
 
 ## 1. inventory (5 min)
 
@@ -194,8 +215,9 @@ Stop anything you started (`ctrl-c` on `kula-node share` and `chat`; `kula-node 
 person does not want the page left running). Ask whether to keep or remove the downloaded model
 and kula itself; remove only what they say.
 
-Write one file, `kula-test-<yyyymmdd>-<four random letters>.md`, in the folder you worked in, with
-exactly these parts:
+The report is the `<name>v<n>.md` that `render.mjs` writes from the json (section 0), next to
+its pdf. If you could not run the renderer, write `<name>v<n>.md` by hand in the folder you
+worked in, with exactly these parts:
 
 1. **Summary**, five lines: the devices (as A, B, C with kind and model), what worked, what did
    not, the fastest tok/s seen and where, the single most important problem.
@@ -242,7 +264,8 @@ The data block:
 ```json
 {
   "protocol": "kula-field-test/1",
-  "date": "2026-11-12",
+  "tester": "selcuk", "test": 1, "status": "running",
+  "date": "2026-11-12", "started": "19:05", "ended": null,
   "minutes": 58,
   "ai": "which assistant ran this, and whether it ran commands itself or guided",
   "kula": { "node": "0.3.0", "app": "0.3.0" },
@@ -256,7 +279,7 @@ The data block:
       "link": "wifi",
       "install": { "result": "pass", "minutes": 3, "note": "" },
       "setup": { "result": "skipped", "minutes": 0, "note": "phone" },
-      "model": { "file": "Qwen3-0.6B-Q8_0.gguf", "download_seconds": 95, "mb_per_s": 6.7 },
+      "download": { "file": "Qwen3-0.6B-Q8_0.gguf", "seconds": 95, "mb_per_s": 6.7 },
       "passport": { "mem_bw_gbs": 61, "largest_fits": "Gemma 3 4B" },
       "alone": { "prompt_tok_s": 210, "gen_tok_s": 38, "p1": "pass", "p2": "pass", "p3": "pass" },
       "biggest_model_run": { "name": "Qwen3 0.6B", "gen_tok_s": 38 }
@@ -267,24 +290,47 @@ The data block:
       "devices": ["A", "B"], "link": "wifi",
       "pairing": { "way": "computer shows qr, phone scans", "result": "pass", "tries": 1, "seconds": 25 },
       "probe": { "rpc": "pass", "api": "pass", "gate_ms": 14 },
-      "apart": { "result": "pass", "tok_s": { "A": 36, "B": 52 }, "prompts": { "A": 3, "B": 5 } },
+      "apart": { "result": "pass", "tokens_total": 1900, "seconds": 22.4, "tok_s": { "A": 36, "B": 52 }, "prompts": { "A": 3, "B": 5 } },
       "split": { "result": "pass", "load_seconds": 21, "tok_s": 11 },
       "tunnel_mb_s": 38,
       "trust_verdict": "all clear",
       "errors": []
     }
   ],
+  "heat": { "device": "A", "tok_s": [52, 50, 49, 47], "temp_c": [31, 39], "minutes": 10 },
+  "trust": { "verdict": "all clear", "ledger": "holds", "revoke_refused": true, "tls_pinned": true },
   "checklist": { "T01": "pass", "T02": "pass", "T03": "fail", "T04": "pass" },
+  "checklist_notes": { "T03": "cmake missing" },
   "problems": [
-    { "t": "T03", "expected": "setup builds llama.cpp", "happened": "cmake not found", "error": "first lines of the error", "again": true, "workaround": "brew install cmake" }
+    { "t": "T03", "title": "setup needs cmake", "expected": "setup builds llama.cpp", "happened": "cmake not found", "error": "first lines of the error", "again": true, "workaround": "brew install cmake" }
   ],
   "person": { "most_confusing": "", "wish": "" }
 }
 ```
 
-Use `null` for what you could not learn, never a guess. Numbers are numbers, not text. Read the
+Use `null` for what you could not learn, never a guess. Numbers are numbers, not text.
+`checklist` values are `pass`, `partial`, `fail`, `skipped` or `not tried`; `p1`–`p3` are `pass`,
+`partial` or `fail`. `tokens_total` and `seconds` are the apart batch's own totals (the last lines
+of `chat --batch`). `heat.tok_s` is one device's speed over runs in a row, first to last. Order
+`problems` by what matters most: the first four go on the score sheet. Read the
 report once more against rule 4 before you hand it over: no names, addresses, codes or serials.
 
 Then tell the person where the file is and ask them to send it to whoever gave them this test.
 If they are comfortable with it being public, it can also go into a new issue titled
 `field test: <devices>` at https://github.com/kurtkurtkurt-del/kula-decentralized-ai/issues.
+
+## the score
+
+`render.mjs` scores every report the same way from its data block, out of 100:
+
+| part | points | from |
+|---|---|---|
+| works | 40 | 40 × (pass + ½ partial) ÷ (pass + partial + fail); skipped and not tried rows do not count |
+| together | 25 | 15 × the apart gain: the best combination's tokens ÷ seconds, over the fastest device alone; 1× is 0, k× for k devices is 15. Plus 10 × the best split tok/s over half the fastest device alone (capped) |
+| trust | 20 | the trust verdict (all clear 8, look at this 4, else 0) + the ledger holds 4 + a removed device is refused 4 + every link tls with a pinned certificate 4 |
+| holds up | 15 | 5 for speed when warm (last ÷ first run: 95 % or more is 5, 70 % or less is 0) + 5 × the share of P1–P3 answered (partial is half) + pairing 5 (first try within 60 s; 3 within three tries) |
+
+Grades: 90 and up *ready for friends*, 75–89 *works, rough edges*, 50–74 *works with help*,
+under 50 *not yet*. What was not measured scores 0, so a short test scores lower: that is on
+purpose. Change the formula only in `render.mjs` and here together, and say so in the release
+notes, so old and new reports stay comparable.

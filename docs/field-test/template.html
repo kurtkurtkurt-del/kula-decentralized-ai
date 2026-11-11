@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+{{REFRESH}}
+<title>{{TITLE}}</title>
+<style>
+  :root {
+    --paper: #fbf8f2; --card: #f2ebdd; --line: #e2d8c6; --ink: #1f1b16; --ink-2: #5a5249; --ink-3: #8b8275;
+    --sage: #4f6e55; --sage-2: #a9bfa9; --cable: #2a78d6; --wifi: #eb6834;
+    --good: #0ca30c; --warn: #fab219; --bad: #d03b3b; --none: #cfc6b6;
+  }
+  @page { size: A4; margin: 12mm; }
+  * { box-sizing: border-box; }
+  html { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  body { margin: 0; background: var(--paper); color: var(--ink); font: 8.6pt/1.38 -apple-system, "Segoe UI", Inter, Roboto, "Helvetica Neue", Arial, sans-serif; }
+  .sheet { width: 184mm; height: 271mm; overflow: hidden; margin: 0 auto; display: flex; flex-direction: column; gap: 2.6mm; }
+  @media screen { body { padding: 12mm 0; } .sheet, .protocol { background: var(--paper); } }
+  .num { font-variant-numeric: tabular-nums; }
+  .kicker { font-size: 7pt; letter-spacing: .16em; text-transform: uppercase; color: var(--ink-3); }
+  h1 { font-size: 22pt; line-height: 1.05; margin: 1mm 0 0; letter-spacing: -.02em; font-weight: 700; }
+  h2 { font-size: 7.2pt; letter-spacing: .14em; text-transform: uppercase; color: var(--ink-3); margin: 0 0 1.6mm; font-weight: 600; }
+  .head { display: flex; justify-content: space-between; align-items: flex-end; border-bottom: 1.5px solid var(--ink); padding-bottom: 2.4mm; }
+  .meta { text-align: right; color: var(--ink-2); font-size: 7.8pt; line-height: 1.5; }
+  .live { display: inline-block; background: var(--warn); color: var(--ink); border-radius: 8px; padding: 0 6px; font-weight: 600; font-size: 7pt; }
+  .card { background: var(--card); border-radius: 3mm; padding: 2.6mm 3.2mm; }
+  .row { display: grid; gap: 3.2mm; }
+  .hero { grid-template-columns: 70mm 1fr; }
+  .ring { display: flex; align-items: center; gap: 3.4mm; }
+  .ring svg { flex: none; }
+  .grade { font-size: 12pt; font-weight: 650; line-height: 1.2; }
+  .grade small { display: block; font-size: 6.9pt; font-weight: 400; color: var(--ink-2); margin-top: 1mm; }
+  .part { display: grid; grid-template-columns: 18mm 1fr 15mm; align-items: center; gap: .4mm 2.4mm; margin: .9mm 0; }
+  .part b { font-weight: 650; }
+  .part .why { grid-column: 2 / 4; color: var(--ink-2); font-size: 7.1pt; }
+  .track { height: 2.6mm; background: var(--paper); border-radius: 2mm; overflow: hidden; }
+  .fill { height: 100%; background: var(--sage); border-radius: 2mm; }
+  .pts { text-align: right; font-weight: 650; }
+  .pts span { color: var(--ink-3); font-weight: 400; }
+  .devices { grid-template-columns: 1fr 1fr; }
+  .dev { display: grid; grid-template-columns: 9mm 1fr; gap: 2.4mm; }
+  .badge { width: 9mm; height: 9mm; border-radius: 50%; background: var(--ink); color: var(--paper); display: grid; place-items: center; font-weight: 700; font-size: 11pt; }
+  .dev .name { font-weight: 650; font-size: 9.6pt; }
+  .dev .sub { color: var(--ink-2); font-size: 7.5pt; }
+  .stats { display: flex; gap: 4mm; margin-top: 1.4mm; }
+  .stat .v { font-size: 12pt; font-weight: 700; letter-spacing: -.01em; }
+  .stat .k { font-size: 6.8pt; color: var(--ink-3); text-transform: uppercase; letter-spacing: .08em; }
+  .chips { display: flex; gap: 1.2mm; margin-top: 1.4mm; flex-wrap: wrap; }
+  .chip { border-radius: 2mm; padding: .2mm 1.6mm; font-size: 7pt; border: 1px solid var(--line); background: var(--paper); }
+  .chip i { font-style: normal; font-weight: 700; margin-right: .8mm; }
+  .mid { grid-template-columns: 96mm 1fr; }
+  .bars .bar { display: grid; grid-template-columns: 35mm 1fr 13mm; align-items: center; gap: 2mm; margin: 1.15mm 0; }
+  .bars .lab { font-size: 7.6pt; color: var(--ink-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .bars .lab b { color: var(--ink); font-weight: 600; }
+  .bars .t { height: 3.4mm; position: relative; }
+  .bars .b { height: 100%; border-radius: 0 1.2mm 1.2mm 0; background: var(--sage); }
+  .bars .b.soft { background: var(--sage-2); }
+  .bars .val { text-align: right; font-weight: 650; }
+  .bars .ref { position: absolute; top: -1mm; bottom: -1mm; border-left: 1px dashed var(--ink-3); }
+  .note { color: var(--ink-3); font-size: 6.9pt; margin-top: 1.2mm; }
+  table.mx { width: 100%; border-collapse: collapse; font-size: 7.7pt; }
+  table.mx th { text-align: left; font-weight: 600; color: var(--ink-2); font-size: 7pt; padding: .8mm 1mm; border-bottom: 1px solid var(--line); }
+  table.mx td { padding: .95mm 1mm; border-bottom: 1px solid var(--line); }
+  table.mx td:first-child { color: var(--ink-2); }
+  table.mx td.n { text-align: right; font-weight: 600; }
+  .dot { display: inline-block; width: 2mm; height: 2mm; border-radius: 50%; margin-right: 1mm; vertical-align: middle; }
+  .grid25 { display: grid; grid-template-columns: repeat(5, 1fr); gap: 1.1mm; }
+  .cell { display: flex; align-items: center; gap: 1.4mm; background: var(--paper); border-radius: 1.4mm; padding: .9mm 1.4mm; font-size: 7.2pt; border-left: 1.4mm solid var(--none); }
+  .cell .id { font-weight: 700; color: var(--ink-2); font-size: 6.8pt; }
+  .cell .s { margin-left: auto; font-weight: 700; }
+  .cell.pass { border-left-color: var(--good); } .cell.partial { border-left-color: var(--warn); } .cell.fail { border-left-color: var(--bad); }
+  .cell.skipped, .cell.nottried, .cell.pending { color: var(--ink-3); }
+  .legend { display: flex; gap: 3.2mm; margin-top: 1.4mm; font-size: 6.9pt; color: var(--ink-2); }
+  .legend span::before { content: ""; display: inline-block; width: 2.4mm; height: 2.4mm; border-radius: .6mm; margin-right: 1mm; vertical-align: -.3mm; background: var(--c); }
+  .low { grid-template-columns: 1fr 50mm; flex: 1; min-height: 0; }
+  ol.probs { margin: 0; padding-left: 4.4mm; }
+  ol.probs li { margin: 0 0 .8mm; }
+  ol.probs b { font-weight: 650; }
+  ol.probs .t { color: var(--ink-3); font-size: 6.9pt; margin-left: 1mm; }
+  ol.probs .d { color: var(--ink-2); font-size: 7.3pt; display: block; }
+  .foot { margin-top: auto; border-top: 1px solid var(--line); padding-top: 1.8mm; color: var(--ink-3); font-size: 6.9pt; display: flex; justify-content: space-between; gap: 4mm; }
+  .pending-v { color: var(--ink-3); font-weight: 400; }
+  /* the protocol pages */
+  .protocol { width: 186mm; margin: 0 auto; break-before: page; page-break-before: always; font-size: 8.6pt; }
+  .protocol .kicker { margin-bottom: 1mm; }
+  .protocol h1 { font-size: 16pt; margin: 0 0 3mm; }
+  .protocol h2 { font-size: 10.5pt; color: var(--ink); letter-spacing: 0; text-transform: none; margin: 5mm 0 1.6mm; border-bottom: 1px solid var(--line); padding-bottom: 1mm; }
+  .protocol h3 { font-size: 9pt; margin: 3.4mm 0 1.2mm; }
+  .protocol p, .protocol li { margin: 0 0 1.6mm; }
+  .protocol ul, .protocol ol { padding-left: 5mm; margin: 0 0 2mm; }
+  .protocol code { font: 7.8pt/1.3 ui-monospace, Menlo, Consolas, monospace; background: var(--card); border-radius: 1mm; padding: 0 .8mm; }
+  .protocol pre { background: var(--card); border-radius: 2mm; padding: 2.4mm 3mm; overflow: hidden; white-space: pre-wrap; break-inside: avoid; }
+  .protocol pre code { background: none; padding: 0; font-size: 7.3pt; }
+  .protocol table { border-collapse: collapse; margin: 0 0 2.4mm; width: 100%; break-inside: avoid; }
+  .protocol th, .protocol td { text-align: left; border-bottom: 1px solid var(--line); padding: .8mm 1.6mm; vertical-align: top; }
+  .protocol hr { border: 0; border-top: 1px solid var(--line); margin: 4mm 0; }
+  .protocol a { color: var(--sage); }
+</style>
+</head>
+<body>
+{{PAGE1}}
+<section class="protocol">
+  <div class="kicker">how the test is run · docs/FIELD-TEST.md</div>
+  {{PROTOCOL}}
+</section>
+</body>
+</html>
