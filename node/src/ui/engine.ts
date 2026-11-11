@@ -1553,6 +1553,24 @@ export class Engine {
   // Fetches a vision model and its image encoder into the models folder (sha256-checked), for
   // reading photos without loading it; it becomes the setting.
   private fetching: AbortController | null = null;
+
+  /** A catalog model onto this computer, sha256-checked, nothing loaded (a brain card's "fetch").
+   *  Runs in the background; its lines go to the decisions like the person's own loads. */
+  fetchModel(id: unknown): { started: boolean; why?: string } {
+    const m = this.catalog.find((x) => x.id === id);
+    if (!m) return { started: false, why: 'unknown model' };
+    if (this.findLocal(m.file)) return { started: false, why: `${m.name} is already on this computer` };
+    if (this.fetching) return { started: false, why: 'already fetching a model' };
+    const ac = new AbortController();
+    this.fetching = ac;
+    this.note(`fetching ${m.name} onto this computer (a brain card)`);
+    this.ensureLocal(m, () => {}, ac.signal)
+      .then(() => this.note(`${m.name} is on this computer`))
+      .catch((e) => this.note(`${m.name} was not fetched: ${(e as Error).message}`))
+      .finally(() => { if (this.fetching === ac) this.fetching = null; });
+    return { started: true };
+  }
+
   async fetchVision(id: unknown, emit: (e: LoadEvent | { done: true; vision: VisionView }) => void, signal?: AbortSignal): Promise<VisionView> {
     const m = this.visionCatalog().find((x) => x.id === id);
     if (!m) throw new Error('that model does not see photos');

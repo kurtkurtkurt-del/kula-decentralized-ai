@@ -137,6 +137,7 @@ export interface BranchView {
   note?: string;                   // its page: one line under the list
   what?: string;                   // overrides the map's line once the branch says more
   report?: TrustReport;            // the trust branch's one screen
+  suggestions?: Suggestion[];      // cards for the brain panel; at most 5 per branch are shown
   pairs?: { id: string; name: string; scored: [number, number, number, number, number, number][] }[];  // forecast → learning: [t, p, lo, hi, p0, x] per finished hour, oldest first
 }
 
@@ -145,6 +146,26 @@ export interface BranchEvent { at: number; text: string }
 
 /** One branch: told about every look (now and the one before), asked for its view. Both quick;
  *  a branch that throws is stopped and shown as broken, the others carry on. */
+/** What the person may do about a card (11.11.2026). The eye never does it: a tap on the card asks
+ *  kula's engine to, the same way the person's own buttons do. `devices` are device ids from the snapshot. */
+export type SuggestAction =
+  | { do: 'load'; model: string; mode: 'phone' | 'apart' | 'split' | 'here'; devices: string[]; ctx?: number }
+  | { do: 'unload' }
+  | { do: 'fetch'; model: string }                  // a catalog model onto this computer
+  | { do: 'probe'; devices: string[] }               // look at these devices again
+  | { do: 'open'; panel: 'devices' | 'models' | 'settings' | 'branch'; branch?: BranchId };  // only moves the page
+
+/** A branch's suggestion or warning, drawn as a card on the brain panel. */
+export interface Suggestion {
+  id: string;                      // stable while its reason holds, "<branch>:<topic>": the same id is the same card
+  kind: 'suggest' | 'warn';
+  title: string;                   // one line
+  why: string;                     // a sentence or two: what the branch saw
+  action: SuggestAction | null;    // null: something to know, nothing to apply
+  label?: string;                  // the button's word ("load", "fetch"); a default per action otherwise
+  weight?: 1 | 2 | 3;              // how much it matters; 3 first (default 2)
+}
+
 export interface Branch {
   id: BranchId;
   observe(now: Snapshot, before: Snapshot | null): void;

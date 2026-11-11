@@ -2,7 +2,7 @@
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import { BRANCHES, BRANCH_IDS, dark, type Branch, type BranchCtx, type BranchEvent, type BranchId, type BranchMaker, type BranchView, type Snapshot } from './types.js';
+import { BRANCHES, BRANCH_IDS, dark, type Branch, type BranchCtx, type BranchEvent, type BranchId, type BranchMaker, type BranchView, type Snapshot, type SuggestAction, type Suggestion } from './types.js';
 import { MAKERS } from './branches/index.js';
 import { clean, dropped, type Dropped } from './branches/guard.js';
 import { openBox, type Box, type BoxStatus } from './box.js';
@@ -31,6 +31,52 @@ type ViewTuple = [boolean, string | Scrubbed, number | null, string];
 
 /** the left-out counts the eye says, one line per kind per run of looks that leave one out */
 const LEFT_OUT: [keyof Dropped, string][] = [['devices', 'device'], ['models', 'model'], ['projects', 'project']];
+
+// cards (11.11.2026): what a branch suggests, drawn on the panel; the person's tap carries it out
+const CARDS_PER_BRANCH = 5;
+const CARDS_MAX = 24;
+const CARD_ID = /^[a-z]+:[\w.:@/-]{1,100}$/;
+const MODES = ['phone', 'apart', 'split', 'here'];
+const PANELS = ['devices', 'models', 'settings', 'branch'];
+const str = (v: unknown, max: number): string | null => (typeof v === 'string' && v.trim() ? v.slice(0, max) : null);
+const ids = (v: unknown): string[] | null => (Array.isArray(v) && v.length <= 64 && v.every((x) => typeof x === 'string' && x.length <= 200) ? [...v] : null);
+
+/** an action exactly as types.ts spells it, or null: a branch cannot slip anything else through a card */
+export function cleanAction(a: unknown): SuggestAction | null {
+  const x = a as Record<string, unknown> | null;
+  if (!x || typeof x !== 'object') return null;
+  switch (x.do) {
+    case 'load': {
+      const model = str(x.model, 200), devices = ids(x.devices);
+      if (!model || !devices || !MODES.includes(x.mode as string)) return null;
+      const ctx = typeof x.ctx === 'number' && Number.isInteger(x.ctx) && x.ctx >= 512 && x.ctx <= 262144 ? x.ctx : undefined;
+      return { do: 'load', model, mode: x.mode as 'phone', devices, ...(ctx ? { ctx } : {}) };
+    }
+    case 'unload': return { do: 'unload' };
+    case 'fetch': { const model = str(x.model, 200); return model ? { do: 'fetch', model } : null; }
+    case 'probe': { const devices = ids(x.devices); return devices ? { do: 'probe', devices } : null; }
+    case 'open': {
+      if (!PANELS.includes(x.panel as string)) return null;
+      const branch = BRANCH_IDS.includes(x.branch as BranchId) ? (x.branch as BranchId) : undefined;
+      if (x.panel === 'branch' && !branch) return null;
+      return { do: 'open', panel: x.panel as 'devices', ...(branch ? { branch } : {}) };
+    }
+    default: return null;
+  }
+}
+
+/** a branch's suggestion checked field by field, or null */
+export function cleanCard(s: unknown): Suggestion | null {
+  const x = s as Record<string, unknown> | null;
+  if (!x || typeof x !== 'object' || typeof x.id !== 'string' || !CARD_ID.test(x.id)) return null;
+  const title = str(x.title, 140), whyText = str(x.why, 400);
+  if (!title || !whyText || (x.kind !== 'suggest' && x.kind !== 'warn')) return null;
+  const action = x.action == null ? null : cleanAction(x.action);
+  if (x.action != null && action === null) return null;   // a broken action is no card, never a silent warning
+  const label = str(x.label, 24) ?? undefined;
+  const weight = x.weight === 1 || x.weight === 3 ? x.weight : 2;
+  return { id: x.id, kind: x.kind, title, why: whyText, action, ...(label ? { label } : {}), weight };
+}
 
 /** what a thrown value says: a caught value may be null or undefined, which has no .message */
 const why = (e: unknown): string => (e instanceof Error ? e.message : String(e));
@@ -62,9 +108,12 @@ export interface EyeOptions {
 }
 
 export type EyeBranchView = BranchView & { n: number; id: BranchId; name: string; what: string; error?: string };
+/** a branch's suggestion as the panel draws it: whose it is and since when it has been there */
+export type EyeCard = Suggestion & { branch: BranchId; since: number };
 export interface EyeView {
   at: number;                                         // when the last look was taken
   branches: EyeBranchView[];                          // the twelve, in the map's order
+  cards: EyeCard[];                                   // suggestions and warnings, most important first
   events: (BranchEvent & { branch: BranchId })[];     // newest first
   box: { count: number; from: number; head: string | null; bytes: number; ok: boolean; problem: string | null } | null;
 }
@@ -237,6 +286,59 @@ export class GodsEye {
     this.record(snap, broken, left);
   }
 
+  // ---- cards: the branches' suggestions, gathered for the panel; the eye itself never applies one
+
+  private cardSince = new Map<string, number>();   // card id → when it first showed
+  private hidden = new Set<string>();              // dismissed or applied: hidden while the branch still says it
+
+  /** every card the branches say now, checked, the hidden ones left out, most important first */
+  cards(): EyeCard[] {
+    const out: EyeCard[] = [];
+    const live = new Set<string>();
+    for (const m of BRANCHES) {
+      if (this.broken.has(m.id)) continue;
+      const list = this.views.get(m.id)?.suggestions;
+      if (!Array.isArray(list)) continue;
+      let n = 0;
+      for (const raw of list) {
+        if (n >= CARDS_PER_BRANCH) break;
+        const c = cleanCard(raw);
+        if (!c || !c.id.startsWith(`${m.id}:`) || live.has(c.id)) continue;   // a branch speaks only for itself
+        live.add(c.id);
+        n++;
+        if (!this.cardSince.has(c.id)) this.cardSince.set(c.id, this.lastAt || this.now());
+        if (this.hidden.has(c.id)) continue;
+        out.push({ ...c, branch: m.id, since: this.cardSince.get(c.id)! });
+      }
+    }
+    // a card whose reason is gone is forgotten, and so is its dismissal: if it comes back, it shows again
+    for (const id of [...this.cardSince.keys()]) if (!live.has(id)) { this.cardSince.delete(id); this.hidden.delete(id); }
+    const rank = (c: EyeCard) => (c.weight ?? 2) * 2 + (c.kind === 'warn' ? 1 : 0);
+    return out.sort((a, b) => rank(b) - rank(a) || a.since - b.since).slice(0, CARDS_MAX);
+  }
+
+  /** the card with this id as it stands now, or null */
+  card(id: string): EyeCard | null {
+    return this.cards().find((c) => c.id === id) ?? null;
+  }
+
+  /** the person closed a card: hidden until its branch stops saying it */
+  dismiss(id: string): boolean {
+    const c = this.card(id);
+    if (!c) return false;
+    this.hidden.add(c.id);
+    this.recordAct(c.branch, 'dismiss', c.id, 'dismissed');
+    return true;
+  }
+
+  /** kula's engine carried a card out on the person's tap (or tried): hidden, and written in the box */
+  applied(id: string, word: string): void {
+    const c = this.cards().find((x) => x.id === id);
+    if (!c) return;
+    this.hidden.add(c.id);
+    this.recordAct(c.branch, 'apply', c.id, String(word).slice(0, WORD_MAX));
+  }
+
   /** Hands a decision from the branch's page to the branch (it never reaches a device), then looks again. */
   act(id: BranchId, action: string, arg: string): string | null {
     const b = this.branches.get(id);
@@ -283,7 +385,7 @@ export class GodsEye {
       const v = err ? { ...dark('broken'), error: err } : this.plainView(m.id);
       return { ...v, n: m.n, id: m.id, name: m.name, what: v.what || m.what };
     });
-    return { at: this.lastAt, branches, events: [...this.events], box: this.boxView() };
+    return { at: this.lastAt, branches, cards: this.cards(), events: [...this.events], box: this.boxView() };
   }
 
   // ---- the black box: what the eye writes, and what it says about the chain

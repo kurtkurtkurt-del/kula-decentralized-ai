@@ -369,6 +369,38 @@ export async function startUi(opts: UiOptions): Promise<UiServer> {
       if (word) log(`god's eye trust: ${body.action} ${body.arg}`);
       return json(res, word ? 200 : 409, word ? { ok: true, view: eye.view() } : { error: 'nothing to do' });
     }
+    // the brain's cards (11.11.2026): the eye only suggests; this is the person's tap, and kula's
+    // engine does the work exactly as the person's own buttons would. Owner only, like every post here.
+    if (route === 'brain/dismiss') {
+      if (!eye) return json(res, 404, { error: 'no brain here' });
+      return eye.dismiss(String(body?.id ?? '')) ? json(res, 200, { ok: true, view: eye.view() }) : json(res, 404, { error: 'that card is gone' });
+    }
+    if (route === 'brain/apply') {
+      if (!eye) return json(res, 404, { error: 'no brain here' });
+      const card = eye.card(String(body?.id ?? ''));
+      if (!card) return json(res, 404, { error: 'that card is gone' });
+      const a = card.action;
+      if (!a) return json(res, 400, { error: 'this card has nothing to apply' });
+      let word: string;
+      try {
+        if (a.do === 'load') {
+          if (engine.status().loading) throw new Error('already loading: wait, or stop it');
+          // in the background like the person's own load; the page follows it in status
+          engine.load({ model: a.model, mode: a.mode, peers: a.devices, ctx: a.ctx, all: a.devices.length > 0 }, () => {})
+            .catch((e) => log(`brain card ${card.id}: ${(e as Error).message}`));
+          word = `loading ${a.model} (${a.mode})`;
+        } else if (a.do === 'unload') { await engine.unload(); word = 'unloaded'; }
+        else if (a.do === 'fetch') {
+          const r = engine.fetchModel(a.model);
+          if (!r.started) throw new Error(r.why ?? 'not started');
+          word = `fetching ${a.model}`;
+        } else if (a.do === 'probe') { await engine.probe(a.devices); word = 'looked again'; }
+        else word = 'opened';   // 'open' only moves the page
+      } catch (e) { return fail(e); }
+      eye.applied(card.id, word);
+      log(`brain card applied: ${card.id}: ${word}`);
+      return json(res, 200, { ok: true, word, view: eye.view() });
+    }
     if (route === 'invite/new') return json(res, 200, await rotateInvite());
     // settings › model › vision model: which model reads photos (null: the smallest here), and fetching one
     if (route === 'settings/vision') { try { return json(res, 200, engine.setVision(body?.id ?? null)); } catch (e) { return fail(e); } }
