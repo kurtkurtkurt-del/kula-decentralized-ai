@@ -39,6 +39,11 @@ usage:
       --relay <wss://…> also register with that relay so a device far away (behind nat) can come in
                         with a six digit code; the qr carries it. needs tls (docs/RELAY.md)
       --dashboard <n>   local dashboard port on 127.0.0.1 (default 50580); --no-dashboard turns it off
+      --ipv4-only       the gate on 0.0.0.0 only (default: ipv6 and ipv4; v1 always stays on ipv4)
+      --map-port        ask this network's router to open the gate port to the internet (pcp, nat-pmp,
+                        upnp), renew it while sharing and remove it on stop; the qr then carries the
+                        router's address too. tls only. no other machine is asked (docs/INTERNET.md)
+      --gateway <ip>    the router to ask (default: the system's default route)
   kula-node probe <host> <port> <secret> [--json]   handshake on both channels, print OK/NO
       secret "env" reads $KULA_SECRET (a secret typed here shows in ps); "-" is none
       --fp <hex> [--pin <code>]   probe over tls (v2) against that certificate fingerprint; secret may be "-"
@@ -100,7 +105,7 @@ files live in ${home()} (KULA_NODE_HOME overrides)
 `;
 
 // flags that never take a value, so `--json host` does not swallow the host
-const BOOLEAN = new Set(['json', 'help', 'check', 'dry-run', 'no-qr', 'no-dashboard', 'verify', 'no-local', 'keep-local', 'code', 'tls', 'no-tls', 'no-apart', 'no-split', 'no-bandwidth', 'no-open', 'new-token', 'lan', 'new-prefix', 'stop', 'install-mac', 'uninstall-mac', 'login']);
+const BOOLEAN = new Set(['json', 'help', 'check', 'dry-run', 'no-qr', 'no-dashboard', 'verify', 'no-local', 'keep-local', 'code', 'tls', 'no-tls', 'no-apart', 'no-split', 'no-bandwidth', 'no-open', 'new-token', 'lan', 'new-prefix', 'stop', 'install-mac', 'uninstall-mac', 'login', 'map-port', 'ipv4-only']);
 
 export function parse(argv: string[]): { cmd: string; flags: Record<string, string | boolean>; rest: string[] } {
   const [cmd = 'help', ...tail] = argv;
@@ -315,6 +320,7 @@ export async function main(argv: string[]): Promise<number> {
     if (got.error) { console.error(got.error); return 2; }
     const secret = got.secret;
     if (flags['no-tls'] === true && typeof flags.relay === 'string') { console.error('--relay needs tls: drop --no-tls'); return 2; }
+    if (flags['map-port'] === true && (flags['no-tls'] === true || secret)) { console.error('--map-port needs tls only: drop --no-tls and --secret (v1 must not face the internet)'); return 2; }
     if (flags['no-tls'] === true) console.error('warning: --no-tls: v1 only, prompts and answers cross the network in plain text');
     if (process.platform === 'win32') console.error(WINDOWS_FIREWALL_NOTE);
     const stop = await share({
@@ -328,6 +334,9 @@ export async function main(argv: string[]): Promise<number> {
       tls: flags['no-tls'] !== true,
       relay: typeof flags.relay === 'string' ? flags.relay : undefined,
       dashboard: flags['no-dashboard'] === true ? false : flags.dashboard !== undefined ? num(flags.dashboard, 50580) : undefined,
+      dualStack: flags['ipv4-only'] !== true,
+      mapPort: flags['map-port'] === true,
+      gateway: typeof flags.gateway === 'string' ? flags.gateway : undefined,
     });
     await new Promise<void>((resolve) => {
       const done = () => { stop().finally(resolve); };

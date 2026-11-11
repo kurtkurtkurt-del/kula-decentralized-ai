@@ -3,14 +3,23 @@
 // with mode 600, because the secrets are in it. Also: finding workers that
 // announce themselves over mdns (_kula._tcp) and a short tcp + handshake probe.
 import fs from 'node:fs';
+import net from 'node:net';
 import path from 'node:path';
 import { Bonjour } from 'bonjour-service';
-import { probe, type Channel, type ProbeResult, type TlsClient } from './gate.js';
+import { probe, peekGate, type Channel, type ProbeResult, type TlsClient } from './gate.js';
 import { probeRelay, CODE_RE, normalizeRelayUrl, type RelayRef } from './relay.js';
 import type { GateIdentity } from './tls.js';
 import { home } from './paths.js';
 
 export type PeerKind = 'phone' | 'tablet' | 'pc';
+
+// One way to a device's gate (docs/INTERNET.md): its lan address, a global ipv6 address, or the
+// port its router mapped (share --map-port). Only a hint: the pinned certificate decides
+// whether whoever answers there is the device.
+export type AddrVia = 'lan' | 'ipv6' | 'mapped';
+export interface PeerAddr { host: string; port: number; via: AddrVia }
+export const ADDR_VIAS: AddrVia[] = ['lan', 'ipv6', 'mapped'];
+export const MAX_ADDRS = 8;
 
 export interface Peer {
   id: string;
@@ -25,6 +34,12 @@ export interface Peer {
   // far away, behind nat: reached through this relay with this code (docs/RELAY.md).
   // only the api channel crosses a relay; split mode needs the lan.
   relay?: RelayRef | null;
+  // more ways to the same gate, in the order the worker gave them (qr v3 `addrs`); host/port
+  // stay the first way (the lan) and are what split mode uses
+  addrs?: PeerAddr[] | null;
+  // where it answered at the last probe when that was not host/port (null: host/port did);
+  // the api channel (apart mode) is opened there
+  route?: PeerAddr | null;
   kind: PeerKind;
   ram: number | null; // MB free when it advertised
   bw: number | null;  // GB/s
@@ -69,6 +84,61 @@ const PIN = /^[0-9a-f]{8,64}$/i;
 
 export const isRemote = (p: Pick<Peer, 'relay'>): boolean => !!p.relay;
 
+// What kind of address a bare host is: a global ipv6 literal is 'ipv6', anything else 'lan'.
+export function addrKind(host: string): AddrVia {
+  const h = host.replace(/^\[|\]$/g, '').toLowerCase();
+  return net.isIPv6(h) && /^[23][0-9a-f]{0,3}:/.test(h) ? 'ipv6' : 'lan';
+}
+
+// The addrs of a qr, kept only where each entry is an ip literal, a port and a known kind;
+// a bad entry is dropped, not the peer. Names are not taken: no lookup goes out for a hint.
+export function cleanAddrs(x: unknown): PeerAddr[] {
+  if (!Array.isArray(x)) return [];
+  const out: PeerAddr[] = [];
+  for (const a of x.slice(0, MAX_ADDRS * 2)) {
+    if (!a || typeof a !== 'object') continue;
+    const host = typeof a.host === 'string' ? a.host.replace(/^\[|\]$/g, '').toLowerCase() : '';
+    const port = Number(a.port);
+    if (!net.isIP(host) || !Number.isInteger(port) || port < 1 || port > 65535 || !ADDR_VIAS.includes(a.via)) continue;
+    if (out.some((o) => o.host === host && o.port === port)) continue;
+    out.push({ host, port, via: a.via });
+    if (out.length >= MAX_ADDRS) break;
+  }
+  return out;
+}
+
+// Every way to try, in order: host/port first (the lan, which mdns keeps current), then the
+// qr's addrs. A cable or a relay peer has one way only.
+export function candidates(p: Pick<Peer, 'host' | 'port' | 'addrs' | 'cable' | 'relay'>): PeerAddr[] {
+  const out: PeerAddr[] = [];
+  const add = (a: PeerAddr) => { if (a.host && a.port && !out.some((o) => o.host === a.host && o.port === a.port)) out.push(a); };
+  add({ host: p.host, port: p.port, via: addrKind(p.host) });
+  if (!p.cable && !p.relay) for (const a of p.addrs ?? []) add(a);
+  return out;
+}
+
+// Where the api channel is dialed: the address that answered last, else host/port.
+export function dialOf(p: Pick<Peer, 'host' | 'port' | 'route'>): { host: string; port: number } {
+  return p.route ? { host: p.route.host, port: p.route.port } : { host: p.host, port: p.port };
+}
+
+// How the device was reached at the last probe: the kind of the address that answered.
+export const reachedBy = (p: Pick<Peer, 'host' | 'route'>): AddrVia => p.route?.via ?? addrKind(p.host);
+
+export type PeekFn = typeof peekGate;
+
+// The first way, in order, whose gate shows the pinned certificate (a tls handshake, the hello,
+// then hang up: nothing is proven or spent). null: none did. Only for a peer with a pinned
+// fingerprint: without one there is nothing to tell this device from another at an address.
+export async function pickRoute(p: Peer, identity: GateIdentity, timeoutMs = 2000, peek: PeekFn = peekGate): Promise<PeerAddr | null> {
+  if (!p.fp) return null;
+  for (const a of candidates(p)) {
+    const r = await peek(a.host, a.port, identity, timeoutMs).catch(() => null);
+    if (r?.up && r.fp === p.fp) return a;
+  }
+  return null;
+}
+
 // Accepts what a worker shows: the QR json (`{"k":"kula-peer","v":2,...}` with the
 // secret, or v3 with the certificate fingerprint, the pairing code and, for a worker
 // far away, `relay: {url, code}`), the same json as a base64url code (one pasteable
@@ -105,6 +175,9 @@ export function parsePeerText(text: string, relayUrl?: string): Peer {
     if (typeof obj.relay.url !== 'string' || !CODE_RE.test(String(obj.relay.code ?? ''))) throw new Error('peer has a bad relay');
     relay = { url: normalizeRelayUrl(obj.relay.url), code: String(obj.relay.code) };
   }
+  const addrs = obj.v === 3 ? cleanAddrs(obj.addrs) : [];
+  // a qr with addrs only: the first one is host/port
+  if (addrs.length && (typeof obj.host !== 'string' || !obj.host)) { obj.host = addrs[0].host; obj.port = addrs[0].port; }
   const port = Number(obj.port);
   // a relayed peer may carry no reachable address at all
   if (!relay && (typeof obj.host !== 'string' || !obj.host)) throw new Error('peer has no host');
@@ -135,6 +208,7 @@ export function parsePeerText(text: string, relayUrl?: string): Peer {
     pin,
     paired_at: null,
     relay,
+    ...(addrs.length ? { addrs } : {}),
     kind,
     ram: num(obj.ram),
     bw: num(obj.bw),
@@ -150,7 +224,7 @@ export function parsePeerText(text: string, relayUrl?: string): Peer {
 export function peerCode(p: Peer): string {
   const { id, name, host, port, secret, kind, ram, bw } = p;
   const o = p.fp
-    ? { k: 'kula-peer', v: 3, id, name, host, port, fp: p.fp, pin: p.pin ?? undefined, relay: p.relay ?? undefined, kind, ram, bw }
+    ? { k: 'kula-peer', v: 3, id, name, host, port, ...(p.addrs?.length ? { addrs: p.addrs } : {}), fp: p.fp, pin: p.pin ?? undefined, relay: p.relay ?? undefined, kind, ram, bw }
     : { k: 'kula-peer', v: 2, id, name, host, port, secret, kind, ram, bw };
   return Buffer.from(JSON.stringify(o), 'utf8').toString('base64url');
 }
@@ -173,7 +247,9 @@ export function afterPaired(p: Peer, fp: string | null): Peer {
 export function whereIs(p: Peer): string {
   if (p.cable) return 'usb cable';
   if (p.relay) return `relay ${p.relay.code} via ${p.relay.url.replace(/^wss?:\/\//, '')}`;
-  return `${p.host}:${p.port}`;
+  const d = dialOf(p);
+  const hp = `${d.host.includes(':') ? `[${d.host}]` : d.host}:${d.port}`;
+  return p.route && p.route.via !== 'lan' ? `${hp} (${p.route.via === 'mapped' ? 'router port' : 'ipv6'}, over the internet)` : hp;
 }
 
 // Adds or replaces (same id) a peer. Returns the list and whether it was new.
@@ -265,8 +341,19 @@ export const REMOTE_NO_SPLIT = 'remote peer: split mode needs the lan';
 // peer that paired gets its pin cleared and its fingerprint pinned (code-only
 // peers learn it here). `identity` is this computer's certificate, needed for v3
 // peers; a relayed peer is probed through its relay on the api channel only.
-export async function probePeers(list: Peer[], timeoutMs = 2000, channels: Channel[] = ['rpc', 'api'], probeFn = probe, identity?: GateIdentity): Promise<PeerProbe[]> {
-  return Promise.all(list.map(async (peer) => {
+//
+// A v3 peer with more than one way (qr addrs) is first asked, way by way in order, whether its
+// pinned certificate answers there (pickRoute); the first that does is kept as its route and
+// the api channel is probed there. The rpc channel (split mode) only ever goes to host/port.
+export async function probePeers(list: Peer[], timeoutMs = 2000, channels: Channel[] = ['rpc', 'api'], probeFn = probe, identity?: GateIdentity, peek: PeekFn = peekGate): Promise<PeerProbe[]> {
+  return Promise.all(list.map(async (peer0) => {
+    let peer = peer0;
+    if (identity && peer.fp && !peer.relay && !peer.cable && candidates(peer).length > 1) {
+      const a = await pickRoute(peer, identity, timeoutMs, peek);
+      const first = candidates(peer)[0];
+      // nobody answered: the old route is kept, the probe below says why
+      if (a) peer = { ...peer, route: a.host === first.host && a.port === first.port ? null : a };
+    }
     let learned: string | null = null;
     let name: string | null = null;
     const one = async (c: Channel): Promise<ProbeResult> => {
@@ -279,7 +366,8 @@ export async function probePeers(list: Peer[], timeoutMs = 2000, channels: Chann
         return r;
       }
       if (peer.fp && !tls) return { ok: false, reason: 'no identity for tls' };
-      const r = await probeFn(peer.host, peer.port, peer.secret, c, timeoutMs, tls);
+      const d = c === 'api' ? dialOf(peer) : { host: peer.host, port: peer.port };
+      const r = await probeFn(d.host, d.port, peer.secret, c, timeoutMs, tls);
       if (r.ok && tls) learned = peer.fp || learned;
       return r;
     };

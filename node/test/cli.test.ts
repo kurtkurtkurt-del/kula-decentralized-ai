@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { parse, menuItems, menuText, pickMenu, versionInfo, secretFrom, probeSecret } from '../src/cli.ts';
+import { main, parse, menuItems, menuText, pickMenu, versionInfo, secretFrom, probeSecret } from '../src/cli.ts';
 
 const pkg = JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
 
@@ -39,6 +39,18 @@ test('the version comes from package.json', () => {
 test('share is tls unless --no-tls; --no-tls never swallows the next word', () => {
   assert.deepEqual(parse(['share', '--no-tls', '--port', '1']).flags, { 'no-tls': true, port: '1' });
   assert.deepEqual(parse(['share', '--no-tls', 'x']).rest, ['x']);
+});
+
+test('share --map-port and --ipv4-only take no value; --map-port refuses v1 before anything opens', async () => {
+  assert.deepEqual(parse(['share', '--map-port', '--ipv4-only', 'x', '--gateway', '192.168.1.1']).flags, { 'map-port': true, 'ipv4-only': true, gateway: '192.168.1.1' });
+  const err = console.error;
+  const said: string[] = [];
+  console.error = (s: string) => { said.push(String(s)); };
+  try {
+    assert.equal(await main(['share', '--map-port', '--no-tls']), 2);
+    assert.equal(await main(['share', '--map-port', '--secret', 'ab'.repeat(16)]), 2);
+  } finally { console.error = err; }
+  assert.ok(said.filter((s) => s.includes('--map-port needs tls only')).length === 2);
 });
 
 test('the v1 secret: --secret-file (mode 600 only), KULA_SECRET, --secret with a ps warning; never echoed', () => {

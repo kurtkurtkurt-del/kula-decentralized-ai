@@ -11,7 +11,9 @@ import { startGateServer, v1Open, PIN_TTL_MS, type GateEvent, type GateServer, t
 import { loadOrCreateIdentity, newPin, Paired } from './tls.js';
 import { findLlama, TAG } from './llama.js';
 import { home, expandHome } from './paths.js';
-import { lanIPv4, freeRamMB, measureBandwidth, detectGpu } from './sysinfo.js';
+import { lanIPv4, globalIPv6, freeRamMB, measureBandwidth, detectGpu } from './sysinfo.js';
+import { startPortMapper, mapLine, type PortMapper } from './portmap.js';
+import type { PeerAddr } from './peers.js';
 import { freePort, startChild, type Child } from './children.js';
 import { startApiServer, type ApiServer } from './api.js';
 import { loadOrCreateKey } from './audit/key.js';
@@ -38,6 +40,11 @@ export interface ShareOptions {
   // far away masters: connect out to this relay, register, put the code in the qr (docs/RELAY.md). needs tls.
   relay?: string;
   dashboard?: number | false; // the local dashboard's port on 127.0.0.1; false: none
+  // the gate on ipv6 and ipv4 (one '::' socket); false (--ipv4-only): 0.0.0.0 as before
+  dualStack?: boolean;
+  // ask the router for the gate port (PCP, NAT-PMP, UPnP-IGD; docs/INTERNET.md). needs tls only
+  mapPort?: boolean;
+  gateway?: string;           // the router to ask; default: the system's default route
 }
 
 // The qr the phone scans. v2 carries the shared secret (protocol v1); v3 carries
@@ -55,6 +62,9 @@ export interface PeerPayload {
   fp?: string;
   pin?: string;
   relay?: { url: string; code: string };
+  // every way to this gate, lan first (docs/INTERNET.md); host/port stay the lan way, so an
+  // old reader of the qr still works
+  addrs?: PeerAddr[];
   kind: 'pc';
   ram: number;
   bw: number;
@@ -94,6 +104,8 @@ export async function share(opts: ShareOptions): Promise<ShareHandle> {
   const host = lanIPv4();
   if (!host) log('no lan ipv4 address found; the phone will not reach this computer');
   if (opts.relay && opts.tls === false) throw new Error('--relay needs tls: the handshake crosses the relay and must be end to end (drop --no-tls)');
+  // the internet must never meet v1: it proves no identity and carries prompts in plain text
+  if (opts.mapPort && (opts.tls === false || opts.secret)) throw new Error('--map-port needs tls only: drop --no-tls and --secret (v1 must not face the internet)');
   const useTls = opts.tls !== false;
   if (!useTls) log('tls is off (--no-tls): v1 only, prompts and answers cross the network in plain text');
   // v1 needs a secret in a qr. With tls the qr carries none, so unless one was given
@@ -207,6 +219,8 @@ export async function share(opts: ShareOptions): Promise<ShareHandle> {
   const printQr = (port: number) => {
     const common = { k: 'kula-peer' as const, id, name, host: host ?? '0.0.0.0', port, kind: 'pc' as const, ram, bw, gpu: gpu.name, vram: gpu.vramMB };
     const payload: PeerPayload = tlsServer ? { ...common, v: 3, fp: tlsServer.identity.fp, pin: tlsServer.pin ?? undefined } : { ...common, v: 2, secret: secret! };
+    const addrs = tlsServer ? addrsOf(port) : [];
+    if (addrs.length > 1) payload.addrs = addrs;
     if (relay?.code && opts.relay) payload.relay = { url: opts.relay, code: relay.code };
     const text = JSON.stringify(payload);
     qrText = text;
@@ -226,9 +240,20 @@ export async function share(opts: ShareOptions): Promise<ShareHandle> {
     log(`tls certificate ${identity.fp.slice(0, 16)}… (${paired.size} paired); ${!secret ? 'v1 off' : paired.size ? 'v1 off (a device is paired; --secret is not used)' : 'v1 on (--secret) until the first device pairs'}`);
   }
 
-  const gate = await startGateServer({ port: opts.port, secret, targets, onEvent, admit: (peer, nonceC, unixMs) => auditor.hello(peer, nonceC, unixMs), tls: tlsServer });
+  // dual-stack unless asked not to, or while v1 may be heard: plain text stays on ipv4 as before
+  const dualStack = opts.dualStack !== false && !v1Open(secret, tlsServer);
+  if (opts.dualStack !== false && !dualStack) log('the gate stays on ipv4 while v1 is on (--secret / --no-tls)');
+  const gate = await startGateServer({ port: opts.port, dualStack, secret, targets, onEvent, admit: (peer, nonceC, unixMs) => auditor.hello(peer, nonceC, unixMs), tls: tlsServer });
   liveGate = gate;
-  log(`gate listening on 0.0.0.0:${gate.port}${tlsServer ? (v1Open(secret, tlsServer) ? ' (v1 and v2 tls)' : ' (v2 tls only)') : ' (v1 only, no tls)'}`);
+  // the router's door to the gate, when the person asked for one (--map-port)
+  let mapper: PortMapper | null = null;
+  if (opts.mapPort) {
+    log(`asking the router for port ${gate.port} (pcp, nat-pmp, upnp)`);
+    const m = await startPortMapper({ internalPort: gate.port, gateway: opts.gateway ?? null }, log).catch((e) => ({ mapper: null, why: (e as Error).message }));
+    mapper = m.mapper;
+    log(mapLine(mapper?.mapping() ?? null, m.why ?? undefined));
+  }
+  log(`gate listening on ${gate.dualStack ? '[::]' : gate.bound}:${gate.port}${gate.dualStack ? ' (ipv6 and ipv4)' : ''}${tlsServer ? (v1Open(secret, tlsServer) ? ' (v1 and v2 tls)' : ' (v2 tls only)') : ' (v1 only, no tls)'}`);
   if (opts.relay) {
     // the relay sees this computer's id, name and certificate fingerprint, nothing more; a
     // relayed stream reaches the gate from 127.0.0.1 and is served like any other
@@ -241,6 +266,15 @@ export async function share(opts: ShareOptions): Promise<ShareHandle> {
     } catch (e) {
       log(`relay: ${(e as Error).message}; sharing on the lan only`);
     }
+  }
+  // every way in for the qr: the lan, global ipv6 (dual-stack only), the router's port
+  function addrsOf(port: number): PeerAddr[] {
+    const out: PeerAddr[] = [];
+    if (host) out.push({ host, port, via: 'lan' });
+    if (liveGate?.dualStack) for (const a of globalIPv6()) out.push({ host: a, port, via: 'ipv6' });
+    const m = mapper?.mapping();
+    if (m?.externalIp && !m.behindAnotherNat) out.push({ host: m.externalIp, port: m.externalPort, via: 'mapped' });
+    return out;
   }
   state.setGatePort(gate.port);
   printQr(gate.port);
@@ -308,6 +342,7 @@ export async function share(opts: ShareOptions): Promise<ShareHandle> {
     await new Promise<void>((r) => bonjour.unpublishAll(() => r()));
     bonjour.destroy();
     await relay?.close();
+    await mapper?.stop();
     await gate.close();
     if (api) await api.close();
     if (rpc) await rpc.stop();

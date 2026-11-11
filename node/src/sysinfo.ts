@@ -42,6 +42,23 @@ export function lanIPv4(): string | null {
   return all[0].address;
 }
 
+// This computer's global ipv6 addresses (2000::/3), the ones another network can route to:
+// no link-local, no unique-local (fc00::/7), no loopback; at most `max`, in interface order.
+// Whether a router's firewall lets a connection in is not known from here.
+export function globalIPv6(max = 2, ifaces = os.networkInterfaces()): string[] {
+  const out: string[] = [];
+  for (const [name, addrs] of Object.entries(ifaces)) {
+    if (/^(docker|br-|veth|utun|tun|tap|vbox|vmnet|awdl|llw)/i.test(name)) continue;
+    for (const a of addrs ?? []) {
+      if (a.family !== 'IPv6' || a.internal) continue;
+      const l = a.address.toLowerCase();
+      if (!/^[23][0-9a-f]{0,3}:/.test(l) || a.scopeid) continue;
+      if (!out.includes(l)) out.push(l);
+    }
+  }
+  return out.slice(0, max);
+}
+
 // Memory a model could take now. os.freemem() is the figure everywhere except
 // macOS, where it counts only untouched pages (often under 100 MB on a busy
 // machine): there, free + inactive + purgeable pages from vm_stat is what the
