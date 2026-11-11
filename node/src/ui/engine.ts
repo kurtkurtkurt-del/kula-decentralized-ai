@@ -11,6 +11,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { randomBytes } from 'node:crypto';
 import { openApart, openPeerDevice, startLlamaServer, type Cluster, type Message, type ModelRef, type Reply, type StartBackend, type WireMessage } from '../apart.js';
 import { readPeers, writePeers, parsePeerText, upsertPeer, findPeer, probePeers, peersFile, whereIs, discover, reachedBy, type AddrVia, type Peer, type PeerProbe, type Found, type PeerKind } from '../peers.js';
 import { connectRemote, handshake, peekGate, GateRefused, type GatePeek } from '../gate.js';
@@ -19,6 +20,7 @@ import { loadOrCreateIdentity, fingerprint, Paired, type GateIdentity } from '..
 import { Ledger, sha256Hex } from '../audit/ledger.js';
 import { Seen, pairedFile, removePaired } from '../unpair.js';
 import { loadOrCreate as loadDeviceKey } from '../audit/key.js';
+import { ownerBlind, loadAttestConfig, loadStatusList, type AttestPolicy, type Why } from '../attest.js';
 import { home, repoRoots } from '../paths.js';
 import { findLlama, sha256File, type LlamaBinaries } from '../llama.js';
 import { download, sha256Of } from '../download.js';
@@ -52,8 +54,26 @@ export interface TrustLook {
   upTo: string | null;                // sha256 of the last line received: where the next look starts
   lines: string[]; restartedAt: number | null;
   rejectsDay: Record<string, number>; rejectsLast: { t: number; why: string; peer: string }[];
+  attest: AttestLook | null;          // owner-blind: the last proof asked for (attest.ts); null: never asked
 }
 export const TRUST_WINDOW = 500;
+
+// Owner-blind (11.11.2026, attest.ts): once an hour a look asks the device to prove that its owner
+// cannot see the work (GET /trust?challenge=, a fresh random question each time); the proof is
+// checked here when it comes and only the outcome is kept, with when it was asked.
+export interface AttestLook { at: number; ok: boolean | null; why: Why; text: string }
+export const ATTEST_EVERY = 3_600_000;
+export const attestDue = (look: TrustLook | null, now: number) => !look?.attest || now - look.attest.at >= ATTEST_EVERY || now < look.attest.at;
+
+/** The `attest` field of one /trust answer to [challenge], checked (exported for tests). */
+export function foldAttest(b: any, challenge: string, at: number, policy: Partial<AttestPolicy> = {}): AttestLook {
+  const cfg = policy.signers && policy.pkg ? { signers: policy.signers, pkg: policy.pkg } : loadAttestConfig();
+  const r = ownerBlind(
+    { attest: b && typeof b === 'object' && 'attest' in b ? b.attest : undefined, challenge, id: str(b?.id, 64), alg: str(b?.key?.alg, 16), pub: str(b?.key?.pub) },
+    { now: at, signers: cfg.signers, pkg: cfg.pkg, ...policy, status: policy.status === undefined ? loadStatusList() : policy.status },
+  );
+  return { at, ok: r.ok, why: r.why, text: r.text };
+}
 export const OLD_WORKER = 'an older kula without the security report: update it';
 const str = (v: unknown, max = 4096): string | null => (typeof v === 'string' && v.length <= max ? v : null);
 const HEX64 = /^[0-9a-f]{64}$/;
@@ -81,6 +101,7 @@ export function foldTrust(was: TrustLook | null, b: any, at: number, pin: string
     // not the head: with `more` the answer stopped before it
     upTo: got.length ? sha256Hex(got[got.length - 1]) : lg.found === true ? was?.upTo ?? null : null,
     lines, restartedAt, rejectsDay: day, rejectsLast: last,
+    attest: was?.attest ?? null,
   };
 }
 
@@ -473,14 +494,18 @@ export class Engine {
   private async askTrust(p: Peer, apiPort: number, ms: number): Promise<void> {
     const id = this.groupId(p.id);
     let look = this.trusts.get(id) ?? null;
+    // the first round of a look asks for the owner-blind proof too, when it is due; making it
+    // costs the phone a keystore key, so not every look
+    const challenge = attestDue(look, Date.now()) ? randomBytes(32).toString('hex') : null;
     try {
       for (let round = 0; round < 5; round++) {
-        const since = look && !look.error && look.upTo ? `?since=${look.upTo}` : '';
-        const r = await fetch(`http://127.0.0.1:${apiPort}/trust${since}`, { signal: AbortSignal.timeout(ms) });
+        const q = [look && !look.error && look.upTo ? `since=${look.upTo}` : '', round === 0 && challenge ? `challenge=${challenge}` : ''].filter(Boolean).join('&');
+        const r = await fetch(`http://127.0.0.1:${apiPort}/trust${q ? `?${q}` : ''}`, { signal: AbortSignal.timeout(ms) });
         if (r.status === 404) { look = { ...(look ?? foldTrust(null, {}, Date.now())), at: Date.now(), error: OLD_WORKER }; break; }
         if (!r.ok) throw new Error(`it answered ${r.status}`);
         const b = await r.json();
         look = foldTrust(look && !look.error ? look : null, b, Date.now(), p.fp ?? null);
+        if (round === 0 && challenge) look.attest = foldAttest(b, challenge, Date.now());
         if (b?.ledger?.more !== true) break;
       }
     } catch (e) {

@@ -130,3 +130,24 @@ test('/trust on an empty ledger and without tls; no trust source: not found', as
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('/trust?challenge: a computer has no hardware to vouch for it, so "attest" is null; asked badly, 400', async () => {
+  const dir = tmp();
+  const key = generate();
+  const api = await startApiServer({ models: dir, llama: null, trust: { key, ledgerFile: path.join(dir, 'ledger.jsonl'), cert: () => null, gate: () => ({ v1: false, tls: true, paired: 1 }) } });
+  try {
+    const plain = await (await fetch(`http://127.0.0.1:${api.port}/trust`)).text();
+    assert.ok(!plain.includes('"attest"'), 'not asked: no field, the bytes as before');
+    const r = await fetch(`http://127.0.0.1:${api.port}/trust?challenge=${'ab'.repeat(32)}`);
+    assert.equal(r.status, 200);
+    assert.ok((await r.text()).endsWith(',"attest":null}'), 'last, and null');
+    for (const bad of ['', 'AB'.repeat(32), 'ab'.repeat(31), 'zz'.repeat(32)]) {
+      const b = await fetch(`http://127.0.0.1:${api.port}/trust?challenge=${bad}`);
+      assert.equal(b.status, 400);
+      assert.deepEqual(await b.json(), { error: 'bad challenge' });
+    }
+  } finally {
+    await api.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});

@@ -13,6 +13,7 @@ import type { LlamaBinaries } from './llama.js';
 import { blobMb } from './benchcore.js';
 import { apiPeerOf } from './gate.js';
 import { trustBody, SINCE_RE, type TrustSource } from './trust.js';
+import { CHALLENGE_RE } from './attest.js';
 
 export interface ApiStatus {
   loaded: boolean;
@@ -293,7 +294,9 @@ export async function startApiServer(opts: ApiOptions): Promise<ApiServer> {
         const q = new URLSearchParams((req.url ?? '').split('?')[1] ?? '');
         const since = q.get('since');
         if (since !== null && !SINCE_RE.test(since)) return json(res, 400, { error: 'bad since' });
-        return json(res, 200, trustBody(opts.trust, since));
+        const challenge = q.get('challenge');
+        if (challenge !== null && !CHALLENGE_RE.test(challenge)) return json(res, 400, { error: 'bad challenge' });
+        return json(res, 200, trustBody(opts.trust, since, challenge));
       }
       if (req.method === 'GET' && url === '/blob') return blob(new URLSearchParams((req.url ?? '').split('?')[1] ?? '').get('mb'), res);
       if (req.method === 'POST' && url === '/load') return handleLoad(await readJson(req), res, masterOf(req.socket.remotePort));

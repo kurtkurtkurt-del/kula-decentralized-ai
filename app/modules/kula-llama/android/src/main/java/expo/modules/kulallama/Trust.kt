@@ -19,6 +19,9 @@ import java.io.RandomAccessFile
  *    "ledger":{"count","head","self","found","more","lines":[...]},
  *    "rejects":{"day":{"<why>":n},"last":[{"t","why","peer"}]}}
  *
+ * With `challenge=<64 hex>` (11.11.2026) the answer gains "attest" last: the proof that this
+ * phone's owner cannot see the work (Attest.kt); without it the bytes are as before.
+ *
  * The ledger is read as it is on disk (it can be 5 MB a file, and files are rotated away):
  * lines are only ever complete ones (a line being written has no newline yet), the chain
  * check is cached per file by size and mtime and goes on from where it stopped while a file
@@ -32,6 +35,8 @@ class Trust(
   private val ledgerFile: File,
   private val gate: () -> GateState,
   private val now: () -> Long = System::currentTimeMillis,
+  /** the `attest` field for a challenge (Attest.answer); null: this device makes no proof */
+  private val attest: ((String) -> Map<String, Any?>)? = null,
 ) {
   data class GateState(val v1: Boolean, val tls: Boolean, val paired: Int)
 
@@ -57,6 +62,8 @@ class Trust(
   fun answer(query: String?): Answer {
     val since = param(query, "since")
     if (since != null && !SINCE.matches(since)) return Answer(400, Json.obj(linkedMapOf("error" to "bad since")))
+    val challenge = param(query, "challenge")
+    if (challenge != null && !Attest.challengeOk(challenge)) return Answer(400, Json.obj(linkedMapOf("error" to "bad challenge")))
     val files = Ledger.chainFiles(ledgerFile)
     val chain = check(files)
     val head = chain.head
@@ -85,6 +92,7 @@ class Trust(
       ),
       "rejects" to rejects(files),
     )
+    if (challenge != null) body["attest"] = attest?.invoke(challenge) ?: linkedMapOf("v" to 1, "error" to "no keystore on this device")
     return Answer(200, Json.obj(body))
   }
 

@@ -216,7 +216,7 @@ class WorkerService : Service() {
         api?.trust = Trust(key, held.store, identity.certDer, ledgerFile(this), {
           val g = gate
           Trust.GateState(g?.v1Open() ?: false, g?.tlsOn ?: false, g?.pairedCount ?: 0)
-        }).also { t -> thread(name = "kula-trust-warm", isDaemon = true) { runCatching { t.warm() } } }
+        }, attest = { ch -> Attest.answer(ch, key, KeyStoreAttester) }).also { t -> thread(name = "kula-trust-warm", isDaemon = true) { runCatching { t.warm() } } }
         Log.i(TAG, "worker${if (auto) " (auto)" else ""}: $threads threads, $ramMb MB free, %.1f GB/s, gate $port".format(bandwidth))
         val name = intent?.getStringExtra(EXTRA_NAME) ?: Keeper.config(this).name ?: Build.MODEL
         // far away masters: register with the relay; every relayed stream reaches the gate on

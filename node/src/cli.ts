@@ -9,6 +9,7 @@ import { share } from './share.js';
 import { home, packageRoot } from './paths.js';
 import { version, isPacked } from './build.js';
 import { ledgerCommand } from './ledgercmd.js';
+import { loadStatusList, refreshStatusList, statusFile, STATUS_URL } from './attest.js';
 import { pairedCommand } from './unpair.js';
 import { collectInfo, infoText } from './info.js';
 import { peersCommand, chatCommand } from './mastercmd.js';
@@ -53,6 +54,9 @@ usage:
                                      fingerprint): a running share refuses it at once and closes its
                                      connections; one signed ledger line. it pairs again only with a fresh code
   kula-node ledger [--verify] [--tail N]   print the signed ledger; --verify checks the chain and signatures
+  kula-node attestation [refresh]    Google's revocation list for phones' hardware proofs (owner-blind):
+                                     whether a copy is kept here and from when; refresh fetches it
+                                     (an internet call, only when you run it) into ~/.kula-node
   kula-node --version [--json]
   kula-node info [--json] [--no-bandwidth]   address, ram, memory bandwidth, gpu, llama.cpp: what a cluster would see
 
@@ -285,6 +289,7 @@ export async function main(argv: string[]): Promise<number> {
   if (cmd === 'bench') return benchCommand(flags);
   if (cmd === 'ui') return uiCommand(flags);
 
+  if (cmd === 'attestation') return attestationCommand(rest[0]);
   if (cmd === 'ledger') {
     return ledgerCommand({ verify: flags.verify === true, tail: flags.tail !== undefined ? num(flags.tail, 20) : undefined });
   }
@@ -349,4 +354,22 @@ export async function main(argv: string[]): Promise<number> {
   console.error(`unknown command: ${cmd}\n`);
   console.log(HELP);
   return 2;
+}
+
+// The revocation list the owner-blind check reads (attest.ts). Nothing fetches it on its own: no
+// outside network unless the person asks, here.
+async function attestationCommand(sub: string | undefined): Promise<number> {
+  if (sub === 'refresh') {
+    try {
+      const l = await refreshStatusList();
+      console.log(`fetched ${STATUS_URL}: ${l.serials.size} revoked keys, kept in ${statusFile()}`);
+      return 0;
+    } catch (e) { console.error(`could not fetch it: ${(e as Error).message}`); return 1; }
+  }
+  if (sub !== undefined) { console.error('usage: kula-node attestation [refresh]'); return 2; }
+  const l = loadStatusList();
+  console.log(l
+    ? `Google's revocation list from ${new Date(l.fetched).toISOString().slice(0, 10)}: ${l.serials.size} revoked keys (${statusFile()})`
+    : 'no copy of Google\'s revocation list here: phones\' proofs are checked without it. kula-node attestation refresh fetches it (an internet call).');
+  return 0;
 }

@@ -13,7 +13,7 @@ import { ledgerFile } from '../ledgercmd.js';
 import { loadOrCreate } from '../audit/key.js';
 import { chainFiles, verifyChain } from '../audit/ledger.js';
 
-const trustOf = (t: TrustLook | null): EyeTrust | null => (t ? { ...t, lines: [...t.lines], rejectsDay: { ...t.rejectsDay }, rejectsLast: t.rejectsLast.map((r) => ({ ...r })) } : null);
+const trustOf = (t: TrustLook | null): EyeTrust | null => (t ? { ...t, lines: [...t.lines], rejectsDay: { ...t.rejectsDay }, rejectsLast: t.rejectsLast.map((r) => ({ ...r })), attest: t.attest ? { ...t.attest } : null } : null);
 
 // this computer's own ledger, checked again only when one of its files changed (it can be 5 MB)
 let hostLedgerSeen: { stamp: string; v: Snapshot['host']['ledger'] } | null = null;

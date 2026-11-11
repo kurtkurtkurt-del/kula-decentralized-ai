@@ -304,6 +304,30 @@ GET /trust  or  GET /trust?since=<sha256 hex of a ledger line>
   pinned the certificate can tie the ledger's signatures to it.
 - Nothing secret: no v1 secret, no pairing code, no private key, no prompts.
 
+**`challenge`: owner-blind** (11.11.2026). `GET /trust?challenge=<64 lowercase hex>` (with or
+without `since`) asks the device to prove that its owner cannot see the work it runs
+([AUDIT.md](AUDIT.md#owner-blind-11112026)). The answer gains one field, last; without a
+challenge the bytes are as before.
+
+```
+phone:    …,"attest":{"v":1,"chain":["<base64 der>", … leaf first],"sig":"<base64>"}}
+          …,"attest":{"v":1,"error":"<why there is no proof>"}}
+computer: …,"attest":null}         a computer has no hardware that could vouch for this
+400 {"error":"bad challenge"}
+```
+
+- The phone (`Attest.kt`, `KeyStoreAttester.kt`) makes a fresh EC P-256 key in the Android
+  KeyStore (TEE) with the attestation challenge sha256(`"kula-attest-1\n" + challenge + "\n" +
+  device id`), reads its certificate chain and deletes the key. The key signs nothing.
+- `sig`: the device key (the one that signs the ledger) over `"kula-attest-1\n" + challenge +
+  "\n" + hex(sha256(chain[0]))`, so the device that keeps the ledger is the one that answered.
+  The device id inside the attestation challenge means another phone running kula cannot lend
+  its proof: its kula would put its own id in.
+- An older worker ignores the parameter and sends no `attest` field.
+- kula's engine asks once an hour per device (a fresh random challenge each time; making the key
+  costs the phone a moment), on the first page of a look, and checks the answer at once
+  (`node/src/attest.ts`).
+
 ## the tunnel
 
 `Tunnel` (in `Gate.kt` and `node/src/gate.ts`) listens on a free 127.0.0.1 port. Every
