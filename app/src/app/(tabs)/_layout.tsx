@@ -4,12 +4,15 @@ import { TabList, TabSlot, TabTrigger, Tabs, type TabsSlotRenderOptions } from '
 import { Screen } from 'react-native-screens';
 import Animated, { Easing, useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
 import { TabBarFrame, TabItem } from '@/components/TabBar';
+import { useClusterEye } from '@/eye/run';
 
 // The main app: five tabs in an edge-to-edge bottom bar, in this order:
 // models · connect · the brain · projects · passport. The brain (beyin at work on this
 // phone) sits in the middle. 5.11.2026: connect took the messages tab's place and holds the
 // messages (/messages redirects there); its old place is the person's own projects.
 export default function TabsLayout() {
+  // god's eye keeps looking while this phone runs a cluster, whichever tab is open (src/eye/run.ts)
+  useClusterEye();
   return (
     <Tabs>
       <TabSlot renderFn={renderTab} />

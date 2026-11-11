@@ -8,6 +8,7 @@ import Tips from '@/components/Tips';
 import { useTabBarSpace } from '@/components/TabBar';
 import BrainFigure, { type FigureNode } from '@/components/brain/BrainFigure';
 import Empty from '@/components/brain/Empty';
+import { EyeCards, EyeGrid } from '@/components/brain/Eye';
 import Ledger, { type Tile } from '@/components/brain/Ledger';
 import Night from '@/components/brain/Night';
 import Now from '@/components/brain/Now';
@@ -20,6 +21,7 @@ import { group } from '@/components/brain/grouping';
 import { networkEstimate, type NetworkEstimate } from '@/data/network';
 import { lastPassport } from '@/data/passport';
 import { useRefreshOnFocus } from '@/hooks/useRefresh';
+import { actOf, applyCard, dismissCard, holdEye, useEyeView } from '@/eye/run';
 import { useLang } from '@/i18n';
 import { parseLedger, peerBadge, summarize, verdictOf, verifyChain, type AuditEntry } from '@/llm/audit';
 import { clearBrainLog, latest, useBrainLog } from '@/llm/brainlog';
@@ -45,6 +47,8 @@ import { brand } from '@/theme/layout';
 // behind "the full ledger". The night: a ring for tonight's window and last night's numbers.
 // The wider network: what every phone could make tonight. Every picture says its sentence
 // to a screen reader (accessibilityLabel). The pure parts are in components/brain/*.ts.
+// god's eye (11.11.2026): the cards the twelve branches say, and the twelve as a map, each with
+// its page (/branch/<id>); the same brain the computer runs (src/eye/, docs/BEYIN.md).
 const LEDGER = 200; // lines read from the native ledger
 const SHOWN = 8;    // rows of decisions before "show all"
 const ALL = 50;     // decisions read for "show all"
@@ -65,6 +69,7 @@ export default function BrainScreen() {
   const [readAt, setReadAt] = useState(0); // when the ledger was read: its sparklines end there
   const [all, setAll] = useState(false);
   const [wider, setWider] = useState<NetworkEstimate | null>(null);
+  const eye = useEyeView();
 
   // the ledger: on focus, and every 15 s while the tab is open (the worker writes as it goes)
   const readLedger = useCallback(() => {
@@ -80,10 +85,13 @@ export default function BrainScreen() {
       const every = setInterval(readLedger, 15_000);
       // the security report: every paired device asked now and each minute (llm/trustStore.ts)
       const stopTrust = startTrustRhythm();
+      // god's eye: the twelve look every 5 s while the tab is open (src/eye/run.ts)
+      const stopEye = holdEye('tab');
       return () => {
         clearTimeout(first);
         clearInterval(every);
         stopTrust();
+        stopEye();
       };
     }, [readLedger]),
   );
@@ -211,6 +219,16 @@ export default function BrainScreen() {
         ) : (
           <Empty kind="model" text={t('brain.empty.model')} a11y={t('brain.idle')} action={t('brain.empty.load')} onAction={() => router.push('/models')} />
         )}
+
+        {/* god's eye: what the branches suggest, then the twelve (src/eye/, the computer's same brain) */}
+        {eye?.cards.length ? (
+          <>
+            <Head text={up(t('eye.cards'))} />
+            <EyeCards cards={eye.cards} actOf={(c) => actOf(c)} apply={applyCard} dismiss={dismissCard} />
+          </>
+        ) : null}
+        <Head text={up(t('eye.title'))} hint={t('eye.lede')} />
+        <EyeGrid view={eye} onOpen={(id) => router.push({ pathname: '/branch/[id]', params: { id } })} />
 
         {/* trust and verification: the master's security report on the devices it uses */}
         {peers.length ? (

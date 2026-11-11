@@ -352,7 +352,7 @@ export class GodsEye {
     }
     this.tick();
     this.timer = setInterval(() => this.tick(), this.opts.everyMs ?? 5000);
-    this.timer.unref?.();
+    (this.timer as { unref?: () => void }).unref?.();   // node: the look never keeps the process up; a phone has no unref
   }
 
   stop(): void {
