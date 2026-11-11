@@ -115,3 +115,14 @@ test('the page applies and dismisses cards through the server; a gone card is a 
     assert.equal(cross.status, 403, 'another site cannot press a card');
   } finally { await ui.close(); eye.stop(); }
 });
+
+test('the advisor\'s "first: <card>" hides with the card it points at', () => {
+  const eye = new GodsEye({ snapshot: () => snap(), dir: path.join(HOME, 'adv'), makers: {
+    planner: () => ({ id: 'planner', observe() {}, view: () => ({ ...dark(), built: true, stat: 'x', suggestions: [{ id: 'planner:split:m', kind: 'suggest', title: 't', why: 'w', action: null }] as any }) }),
+    advisor: () => ({ id: 'advisor', observe() {}, view: () => ({ ...dark(), built: true, stat: 'x', suggestions: [{ id: 'advisor:first:planner:split:m', kind: 'suggest', title: 'first', why: 'w', action: null }] as any }) }),
+  } });
+  eye.tick();
+  assert.equal(eye.view().cards.length, 2);
+  eye.dismiss('planner:split:m');
+  assert.deepEqual(eye.view().cards.map((c) => c.id), []);
+});

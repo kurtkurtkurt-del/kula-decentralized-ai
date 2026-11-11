@@ -308,6 +308,8 @@ export class GodsEye {
         n++;
         if (!this.cardSince.has(c.id)) this.cardSince.set(c.id, this.lastAt || this.now());
         if (this.hidden.has(c.id)) continue;
+        // the advisor's "first: <card>" leans on another branch's card: hidden with it
+        if (c.id.startsWith('advisor:first:') && this.hidden.has(c.id.slice('advisor:first:'.length))) continue;
         out.push({ ...c, branch: m.id, since: this.cardSince.get(c.id)! });
       }
     }
