@@ -178,7 +178,7 @@ test('a kind called internet works today, with no code change', () => {
   const { b } = drive(snaps);
   const v = b.view();
 
-  assert.equal(v.stat, '0 cable · 0 wi-fi');
+  assert.equal(v.stat, '0 cable · 0 wi-fi · 1 internet');
   assert.deepEqual(v.rows[0], ['kinds', 'internet 1']);
   assert.equal(v.lines[0], 'pixel · internet · 203.0.113.7:50551 · reachable · 12 ms · answers 100% over internet · usually 12 ms');
 });
@@ -1052,4 +1052,27 @@ test('the assumed table is exactly the starting assumptions', () => {
   ]);
   const { b } = drive([snap([], at(0))]);
   assert.deepEqual(b.view().rows[2], ['assumed', ASSUMED_LINE]);
+});
+
+test('a device that answers only at its router\'s port or ipv6 gets one card; the lan, a miss or a cable get none', async () => {
+  const { cleanCard } = await import('../src/godseye/index.ts');
+  const look = (devices: any[]) => drive([snap(devices, at(1))]).b.view();
+  const v = look([
+    dev({ id: 'p1', name: 'pixel', via: 'wifi', reachedBy: 'mapped', where: '203.0.113.7:50551 (router port, over the internet)' }),
+    dev({ id: 'p2', name: 'tab', via: 'internet', reachedBy: 'ipv6' }),
+    dev({ id: 'p3', name: 'home', via: 'wifi', reachedBy: 'lan' }),
+    dev({ id: 'p4', name: 'gone', via: 'internet', reachedBy: 'mapped', reachable: false, reason: 'connect timeout' }),
+    dev({ id: 'p5', name: 'cab', via: 'cable', reachedBy: null }),
+  ]);
+  const cards = v.suggestions ?? [];
+  assert.deepEqual(cards.map((c: any) => c.id), ['connections:internet:p1', 'connections:internet:p2']);
+  assert.equal(cards[0].title, 'pixel is reached over the internet');
+  assert.match(cards[0].why, /the port its router opened.*apart mode/);
+  assert.match(cards[1].why, /its ipv6 address/);
+  assert.deepEqual(cards[0].action, { do: 'probe', devices: ['p1'] });
+  for (const c of cards) assert.ok(cleanCard(c), 'the eye keeps the card as the branch wrote it');
+  // an older snapshot without reachedBy and a lan device: no card at all
+  assert.equal(look([dev()]).suggestions, undefined);
+  // the address never reaches a card
+  assert.ok(!JSON.stringify(cards).includes('203.0.113.7'));
 });

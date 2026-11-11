@@ -37,8 +37,12 @@ export interface EyeDevice {
   id: string;
   name: string;
   kind: string;                    // phone, pc, …
-  via: 'cable' | 'wifi' | 'relay';
+  via: 'cable' | 'wifi' | 'relay' | 'internet';   // internet: its gate answered only at a global ipv6 address or its router's port
   where: string;                   // how it is reached, in words (an address, "usb cable", …)
+  // which kind of address its pinned certificate answered at (docs/INTERNET.md): its lan
+  // address, a global ipv6 address, or a port its router mapped; null on a cable or a relay.
+  // Left out of a snapshot from before 11.11.2026.
+  reachedBy?: 'lan' | 'ipv6' | 'mapped' | null;
   reachable: boolean | null;       // null: not looked at yet
   reachMs: number | null;
   reason: string | null;           // why not reachable

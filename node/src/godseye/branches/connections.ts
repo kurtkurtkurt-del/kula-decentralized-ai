@@ -26,7 +26,13 @@
 // the probe still counts. A look far behind a device's remembered times means the remembered ones
 // were a bad clock: the remembered kind is forgotten (no switch, no feed line) and seen
 // re-anchors. Saved at most once a minute and only when something changed.
-import type { Branch, BranchCtx, BranchView, EyeDevice, Snapshot } from '../types.js';
+//
+// Which address answered (11.11.2026, docs/INTERNET.md): a snapshot device may say reachedBy,
+// 'lan', 'ipv6' or 'mapped' (its router's port). A device that answers, but only at a global ipv6
+// address or its router's port, gets one card: it is reached over the internet, answers are
+// slower and only apart mode works there (split needs the lan). Something to know; its button
+// only looks again (a probe), which puts it back on the lan once the lan answers.
+import type { Branch, BranchCtx, BranchView, EyeDevice, Snapshot, Suggestion } from '../types.js';
 import { reachWord } from './util.js';
 
 export const MAX_DEVICES = 40;
@@ -53,6 +59,13 @@ export const ASSUMED: { kind: string; ms: number; drops: string }[] = [
 ];
 const ASSUMED_BY_KIND = new Map(ASSUMED.map((a) => [a.kind, a]));
 const ASSUMED_LINE = `${ASSUMED.map((a) => `${a.kind}: ${a.ms} ms, ${a.drops} drops`).join(' · ')} · other: none`;
+
+/** The address kinds that mean the internet: a global ipv6 address, a router's mapped port. */
+export const INTERNET_ADDRS = ['ipv6', 'mapped'];
+/** Did this snapshot device answer only over the internet? Its reachedBy says so, or its via. */
+export function overInternet(d: Record<string, unknown>): boolean {
+  return INTERNET_ADDRS.includes(d.reachedBy as string) || kindOf(d.via) === 'internet';
+}
 
 /** The link kind as a dimension, from a snapshot's via: cut to 20 chars, lower case, letters /
  *  digits / dashes only; anything else is 'other'. A new kind needs no code change. */
@@ -404,6 +417,21 @@ export function create(ctx: BranchCtx): Branch {
         kindCounts.set(k, (kindCounts.get(k) ?? 0) + 1);
       }
       const kinds = [...kindCounts.entries()];
+      // reached, but only over the internet: one card per device while it lasts
+      const suggestions: Suggestion[] = [];
+      for (const o of objs) {
+        if (o === null || o.reachable !== true || !overInternet(o)) continue;
+        const id = idOf(o.id);
+        if (id === null || !/^[\w.:@/-]{1,80}$/.test(id)) continue;   // the card id must stay a card id
+        const name = cut(textOf(o.name) ?? '') || id;
+        const at = o.reachedBy === 'mapped' ? 'the port its router opened' : o.reachedBy === 'ipv6' ? 'its ipv6 address' : 'an internet address';
+        suggestions.push({
+          id: `connections:internet:${id}`, kind: 'warn', weight: 1,
+          title: `${name} is reached over the internet`,
+          why: `its lan address did not answer; its pinned certificate answered at ${at}. answers are slower there, and only apart mode works over it: split mode needs the lan.`,
+          action: { do: 'probe', devices: [id] }, label: 'look again',
+        });
+      }
       const today = snap !== null && isTime(snap.at) ? dayKey(snap.at) : null;
       let switches = 0;
       if (today !== null) {
@@ -411,7 +439,7 @@ export function create(ctx: BranchCtx): Branch {
       }
       return {
         built: true,
-        stat: `${cable} cable · ${wifi} wi-fi${relay ? ` · ${relay} relay` : ''}`,
+        stat: `${cable} cable · ${wifi} wi-fi${relay ? ` · ${relay} relay` : ''}${kindCounts.get('internet') ? ` · ${kindCounts.get('internet')} internet` : ''}`,
         gauge: null,
         rows: [
           ['kinds', kinds.length ? kinds.map(([k, n]) => `${k} ${n}`).join(' · ') : 'none yet'],
@@ -420,6 +448,7 @@ export function create(ctx: BranchCtx): Branch {
         ],
         lines: objs.filter((o) => o !== null).map((o) => deviceLine(o)),
         note: objs.length ? undefined : 'no device yet.',
+        ...(suggestions.length ? { suggestions } : {}),
       };
     },
   };

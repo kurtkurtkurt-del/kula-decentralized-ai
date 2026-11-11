@@ -32,11 +32,16 @@ export function hostLedger(file = ledgerFile()): Snapshot['host']['ledger'] {
 }
 
 // the way the device is reached now (one device is one row: engine.peers, devices.ts)
-const via = (p: PeerRow): EyeDevice['via'] => p.via ?? (p.cable ? 'cable' : p.far ? 'relay' : 'wifi');
+// a wi-fi record whose gate answered only at a global ipv6 address or its router's port is
+// reached over the internet (peers.ts pickRoute)
+const via = (p: PeerRow): EyeDevice['via'] => {
+  const v = p.via ?? (p.cable ? 'cable' : p.far ? 'relay' : 'wifi');
+  return v === 'wifi' && (p.reachedBy === 'ipv6' || p.reachedBy === 'mapped') ? 'internet' : v;
+};
 
 export function deviceOf(p: PeerRow, trust: TrustLook | null = null): EyeDevice {
   return {
-    id: p.id, name: p.name, kind: p.kind, via: via(p), where: p.where,
+    id: p.id, name: p.name, kind: p.kind, via: via(p), where: p.where, reachedBy: p.reachedBy ?? null,
     reachable: p.reach ? p.reach.ok : null, reachMs: p.reach?.ms ?? null, reason: p.reach?.ok ? null : p.reach?.reason ?? null,
     checkedAt: p.probedAt, lastOk: p.last_ok, ramMb: p.ram, bwGBs: p.bw, gpu: p.gpu,
     tls: p.tls, waitingPair: p.waitingPair, plugged: p.cable ? p.cable.plugged : null, holds: p.holds,
