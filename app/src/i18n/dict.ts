@@ -20,10 +20,11 @@ import { power } from './parts/power';
 import { computers } from './parts/computers';
 import { trust } from './parts/trust';
 import { vision } from './parts/vision';
+import { eye } from './parts/eye';
 
 // Every string in one table. When a key appears in two parts the later wins,
 // so each part uses its own prefix (home.* · brain.* · project.* …).
-export const dict = { ...common, ...home, ...tabs, ...pages, ...staff, ...tips, ...coops, ...server, ...models, ...audit, ...ux, ...brain, ...bench, ...voice, ...tasks, ...modelsui, ...social, ...passportui, ...power, ...computers, ...trust, ...vision } as const;
+export const dict = { ...common, ...home, ...tabs, ...pages, ...staff, ...tips, ...coops, ...server, ...models, ...audit, ...ux, ...brain, ...bench, ...voice, ...tasks, ...modelsui, ...social, ...passportui, ...power, ...computers, ...trust, ...vision, ...eye } as const;
 
 export type Key = keyof typeof dict;
 type Roots<K> = K extends `${infer Base}.other` ? Base : never;

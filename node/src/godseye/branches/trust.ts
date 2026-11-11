@@ -19,11 +19,14 @@
 // bootloader, green verified boot, the official kula app); a computer cannot prove it. One line per
 // device, informational for now: it never turns the verdict red or grey. A device in the running
 // cluster that fails it gets a warning card.
-import { createHash, createPublicKey, verify, X509Certificate, type KeyObject } from 'node:crypto';
 import type { Branch, BranchCtx, EyeDevice, EyeTrust, Snapshot, Suggestion, TrustCheck, TrustReport, Verdict } from '../types.js';
+import type { EyeKey, EyeKeys } from '../platform.js';
+import { fromBase64, sha256Hex } from '../hash.js';
 import { hhmm, pct } from './util.js';
 
-const sha = (s: string | Buffer) => createHash('sha256').update(s).digest('hex');
+// the signatures and the certificate's subject come from the platform (ctx.keys: node:crypto on a
+// computer, platform.ts); the hashes are plain TypeScript and the same everywhere
+const sha = (s: string | Uint8Array) => sha256Hex(s);
 const SIG_TAIL = /,"sig":"([A-Za-z0-9+/=]*)"\}$/;
 // refusals that mean someone tried a code or a proof that was not theirs
 const GUESSES = new Set(['wrong pin', 'wrong secret', 'bad proof']);
@@ -164,31 +167,30 @@ function sane(x: unknown): Notes {
 }
 
 /** Why a ledger line does not hold, or null: json, its prev (when one is expected) and its signature. */
-export function lineProblem(line: string, key: KeyObject, expectPrev: string | null): string | null {
+export function lineProblem(line: string, key: EyeKey, expectPrev: string | null): string | null {
   let obj: { prev?: unknown };
   try { obj = JSON.parse(line); } catch { return 'not a ledger line'; }
   if (expectPrev !== null && obj.prev !== expectPrev) return 'the chain is broken (a line was changed, dropped or put in)';
   const m = SIG_TAIL.exec(line);
   if (!m) return 'a line has no signature';
-  const ed = key.asymmetricKeyType === 'ed25519';
   let ok = false;
-  try { ok = verify(ed ? null : 'sha256', Buffer.from(line.slice(0, m.index), 'utf8'), key, Buffer.from(m[1], 'base64')); } catch {}
+  try { ok = key.verify(line.slice(0, m.index), m[1]) === true; } catch {}
   return ok ? null : 'a signature does not match the device key';
 }
 
 /** The certificate the device shows: the one pinned (kula compared it with the pin, which stays
  *  out of the snapshot), and naming the key that signs its ledger, worked out here. */
-export function identityCheck(t: EyeTrust): TrustCheck {
+export function identityCheck(t: EyeTrust, keys: EyeKeys | null | undefined): TrustCheck {
   const k = 'identity';
   if (!t.cert || !t.pub || !t.id) return { k, ok: null, text: 'it did not show its certificate' };
-  const der = Buffer.from(t.cert, 'base64');
   if (t.certPinned === null) return { k, ok: null, text: 'nothing pinned here to compare its certificate with' };
   if (!t.certPinned) return { k, ok: false, text: 'the certificate it shows is not the one pinned from its qr' };
   let keyId = '';
-  try { keyId = sha(Buffer.from(t.pub, 'base64')).slice(0, 32); } catch {}
+  try { keyId = sha(fromBase64(t.pub)).slice(0, 32); } catch {}
   if (keyId !== t.id.toLowerCase()) return { k, ok: false, text: 'its ledger key is not the device it claims to be' };
+  if (!keys) return { k, ok: null, text: 'its certificate cannot be read here' };
   let cn: string | null = null;
-  try { cn = /CN=([0-9a-fA-F]{32})/.exec(new X509Certificate(der).subject)?.[1]?.toLowerCase() ?? null; } catch {}
+  try { cn = /CN=([0-9a-fA-F]{32})/.exec(keys.certSubject(t.cert) ?? '')?.[1]?.toLowerCase() ?? null; } catch {}
   if (cn !== keyId) return { k, ok: false, text: 'its certificate names another device than its ledger key' };
   return { k, ok: true, text: `certificate matches the pin and names its ledger key (${keyId.slice(0, 8)}…)` };
 }
@@ -236,8 +238,8 @@ export function create(ctx: BranchCtx): Branch {
     // the "started over" fault is raised only when the verified head is really gone from the lines:
     // a restart flag alone is the device's word and never lowers the remembered count by itself
     const startedOver = restart && !!s.head && !hashes.includes(s.head);
-    let key: KeyObject | null = null;
-    try { key = createPublicKey({ key: Buffer.from(t.pub ?? '', 'base64'), format: 'der', type: 'spki' }); } catch {
+    let key: EyeKey | null = null;
+    try { key = t.pub && ctx.keys ? ctx.keys.key(t.pub) : null; } catch {
       // no key, no checks: the restart stays unconsumed, so the next answer that can be checked
       // raises the started-over fault instead of it being lost
     }
@@ -380,7 +382,7 @@ export function create(ctx: BranchCtx): Branch {
       checks.push({ k: 'identity', ok: null, text: err ? `not checked: ${err}` : d.reachable === false ? `not checked: not reachable${reason ? ` (${reason})` : ''}` : 'not checked yet' });
     } else {
       let ident: TrustCheck;
-      try { ident = identityCheck(t!); } catch { ident = { k: 'identity', ok: null, text: 'it did not show a proper certificate' }; }
+      try { ident = identityCheck(t!, ctx.keys); } catch { ident = { k: 'identity', ok: null, text: 'it did not show a proper certificate' }; }
       checks.push(ident);
       const refused = Object.entries(rejects).sort((a, b) => b[1] - a[1]);
       const guesses = refused.filter(([w]) => GUESSES.has(w)).reduce((a, [, n]) => a + n, 0);

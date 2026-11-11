@@ -8,6 +8,8 @@
 //
 // The twelve branches are the twelve of the brain map (https://claude.ai/artifact/XdUbnR74Y1gTzeBfcZCe7K).
 
+import type { EyeKeys } from './platform.js';
+
 export type BranchId =
   | 'senses' | 'memory' | 'forecast' | 'learning' | 'connections' | 'planner'
   | 'executor' | 'trust' | 'limits' | 'models' | 'review' | 'advisor';
@@ -135,7 +137,11 @@ export interface EyeProject {
 
 export interface Snapshot {
   at: number;                      // ms, the clock of the computer that took it
-  host: { name: string; freeMb: number | null; ledger?: { ok: boolean; count: number; problem: string | null } | null };
+  host: {
+    name: string; freeMb: number | null; ledger?: { ok: boolean; count: number; problem: string | null } | null;
+    /** the host's own battery and heat, when it has them (a phone: app/src/eye/snapshot.ts); a computer leaves it out */
+    power?: { battery: number | null; charging: boolean | null; hot: boolean | null } | null;
+  };
   devices: EyeDevice[];
   work: EyeWork;
   models: EyeModel[];
@@ -208,6 +214,8 @@ export interface BranchCtx {
   save(data: unknown): void;       // the same file, written whole, mode 600
   emit(text: string): void;        // a line in the live feed
   peek(id: BranchId): BranchView | null;
+  /** signatures and certificates where the platform has them (platform.ts); null or absent: none */
+  keys?: EyeKeys | null;
 }
 
 export type BranchMaker = (ctx: BranchCtx) => Branch;

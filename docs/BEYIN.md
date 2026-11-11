@@ -69,6 +69,68 @@ interface BeyinClient {
   (written, not called yet), the `device_ledger_heads` table and the v1 collection plan in
   [BACKEND.md](BACKEND.md), the relay address in settings.
 
+## god's eye: one eye, two homes (11.11.2026)
+
+god's eye (`node/src/godseye/`) is the brain's twelve branches, written as a program in waiting:
+handed a snapshot every few seconds, it thinks with its own rules, keeps its own notes, says
+cards, and never acts. It ran only on the computer. The phone, when it runs the cluster, now has
+the same brain, from **the same source, not a copy**.
+
+**How it is shared.** The eye is platform-neutral behind a tiny platform interface
+(`node/src/godseye/platform.ts`):
+
+| what the eye needs | interface | computer (`node.ts`) | phone (`app/src/eye/`) |
+|---|---|---|---|
+| the branches' notes | `EyeNotes` read / write / remove, one json per branch | files `<dir>/<id>.json`, mode 600, tmp + rename | kv-store `eye.notes.<id>` (`notes.ts`) |
+| sha256, base64 | none: plain TypeScript (`hash.ts`), byte for byte node's | the same | the same |
+| signatures, certificates (trust branch) | `EyeKeys` key(spki).verify / certSubject | `node:crypto` | none: branch 8 is the phone's own report (below) |
+| the clock | `now` in `EyeOptions` | `Date.now` | `Date.now` |
+| the black box | a `Box`, handed in opened | `box.ts` on disk | **none: the black box stays computer-only for now** |
+
+`core.ts` is the entry without node (types, the eye, the cards' checks, the platform types);
+`index.ts` stays kula-node's entry and adds the computer's pieces (`NodeGodsEye` as `GodsEye`,
+which still takes `dir` and `box: { dir }`). Only `box.ts` and `node.ts` may import a `node:`
+module; `node/test/godseye.test.ts` holds that line.
+
+The app imports `@godseye/core`: a tsconfig path to `../node/src/godseye/*`. Metro watches that
+one folder and, inside it only, reads a relative `./x.js` as `./x.ts` (the files are node ESM)
+and takes a package (babel's helpers) from the app's node_modules (`app/metro.config.js`); jest
+does the same (`app/jest.resolver.js`). `app/src/__tests__/eye-shared.test.ts` walks what
+`core.ts` reaches (no `node:`, no package, never `node.ts` or `box.ts`) and compiles it under the
+app's tsconfig with no node types at all. Why not a generated copy with a parity test, like the
+catalog: Metro and jest resolve the one source cleanly, so there is nothing to keep in step.
+
+**The phone's look** (`app/src/eye/snapshot.ts`, the twin of `node/src/ui/godseye-feed.ts`).
+This phone is the host: its passport name, its free memory (native `info()`), its own ledger
+chain, and, new in the shape, `host.power` (battery, charging, the passport's thermal flag),
+which the limits branch reads when a look carries it (the computer's does not). The devices are
+the paired ones: via wi-fi or a relay, pinned or not, memory and bandwidth as advertised, reach
+from the freshest of the security report's last look, a card's probe or the engine using it.
+Alone is mode `here`; apart lists every device; split carries the parts. The models are the
+catalog with what is here plus models only here, each with kula-node's `needMb`. The projects
+are the person's own, with tonight's window. A device's `trust` is null on the phone.
+
+**Branch 8 on the phone** is the phone's own security report (`app/src/eye/trustBranch.ts`):
+Hermes has neither Ed25519 nor P-256, and the phone already verifies every certificate and
+ledger line natively (`TrustVerify.kt`) once a minute while the report is open, so the eye reads
+that report (in the reader's language) instead of checking a second time, and says a red
+verdict as a warn card.
+
+**When it runs** (`app/src/eye/run.ts`): every 5 s like the computer's, only while the app is in
+the foreground and someone holds it: the brain tab or a branch's page on screen, or a cluster
+this phone runs (a model apart or split, or a load under way; `useClusterEye` in the tabs). In
+the background it pauses; nothing is read.
+
+**The brain tab**: the cards first (warn and suggest, with the phone's button or "only the
+computer can do this one", and dismiss), then the twelve as a small map, three across, each with
+its page (`/branch/<id>`): its gauge and few words, what it sees, its list, its note, its cards.
+The branches' names and map lines are in en, de and tr; what a branch says is its own words, in
+english on both homes. A card's tap goes to the phone's own engine (`app/src/eye/apply.ts`):
+load (alone, apart or split, with models on this phone and paired devices), unload, fetch (a
+catalog model onto this phone), probe (look at devices again), open (devices, models, settings,
+a branch). What the phone cannot do, a model only on the computer, `phone` mode on another
+phone, a device it has not paired, gets no button.
+
 ## nothing is closed now
 
 All of kula and all of beyin are public. No repository is split, no code is withheld, no

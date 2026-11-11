@@ -23,9 +23,10 @@ import { power } from '@/i18n/parts/power';
 import { computers } from '@/i18n/parts/computers';
 import { trust } from '@/i18n/parts/trust';
 import { vision } from '@/i18n/parts/vision';
+import { eye } from '@/i18n/parts/eye';
 import { dict } from '@/i18n/dict';
 
-const parts: Record<string, Record<string, Record<string, string>>> = { common, home, tabs, pages, staff, tips, coops, server, models, audit, ux, brain, bench, voice, tasks, modelsui, social, passportui, power, computers, trust, vision };
+const parts: Record<string, Record<string, Record<string, string>>> = { common, home, tabs, pages, staff, tips, coops, server, models, audit, ux, brain, bench, voice, tasks, modelsui, social, passportui, power, computers, trust, vision, eye };
 
 describe('i18n dict', () => {
   it('has no key in two parts', () => {

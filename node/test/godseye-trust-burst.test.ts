@@ -7,6 +7,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 const { create, poissonTail, medianOf } = await import('../src/godseye/branches/trust.ts');
+const { nodeKeys, nodeKey } = await import('../src/godseye/node.ts');   // the computer's signatures (platform.ts)
 const { hhmm } = await import('../src/godseye/branches/util.ts');
 const { generate, publicKeyDer } = await import('../src/audit/key.ts');
 const { makeLine, GENESIS, sha256Hex } = await import('../src/audit/ledger.ts');
@@ -49,7 +50,7 @@ const snap = (devices: any[]) => ({
 function branch(initial: unknown = {}) {
   let notes: unknown = structuredClone(initial);
   const events: string[] = [];
-  const b = create({ now: () => 9_000, load: <T>(f: T) => (structuredClone(notes) as T) ?? f, save: (x: unknown) => { notes = structuredClone(x); }, emit: (t: string) => events.push(t), peek: () => null });
+  const b = create({ now: () => 9_000, load: <T>(f: T) => (structuredClone(notes) as T) ?? f, save: (x: unknown) => { notes = structuredClone(x); }, emit: (t: string) => events.push(t), peek: () => null, keys: nodeKeys });
   return { b, events, notes: () => notes as any };
 }
 const check = (v: any, k: string, dev = 0) => v.report.devices[dev].checks.find((c: any) => c.k === k);

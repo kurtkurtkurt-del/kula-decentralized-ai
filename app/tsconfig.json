@@ -5,6 +5,9 @@
     "paths": {
       "@/*": [
         "./src/*"
+      ],
+      "@godseye/*": [
+        "../node/src/godseye/*"
       ]
     }
   },

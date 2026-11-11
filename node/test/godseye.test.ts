@@ -125,7 +125,11 @@ test('god\'s eye imports nothing of kula: it can leave as a program of its own',
     const text = fs.readFileSync(path.join(root, f), 'utf8');
     for (const m of text.matchAll(/from '([^']+)'/g)) {
       const spec = m[1];
-      assert.ok(spec.startsWith('node:') || spec.startsWith('./') || spec === '../types.js', `${f} imports ${spec}`);
+      const inside = (spec.startsWith('./') || spec.startsWith('../')) && path.resolve(root, path.dirname(f), spec).startsWith(root + path.sep);
+      assert.ok(spec.startsWith('node:') || inside, `${f} imports ${spec}`);
+      // one eye, two homes (11.11.2026): only the computer's own pieces reach for node; the rest
+      // runs on the phone too (platform.ts, app/src/__tests__/eye-shared.test.ts)
+      if (spec.startsWith('node:')) assert.ok(f === 'box.ts' || f === 'node.ts', `${f} imports ${spec}: only box.ts and node.ts may`);
     }
   }
 });
