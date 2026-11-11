@@ -74,7 +74,8 @@ ever deleted. Nothing changed since the last release: skip this step and say so.
   run on a real phone). Download one asset back with `gh release download` and compare its sha256.
 - The site is the `gh-pages` branch holding only `web/site` (and `.nojekyll`): rebuild it from
   the tree (`git rev-parse kula-main:web/site`, add `.nojekyll` with `git mktree`, `git commit-tree`
-  with the previous gh-pages commit as parent) and push `gh-pages`. Check
+  with the previous gh-pages commit as parent) and push it with `git push origin "${C}:refs/heads/gh-pages"`
+  (the braces matter: in zsh `$C:refs` is read as a modifier and the push fails). Check
   https://kurtkurtkurt-del.github.io/kula-decentralized-ai/ shows the new version once Pages built.
 
 ## 6. the kula app on this Mac
@@ -83,7 +84,9 @@ ever deleted. Nothing changed since the last release: skip this step and say so.
   `desktop/release/mac-arm64/kula.app` (`ditto`), and open it once with
   `KULA_SNAP=<scratchpad>/app.png /Applications/kula.app/Contents/MacOS/kula` for ~20 s: its log
   says "opening http://127.0.0.1:…" and the picture shows the chat page. Then quit that run and
-  `open -a /Applications/kula.app` so the person finds it running.
+  `open -a /Applications/kula.app` so the person finds it running. On a Mac where
+  `~/.kula-node/llama-b11157` is missing, the first start builds llama.cpp (5–10 min, a start
+  screen) before the chat page opens: check that `cmake --build …llama-b11157` runs, not the picture.
 
 ## report
 
