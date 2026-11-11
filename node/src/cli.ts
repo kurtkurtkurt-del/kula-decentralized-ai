@@ -15,6 +15,7 @@ import { collectInfo, infoText } from './info.js';
 import { peersCommand, chatCommand } from './mastercmd.js';
 import { benchCommand } from './bench.js';
 import { uiCommand } from './ui/cmd.js';
+import { brainCommand } from './braincmd.js';
 
 const HELP = `kula-node: make this computer a worker in a kula cluster
 
@@ -57,6 +58,9 @@ usage:
   kula-node attestation [refresh]    Google's revocation list for phones' hardware proofs (owner-blind):
                                      whether a copy is kept here and from when; refresh fetches it
                                      (an internet call, only when you run it) into ~/.kula-node
+  kula-node brain replay [--from <time>] [--to <time>] [--night <yyyy-mm-dd>] [--json]
+                                     what the devices did together, read back from the brain's black box
+                                     (default: last night, 18:00 → 09:00), and whether its chain holds
   kula-node --version [--json]
   kula-node info [--json] [--no-bandwidth]   address, ram, memory bandwidth, gpu, llama.cpp: what a cluster would see
 
@@ -289,6 +293,7 @@ export async function main(argv: string[]): Promise<number> {
   if (cmd === 'chat') return chatCommand(flags);
   if (cmd === 'bench') return benchCommand(flags);
   if (cmd === 'ui') return uiCommand(flags);
+  if (cmd === 'brain') return brainCommand(rest[0], flags);
 
   if (cmd === 'attestation') return attestationCommand(rest[0]);
   if (cmd === 'ledger') {

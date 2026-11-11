@@ -870,30 +870,41 @@ function apply(state: Facts, d: unknown): Facts {
  *  skipped, never thrown on. */
 export function replay(records: readonly BoxRec[]): LookFacts[] {
   const out: LookFacts[] = [];
+  const next = replayer();
+  for (const r of records) {
+    const look = next(r);
+    if (look !== null) out.push(look);
+  }
+  return out;
+}
+
+/** replay() one record at a time, for a record too long to hold whole (the night replay walks the
+ *  box with it): each call gives the look that record completed, or null */
+export function replayer(): (r: BoxRec) => LookFacts | null {
   let state: Facts | null = null;
   let key: { at: number; of: number; chunks: Map<number, Record<string, unknown>> } | null = null;
-  for (const r of records) {
-    if (!isObj(r)) continue;
+  return (r: BoxRec): LookFacts | null => {
+    if (!isObj(r)) return null;
     const x = isObj(r.x) ? r.x : null;
     if (r.k === 'key' && x !== null) {
       const at = n3(x.at);
       const i = n3(x.i);
       const of = n3(x.of);
-      if (at === null || i === null || of === null) continue;
-      if (!Number.isSafeInteger(i) || !Number.isSafeInteger(of) || of < 1 || of > KEY_CHUNKS_MAX || i < 0 || i >= of) continue;
+      if (at === null || i === null || of === null) return null;
+      if (!Number.isSafeInteger(i) || !Number.isSafeInteger(of) || of < 1 || of > KEY_CHUNKS_MAX || i < 0 || i >= of) return null;
       if (key === null || key.at !== at || key.of !== of) key = { at, of, chunks: new Map() };
       key.chunks.set(i, x);
       if (key.chunks.size === of) {
         state = assemble(key.chunks, of);
         key = null;
-        out.push({ n: r.n, at, facts: state });
+        return { n: r.n, at, facts: state };
       }
     } else if (r.k === 'look' && x !== null) {
-      if (state === null) continue;   // no whole key in the kept record: this look cannot be rebuilt
+      if (state === null) return null;   // no whole key in the kept record: this look cannot be rebuilt
       const at = n3(x.at) ?? n0(r.t);
       state = apply(state, x.d);
-      out.push({ n: r.n, at, facts: state });
+      return { n: r.n, at, facts: state };
     }
-  }
-  return out;
+    return null;
+  };
 }

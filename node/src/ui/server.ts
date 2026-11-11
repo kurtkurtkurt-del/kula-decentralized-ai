@@ -28,6 +28,8 @@ import { ChatStore, ID_RE } from './store.js';
 import { ProjectRunner } from './projects.js';
 import { GodsEye } from '../godseye/index.js';
 import { kulaSnapshot } from './godseye-feed.js';
+import { openBox } from '../godseye/box.js';
+import { replayBox } from '../godseye/replay.js';
 import { Invite, INVITE_TTL_MS, type Guest } from './invite.js';
 import { qrSvg } from '../dashboard/qr.js';
 import { lanIPv4 } from '../sysinfo.js';
@@ -71,7 +73,7 @@ const hostPort = (h: string, port: number) => `${h.includes(':') ? `[${h}]` : h}
 const GONE_PAGE = (why: string) => `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>kula chat</title></head><body><p>${why.replace(/[&<>"']/g, '')}</p><p>ask whoever runs kula on that computer for a new qr code.</p></body></html>`;
 
 const TYPES: Record<string, string> = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml' };
-export const UI_STATIC = ['index.html', 'app.js', 'app.css', 'fonts.css', 'markdown.js', 'wizard.js', 'learn.js', 'brainmap.js'];
+export const UI_STATIC = ['index.html', 'app.js', 'app.css', 'fonts.css', 'markdown.js', 'wizard.js', 'learn.js', 'brainmap.js', 'replay.js', 'replay.css'];
 // tools/pack.mjs bakes these in: a packed executable has no static folder next to it
 declare const __KULA_UI_STATIC__: Record<string, string> | undefined;
 
@@ -328,6 +330,13 @@ export async function startUi(opts: UiOptions): Promise<UiServer> {
       if (route === 'chats') return json(res, 200, chats.list(query.get('q') ?? undefined));
       if (route === 'projects') return json(res, 200, projects.list());
       if (route === 'brain') return json(res, 200, eye ? eye.view() : { at: 0, branches: [], events: [] });
+      // the night replay (11.11.2026): the black box read back, opened for reading only (godseye/replay.ts)
+      if (route === 'brain/replay') {
+        const q = (k: string): number | undefined => { const v = query.get(k); const n = v === null || v === '' ? NaN : Number(v); return Number.isFinite(n) ? n : undefined; };
+        const dir = path.join(home(), 'godseye', 'box');
+        if (!fs.existsSync(dir)) return json(res, 404, { error: 'no black box yet: the brain writes it while this page runs' });
+        return json(res, 200, replayBox(openBox({ dir, readOnly: true }), { from: q('from'), to: q('to'), fromN: q('fromN'), toN: q('toN'), frames: q('frames') }));
+      }
       const m = /^chats\/([0-9a-f]+)$/.exec(route);
       if (m && ID_RE.test(m[1])) { const c = chats.get(m[1]); return c ? json(res, 200, c) : json(res, 404, { error: 'no such chat' }); }
       return json(res, 404, { error: 'not found' });

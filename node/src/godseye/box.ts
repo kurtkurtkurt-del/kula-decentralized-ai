@@ -47,6 +47,12 @@
 //
 // nothing here throws out of the API: a failure is returned (append false, a verify/status problem)
 // or kept in status().problem.
+//
+// a reader (11.11.2026, the night replay): openBox({ dir, readOnly: true }) opens nothing for
+// writing — no dir is made, no torn tail is cut, no head is healed and no tamper record written —
+// so a second process (the cli) or a request may read a box the eye is writing. walk() hands every
+// record to a callback in n order, each line checked against its own hash and the record before it
+// on the way, with no limit: it is how a whole night is read back once.
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -109,6 +115,18 @@ export interface BoxOptions {
   segmentBytes?: number;
   keepBytes?: number;
   payloadMax?: number;
+  readOnly?: boolean;      // a reader: nothing is written, append() is refused
+}
+
+/** what walk() found on the way: the records it handed over and the first that did not hold */
+export interface BoxWalk {
+  count: number;           // records handed to the callback
+  from: number;            // the n of the first, 0 when none
+  last: number;            // the n of the last, 0 when none
+  firstT: number | null;   // the time of the first and of the latest record seen (t is not the order)
+  lastT: number | null;
+  problem: string | null;  // the first record that does not hold, in verify()'s words
+  problemN: number | null; // and its n (null when the problem is not one record's)
 }
 
 export interface Box {
@@ -117,6 +135,9 @@ export interface Box {
   read(q?: BoxQuery): BoxRecord[];
   status(): BoxStatus;
   accept(): void;
+  /** every record in n order to fn (which may return false to stop), each one checked: bad is
+   *  null when its line hashes and links to the one before, else what does not hold */
+  walk?(fn: (r: BoxRecord, bad: string | null) => boolean | void): BoxWalk;
 }
 
 /** what a caught value says: a caught value may be null or undefined, which has no .message */
@@ -185,6 +206,11 @@ class Recorder implements Box {
     if (dir === null) {
       // no dir means no place to write: never fall back to the process's own directory
       this.blocked = 'the box has no dir';
+      return;
+    }
+    if (o.readOnly === true) {
+      // a reader: the writer's own state is not ours to repair, heal or mark
+      this.blocked = 'the box was opened for reading';
       return;
     }
     try {
@@ -407,6 +433,71 @@ class Recorder implements Box {
       return out;
     } catch {
       return out;   // whatever happened, the caller gets what was read so far
+    }
+  }
+
+  walk(fn: (r: BoxRecord, bad: string | null) => boolean | void): BoxWalk {
+    const out: BoxWalk = { count: 0, from: 0, last: 0, firstT: null, lastT: null, problem: null, problemN: null };
+    const fail = (problem: string, n: number | null): void => {
+      if (out.problem === null) { out.problem = problem; out.problemN = n; }
+    };
+    try {
+      const segs = this.segmentNumbers();
+      const whole = segs.length > 0 && segs[0] === 1;
+      let prevN: number | null = null;
+      let prevH: string | null = null;
+      for (const seg of segs) {
+        const name = path.basename(this.segFile(seg));
+        let text: string;
+        try {
+          text = fs.readFileSync(this.segFile(seg), 'utf8');
+        } catch (e) {
+          fail(`${name} cannot be read: ${why(e)}`, null);
+          continue;
+        }
+        const lines = text.split('\n');
+        for (let i = 0; i < lines.length; i++) {
+          const line = lines[i];
+          if (line === '') {
+            if (i !== lines.length - 1) fail(`${name} line ${i + 1} is empty`, null);
+            continue;
+          }
+          let raw: unknown;
+          try {
+            raw = JSON.parse(line);
+          } catch {
+            fail(`${name} line ${i + 1} is not json`, null);
+            continue;
+          }
+          if (!isObj(raw)) { fail(`${name} line ${i + 1} is not a record`, null); continue; }
+          const n = num(raw.n, 1, Number.MAX_SAFE_INTEGER);
+          if (n === null || !Number.isSafeInteger(n)) { fail(`${name} line ${i + 1} has no sequence number`, null); continue; }
+          // the same checks as verify(), on the same exact bytes
+          let bad: string | null = null;
+          const h = typeof raw.h === 'string' ? raw.h : '';
+          const p = typeof raw.p === 'string' ? raw.p : '';
+          const at = line.lastIndexOf(',"h":"');
+          if (!HEX64.test(h) || !HEX64.test(p) || line.slice(at) !== `,"h":"${h}"}`) bad = `record n ${n}: its tail is not a hash`;
+          else if (hashOf(line.slice(0, at)) !== h) bad = `record n ${n}: h does not match its line`;
+          else if (prevN === null) { if (whole && (n !== 1 || p !== ZERO)) bad = `record n ${n}: not the start of the chain`; }
+          else if (n !== prevN + 1) bad = `record n ${n}: expected n ${prevN + 1}`;
+          else if (p !== prevH) bad = `record n ${n}: p does not link to the record before it`;
+          if (bad !== null) fail(bad, n);
+          prevN = n;
+          prevH = h;
+          const t = finite(raw.t) ?? 0;
+          const rec: BoxRecord = { n, t, k: typeof raw.k === 'string' ? raw.k : 'other', b: typeof raw.b === 'string' ? raw.b : null, x: raw.x, p, h };
+          if (out.count === 0) { out.from = n; out.firstT = t; }
+          out.count++;
+          out.last = n;
+          if (out.lastT === null || t > out.lastT) out.lastT = t;
+          if (fn(rec, bad) === false) return out;
+        }
+      }
+      return out;
+    } catch (e) {
+      fail(`walk failed: ${why(e)}`, null);
+      return out;
     }
   }
 
