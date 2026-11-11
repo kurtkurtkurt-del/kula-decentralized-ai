@@ -41,6 +41,7 @@ export function deviceOf(p: PeerRow, trust: TrustLook | null = null): EyeDevice 
     checkedAt: p.probedAt, lastOk: p.last_ok, ramMb: p.ram, bwGBs: p.bw, gpu: p.gpu,
     tls: p.tls, waitingPair: p.waitingPair, plugged: p.cable ? p.cable.plugged : null, holds: p.holds,
     trust: trustOf(trust),
+    ring: p.ring ?? 'home',
   };
 }
 

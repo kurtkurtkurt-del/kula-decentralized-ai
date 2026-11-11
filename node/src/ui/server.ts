@@ -432,6 +432,9 @@ export async function startUi(opts: UiOptions): Promise<UiServer> {
     if (route === 'peers/rename') {
       try { return engine.renamePeer(String(body?.id ?? ''), String(body?.name ?? '')) ? json(res, 200, { ok: true }) : json(res, 404, { error: 'no such device' }); } catch (e) { return fail(e, 400); }
     }
+    if (route === 'peers/ring') {
+      try { return engine.setRing(String(body?.id ?? ''), String(body?.ring ?? '')) ? json(res, 200, { ok: true }) : json(res, 404, { error: 'no such device' }); } catch (e) { return fail(e, 400); }
+    }
     if (route === 'projects/new') { try { return json(res, 200, projects.create(body)); } catch (e) { return fail(e); } }
     if (route === 'projects/cancel') { const p = projects.cancel(String(body?.id ?? '')); return p ? json(res, 200, p) : json(res, 404, { error: 'no such project' }); }
     if (route === 'peers/remove') return engine.removePeer(String(body?.id ?? '')) ? json(res, 200, { ok: true }) : json(res, 404, { error: 'no such device' });

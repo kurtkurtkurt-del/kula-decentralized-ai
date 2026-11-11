@@ -52,7 +52,13 @@ export interface EyeDevice {
   plugged: boolean | null;         // on a cable: is it plugged in now (null: unknown)
   holds: string | null;            // the model file it has loaded
   trust: EyeTrust | null;          // what the device said about itself (GET /trust); null: never asked
+  ring?: Ring;                     // how far the person trusts it; absent: home (every device paired before 11.11.2026)
 }
+
+/** The three rings (11.11.2026): home is the person's own devices (everything may go there, a private
+ *  chat included), circle a friend's (work the person trusts them with), world a stranger's (only
+ *  pieces with nothing private: a stranger's phone sees the prompt in plain text while it runs). */
+export type Ring = 'home' | 'circle' | 'world';
 
 /** A device's own account of its security (the worker's GET /trust, docs/GATE.md), as kula's engine
  *  received it. Nothing in it is taken on faith: the trust branch checks the certificate against the

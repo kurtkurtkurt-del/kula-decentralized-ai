@@ -59,6 +59,7 @@ export interface DeviceFacts {
   holds: string | null;
   down: boolean;
   trust: TrustFacts | null;   // what it said about its security, the whitelisted fields only
+  ring: string;               // home, circle or world (absent in the look: home)
 }
 
 /** what a device said about its security, stripped of every string it could hide a secret in */
@@ -164,7 +165,7 @@ const shapeKey = (k: string): boolean => k === '__proto__' || k === 'constructor
 /** the device fields a delta names; id is the key, never a field of the change */
 const DEV_KEYS = [
   'name', 'kind', 'via', 'reachable', 'reachMs', 'checkedAt', 'lastOk', 'ramMb', 'bwGBs', 'gpu',
-  'tls', 'waitingPair', 'plugged', 'holds', 'down', 'trust',
+  'tls', 'waitingPair', 'plugged', 'holds', 'down', 'trust', 'ring',
 ] as const;
 
 // ---- a look's reduced facts
@@ -220,6 +221,7 @@ function devOf(raw: unknown): DeviceFacts | null {
     holds: strOrNull(raw.holds, MODEL),
     down: reason.length > 0,
     trust: isObj(raw.trust) ? trustOf(raw.trust) : null,
+    ring: raw.ring == null ? 'home' : str(raw.ring, WORD),
   };
 }
 
