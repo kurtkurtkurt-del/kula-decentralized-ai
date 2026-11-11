@@ -14,6 +14,7 @@ import { collectInfo, infoText } from './info.js';
 import { peersCommand, chatCommand } from './mastercmd.js';
 import { benchCommand } from './bench.js';
 import { uiCommand } from './ui/cmd.js';
+import { brainCommand } from './braincmd.js';
 
 const HELP = `kula-node: make this computer a worker in a kula cluster
 
@@ -48,6 +49,9 @@ usage:
                                      fingerprint): a running share refuses it at once and closes its
                                      connections; one signed ledger line. it pairs again only with a fresh code
   kula-node ledger [--verify] [--tail N]   print the signed ledger; --verify checks the chain and signatures
+  kula-node brain replay [--from <time>] [--to <time>] [--night <yyyy-mm-dd>] [--json]
+                                     what the devices did together, read back from the brain's black box
+                                     (default: last night, 18:00 → 09:00), and whether its chain holds
   kula-node --version [--json]
   kula-node info [--json] [--no-bandwidth]   address, ram, memory bandwidth, gpu, llama.cpp: what a cluster would see
 
@@ -279,6 +283,7 @@ export async function main(argv: string[]): Promise<number> {
   if (cmd === 'chat') return chatCommand(flags);
   if (cmd === 'bench') return benchCommand(flags);
   if (cmd === 'ui') return uiCommand(flags);
+  if (cmd === 'brain') return brainCommand(rest[0], flags);
 
   if (cmd === 'ledger') {
     return ledgerCommand({ verify: flags.verify === true, tail: flags.tail !== undefined ? num(flags.tail, 20) : undefined });
