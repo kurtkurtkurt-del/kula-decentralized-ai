@@ -27,12 +27,14 @@ import kotlin.concurrent.thread
  *   POST /stop
  *   GET  /blob?mb=N                    N MB (1024²) of zeros, N capped at 64: the bench's tunnel
  *                                      speed test (app/src/bench, kula-node bench)
- *   GET  /trust[?since=<64 hex>]       what this device says about itself: id, key (alg, pub,
+ *   GET  /trust[?since=<64 hex>][&challenge=<64 hex>]   what this device says about itself: id, key (alg, pub,
  *                                      where it lives), gate certificate, gate state (v1 open,
  *                                      tls, paired), the ledger (count, head, its own chain
  *                                      check, up to 200 raw lines: after `since` when found,
  *                                      else the newest) and the last day's rejects. Nothing
  *                                      secret. Trust.kt has the exact shape; 400 "bad since".
+ *                                      With a challenge: "attest", a fresh keystore key's
+ *                                      attestation chain (Attest.kt); 400 "bad challenge".
  *
  * The same routes are what kula-node serves on a computer (node/src/api.ts); its conformance
  * tests pin the bytes, this file follows them by hand (blobMb = bench/core.ts blobMb).
