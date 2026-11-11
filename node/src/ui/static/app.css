@@ -960,3 +960,18 @@ ul.wiz-steps li::before { content: "› "; color: var(--meta); }
 .bm-also b { font-weight: 500; color: var(--words); }
 .bm-also span:not(.go) { flex: 1; min-width: 0; }
 .bm-also .go { color: var(--meta); }
+
+/* the brain's cards (11.11.2026): suggestions and warnings on top of the panel, like the branch card */
+.bcards { margin: 0 0 10px; }
+.bcards .bfeed-h { display: flex; align-items: center; gap: 8px; }
+.bcards .bc-n { font: 11px var(--mono); color: var(--meta); }
+.bm-sel.bc { margin-top: 6px; padding-bottom: 9px; }
+.bm-sel.bc .tag { margin-left: auto; }
+.bc-x { border: 0; background: none; color: var(--meta); font-size: 16px; line-height: 1; padding: 0 2px 0 4px; cursor: pointer; }
+.bc-x:hover { color: var(--words); }
+.bc-t { font-size: 15px; font-weight: 500; line-height: 1.35; margin: 6px 0 3px; overflow-wrap: anywhere; }
+.bc-w { font-size: 12.5px; color: var(--mute); line-height: 1.45; margin: 0 0 8px; overflow-wrap: anywhere; }
+.bm-sel.bc .f { align-items: center; }
+.bc-go { white-space: nowrap; }
+.bc-go[disabled] { opacity: 0.6; cursor: default; }
+.bc-more { display: block; margin: 6px auto 0; font-size: 12px; }

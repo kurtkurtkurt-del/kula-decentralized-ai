@@ -83,3 +83,35 @@ test('at most five cards per branch, and a broken branch has none', () => {
   eye.tick();
   assert.equal(eye.view().cards.length, 0);
 });
+
+test('the page applies and dismisses cards through the server; a gone card is a 404; the engine does the work', async () => {
+  process.env.KULA_NODE_HOME = HOME;
+  const { Engine } = await import('../src/ui/engine.ts');
+  const { startUi } = await import('../src/ui/server.ts');
+  const dir = fs.mkdtempSync(path.join(HOME, 'ui-'));
+  const engine = new Engine({ peersFile: path.join(dir, 'peers.json'), modelDirs: [dir], llama: null });
+  const say = [
+    { id: 'planner:unload', kind: 'suggest', title: 'unload', why: 'nothing uses it', action: { do: 'unload' } },
+    { id: 'planner:look', kind: 'warn', title: 'look', why: 'w', action: null },
+    { id: 'planner:fetch', kind: 'suggest', title: 'fetch', why: 'w', action: { do: 'fetch', model: 'no-such-model' } },
+  ];
+  const eye = new GodsEye({ snapshot: () => snap(), dir: path.join(dir, 'eye'), makers: { planner: () => ({ id: 'planner', observe() {}, view: () => ({ ...dark(), built: true, stat: 'x', suggestions: say as any }) }) } });
+  eye.tick();
+  const ui = await startUi({ engine, eye, port: 0, prefix: 'ab'.repeat(12), token: 'cd'.repeat(16) } as any);
+  const post = (route: string, body: unknown) => fetch(`${ui.url}api/${route}`, { method: 'POST', headers: { 'content-type': 'application/json', origin: `http://127.0.0.1:${ui.port}`, 'sec-fetch-site': 'same-origin' }, body: JSON.stringify(body) });
+  try {
+    const a = await post('brain/apply', { id: 'planner:unload' });
+    assert.equal(a.status, 200);
+    assert.equal((await a.json()).word, 'unloaded');
+    assert.equal((await post('brain/apply', { id: 'planner:unload' })).status, 404, 'applied: hidden, gone');
+    assert.equal((await post('brain/apply', { id: 'planner:look' })).status, 400, 'a warning has nothing to apply');
+    const f = await post('brain/apply', { id: 'planner:fetch' });
+    assert.equal(f.status, 400);
+    assert.match((await f.json()).error, /unknown model/);
+    assert.equal((await post('brain/dismiss', { id: 'planner:look' })).status, 200);
+    assert.equal((await post('brain/dismiss', { id: 'planner:look' })).status, 404);
+    assert.equal((await post('brain/apply', { id: 'models:nothing' })).status, 404);
+    const cross = await fetch(`${ui.url}api/brain/apply`, { method: 'POST', headers: { 'content-type': 'application/json', origin: 'http://evil.example' }, body: JSON.stringify({ id: 'planner:fetch' }) });
+    assert.equal(cross.status, 403, 'another site cannot press a card');
+  } finally { await ui.close(); eye.stop(); }
+});

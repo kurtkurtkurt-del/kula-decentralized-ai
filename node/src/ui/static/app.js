@@ -1044,7 +1044,8 @@ function drawMap(box) {
   // the others worth a look
   const also = bmap.notices(list, pick).map((x) => { const o = BRANCHES.find((y) => y.id === x.id); return `<button type="button" data-open="${o.id}">${stateDot(x.state)}<span><b>${esc(SHORT_MAP[o.id] ?? o.name)}</b> ${esc(said(o.id))}</span><span class="go">›</span></button>`; }).join('');
 
-  box.innerHTML = `${map}<div class="bm-legend">${legend}</div>${card}${sel}${also ? `<div class="bm-also">${also}</div>` : ''}`;
+  box.innerHTML = `${brainCards()}${map}<div class="bm-legend">${legend}</div>${card}${sel}${also ? `<div class="bm-also">${also}</div>` : ''}`;
+  wireCards(box);
   const choose = (id) => { brainPick = id === auto ? null : id; renderBrain(); box.querySelector(`.node[data-id="${id}"]`)?.focus(); };
   for (const n of box.querySelectorAll('.node')) {
     n.addEventListener('click', () => choose(n.dataset.id));
@@ -1057,6 +1058,60 @@ function drawMap(box) {
   coreEl.addEventListener('click', coreGo);
   coreEl.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); coreGo(); } });
   for (const x of box.querySelectorAll('[data-open]')) x.addEventListener('click', () => openBranch(x.dataset.open));
+}
+// ---------- cards (11.11.2026): what the branches suggest or warn about, on top of the panel.
+// The brain never acts by itself: a card waits for the person; "apply" asks kula's engine to do
+// exactly what the card says (load, unload, fetch, look again), "open" only moves the page, × hides
+// the card until its reason changes. Every word is the branch's; the page escapes it.
+const CARD_VERB = { load: 'load', unload: 'unload', fetch: 'fetch', probe: 'look again', open: 'open' };
+let cardsOpen = false;   // more than three cards: the rest behind "show all"
+const cardBusy = new Set();
+function brainCards() {
+  const cards = isGuest() ? [] : (S.brain?.cards ?? []);
+  if (!cards.length) return '';
+  const shown = cardsOpen ? cards : cards.slice(0, 3);
+  const one = (c) => {
+    const b = BRANCHES.find((x) => x.id === c.branch);
+    const tone = c.kind === 'warn' ? 'look' : 'know';
+    const verb = c.action ? esc(c.label || CARD_VERB[c.action.do] || 'apply') : '';
+    return `<div class="bm-sel bc is-${tone}" data-card="${esc(c.id)}"><div class="h"><span class="n">${b ? b.n : ''}</span><b>${esc(b ? (SHORT_MAP[b.id] ?? b.name) : c.branch)}</b>`
+      + `<span class="tag is-${tone}">${c.kind === 'warn' ? 'warning' : 'suggestion'}</span><button type="button" class="bc-x" data-dismiss="${esc(c.id)}" aria-label="hide this card" title="hide until it changes">×</button></div>`
+      + `<p class="bc-t">${esc(c.title)}</p><p class="bc-w">${esc(c.why)}</p>`
+      + (c.action ? `<div class="f"><span>${cardBusy.has(c.id) ? 'working…' : c.action.do === 'open' ? '' : 'nothing happens until you press'}</span><button type="button" class="pill bc-go" data-apply="${esc(c.id)}"${cardBusy.has(c.id) ? ' disabled' : ''}>${verb}</button></div>` : '')
+      + `</div>`;
+  };
+  const more = cards.length > 3 ? `<button type="button" class="link bc-more" data-more>${cardsOpen ? 'show fewer' : `show all ${cards.length}`}</button>` : '';
+  return `<section class="bcards" aria-label="the brain's suggestions"><h3 class="bfeed-h">suggestions <span class="bc-n">${cards.length}</span></h3>${shown.map(one).join('')}${more}</section>`;
+}
+function wireCards(box) {
+  for (const x of box.querySelectorAll('[data-dismiss]')) x.addEventListener('click', async (e) => {
+    e.stopPropagation();
+    try { const r = await postJson('brain/dismiss', { id: x.dataset.dismiss }); if (r?.view) S.brain = r.view; } catch {}
+    renderBrain();
+  });
+  for (const x of box.querySelectorAll('[data-apply]')) x.addEventListener('click', () => applyCard(x.dataset.apply));
+  box.querySelector('[data-more]')?.addEventListener('click', () => { cardsOpen = !cardsOpen; renderBrain(); });
+}
+async function applyCard(id) {
+  const c = (S.brain?.cards ?? []).find((x) => x.id === id);
+  if (!c?.action || cardBusy.has(id)) return;
+  const a = c.action;
+  if (a.do === 'open') {   // the page moves; the server only notes the card as used
+    postJson('brain/apply', { id }).then((r) => { if (r?.view) S.brain = r.view; renderBrain(); }).catch(() => {});
+    if (a.panel === 'branch' && a.branch) openBranch(a.branch);
+    else if (a.panel === 'devices') openDevices();
+    else if (a.panel === 'models') openConnect();
+    else if (a.panel === 'settings') openSettings();
+    return;
+  }
+  cardBusy.add(id); renderBrain();
+  try {
+    const r = await postJson('brain/apply', { id });
+    if (r?.view) S.brain = r.view;
+    feed(c.branch, `you applied: ${c.title} (${r?.word ?? 'done'})`);
+  } catch (e) { feed(c.branch, `could not apply "${c.title}": ${e.message}`); }
+  cardBusy.delete(id);
+  renderBrain(); refreshStatus?.();
 }
 $('bback').addEventListener('click', () => { brainOpen = null; renderBrain(); });
 // (6.11.2026) the tiles no longer fold: the feed scrolls in its own box
