@@ -300,8 +300,9 @@ function snapshotDevices(snap: Snapshot | null): { id: string; name: string; dev
 /** the device's tonight: N (sum of its slots' decayed n), the mean and 80% interval over tonight's
  *  nine slots (an unseen slot stands on the prior alone), the guess, and whether any of the nine
  *  slots has ever been folded. */
-function tonightOf(d: DevNotes, at: number): { N: number; mean: number; lo: number; hi: number; guess: Guess; night: boolean } {
+function tonightOf(d: DevNotes, at: number): { N: number; mean: number; lo: number; hi: number; guess: Guess; night: boolean; hours: number[] } {
   const slots = tonightSlots(at);
+  const hours: number[] = [];
   // every slot decays to the look's time first, so a device that went quiet fades (not written back)
   const pr = prior(Object.values(d.slots).map(([n, s, t]) => decay({ n, s, t }, at)));
   let mean = 0, lo = 0, hi = 0;
@@ -312,10 +313,11 @@ function tonightOf(d: DevNotes, at: number): { N: number; mean: number; lo: numb
     const de = st ? decay({ n: st[0], s: st[1], t: st[2] }, at) : null;
     const e = estimate(pr.a, de ? de.s : 0, de ? de.n : 0, PRIOR_K);
     mean += e.mean; lo += e.lo; hi += e.hi;
+    hours.push(Math.round(e.mean * 100) / 100);
   }
   mean /= slots.length; lo /= slots.length; hi /= slots.length;
   const guess: Guess = Math.round(pr.N * 10) / 10 < MIN_SLOTS ? 'unknown' : mean >= LIKELY ? 'likely' : mean < UNLIKELY ? 'unlikely' : 'maybe';
-  return { N: pr.N, mean, lo, hi, guess, night };
+  return { N: pr.N, mean, lo, hi, guess, night, hours };
 }
 
 export function create(ctx: BranchCtx): Branch {
@@ -489,6 +491,8 @@ export function create(ctx: BranchCtx): Branch {
           name: notes.dev[id].name,
           scored: notes.dev[id].pairs.map((q) => [q.t, q.p, q.lo, q.hi, q.p0, q.x] as [number, number, number, number, number, number]),
         }));
+      // for the deciding branches (peek): each present device's tonight, as data
+      const hints = rated.filter((r) => present(r.id)).map(({ id, t }) => ({ id, tonight: { guess: t.guess, p: Math.round(t.mean * 100) / 100, hours: t.hours } }));
       return {
         built: true,
         stat: known === 0
@@ -508,6 +512,7 @@ export function create(ctx: BranchCtx): Branch {
         note: rated.length ? undefined : 'no device seen yet.',
         what: 'guesses when each device is there tonight (22–07) from a decayed beta-binomial over its hours of the week, and how fast it will be from the tok/s it answered with.',
         pairs,
+        hints,
       };
     },
   };

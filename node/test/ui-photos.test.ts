@@ -248,10 +248,13 @@ test('no vision model here: a clear message pointing at the model list; no llama
     assert.match(NO_VISION, /sees photos/);
     // text without photos still works
     assert.equal((await a.engine.chat([{ role: 'user', content: 'x' }], () => {})).text, 'fine');
+    // counted for god's eye: one photo, nothing here saw it
+    assert.deepEqual({ ...a.engine.photos(), at: null }, { n: 1, unseen: 1, at: null });
 
     await b.engine.load({ model: 'text', mode: 'here' }, () => {});
     const r = await b.engine.chat([{ role: 'user', content: 'x' }], () => {}, { photos: [JPEG] });
     assert.equal(r.photos?.how, 'describe');
+    assert.equal(b.engine.photos().unseen, 0, 'read by the vision model: not unseen');
     assert.ok(fs.existsSync(path.join(b.modelsDir, 'mmproj-tiny-vision.gguf')), 'the encoder was fetched and checked first');
 
     // llama: null and no fake vision server: setup is not done

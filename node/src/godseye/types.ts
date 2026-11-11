@@ -102,6 +102,7 @@ export interface EyeWork {
   plan: string[];                  // why the model sits where it sits
   decisions: { at: number; text: string }[];
   llama: boolean;                  // this computer can run llama.cpp itself
+  photos?: { n: number; unseen: number; at: number | null };   // photos sent in chats since kula-node started; unseen: refused, nothing here sees them
 }
 
 export interface EyeModel {
@@ -109,6 +110,8 @@ export interface EyeModel {
   catalog: boolean;                // phones can fetch it
   here: boolean;                   // the file is on this computer
   needMb: number;                  // what running it whole takes at 4k context
+  active_b?: number | null;        // a mixture of experts: the parameters one token reads
+  vision?: boolean;                // it sees photos (an image encoder in the catalog)
 }
 
 export interface EyeProject {
@@ -139,6 +142,16 @@ export interface BranchView {
   report?: TrustReport;            // the trust branch's one screen
   suggestions?: Suggestion[];      // cards for the brain panel; at most 5 per branch are shown
   pairs?: { id: string; name: string; scored: [number, number, number, number, number, number][] }[];  // forecast → learning: [t, p, lo, hi, p0, x] per finished hour, oldest first
+  hints?: DeviceHint[];            // what a branch tells the deciding branches about each device (peek only, never in a view)
+}
+
+/** A branch's word on one device for the deciding branches (11.11.2026): forecast says tonight and
+ *  the speeds it measured, limits says no to a device that should rest. Data, not drawn. */
+export interface DeviceHint {
+  id: string;                      // a device id from the snapshot, or "local" for this computer
+  no?: string;                     // why no work should go to it now, in a few words
+  tonight?: { guess: 'likely' | 'maybe' | 'unlikely' | 'unknown'; p: number; hours: number[] };   // hours: the chance per hour 22:00..06:00
+  tps?: { file: string; tps: number; n: number }[];   // measured tok/s per model file, n answers behind it
 }
 
 /** A line a branch wants in the live feed. */

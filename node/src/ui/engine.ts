@@ -266,6 +266,8 @@ export class Engine {
   private decisions: { at: number; text: string }[] = [];
   private reach = new Map<string, { r: Reach; at: number }>();
   private chats = new Set<AbortController>();
+  // photos sent in chats since start, and those nothing here could see (god's eye's models branch)
+  private photoCount: { n: number; unseen: number; at: number | null } = { n: 0, unseen: 0, at: null };
   private extraClose: (() => Promise<void>)[] = [];
   private ident: GateIdentity | null;
   private adbTool: Adb | null = null;
@@ -1461,6 +1463,7 @@ export class Engine {
     const photos = checkPhotos(o.photos);
     // which way the photos go, decided before anything runs: a clear message when nothing can see them
     const route = photos.length ? routePhotos(!!loaded.sees, this.chosenVision()) : null;
+    if (photos.length) this.photoCount = { n: this.photoCount.n + photos.length, unseen: this.photoCount.unseen + (route?.kind === 'none' ? photos.length : 0), at: Date.now() };
     if (route?.kind === 'none') throw new Error(NO_VISION);
     if (route?.kind === 'describe' && !this.canRead()) throw new Error(VISION_NEEDS_SETUP);
     const ac = new AbortController();
@@ -1503,6 +1506,9 @@ export class Engine {
   }
 
   // ---- photos (10.11.2026, ui/vision.ts): the vision model on this computer and its setting
+
+  /** how many photos came in chats since start, how many nothing here could see, and when the last came */
+  photos(): { n: number; unseen: number; at: number | null } { return { ...this.photoCount }; }
 
   private settingsPath(): string { return this.opts.settingsFile ?? path.join(home(), 'ui-settings.json'); }
   private readSettings(): { visionModel?: string } {

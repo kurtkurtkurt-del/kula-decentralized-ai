@@ -54,8 +54,8 @@ export function kulaSnapshot(engine: Engine, projects: ProjectRunner, now = Date
     at: now,
     host: { name: hostLabel(), freeMb, ledger: hostLedger() },
     devices: engine.peers().map((p) => deviceOf(p, engine.trustOf(p.id))),
-    work: { loaded: st.loaded, loading: st.loading, chatting: st.chatting, plan: st.plan, decisions: st.decisions, llama: st.llama },
-    models: engine.models().map((m) => ({ id: m.id, name: m.name, file: m.file, size: m.size, quant: m.quant, params_b: m.params_b, catalog: m.catalog, here: m.here, needMb: m.needMb })),
+    work: { loaded: st.loaded, loading: st.loading, chatting: st.chatting, plan: st.plan, decisions: st.decisions, llama: st.llama, photos: engine.photos() },
+    models: engine.models().map((m) => ({ id: m.id, name: m.name, file: m.file, size: m.size, quant: m.quant, params_b: m.params_b, catalog: m.catalog, here: m.here, needMb: m.needMb, active_b: m.active_b, vision: m.vision })),
     projects: projects.list().map((p) => ({ id: p.id, title: p.title, request: p.request, start: p.start, end: p.end, state: p.state, mode: p.mode, model: p.model, peers: p.peers, parts: p.parts, done: p.done, line: p.line, error: p.error })),
   });
 }
