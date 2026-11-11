@@ -66,9 +66,10 @@ client says so.
 Both devices send UDP to each other's public address at the same moment, so each NAT sees an
 outgoing flow and lets the answer in. Someone both can reach must tell each the other's public
 address and the moment: the introducer. In kula that is any paired device of the circle that is
-itself reachable (layer 1 or 2), never a machine of ours. A 2025 large-scale measurement of
-libp2p's DCUtR found hole punching works for roughly 70% of NAT pairs, and that TCP and QUIC do
-about equally well when synchronised precisely ([arXiv 2510.27500](https://arxiv.org/abs/2510.27500)).
+itself reachable (layer 1 or 2), never a machine of ours. Hole punching does not work for every
+pair of NATs (two strict NATs defeat it); a 2025 large-scale measurement of libp2p's DCUtR
+([arXiv 2510.27500](https://arxiv.org/abs/2510.27500)) gives the success rates. Its figures were
+not read for this page: check them there before quoting a number.
 
 ### 4. Limited relay on a circle device
 
