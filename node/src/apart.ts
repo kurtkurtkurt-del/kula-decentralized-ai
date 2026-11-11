@@ -5,7 +5,7 @@
 // api: POST /load (sse) once, then POST /chat (sse) per prompt.
 import { Tunnel } from './gate.js';
 import { RelayTunnel } from './relay.js';
-import { probePeers, reachable, peerTls, type Peer } from './peers.js';
+import { probePeers, reachable, peerTls, dialOf, type Peer } from './peers.js';
 import type { GateIdentity } from './tls.js';
 import { freePort, startChild } from './children.js';
 import type { LlamaBinaries } from './llama.js';
@@ -119,7 +119,9 @@ export async function openPeerDevice(peer: Peer, identity?: GateIdentity): Promi
     const port = await tunnel.listen();
     return { id: peer.id, name: peer.name, local: false, apiPort: port, bw: peer.bw ?? 4, busy: false, tps: null, done: 0, close: () => tunnel.close() };
   }
-  const tunnel = new Tunnel(peer.host, peer.port, peer.secret, 'api', tls);
+  // the address its pinned certificate last answered at (lan, ipv6 or a router's port)
+  const d = dialOf(peer);
+  const tunnel = new Tunnel(d.host, d.port, peer.secret, 'api', tls);
   const port = await tunnel.listen();
   return { id: peer.id, name: peer.name, local: false, apiPort: port, bw: peer.bw ?? 4, busy: false, tps: null, done: 0, close: () => tunnel.close() };
 }

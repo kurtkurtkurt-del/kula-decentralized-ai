@@ -227,7 +227,10 @@ export type Admit = (peer: string, nonceC: string, unixMs: number | null) => str
 
 export interface GateServerOptions {
   port: number;
+  // one address to listen on; without it the gate listens on every interface: dual-stack
+  // ('::', ipv6 and ipv4 on one socket) unless dualStack is false, then 0.0.0.0 (ipv4 only)
   host?: string;
+  dualStack?: boolean;
   // the v1 secret; null turns v1 off: a plain hello is told "NO no v1" (a v2 worker that
   // never handed out a secret has no reason to take the unauthenticated-tls path). With
   // tls, v1 also goes off as soon as one certificate is paired (v1Open).
@@ -276,6 +279,8 @@ export function peerFingerprint(socket: tls.TLSSocket): string | null {
 
 export interface GateServer {
   port: number;
+  bound: string;       // the address it listens on: '::' (dual-stack), '0.0.0.0' or the host asked for
+  dualStack: boolean;  // ipv6 and ipv4 on one socket
   server: net.Server;
   close(): Promise<void>;
   // Ends every open pipe of the client certificate `fp` (its access was just removed);
@@ -463,7 +468,9 @@ export async function startGateServer(opts: GateServerOptions): Promise<GateServ
     open.add(socket);
     socket.once('close', () => open.delete(socket));
     socket.setNoDelay(true);
-    const peer = socket.remoteAddress ?? '?';
+    // one form for every peer: a dual-stack socket shows an ipv4 client as "::ffff:10.0.0.5",
+    // the ledger, the busy check and the events keep seeing "10.0.0.5"
+    const peer = plainIp(socket.remoteAddress ?? '?');
     socket.on('error', () => {});
     if (inHandshake >= MAX_HANDSHAKES) {
       emit({ type: 'reject', channel: null, peer, at: Date.now(), reason: 'overloaded', v: 1 });
@@ -498,13 +505,27 @@ export async function startGateServer(opts: GateServerOptions): Promise<GateServ
     })().catch(() => socket.destroy());
   });
 
-  await new Promise<void>((resolve, reject) => {
+  const listen = (host: string, ipv6Only?: boolean) => new Promise<void>((resolve, reject) => {
     server.once('error', reject);
-    server.listen(opts.port, opts.host ?? '0.0.0.0', () => { server.off('error', reject); resolve(); });
+    server.listen({ port: opts.port, host, ...(ipv6Only === undefined ? {} : { ipv6Only }) }, () => { server.off('error', reject); resolve(); });
   });
+  let bound: string;
+  if (opts.host) await listen(bound = opts.host);
+  else if (opts.dualStack === false) await listen(bound = '0.0.0.0');
+  else {
+    // a system without ipv6 (turned off, a container) cannot open '::': ipv4 only then
+    try { await listen(bound = '::', false); }
+    catch (e) {
+      const code = (e as NodeJS.ErrnoException).code;
+      if (code !== 'EAFNOSUPPORT' && code !== 'EADDRNOTAVAIL' && code !== 'EINVAL') throw e;
+      await listen(bound = '0.0.0.0');
+    }
+  }
   const addr = server.address() as net.AddressInfo;
   return {
     port: addr.port,
+    bound,
+    dualStack: bound === '::',
     server,
     drop,
     close: () => new Promise<void>((resolve) => {

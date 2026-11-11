@@ -117,6 +117,11 @@ dev-gate prints new JSON). A v3 QR without `pin` is also readable: it is what a 
 again to a master that is already paired. `app/src/llm/peers.ts` reads v2 and v3 and writes
 v3 whenever the worker has a fingerprint.
 
+kula-node's v3 QR may also carry `addrs`, every way to the gate in order
+(`[{host, port, via: 'lan' | 'ipv6' | 'mapped'}]`, LAN first); `host`/`port` stay the LAN way,
+so an older reader is unaffected. A master tries them in order and keeps the first whose pinned
+certificate answers; see [INTERNET.md](INTERNET.md).
+
 ### the handshake inside TLS
 
 TLS 1.3 first, **both sides presenting a certificate** (the server asks with

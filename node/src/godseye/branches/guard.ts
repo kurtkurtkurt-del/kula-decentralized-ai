@@ -231,6 +231,8 @@ function devOf(raw: Record<string, unknown>, id: string): EyeDevice {
     plugged: bool3(raw.plugged),
     holds: wordOrNull(raw.holds, MODEL),
     trust: isObj(raw.trust) ? trustOf(raw.trust) : null,
+    // only when the snapshot has it (an older one does not): one of the three kinds, else null
+    ...('reachedBy' in raw ? { reachedBy: raw.reachedBy === 'lan' || raw.reachedBy === 'ipv6' || raw.reachedBy === 'mapped' ? raw.reachedBy : null } : {}),
   };
 }
 
