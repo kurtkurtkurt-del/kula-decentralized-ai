@@ -63,10 +63,14 @@ const NAME_LEN = 80;               // names shown are cut to this
 const MAX_TPS = 100_000;           // tok/s beyond this is not a measurement
 const MAX_DONE = 1e15;             // an answer count beyond this is not plausible
 const MAX_N = 1e9;                 // scored guesses beyond this are not plausible
+const KEY_LEN = MAX_ID + 40;       // a load key `file|since`: a file id and a time
 
 interface Loop { alpha: number; fast: number; slow: number; n: number; emittedAlpha: number }
 interface Reach extends Loop { p: number; hits: string; at: number | null }
-interface Speed extends Loop { est: number; errs: number[]; done: number }
+// done is the answer count of one load, keyed `file|since`: a new load counts from 0 again; a
+// speed from another model file restarts the guess (a fresh loop, unscored). Notes written before
+// key and file existed have neither: their next load scores from 0 and keeps the guess.
+interface Speed extends Loop { est: number; errs: number[]; done: number; key?: string; file?: string }
 interface Dev { name: string; seen: number; reach?: Reach; speed?: Speed; alphaAt: number | null }
 export interface LearningNotes {
   v: 1;
@@ -173,7 +177,12 @@ function saneSpeed(x: any): Speed | null {
     errs.push(Math.min(Math.max(e, 0), MAX_ERR));
   }
   if (!okNum(x.done) || x.done < 0 || x.done > MAX_DONE) return null;
-  return { alpha: x.alpha, fast: x.fast, slow: x.slow, n: x.n, emittedAlpha: x.emittedAlpha, est: x.est, errs: errs.slice(-ERRS_MAX), done: x.done };
+  const s: Speed = { alpha: x.alpha, fast: x.fast, slow: x.slow, n: x.n, emittedAlpha: x.emittedAlpha, est: x.est, errs: errs.slice(-ERRS_MAX), done: x.done };
+  // key and file are optional: one that is not a usable string is left out (read as "not known"),
+  // never a reason to drop the device
+  if (typeof x.key === 'string' && x.key.length <= KEY_LEN) s.key = x.key;
+  if (cleanId(x.file)) s.file = x.file;
+  return s;
 }
 
 /** A notes file from disk, kept only if it has the shape we wrote: devices are rebuilt as a
@@ -387,10 +396,34 @@ export function create(ctx: BranchCtx): Branch {
     dirty = true;
   }
 
-  function seeSpeed(d: Dev, tps: number, done: number, at: number) {
+  /** file: the loaded model file (null when the snapshot gives none usable); key: `file|since`,
+   *  always a string, so one load is one key */
+  function seeSpeed(d: Dev, tps: number, done: number, at: number, file: string | null, key: string) {
     const s = d.speed;
-    if (!s) { d.speed = { ...loop(), est: tps, errs: [], done }; dirty = true; return; }
-    if (done <= s.done) return;                                    // no new answer: no new speed to score
+    const start = (errs: number[]): Speed => {
+      const x: Speed = { ...loop(), est: tps, errs, done, key };
+      if (file != null) x.file = file;
+      return x;
+    };
+    if (!s) { d.speed = start([]); dirty = true; return; }
+    if (s.file != null && file != null && s.file !== file) {
+      // another model file: its speed says nothing about this guess. the guess restarts from this
+      // speed with a fresh loop, unscored; the errors already scored stay as they were
+      d.speed = start(s.errs);
+      dirty = true;
+      return;
+    }
+    // a new load (or notes from before the key) counts its answers from 0; within one load a count
+    // that goes back is not a new answer and is not remembered lower
+    let base = s.done;
+    if (s.key !== key) {
+      base = 0;
+      s.key = key;
+      if (file != null) s.file = file;
+      s.done = done;
+      dirty = true;
+    }
+    if (done <= base) return;                                      // no new answer: no new speed to score
     s.done = done;
     const off = Math.abs(tps - s.est) / tps;                       // uncapped, as the merged version scored it
     s.errs = [...s.errs, r3(off)].slice(-ERRS_MAX);
@@ -434,7 +467,12 @@ export function create(ctx: BranchCtx): Branch {
       }
       const W = (now as any).work;
       const L = W && typeof W === 'object' ? W.loaded : null;
-      const rawLdevs = L && typeof L === 'object' && Array.isArray(L.devices) ? L.devices : [];
+      // a split runs one model across devices: the speed is the chain's, not any one device's, so
+      // a split load records no speed at all
+      const rawLdevs = L && typeof L === 'object' && L.mode !== 'split' && Array.isArray(L.devices) ? L.devices : [];
+      const M = L && typeof L === 'object' && L.model && typeof L.model === 'object' ? L.model : null;
+      const lfile: string | null = M && cleanId(M.file) ? M.file : null;
+      const lkey = `${lfile ?? ''}|${L && typeof L === 'object' && okNum(L.since) ? L.since : ''}`;
       const ldevs: NonNullable<ReturnType<typeof snapSpeed>>[] = [];
       for (const raw of rawLdevs) {
         const s = snapSpeed(raw);
@@ -449,7 +487,7 @@ export function create(ctx: BranchCtx): Branch {
       }
       for (const s of ldevs) {
         seen.set(s.id, s.name);
-        seeSpeed(dev(s.id, s.name, at, live), s.tps, s.done, at);
+        seeSpeed(dev(s.id, s.name, at, live), s.tps, s.done, at, lfile, lkey);
       }
       present = [...seen].map(([id, name]) => ({ id, name }));
       for (const [id, d] of Object.entries(notes.devices)) {

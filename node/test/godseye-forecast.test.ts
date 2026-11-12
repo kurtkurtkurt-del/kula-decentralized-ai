@@ -540,6 +540,20 @@ test('tok/s: a weighted average, sampled only when the answer count grows', () =
   assert.match(b.view().lines[0], / · ~7\.4 tok\/s on Qwen3 0\.6B$/);
 });
 
+test('tok/s: a split load records no speed (its chain speed is not one device\'s)', () => {
+  const { c, ctx } = fakeCtx();
+  const b = create(ctx);
+  const split = (tps: number, done: number) => ({ ...loadedWith([{ id: 'p1', name: 'pixel', local: false, busy: false, tps, done }, { id: 'local', name: 'this computer', local: true, busy: false, tps, done }]), mode: 'split' });
+  b.observe(snap([dev({ holds: 'qwen3-0.6b.gguf' })], at23(0), split(8, 1)), null);
+  b.observe(snap([dev({ holds: 'qwen3-0.6b.gguf' })], at23(1), split(6, 2)), null);
+  assert.doesNotMatch(b.view().lines.join('\n'), /tok\/s/);
+  c.t += 120_000;
+  b.observe(snap([dev({ holds: 'qwen3-0.6b.gguf' })], at23(2), split(6, 3)), null);   // saves
+  const saved = c.stored as any;
+  assert.deepEqual(Object.keys(saved.dev.p1.tps), [], 'no speed booked to the phone');
+  assert.equal(saved.dev.local, undefined, 'no speed booked to this computer');
+});
+
 test('saves at most once a minute, and a new branch reads its notes back', () => {
   const { c, ctx } = fakeCtx();
   const b = create(ctx);

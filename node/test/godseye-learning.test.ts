@@ -955,6 +955,58 @@ test('an answer count that goes back scores nothing and is not remembered lower'
   assert.equal((f.stored as any).devices.p1.speed.done, 6, 'the remembered count never went back');
 });
 
+test('a reload of another model: every answer of the new load scores, the guess restarts from its own speed', () => {
+  const f = fakeCtx();
+  const b = create(f.ctx as any);
+  const ld = (file: string, since: number, tps: number, done: number) =>
+    ({ mode: 'apart', model: { id: file, name: file, file, size: 1 }, ctx: 4096, since, devices: [{ id: 'p1', name: 'pixel', local: false, busy: false, tps, done }] });
+  let t = 1000;
+  for (let i = 1; i <= 20; i++) b.observe(snap([dev({ checkedAt: 1 })], t += 1000, ld('small.gguf', 500, 20, i)) as any, null);
+  f.set(f.ctx.now() + 60_000);
+  b.observe(snap([dev({ checkedAt: 1 })], t += 1000, ld('small.gguf', 500, 20, 20)) as any, null);   // saves
+  const before = (f.stored as any).devices.p1.speed.errs.length;
+  assert.equal(before, 19, 'load 1: the first answer seeds the guess, the next 19 score');
+  // load 2: big.gguf, a new since, 4 tok/s, its own count from 1
+  b.observe(snap([dev({ checkedAt: 1 })], t += 1000, ld('big.gguf', 99_000, 4, 1)) as any, null);
+  assert.match(b.view().lines[0], /guess 4 tok\/s · α 0\.3$/, 'the first guess for big is its own speed, not small\'s 20');
+  assert.doesNotMatch(f.events.join('\n') + ((f.stored as any).last?.text ?? ''), /guessed pixel at 20 tok\/s, it ran at 4/);
+  for (let i = 2; i <= 10; i++) b.observe(snap([dev({ checkedAt: 1 })], t += 1000, ld('big.gguf', 99_000, 4, i)) as any, null);
+  f.set(f.ctx.now() + 60_000);
+  b.observe(snap([dev({ checkedAt: 1 })], t += 1000, ld('big.gguf', 99_000, 4, 10)) as any, null);   // saves
+  const s = (f.stored as any).devices.p1.speed;
+  assert.equal(s.errs.length, Math.min(30, before + 9), 'every answer of load 2 after its seed scored (none waited for 20)');
+  assert.equal(s.est, 4);
+  assert.equal(s.file, 'big.gguf');
+  assert.equal(s.key, 'big.gguf|99000');
+  assert.equal(s.done, 10);
+});
+
+test('saved notes with done 50 and no load key score on the next load', () => {
+  const t = 5000;
+  const f = fakeCtx({ v: 1, devices: { p1: { name: 'pixel', seen: t, speed: { alpha: 0.3, fast: 0, slow: 0, n: 3, emittedAlpha: 0.3, est: 10, errs: [0], done: 50 } } }, last: null, good: false });
+  const b = create(f.ctx as any);
+  b.observe(snap([dev({ checkedAt: 1 })], t + 1000, loaded([{ id: 'p1', name: 'pixel', local: false, busy: false, tps: 12, done: 1 }])) as any, null);
+  // off |12-10|/12 = 17%; mean([0, 0.167]) = 8%
+  assert.equal(b.view().lines[0], 'pixel · reach: first look · α 0.3 · speed off 8% · guess 10.6 tok/s · α 0.3');
+  b.observe(snap([dev({ checkedAt: 1 })], t + 2000, loaded([{ id: 'p1', name: 'pixel', local: false, busy: false, tps: 12, done: 1 }])) as any, null);
+  assert.equal(b.view().lines[0], 'pixel · reach: first look · α 0.3 · speed off 8% · guess 10.6 tok/s · α 0.3', 'the same answer is not scored twice');
+});
+
+test('a split load records no speed: its chain speed is not one device\'s', () => {
+  const f = fakeCtx();
+  const b = create(f.ctx as any);
+  const split = (tps: number, done: number) => ({ ...loaded([{ id: 'p1', name: 'pixel', local: false, busy: false, tps, done }, { id: 'local', name: 'this computer', local: true, busy: false, tps, done }]), mode: 'split' });
+  b.observe(snap([dev({ checkedAt: 1 })], 1000, split(6, 1)) as any, null);
+  b.observe(snap([dev({ checkedAt: 1 })], 2000, split(9, 2)) as any, null);
+  f.set(f.ctx.now() + 60_000);
+  b.observe(snap([dev({ checkedAt: 1 })], 3000, split(9, 3)) as any, null);
+  assert.equal(b.view().lines.length, 1, 'only the device from the look, no "this computer" from the chain');
+  assert.doesNotMatch(b.view().lines[0], /speed/);
+  const saved = f.stored as any;
+  assert.equal(saved?.devices?.p1?.speed, undefined);
+  assert.equal(saved?.devices?.local, undefined);
+});
+
 test('a 20-vs-5 speed miss scores exactly as the merged version did: stat, gauge and line', () => {
   const f = fakeCtx();
   const b = create(f.ctx as any);

@@ -342,7 +342,7 @@ export function create(ctx: BranchCtx): Branch {
   let snap: Snapshot | null = null;
   let pendingAt: number | null = null;             // a far-forward look waiting for the next one to agree
   let lastSave = ctx.now();
-  const lastDone = new Map<string, number>();      // device|file -> answers, this run only
+  const lastDone = new Map<string, number>();      // device|file|since -> answers, this run only
 
   /** at most MAX_DEVICES devices; one in the current snapshot is never evicted in favour of one
    *  that is not, however far its seen is. */
@@ -435,7 +435,9 @@ export function create(ctx: BranchCtx): Branch {
       if (notes.since == null || now.at < notes.since) notes.since = now.at;
 
       const L = now.work && typeof now.work === 'object' ? now.work.loaded : null;
-      if (L && typeof L === 'object' && L.model && typeof L.model === 'object'
+      // a split runs one model across devices: its speed is the chain's, not one device's, so a
+      // split load books no speed to anyone
+      if (L && typeof L === 'object' && L.mode !== 'split' && L.model && typeof L.model === 'object'
         && typeof L.model.file === 'string' && L.model.file.length > 0 && L.model.file.length <= MAX_ID
         && Array.isArray(L.devices)) {
         const mName = typeof L.model.name === 'string' ? L.model.name.slice(0, NAME_LEN) : L.model.file;
@@ -444,7 +446,7 @@ export function create(ctx: BranchCtx): Branch {
           if (typeof ld.id !== 'string' || ld.id.length === 0 || ld.id.length > MAX_ID) continue;
           if (!okNum(ld.tps) || !(ld.tps > 0) || ld.tps > MAX_TPS) continue;
           if (!okNum(ld.done)) continue;
-          const key = `${ld.id}|${L.model.file}`;
+          const key = `${ld.id}|${L.model.file}|${typeof L.since === 'number' ? L.since : ''}`;   // a reload (new since) counts from 0 again
           const before = lastDone.get(key);
           if (before === undefined || ld.done > before) {
             const d = (notes.dev[ld.id] ??= { name: typeof ld.name === 'string' ? ld.name.slice(0, NAME_LEN) : ld.id, seen: now.at, slots: Object.create(null), cur: null, tps: Object.create(null), pairs: [] });
