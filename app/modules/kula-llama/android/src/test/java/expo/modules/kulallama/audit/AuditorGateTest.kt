@@ -3,6 +3,7 @@ package expo.modules.kulallama.audit
 import expo.modules.kulallama.Gate
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.File
@@ -122,9 +123,12 @@ class AuditorGateTest {
     assertEquals("model", a.onLoad(listOf("local" to 32), "deadbeef", "cafe").reason)
     assertEquals(listOf("ram"), a.onClaim("abc", 3000, 1000, 0.0, 0.0, 0.0).warn)
     assertEquals(listOf("hot"), a.onHealth(false, 45.0, 90).warn)
+    assertEquals(listOf("battery"), a.onHealth(false, 30.0, 14, charging = true).warn)
     assertEquals("bounds", a.onEnd("abc", "rpc", 5, 1, ).let { Auditor(a.ledger, key, limits = Checks.Limits(1, 1)).onEnd("abc", "rpc", 5, 1) }.reason)
     val s = a.summary(10)
-    assertEquals(listOf("pair", "load", "load", "claim", "health", "end", "end"), s.map { it.getString("kind") })
+    assertEquals(listOf("pair", "load", "load", "claim", "health", "health", "end", "end"), s.map { it.getString("kind") })
+    assertFalse("unknown charging is left out, not written as false", s[4].has("charging"))
+    assertTrue(s[5].getBoolean("charging"))
     assertEquals("model", s[2].getString("reject"))
     assertEquals(12, s[1].getJSONArray("split").getJSONObject(1).getInt("layers"))
     assertEquals(-1, Ledger.verify(a.ledger.file, key.publicKey, key.alg))

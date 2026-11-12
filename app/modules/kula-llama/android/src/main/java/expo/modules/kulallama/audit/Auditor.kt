@@ -51,9 +51,11 @@ class Auditor(
     return v
   }
 
-  fun onHealth(throttled: Boolean, batteryC: Double, batteryPct: Int): Verdict {
+  /** [charging]: a power source is plugged in (null: Android did not say); written only when known. */
+  fun onHealth(throttled: Boolean, batteryC: Double, batteryPct: Int, charging: Boolean? = null): Verdict {
     val v = Checks.health(throttled, batteryC, batteryPct)
     val fields = linkedMapOf<String, Any?>("throttled" to throttled, "batteryC" to batteryC, "batteryPct" to batteryPct)
+    if (charging != null) fields["charging"] = charging
     putVerdict(fields, v)
     ledger.append("health", null, fields)
     return v

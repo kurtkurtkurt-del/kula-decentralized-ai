@@ -35,7 +35,7 @@ Event fields:
 | reject | channel (may be null), why |
 | load | split `[{peer, layers}]`, sha, `reject:"model"` when it is not the expected file |
 | claim | ramMb (claimed), heldMb, bw (claimed GB/s), tps, modelGb, warn / reject |
-| health | throttled, batteryC, batteryPct, warn |
+| health | throttled, batteryC, batteryPct, charging (plugged in; left out when unknown), warn |
 | end | channel, bytes (both directions), seconds, `reject:"bounds"` when over the limits |
 
 ## The key

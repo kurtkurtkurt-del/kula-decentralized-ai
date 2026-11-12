@@ -14,10 +14,11 @@ sourceSets {
   main {
     kotlin.setSrcDirs(listOf("../android/src/main/java/expo/modules/kulallama", "stub"))
     // these need the Android SDK
-    kotlin.exclude("ApiServer.kt", "Discovery.kt", "Keeper.kt", "KeyStoreVault.kt", "KulaLlamaModule.kt", "ModelDownloader.kt", "Native.kt", "WorkerService.kt")
+    kotlin.exclude("ApiServer.kt", "Discovery.kt", "Keeper.kt", "KeyStoreVault.kt", "KulaLlamaModule.kt", "ModelDownloader.kt", "Native.kt", "WorkerService.kt", "Vision.kt", "KeyStoreAttester.kt")
   }
   test {
     kotlin.setSrcDirs(listOf("../android/src/test/java/expo/modules/kulallama"))
+    kotlin.exclude("VisionTest.kt") // Vision.kt needs android.graphics
   }
 }
 

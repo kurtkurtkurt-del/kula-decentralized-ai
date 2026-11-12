@@ -312,7 +312,7 @@ class WorkerService : Service() {
           val warn = Checks.health(throttled, batteryC(), batteryPct()).warn.joinToString(",")
           val nowMs = System.currentTimeMillis()
           if (nowMs - lastAudit >= 60_000 || warn != lastWarn) {
-            runCatching { a.onHealth(throttled, batteryC(), batteryPct()) }
+            runCatching { a.onHealth(throttled, batteryC(), batteryPct(), charging()) }
             // the claim only once a master has put a model here: before that RSS is this
             // process alone and the advertised RAM would look like a 4x lie every minute
             if (peer != null && held >= CLAIM_MIN_HELD_MB) runCatching { a.onClaim(peer, ramMb, held, bandwidth, 0.0, 0.0) }
@@ -358,6 +358,11 @@ class WorkerService : Service() {
   private fun batteryPct(): Int = runCatching {
     (getSystemService(Context.BATTERY_SERVICE) as BatteryManager).getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY)
   }.getOrDefault(-1)
+
+  // plugged into any power source (ac, usb, wireless, dock); null when Android gives no battery intent
+  private fun charging(): Boolean? = runCatching {
+    registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))?.let { it.getIntExtra(BatteryManager.EXTRA_PLUGGED, 0) != 0 }
+  }.getOrNull()
 
   private fun batteryC(): Double = runCatching {
     val sticky = registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
