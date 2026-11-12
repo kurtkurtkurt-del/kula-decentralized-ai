@@ -1235,3 +1235,169 @@ test('health: the hints for the deciding branches are the same with and without 
   assert.deepEqual(hot.hints, calm.hints);
   assert.deepEqual(hot.hints, [{ id: 'p1', no: 'should rest (limits)' }]);
 });
+
+// ---------- a device that slows down over a load (12.11.2026, field test selcukv1 T25: a Galaxy S25+
+// went 64 -> 46.5 -> 37 tok/s within three minutes, warm, while charging)
+
+const SLOW = (id = 'p1') => ({ id: `limits:slow:${id}`, kind: 'warn', weight: 2, action: { do: 'open', panel: 'branch', branch: 'limits' } });
+const slowCards = (v: any) => cardsOf(v).filter((c: any) => c.id.startsWith('limits:slow:'));
+
+/** one branch and a look per tps value 15 s apart, each with one more answer done unless the look
+ *  says its own done; since and file name the load, health is stamped with the look's own at */
+function slowRig() {
+  const { ctx, out } = fakeCtx();
+  const b = create(ctx as any);
+  let at = T0;
+  let done = 0;
+  const look = (tps: unknown, o: { since?: number; file?: string; health?: Record<string, unknown> | null; done?: number } = {}) => {
+    at += 15_000;
+    done = o.done ?? done + 1;
+    const health = o.health ? { at, ...o.health } : null;
+    const l = loaded([ld({ tps, done })], { since: o.since ?? T0, model: { id: 'm1', name: 'small', file: o.file ?? 'small.gguf', size: 1 } });
+    b.observe(snap(at, { devices: [dev(health ? { health } : {})], loaded: l }) as any, null);
+    return b.view();
+  };
+  const run = (list: unknown[], o: Parameters<typeof look>[1] = {}) => { let v = b.view(); for (const t of list) v = look(t, o); return v; };
+  return { b, out, look, run };
+}
+
+test('slow: 64, 64, 63 then 40, 37, 37 is one card with both numbers, a warning line and one feed line', () => {
+  const { out, look, run } = slowRig();
+  let v = run([64, 64, 63, 40, 37]);
+  assert.deepEqual(slowCards(v), [], 'five readings are not enough');
+  v = look(37);
+  assert.deepEqual(slowCards(v), [SLOW()]);
+  const card = v.suggestions!.find((c) => c.id === 'limits:slow:p1')!;
+  assert.equal(card.title, 'pixel slowed down: 64 -> 37 tok/s');
+  assert.match(card.why, /64 -> 37 tok\/s since this load began/);
+  assert.ok(card.why.length > 20 && card.why.length <= 400, card.why);
+  assert.equal(card.label, 'look');
+  assert.equal(v.stat, '1 warning');
+  assert.equal(v.lines[0], 'warning: pixel slowed down: 64 -> 37 tok/s since this load began');
+  assert.deepEqual(out.events, ['limits: pixel slowed down: 64 -> 37 tok/s since this load began']);
+  look(37);
+  look(36);
+  assert.equal(out.events.length, 1, 'no line on every look');
+  assert.deepEqual(slowCards(look(37)), [SLOW()]);
+});
+
+test('slow: a flat series and one wobbling by 15% either way are no card', () => {
+  const flat = slowRig().run([50, 50, 50, 50, 50, 50, 50, 50, 50, 50]);
+  assert.deepEqual(slowCards(flat), []);
+  assert.equal(flat.stat, 'all within limits');
+  const noisy = slowRig().run([50, 57.5, 42.5, 42.5, 57.5, 42.5, 42.5, 57.5, 42.5, 42.5, 42.5]);
+  assert.deepEqual(slowCards(noisy), []);
+  assert.equal(noisy.stat, 'all within limits');
+});
+
+test('slow: fewer than 6 readings are no card, however slow the last ones', () => {
+  const { run } = slowRig();
+  assert.deepEqual(slowCards(run([64, 64, 63, 20, 20])), []);
+});
+
+test('slow: it ends only once the speed is back to 85% of where the load began, with a feed line', () => {
+  const { out, look, run } = slowRig();
+  assert.deepEqual(slowCards(run([64, 64, 63, 40, 37, 37])), [SLOW()]);
+  // 50 is above 70% of 64 but below 85% (54.4): the card stays
+  assert.deepEqual(slowCards(run([50, 50])), [SLOW()]);
+  assert.deepEqual(slowCards(look(56)), [SLOW()], 'the median of 50, 50, 56 is still 50');
+  const v = look(56);
+  assert.deepEqual(slowCards(v), []);
+  assert.equal(v.stat, 'all within limits');
+  assert.deepEqual(out.events, ['limits: pixel slowed down: 64 -> 37 tok/s since this load began', 'limits: pixel is no longer slowed down']);
+});
+
+test('slow: a reload, a new since or a new model file, starts over', () => {
+  for (const reload of [{ since: T0 + HOUR }, { file: 'other.gguf' }]) {
+    const { out, look, run } = slowRig();
+    assert.deepEqual(slowCards(run([64, 64, 63, 40, 37, 37])), [SLOW()]);
+    let v = look(37, reload);
+    assert.deepEqual(slowCards(v), [], JSON.stringify(reload));
+    assert.equal(out.events.at(-1), 'limits: pixel is no longer slowed down');
+    // the new load's own first readings are its baseline: steady at 37 is no slowdown
+    v = run([37, 37, 37, 37, 37, 37], reload);
+    assert.deepEqual(slowCards(v), [], JSON.stringify(reload));
+  }
+});
+
+test('slow: a null tps is no reading', () => {
+  const { run, look } = slowRig();
+  assert.deepEqual(slowCards(run([64, 64, 63, null, null, null, 40, 37])), [], 'five readings, the nulls not among them');
+  assert.deepEqual(slowCards(look(37)), [SLOW()]);
+});
+
+test('slow: the same tps with done unchanged is not a new reading, a changed tps with done 0 is (the phone\'s own snapshot)', () => {
+  const { run, look } = slowRig();
+  // the phone always sends done: 0; four readings only, the repeated 40s are one
+  assert.deepEqual(slowCards(run([64, 63, 64, 40, 40, 40, 40], { done: 0 })), []);
+  assert.deepEqual(slowCards(look(37, { done: 0 })), []);
+  assert.deepEqual(slowCards(look(40, { done: 0 })), [SLOW()], 'the sixth reading: 64, 63, 64 then 40, 37, 40');
+});
+
+test('slow: the why says hot or throttled from the phone\'s fresh health, else heat unknown', () => {
+  const series = [64, 64, 63, 40, 37, 37];
+  const why = (health: Record<string, unknown> | null) => {
+    const v = slowRig().run(series, { health });
+    const card = v.suggestions!.find((c) => c.id === 'limits:slow:p1');
+    assert.ok(card, JSON.stringify(health));
+    return card!.why;
+  };
+  assert.match(why(H({ tempC: 44.5 })), /\bhot\b/);
+  assert.match(why(H({ throttled: true })), /\bthrottled\b/);
+  const none = why(null);
+  assert.match(none, /heat unknown/);
+  assert.doesNotMatch(none, /\bhot\b|\bthrottled\b/);
+  assert.match(why(H({ tempC: null })), /heat unknown/);
+  // a stale reading (ten minutes old) is no reading, hot or not
+  assert.match(why(H({ at: T0 - 10 * MIN, tempC: 50, throttled: true })), /heat unknown/);
+  // a fresh reading that is neither hot nor throttled says so with its heat
+  assert.match(why(H()), /not hot \(36\.5 °C\)/);
+});
+
+test('slow: an id a card cannot carry gets the line, no card; the card counts toward the cap of 5', () => {
+  const { ctx } = fakeCtx();
+  const b = create(ctx as any);
+  const id = 'p 1/<x>';
+  let at = T0;
+  for (const [i, tps] of [64, 64, 63, 40, 37, 37].entries()) {
+    at += 15_000;
+    b.observe(snap(at, { devices: [dev({ id, name: 'odd' })], loaded: loaded([ld({ id, name: 'odd', tps, done: i + 1 })]) }) as any, null);
+  }
+  assert.deepEqual(cardsOf(b.view()), []);
+  assert.ok(b.view().lines.includes('warning: odd slowed down: 64 -> 37 tok/s since this load began'), b.view().lines.join('\n'));
+
+  // two phones hot, low and throttled (six health cards) and slow: five cards, the health ones first
+  const { ctx: ctx2 } = fakeCtx();
+  const b2 = create(ctx2 as any);
+  at = T0;
+  for (const [i, tps] of [64, 64, 63, 40, 37, 37].entries()) {
+    at += 15_000;
+    const devs = ['a1', 'b2'].map((x) => dev({ id: x, name: `phone ${x}`, health: H({ at, tempC: 45, battery: 10, throttled: true }) }));
+    b2.observe(snap(at, { devices: devs, loaded: loaded(devs.map((d) => ld({ id: d.id, name: d.name, tps, done: i + 1 }))) }) as any, null);
+  }
+  const v = b2.view();
+  assert.deepEqual(v.suggestions!.map((c) => c.id), ['limits:heat:a1', 'limits:battery:a1', 'limits:throttled:a1', 'limits:heat:b2', 'limits:battery:b2']);
+  assert.ok(v.lines.includes('warning: phone a1 slowed down: 64 -> 37 tok/s since this load began'));
+  assert.ok(v.lines.includes('warning: phone b2 slowed down: 64 -> 37 tok/s since this load began'));
+});
+
+test('slow: the hints for the deciding branches are the same with and without the slow card', () => {
+  const run = (slow: boolean) => {
+    const { ctx } = fakeCtx();
+    const b = create(ctx as any);
+    let done = 0;
+    let i = 0;
+    for (let at = T0; at <= T0 + 21 * MIN; at += 15_000, i++) {
+      done++;
+      const tps = slow && i >= 3 ? 37 : 64;
+      b.observe(snap(at, { loaded: loaded([ld({ busy: true, done, tps })]) }) as any, null);
+    }
+    return b.view();
+  };
+  const steady = run(false);
+  const slowed = run(true);
+  assert.deepEqual(slowCards(steady), []);
+  assert.deepEqual(slowCards(slowed), [SLOW()]);
+  assert.deepEqual(slowed.hints, steady.hints);
+  assert.deepEqual(slowed.hints, [{ id: 'p1', no: 'should rest (limits)' }]);
+});

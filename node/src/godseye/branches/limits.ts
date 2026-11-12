@@ -14,6 +14,18 @@
 //            throttled when its phone moved the work to the slow cores: each a warning and a card
 //            (weight 3, opens this page; at most 5). A stale or absent reading is no warning: its
 //            row says "health unknown". These change no hint: the deciding branches hear only "rest".
+//   slow     a device that slows down over a load (12.11.2026, field test selcukv1 T25: a Galaxy
+//            S25+ went 64 -> 46.5 -> 37 tok/s within three minutes, warm, while charging). Per device
+//            and load (its id, loaded.since and model.file), in memory only: a reading of its tok/s
+//            (work.loaded.devices[].tps; null, not a number or not above 0 is none) is taken when its
+//            answer counter rose or its tps changed since the last reading (the phone's own snapshot
+//            always sends done: 0), the first 3 and the last 29 kept, for at most 32 devices (the
+//            oldest goes). Where the load began is the median of the first 3 readings, now is the
+//            median of the last 3 after them: at least 6 readings. Now at or under 70% of where it
+//            began is a warning and a card (weight 2, opens this page, under the same cap of 5 as the
+//            health cards, none for an id a card cannot carry) giving both numbers and, from the
+//            phone's fresh health, hot or throttled, else its heat or "heat unknown". It ends when now
+//            is back to 85% or more, or on a reload, which starts the readings over. No hint either.
 // A feed line is written only when a warning starts or ends, never on every look.
 // Every value taken from the snapshot is checked first: a look without a usable at changes nothing,
 // a null or wrong-typed field counts as empty or unknown, and a device id, name or project id that
@@ -125,6 +137,32 @@ const healthWords = (h: Health | null): string => !h ? 'health unknown' : `healt
   h.battery == null ? 'battery unknown' : `battery ${Math.round(h.battery)}%${h.charging === true ? ' charging' : ''}`,
   h.throttled === true ? 'throttled' : h.throttled === false ? 'not throttled' : 'throttle unknown',
 ].join(', ')}`;
+
+/** a device that slows down over a load: now (the median of its last 3 readings) against where the
+ *  load began (the median of its first 3); at or under 70% warns, back to 85% or more ends it */
+export const SLOW_AT = 0.7;
+export const SLOW_END = 0.85;
+const SPEED_FIRST = 3;                          // readings that say where the load began
+const SPEED_LAST = 3;                           // readings that say where it is now
+const SPEED_AFTER_KEPT = 29;                    // readings kept after the first 3: 32 in all
+const SPEED_DEVICES = 32;                       // devices whose readings are kept; the oldest goes
+const TPS_MAX = 100_000;                        // a tok/s past this is not a reading
+type Speed = { load: string; first: number[]; after: number[]; lastTps: number | null; lastDone: number | null; slow: boolean };
+/** the middle value; NaN for none, so no comparison with it is ever true */
+export function median(xs: number[]): number {
+  const s = [...xs].sort((a, b) => a - b);
+  const n = s.length;
+  if (n === 0) return NaN;
+  return n % 2 ? s[(n - 1) / 2] : (s[n / 2 - 1] + s[n / 2]) / 2;
+}
+/** what the phone's fresh health says beside a slowdown: hot or throttled, else its heat */
+const slowHeat = (h: Health | null): string => {
+  const said: string[] = [];
+  if (h?.tempC != null && h.tempC > HOT_C) said.push(`hot (${round1(h.tempC)} °C)`);
+  if (h?.throttled === true) said.push('throttled');
+  if (said.length) return `its own signed health line says it is ${said.join(' and ')}`;
+  return h?.tempC != null ? `not hot (${round1(h.tempC)} °C)` : 'heat unknown';
+};
 
 const arrayOf = (raw: Record<string, unknown> | null, key: string): unknown[] => {
   const v = raw?.[key];
@@ -250,6 +288,7 @@ export function create(ctx: BranchCtx): Branch {
   const lastBusy = new Map<string, number>();           // when it was last seen busy
   const lastDone = new Map<string, number>();           // its answer counter at the last look
   const answers = new Map<string, number[]>();          // when each answer was counted, the last hour
+  const speeds = new Map<string, Speed>();              // its tok/s readings over the current load
 
   let warns = new Map<string, Warn>();
   let mems: Mem[] = [];
@@ -515,11 +554,13 @@ export function create(ctx: BranchCtx): Branch {
       cards = [];
       healthFresh = false;
       const healthSeen = new Set<string>();
+      const healthById = new Map<string, Health>();
       for (const d of devices) {
         if (!usableNamed(d) || healthSeen.has(d.id)) continue;
         healthSeen.add(d.id);
         const h = freshHealth(d.health, at);
         if (!h) continue;
+        healthById.set(d.id, h);
         healthFresh = true;
         const name = shownName(d);
         const card = (topic: string, title: string, why: string) => {
@@ -544,6 +585,56 @@ export function create(ctx: BranchCtx): Branch {
           card('throttled', `${name} is throttled`, `its own signed health line says its phone moved kula's work to the slow cores (battery saving or heat): its answers are slower until that ends.`);
         }
       }
+
+      // a device that slows down over a load (12.11.2026): its tok/s now against where the load
+      // began. a warning and a card after the health cards (same cap), and no hint
+      const since = l && isTime(l.since) ? l.since : null;
+      const file = l && isObject(l.model) && typeof l.model.file === 'string' ? l.model.file.slice(0, DEVICE_MAX) : null;
+      const load = JSON.stringify([since, file]);
+      const speedSeen = new Set<string>();
+      for (const d of loaded) {
+        if (!usableNamed(d) || speedSeen.has(d.id)) continue;
+        speedSeen.add(d.id);
+        let sp = speeds.get(d.id);
+        if (sp && sp.load !== load) { speeds.delete(d.id); sp = undefined; }   // a reload starts over
+        const tps = isNumber(d.tps) && d.tps > 0 && d.tps <= TPS_MAX ? d.tps : null;
+        if (tps != null) {
+          if (!sp) {
+            if (speeds.size >= SPEED_DEVICES) { const oldest = speeds.keys().next().value; if (oldest !== undefined) speeds.delete(oldest); }
+            sp = { load, first: [], after: [], lastTps: null, lastDone: null, slow: false };
+            speeds.set(d.id, sp);
+          }
+          const done = isNumber(d.done) && d.done >= 0 ? d.done : null;
+          const rose = done != null && sp.lastDone != null && done > sp.lastDone;
+          // a new reading only when an answer was done or the tps changed: a look repeating the
+          // last one is not a second reading of it
+          if (sp.lastTps == null || rose || tps !== sp.lastTps) {
+            if (sp.first.length < SPEED_FIRST) sp.first.push(tps);
+            else { sp.after.push(tps); if (sp.after.length > SPEED_AFTER_KEPT) sp.after.shift(); }
+            sp.lastTps = tps;
+            sp.lastDone = done;
+          }
+        }
+        if (!sp) continue;
+        if (sp.first.length < SPEED_FIRST || sp.after.length < SPEED_LAST) { sp.slow = false; continue; }
+        const began = median(sp.first);
+        const now2 = median(sp.after.slice(-SPEED_LAST));
+        if (!sp.slow && now2 <= SLOW_AT * began) sp.slow = true;
+        else if (sp.slow && now2 >= SLOW_END * began) sp.slow = false;
+        if (!sp.slow) continue;
+        const name = shownName(d);
+        const from = round1(began);
+        const to = round1(now2);
+        next.set(`slow:${d.id}`, { text: `${name} slowed down: ${from} -> ${to} tok/s since this load began`, ended: `${name} is no longer slowed down` });
+        if (CARD_DEVICE.test(d.id)) {
+          cards.push({
+            id: `limits:slow:${d.id}`, kind: 'warn', weight: 2, title: `${name} slowed down: ${from} -> ${to} tok/s`,
+            why: `${from} -> ${to} tok/s since this load began (the median of its first 3 readings against its last 3); ${slowHeat(healthById.get(d.id) ?? null)}. kula never stops it or moves its work: let it rest or cool, or leave it out of the next load.`,
+            action: { do: 'open', panel: 'branch', branch: 'limits' }, label: 'look',
+          });
+        }
+      }
+      for (const id of [...speeds.keys()]) if (!speedSeen.has(id)) speeds.delete(id);
 
       for (const [k, w] of next) if (!warns.has(k)) ctx.emit(`limits: ${w.text}`);
       for (const [k, w] of warns) if (!next.has(k)) ctx.emit(`limits: ${w.ended}`);
@@ -610,7 +701,7 @@ export function create(ctx: BranchCtx): Branch {
         ],
         lines,
         note: `it only warns, it never stops a device. heat, battery and throttling come from each phone's signed health lines (fresh for ${HEALTH_OLD_MS / 60_000} min)${pw ? ', and this device\'s own battery and heat from itself' : ''}; a phone's own brain does not see the other devices' health yet${devs.length ? '' : '; no model loaded, nothing is working'}.`,
-        what: 'keeps devices within their limits: memory, rest, the night window, an energy guess, and each phone\'s heat, battery and throttling from its own signed health lines.',
+        what: 'keeps devices within their limits: memory, rest, the night window, an energy guess, each phone\'s heat, battery and throttling from its own signed health lines, and a device that slows down over a load.',
         // for the deciding branches (peek): a device that should rest gets no new work suggested.
         // health warnings ("dev:") are cards for the person only, never a hint
         hints: [...warns.keys()].filter((k) => k.startsWith('rest:')).map((k) => ({ id: k.slice(5), no: 'should rest (limits)' })),
