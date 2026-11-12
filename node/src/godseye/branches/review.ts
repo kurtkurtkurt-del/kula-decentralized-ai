@@ -17,7 +17,9 @@
 // is shown with anything a sensitivity rule finds masked out.
 import type { Branch, BranchCtx, EyeDevice, EyeModel, EyeProject, Ring, Snapshot, Suggestion, SuggestAction } from '../types.js';
 import { hhmm, pct } from './util.js';
-import { RINGS, kindWords, masked, mayGo, parts, privateKinds, ringOf, sense, widest, type Level, type Parts } from './sensitivity.js';
+import { RINGS, kindWords, masked, mayGo, parts, privateKinds, ringOf, sense, widest, type Level, type Parts, type Sense } from './sensitivity.js';
+import { heldHere } from './decide.js';
+import { sha256Hex } from '../hash.js';
 
 export { masked } from './sensitivity.js';
 /** the private kinds of a text (e-mail, iban, card, phone, secret, …), in a fixed order */
@@ -35,7 +37,6 @@ const WORDS: Record<string, string> = {
   injection: 'it carries text that tries to give the model new orders',
   'send:circle': `private material would go to ${RING_WORDS.circle}`,
   'send:world': `material that is not for strangers would go to ${RING_WORDS.world}`,
-  'chat:circle': `a private chat would reach ${RING_WORDS.circle}`,
   'chat:world': `a private chat would reach ${RING_WORDS.world}`,
   relay: 'it would go over a relay',
   'no-tls': 'it would go to a device without a pinned certificate',
@@ -87,7 +88,8 @@ function projectDevices(p: EyeProject, s: Snapshot): (EyeDevice | undefined)[] {
 const ringsOf = (devs: (EyeDevice | undefined)[]): Ring[] => RINGS.filter((r) => r === 'home' || devs.some((d) => d && ringOf(d) === r));
 
 function fits(m: EyeModel, p: EyeProject, devs: EyeDevice[], s: Snapshot): boolean | null {
-  const host = s.host.freeMb;
+  // the runner unloads the model loaded now before it loads the project's: what it holds here is free then
+  const host = s.host.freeMb == null ? null : s.host.freeMb + heldHere(s);
   if (p.mode === 'here') return host == null ? null : host >= m.needMb;
   const rams = devs.map((d) => d.ramMb).filter((r): r is number => r != null);
   if (p.mode === 'split') {
@@ -100,10 +102,21 @@ function fits(m: EyeModel, p: EyeProject, devs: EyeDevice[], s: Snapshot): boole
   return sizes.some((r) => r >= m.needMb);
 }
 
-export function reviewProject(p: EyeProject, s: Snapshot): Verdict {
+/** what a project's title and request say: its level, kinds and flags, and its pieces per ring. Verdicts only, no text. */
+export interface Read extends Sense { parts: Parts | null }
+
+/** read a project's title and request (the costly part of a review: every finder over the whole text) */
+export function readRequest(p: EyeProject): Read {
+  const req = String(p.request ?? '').trim();
+  return { ...sense(`${String(p.title ?? '')}\n\n${req}`), parts: req ? parts(req) : null };
+}
+
+/** the key a read is kept under: a hash of the title and the request, never the text itself */
+export const readKey = (p: EyeProject): string => sha256Hex(JSON.stringify([String(p.title ?? ''), String(p.request ?? '')]));
+
+export function reviewProject(p: EyeProject, s: Snapshot, sn: Read = readRequest(p)): Verdict {
   const reasons: string[] = [];
   const req = String(p.request ?? '').trim();
-  const sn = sense(`${String(p.title ?? '')}\n\n${req}`);
   const devs = projectDevices(p, s);
   const rings = ringsOf(devs);
   if (sn.kinds.includes('secret')) reasons.push('secret');
@@ -117,7 +130,7 @@ export function reviewProject(p: EyeProject, s: Snapshot): Verdict {
   const m = s.models.find((x) => x.id === p.model);
   if (!m) reasons.push('unknown-model');
   else if (fits(m, p, devs.filter((d): d is EyeDevice => !!d), s) === false) reasons.push('too-big');
-  return { ok: reasons.length === 0, reasons, level: sn.level, kinds: sn.kinds, parts: req ? parts(req) : null, rings };
+  return { ok: reasons.length === 0, reasons, level: sn.level, kinds: sn.kinds, parts: sn.parts, rings };
 }
 
 /** a person's own chat runs now: something is being written and no night project is running */
@@ -135,8 +148,9 @@ function reviewLoaded(s: Snapshot): Verdict | null {
   if (!s.work.loaded) return null;
   const devs = loadedDevices(s);
   const rings = ringsOf(devs);
-  // a chat is the person's own: private by its nature, home only
-  const reasons = chatRuns(s) ? rings.filter((r) => r !== 'home').map((r) => `chat:${r}`) : [];
+  // a chat is the person's own: private by its nature. Only a ring that may not take private
+  // material warns (a friend's device may, the person's decision, 11.11.2026)
+  const reasons = chatRuns(s) ? rings.filter((r) => !mayGo('private', r)).map((r) => `chat:${r}`) : [];
   reasons.push(...whereReasons(devs));
   return { ok: reasons.length === 0, reasons, level: chatRuns(s) ? 'private' : 'world-ok', kinds: [], parts: null, rings };
 }
@@ -222,6 +236,18 @@ export function create(ctx: BranchCtx): Branch {
   let snap: Snapshot | null = null;
   // project id → its verdict, in memory only: never written to the notes file
   const verdicts = new Map<string, Verdict & { state: string }>();
+  // project id → what its title and request said, under a hash of them: a request is read once, not
+  // on every look (the finders over a long request held the eye's tick for a tenth of a second
+  // each). Only the hash and the verdicts are kept, never the text; one entry per current project.
+  const reads = new Map<string, { hash: string; read: Read }>();
+  const readOf = (p: EyeProject): Read => {
+    const hash = readKey(p);
+    const had = reads.get(p.id);
+    if (had && had.hash === hash) return had.read;
+    const read = readRequest(p);
+    reads.set(p.id, { hash, read });
+    return read;
+  };
   let loadedKey: string | null = null;
   let loaded: Verdict | null = null;
 
@@ -236,14 +262,15 @@ export function create(ctx: BranchCtx): Branch {
         // a finished project keeps the verdict it had while it could still run
         if (FINISHED.has(p.state)) {
           if (old) old.state = p.state;
-          else verdicts.set(p.id, { ...reviewProject(p, now), state: p.state });
+          else verdicts.set(p.id, { ...reviewProject(p, now, readOf(p)), state: p.state });
           continue;
         }
-        const v = reviewProject(p, now);
+        const v = reviewProject(p, now, readOf(p));
         if (!old || key(old) !== key(v)) ctx.emit(`${titleOf(p)} (${p.state}, ${hhmm(p.start)}): ${say(v)}`);
         verdicts.set(p.id, { ...v, state: p.state });
       }
       for (const id of [...verdicts.keys()]) if (!seen.has(id)) verdicts.delete(id);
+      for (const id of [...reads.keys()]) if (!seen.has(id)) reads.delete(id);
 
       loaded = reviewLoaded(now);
       const lk = loaded && now.work.loaded ? `${now.work.loaded.model.id}|${key(loaded)}` : null;

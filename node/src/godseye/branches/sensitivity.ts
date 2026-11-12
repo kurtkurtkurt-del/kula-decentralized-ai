@@ -45,6 +45,27 @@ const all = (re: RegExp, text: string, keep: (m: string) => boolean = () => true
 };
 const digits = (s: string) => s.replace(/\D/g, '');
 
+// e-mail addresses in linear time. The plain pattern restarts at every character of a long run with
+// no '@' in it (a DNA sequence, a hex dump) and scans it to its end again: quadratic. Every start
+// inside one run of local-part characters reaches the same '@' and the same domain, so a match can
+// only begin where such a run begins (the lookbehind) or right where the last match ended inside one
+// (the sticky try): the same matches as the plain pattern.
+const EMAIL = '[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\\.[A-Za-z0-9-]+)*\\.[A-Za-z]{2,}';
+const EMAIL_START = new RegExp(`(?<![A-Za-z0-9._%+-])${EMAIL}`, 'g');
+const EMAIL_GLUED = new RegExp(EMAIL, 'y');
+const LOCAL_CHAR = /[A-Za-z0-9._%+-]/;
+function emails(text: string): Span[] {
+  const out: Span[] = [];
+  for (let i = 0; ;) {
+    let m: RegExpExecArray | null = null;
+    if (i > 0 && LOCAL_CHAR.test(text[i - 1])) { EMAIL_GLUED.lastIndex = i; m = EMAIL_GLUED.exec(text); }
+    if (!m) { EMAIL_START.lastIndex = i; m = EMAIL_START.exec(text); }
+    if (!m) return out;
+    out.push([m.index, m.index + m[0].length]);
+    i = m.index + m[0].length;
+  }
+}
+
 function luhn(num: string): boolean {
   let sum = 0;
   for (let i = 0; i < num.length; i++) {
@@ -201,7 +222,7 @@ export interface Kind { kind: string; words: string; level: Level; find: Finder 
 
 /** every kind, in the order a span is claimed: a span counts once, for the first kind that finds it */
 export const KINDS: Kind[] = [
-  { kind: 'email', words: 'an e-mail address', level: 'private', find: (t) => all(/[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}/g, t) },
+  { kind: 'email', words: 'an e-mail address', level: 'private', find: emails },
   { kind: 'iban', words: 'an iban', level: 'private', find: (t) => all(/\b[A-Z]{2}\d{2}(?: ?[A-Z0-9]{4}){2,7}(?: ?[A-Z0-9]{1,4})?\b/gi, t, ibanOk) },
   { kind: 'card', words: 'a card number', level: 'private', find: (t) => all(/\b\d(?:[ -]?\d){12,18}\b/g, t, (m) => luhn(digits(m))) },
   { kind: 'tckn', words: 'a turkish id number', level: 'private', find: (t) => all(/\b[1-9]\d{10}\b/g, t, tcknOk) },

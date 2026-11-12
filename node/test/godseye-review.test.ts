@@ -11,7 +11,8 @@ const HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'kula-eye-review-'));
 after(() => fs.rmSync(HOME, { recursive: true, force: true }));
 
 const { GodsEye } = await import('../src/godseye/index.ts');
-const { create, personalKinds, masked } = await import('../src/godseye/branches/review.ts');
+const { create, personalKinds, masked, reviewProject } = await import('../src/godseye/branches/review.ts');
+const { KINDS } = await import('../src/godseye/branches/sensitivity.ts');
 
 const NOW = Date.UTC(2026, 10, 8, 20, 0);
 const H = 3600_000;
@@ -189,4 +190,78 @@ test('in the eye: the review tile is lit, no request text reaches the view, the 
   assert.ok(!all.includes(secret) && !all.includes('4111') && !all.includes('invoice sent'), 'no request text, no personal data');
   assert.equal(v.events.filter((e) => e.branch === 'review').length, 1);
   assert.ok(!fs.existsSync(path.join(dir, 'review.json')), 'no notes file');
+});
+
+// C2: a night project is measured against this computer as it will be once the loaded model goes
+// (the runner's load unloads it first), not against the memory free beside it now
+test('fits: a night model that fits once the loaded chat model is unloaded is not too big', () => {
+  const chat = { mode: 'here', model: { id: 'chat', name: 'Chat', file: 'chat.gguf', size: 5e9 }, ctx: 4096, since: 1, devices: [{ id: 'local', name: 'this computer', local: true, busy: false, tps: 10, done: 3 }] };
+  const work = { loaded: chat, loading: null, chatting: 0, plan: [], decisions: [], llama: true };
+  const models = [model({ id: 'chat', name: 'Chat', file: 'chat.gguf', needMb: 6000 }), model({ id: 'night', name: 'Night', file: 'night.gguf', needMb: 4000 }), model({ id: 'huge', name: 'Huge', file: 'huge.gguf', needMb: 12000 })];
+  const s = snap({
+    host: { name: 'mac', freeMb: 3000 }, devices: [dev({ ramMb: 500 })], work, models,
+    projects: [
+      project({ id: 'h', title: 'here', mode: 'here', peers: [], model: 'night' }),
+      project({ id: 's', title: 'split', mode: 'split', peers: ['p1'], model: 'night' }),
+      project({ id: 'a', title: 'apart', mode: 'apart', peers: ['p1'], model: 'night' }),
+      project({ id: 'x', title: 'huge', mode: 'here', peers: [], model: 'huge' }),
+    ],
+  }) as any;
+  const reasons = (id: string) => reviewProject(s.projects.find((p: any) => p.id === id), s).reasons;
+  assert.ok(!reasons('h').includes('too-big'), `here: ${reasons('h')}`);   // 3000 + 6000 ≥ 4000
+  assert.ok(!reasons('s').includes('too-big'), `split: ${reasons('s')}`);
+  assert.ok(!reasons('a').includes('too-big'), `apart: ${reasons('a')}`);
+  assert.ok(reasons('x').includes('too-big'), 'still too big when even the freed memory is short');
+});
+
+// C3: the e-mail finder is linear on a long run without a break, and gives the same matches as before
+const OLD_EMAIL = /[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}/g;
+const dna = (n: number) => Array.from({ length: n }, (_, i) => 'ACGT'[(i * 7 + (i >> 3)) % 4]).join('');
+const msPer = (f: () => void, reps = 3) => { const t0 = performance.now(); for (let i = 0; i < reps; i++) f(); return (performance.now() - t0) / reps; };
+
+test('the e-mail finder takes well under 200 ms on a 40 000-char unbroken run', () => {
+  const email = KINDS.find((k) => k.kind === 'email')!;
+  for (const run of [dna(40_000), 'a'.repeat(40_000), `${'a'.repeat(20_000)}@${'b'.repeat(20_000)}`, `x.${'a@'.repeat(20_000)}`]) {
+    const ms = msPer(() => email.find(run));
+    assert.ok(ms < 200, `${run.slice(0, 8)}…: ${ms.toFixed(1)} ms`);
+  }
+});
+
+test('the e-mail finder finds what the old pattern found, also addresses glued to another', () => {
+  const email = KINDS.find((k) => k.kind === 'email')!;
+  const old = (t: string) => [...t.matchAll(OLD_EMAIL)].map((m) => [m.index!, m.index! + m[0].length]);
+  const fixed = ['mail ayse.yilmaz@example.com.tr now', 'a@b.com.x@y.io', 'a@b.co-x@y.io', 'a@b.c@d.com', 'x@@c.io', '+a@b.io;c_d%e@f-g.h.io', 'ğabc@x.com', 'a@b', ''];
+  let seed = 7;
+  const rnd = () => (seed = (seed * 1103515245 + 12345) % 2 ** 31) / 2 ** 31;
+  const alpha = 'ab9.-_%+@ ğ';
+  const random = Array.from({ length: 3000 }, () => Array.from({ length: Math.floor(rnd() * 24) }, () => alpha[Math.floor(rnd() * alpha.length)]).join(''));
+  for (const t of [...fixed, ...random]) assert.deepEqual(email.find(t), old(t), JSON.stringify(t));
+});
+
+test('review: a second look with ten night projects that each carry a 4000-char sequence takes under 100 ms', () => {
+  const { b } = fake();
+  const projects = Array.from({ length: 10 }, (_, i) => project({ id: `p${i}`, title: `motifs ${i}`, request: `find motifs in ${dna(3980)}`, start: NOW + H + i, mode: 'here', peers: [] }));
+  b.observe(snap({ projects }) as any, null);   // the first look reads each request once
+  const ms = msPer(() => b.observe(snap({ at: NOW + 5000, projects }) as any, null));
+  assert.ok(ms < 100, `a look took ${Math.round(ms)} ms`);
+  // a changed request is read again
+  const changed = projects.map((p, i) => (i ? p : { ...p, request: `${p.request} mail ayse@example.com` }));
+  b.observe(snap({ at: NOW + 10000, projects: changed, devices: [dev({ ring: 'world' })] }) as any, null);
+  assert.match(b.view().lines.find((l) => l.includes('“motifs 0”'))!, /private \(an e-mail address\)/);
+});
+
+// C6: a friend's (circle) device may see a private chat (the person's decision, 11.11.2026)
+test('a chat with a friend’s device in the loaded work: no warning; a stranger’s device still warns', () => {
+  const loaded = (id: string) => ({ mode: 'apart', model: { id: 'qwen-1.5b', name: 'qwen 1.5b', file: 'q.gguf', size: 1e9 }, ctx: 4096, since: NOW, devices: [{ id: 'local', name: 'mac', local: true, busy: true, tps: 20, done: 1 }, { id, name: 'phone', local: false, busy: false, tps: 9, done: 1 }] });
+  const work = (id: string) => ({ loaded: loaded(id), loading: null, chatting: 1, plan: [], decisions: [], llama: true });
+  const friend = fake();
+  friend.b.observe(snap({ projects: [], devices: [dev({ id: 'f1', ring: 'circle' })], work: work('f1') }) as any, null);
+  const v = friend.b.view();
+  assert.doesNotMatch(v.lines[0], /friend’s device|look again/);
+  assert.equal(friend.events.length, 0);
+  assert.ok(!JSON.stringify(friend.events).includes('friend’s device'));
+  const stranger = fake();
+  stranger.b.observe(snap({ projects: [], devices: [dev({ id: 'w1', ring: 'world' })], work: work('w1') }) as any, null);
+  assert.match(stranger.b.view().lines[0], /look again: a private chat would reach a stranger’s device \(world\)/);
+  assert.match(stranger.events[0], /a private chat would reach a stranger’s device \(world\)/);
 });
