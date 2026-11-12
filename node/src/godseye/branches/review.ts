@@ -193,7 +193,9 @@ function homeOnly(s: Snapshot): SuggestAction | null {
   const home = loadedDevices(s).filter((d): d is EyeDevice => !!d && ringOf(d) === 'home').map((d) => d.id);
   const mode = l.mode === 'phone' || l.mode === 'apart' || l.mode === 'split' || l.mode === 'here' ? l.mode : null;
   if (!mode) return null;
-  if (home.length && mode !== 'here') return { do: 'load', model: l.model.id, mode, devices: mode === 'phone' ? home.slice(0, 1) : home, ctx: l.ctx };
+  // kula's engine runs this computer in apart unless told so: an apart load it was not in keeps it out
+  const out = mode === 'apart' && ![...l.devices, ...(l.parts ?? [])].some((d) => d.local) ? { here: false as const } : {};
+  if (home.length && mode !== 'here') return { do: 'load', model: l.model.id, mode, devices: mode === 'phone' ? home.slice(0, 1) : home, ctx: l.ctx, ...out };
   const here = s.models.find((m) => m.id === l.model.id)?.here;
   if (s.work.llama && here) return { do: 'load', model: l.model.id, mode: 'here', devices: [], ctx: l.ctx };
   return null;

@@ -12,7 +12,7 @@
 // Each card holds SHOW looks before it shows and goes HIDE looks after, with SLACK to stay.
 // Notes: when photos last came, and when one could not be seen (the engine's counts restart with it).
 import type { Branch, BranchCtx, BranchView, EyeModel, Snapshot, SuggestAction, Suggestion } from '../types.js';
-import { SLACK, Steady, alone, canAlone, canApart, cardId, field, gb1, heldHere, modelOf, seatName, tpsOn, tpsWord, type Field, type Seat } from './decide.js';
+import { SLACK, Steady, alone, canAlone, canApart, cardId, field, gb1, heldHere, loadAction, modelOf, seatName, tpsOn, tpsWord, type Field, type Place, type Seat } from './decide.js';
 import { seatedIds } from './planner.js';
 
 export const BIGGER = 1.3;          // a model this much bigger (memory) is worth the change
@@ -27,6 +27,8 @@ const sane = (x: unknown): Notes => {
 };
 
 const bySize = (a: EyeModel, b: EyeModel) => b.needMb - a.needMb;
+/** a load on this computer of a model not here downloads it first (kula's engine): say so and how big */
+const fetchedFirst = (m: EyeModel, seats: Seat[]) => (!m.here && seats.some((x) => x.local) ? `it is fetched first (${gb1(m.size / 1048576)})` : null);
 
 export function create(ctx: BranchCtx): Branch {
   const notes = sane(ctx.load<unknown>(null));
@@ -74,13 +76,14 @@ export function create(ctx: BranchCtx): Branch {
         // bigger: fits every place it runs on
         const big = models.find((m) => m.id !== cur.id && m.needMb >= cur.needMb * BIGGER && fits(m));
         if (big) {
+          const fetch = fetchedFirst(big, seats);
           const t0 = seats.map((x) => tpsOn(x, cur)), t1 = seats.map((x) => tpsOn(x, big));
           const slower = t0[0] != null && t1[0] != null ? ` it answers slower: ~${t1[0]} tok/s instead of ~${t0[0]} on ${seatName(s, seats[0])}.` : '';
           out.push({
             id: cardId('models', 'bigger', big.id), kind: 'suggest', weight: 1, label: 'load',
-            action: { do: 'load', model: big.id, mode: L.mode as 'apart', devices: seats.filter((x) => !x.local).map((x) => x.id) },
+            action: loadAction(big, L.mode as Place['mode'], seats),
             title: `${big.name} fits where ${cur.name} runs now`,
-            why: `it needs about ${gb1(big.needMb)} (${cur.name} ${gb1(cur.needMb)}); ${seats.map((x) => `${seatName(s, x)} offers ${gb1(x.capMb)}`).join(', ')}. a bigger model usually answers better.${slower}`,
+            why: `it needs about ${gb1(big.needMb)} (${cur.name} ${gb1(cur.needMb)}); ${seats.map((x) => `${seatName(s, x)} offers ${gb1(x.capMb)}`).join(', ')}. a bigger model usually answers better.${slower}${fetch ? ` ${fetch}.` : ''}`,
           });
         }
       }
@@ -93,12 +96,16 @@ export function create(ctx: BranchCtx): Branch {
           const dropped = strict ? x.ramMb < was * DROP : x.ramMb < was * (DROP + (1 - DROP) / 2);
           if (!over || !dropped) continue;
           const seatsAll = seatsNow(s, fl) ?? [x];
-          const smaller = models.find((m) => m.needMb < cur.needMb && m.needMb > 0 && seatsAll.every((y) => (L.mode === 'apart' ? canApart(y, m) : canAlone(y, m))));
-          const act: SuggestAction = smaller ? { do: 'load', model: smaller.id, mode: L.mode as 'apart', devices: seatsAll.filter((y) => !y.local).map((y) => y.id) } : { do: 'unload' };
+          const fitsAll = (m: EyeModel) => m.needMb < cur.needMb && m.needMb > 0 && seatsAll.every((y) => (L.mode === 'apart' ? canApart(y, m) : canAlone(y, m)));
+          // on this computer, one already here first: the fix for a memory warning is not a download
+          const local = seatsAll.some((y) => y.local);
+          const smaller = (local ? models.find((m) => m.here && fitsAll(m)) : undefined) ?? models.find(fitsAll);
+          const fetch = smaller ? fetchedFirst(smaller, seatsAll) : null;
+          const act: SuggestAction = smaller ? loadAction(smaller, L.mode as Place['mode'], seatsAll) : { do: 'unload' };
           out.push({
             id: cardId('models', 'tight', x.id), kind: 'warn', weight: 3, action: act, label: smaller ? `load ${smaller.name}`.slice(0, 24) : 'unload',
             title: `${cur.name} no longer fits ${seatName(s, x)}: ${gb1(x.ramMb)} free now, ${gb1(was)} when it loaded`,
-            why: `it needs about ${gb1(cur.needMb)}, more than the ${gb1(x.capMb)} kula would give it now: answers may crawl or fail.${smaller ? ` ${smaller.name} (${gb1(smaller.needMb)}) fits.` : ''}`,
+            why: `it needs about ${gb1(cur.needMb)}, more than the ${gb1(x.capMb)} kula would give it now: answers may crawl or fail.${smaller ? ` ${smaller.name} (${gb1(smaller.needMb)}) fits${fetch ? `; ${fetch}` : ''}.` : ''}`,
           });
         }
       }

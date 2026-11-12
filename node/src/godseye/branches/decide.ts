@@ -153,7 +153,7 @@ export interface Place {
 
 /** apart without this computer's seat says here:false: kula's engine runs this computer in apart
  *  unless told so, and the card names only its seats (finding C1) */
-const loadAction = (m: EyeModel, mode: Place['mode'], seats: Seat[]): SuggestAction =>
+export const loadAction = (m: EyeModel, mode: Place['mode'], seats: Seat[]): SuggestAction =>
   ({ do: 'load', model: m.id, mode, devices: seats.filter((x) => !x.local).map((x) => x.id), ...(mode === 'apart' && !seats.some((x) => x.local) ? { here: false as const } : {}) });
 
 /** the fastest seat that runs it whole (unknown speeds last, then the most room) */

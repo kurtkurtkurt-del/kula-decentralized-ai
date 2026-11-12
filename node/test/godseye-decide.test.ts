@@ -323,7 +323,7 @@ test('models: nothing loaded: the biggest model that fits a place; loaded: a cle
   v = branch(models.create).look(snap({ work: { llama: false, loaded: loaded(QWEN17, 'apart', [on('p1', 'pixel', 18), on('p2', 'galaxy', 17)]) } }));
   c = v.suggestions.find((x: any) => x.id === 'models:bigger:gemma3-4b');
   assert.equal(c.title, 'Gemma 3 4B fits where Qwen3 1.7B runs now');
-  assert.deepEqual(c.action, { do: 'load', model: 'gemma3-4b', mode: 'apart', devices: ['p1', 'p2'] });
+  assert.deepEqual(c.action, { do: 'load', model: 'gemma3-4b', mode: 'apart', devices: ['p1', 'p2'], here: false });   // this computer is no seat (llama off): it stays out
   accepted(v, 'models');
   // galaxy has too little: Gemma does not fit every place, no card
   v = branch(models.create).look(snap({ devices: [dev(), dev({ id: 'p2', name: 'galaxy', ramMb: 3000 })], work: { llama: false, loaded: loaded(QWEN17, 'apart', [on('p1', 'pixel', 18), on('p2', 'galaxy', 17)]) } }));
@@ -354,7 +354,7 @@ test('models: memory dropped since the load and the model no longer fits this co
   const c = v.suggestions.find((x: any) => x.id === 'models:tight:local');
   assert.equal(c.kind, 'warn');
   assert.equal(c.title, 'Gemma 3 4B no longer fits mac: 3.8 GB free now, 9.2 GB when it loaded');
-  assert.deepEqual(c.action, { do: 'load', model: 'qwen3-1.7b', mode: 'here', devices: [] });
+  assert.deepEqual(c.action, { do: 'load', model: 'qwen3-0.6b', mode: 'here', devices: [] });   // a smaller model already here, not a download (D7)
   accepted(v, 'models');
 });
 

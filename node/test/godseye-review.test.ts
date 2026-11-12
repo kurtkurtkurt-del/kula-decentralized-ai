@@ -265,3 +265,21 @@ test('a chat with a friend’s device in the loaded work: no warning; a stranger
   assert.match(stranger.b.view().lines[0], /look again: a private chat would reach a stranger’s device \(world\)/);
   assert.match(stranger.events[0], /a private chat would reach a stranger’s device \(world\)/);
 });
+
+// P15 (P8 note a): kula's engine runs this computer in apart unless told so; keep-home on an apart
+// load that left this computer out keeps it out, and one that had it keeps it in
+test('keep it home on apart: here:false only when this computer was not in the loaded work', () => {
+  const row = (id: string, name: string, local = false) => ({ id, name, local, busy: false, tps: 9, done: 1 });
+  const work = (devices: unknown[]) => ({ loaded: { mode: 'apart', model: { id: 'qwen-1.5b', name: 'qwen 1.5b', file: 'q.gguf', size: 1e9 }, ctx: 4096, since: NOW, devices }, loading: null, chatting: 1, plan: [], decisions: [], llama: true });
+  const devices = [dev({ id: 'h1', name: 'tablet', ring: 'home' }), dev({ id: 'w1', name: 'phone', ring: 'world' })];
+  const out = fake();
+  out.b.observe(snap({ projects: [], devices, work: work([row('h1', 'tablet'), row('w1', 'phone')]) }) as any, null);
+  const c = out.b.view().suggestions.find((x: any) => x.id === 'review:private-chat');
+  assert.ok(c, 'no private-chat card');
+  assert.deepEqual(c.action, { do: 'load', model: 'qwen-1.5b', mode: 'apart', devices: ['h1'], ctx: 4096, here: false });
+  const inn = fake();
+  inn.b.observe(snap({ projects: [], devices, work: work([row('local', 'mac', true), row('h1', 'tablet'), row('w1', 'phone')]) }) as any, null);
+  const d = inn.b.view().suggestions.find((x: any) => x.id === 'review:private-chat');
+  assert.ok(d, 'no private-chat card');
+  assert.deepEqual(d.action, { do: 'load', model: 'qwen-1.5b', mode: 'apart', devices: ['h1'], ctx: 4096 });
+});
