@@ -92,12 +92,25 @@ export function kulaSnapshot(engine: Engine, projects: ProjectRunner, now = Date
   const st = engine.status();
   let freeMb: number | null = null;
   try { freeMb = freeRamMB(); } catch {}
+  // one id per device (G1, 12 Nov): status().loaded and a project's peers name a device by the
+  // record of the route it went over, a row by its group's first record. A phone with a cable and
+  // a wi-fi record loaded over wi-fi is the same device; every id the eye gets is the row's id.
+  // An id no row knows ('local', a forgotten device) passes through unchanged.
+  const rows = engine.peers();
+  const rowOf = new Map<string, string>();
+  for (const r of rows) for (const id of [r.id, ...(r.routes ?? [])]) if (!rowOf.has(id)) rowOf.set(id, r.id);
+  const idOf = (id: string) => rowOf.get(id) ?? id;
+  const loaded = st.loaded ? {
+    ...st.loaded,
+    devices: st.loaded.devices.map((d) => ({ ...d, id: idOf(d.id) })),
+    ...(st.loaded.parts ? { parts: st.loaded.parts.map((p) => ({ ...p, id: idOf(p.id) })) } : {}),
+  } : null;
   return structuredClone({
     at: now,
     host: { name: hostLabel(), freeMb, ledger: hostLedger() },
-    devices: engine.peers().map((p) => deviceOf(p, engine.trustOf(p.id))),
-    work: { loaded: st.loaded, loading: st.loading, chatting: st.chatting, plan: st.plan, decisions: st.decisions, llama: st.llama, photos: engine.photos() },
+    devices: rows.map((p) => deviceOf(p, engine.trustOf(p.id))),
+    work: { loaded, loading: st.loading, chatting: st.chatting, plan: st.plan, decisions: st.decisions, llama: st.llama, photos: engine.photos() },
     models: engine.models().map((m) => ({ id: m.id, name: m.name, file: m.file, size: m.size, quant: m.quant, params_b: m.params_b, catalog: m.catalog, here: m.here, needMb: m.needMb, active_b: m.active_b, vision: m.vision })),
-    projects: projects.list().map((p) => ({ id: p.id, title: p.title, request: p.request, start: p.start, end: p.end, state: p.state, mode: p.mode, model: p.model, peers: p.peers, parts: p.parts, done: p.done, line: p.line, error: p.error })),
+    projects: projects.list().map((p) => ({ id: p.id, title: p.title, request: p.request, start: p.start, end: p.end, state: p.state, mode: p.mode, model: p.model, peers: p.peers.map(idOf), parts: p.parts, done: p.done, line: p.line, error: p.error })),
   });
 }
