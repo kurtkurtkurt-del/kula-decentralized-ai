@@ -127,14 +127,56 @@ export function cutTorn(file: string): number {
   } finally { fs.closeSync(fd); }
 }
 
+// Before the signed ledger (5 Nov 2026) the gate wrote its raw events into ledger.jsonl,
+// unsigned: {"type":"open","channel":"rpc","peer":...}. A chain started on top of them can never
+// verify. Such a file, when it is the whole chain, is set aside whole (renamed, never deleted, so
+// it can still be read) and the new chain's first line says which file went, its lines and its
+// sha256, signed. Only that old shape counts: a ledger whose signed lines were changed stays
+// broken and says so.
+const LEGACY_TYPES = ['open', 'close', 'reject', 'pair'];
+export function isLegacy(file: string): boolean {
+  let head = '';
+  try {
+    const fd = fs.openSync(file, 'r');
+    try { const b = Buffer.alloc(4096); head = b.subarray(0, fs.readSync(fd, b, 0, b.length, 0)).toString('utf8'); } finally { fs.closeSync(fd); }
+  } catch { return false; }
+  const first = head.split('\n')[0];
+  let obj: any;
+  try { obj = JSON.parse(first); } catch { return false; }
+  return !!obj && typeof obj === 'object' && LEGACY_TYPES.includes(obj.type) && !('kind' in obj) && !('sig' in obj) && !('prev' in obj);
+}
+
+export interface SetAside { file: string; lines: number; sha256: string }
+export function setAsideLegacy(file: string, now: () => number = Date.now): SetAside | null {
+  if (chainFiles(file).length !== 1 || !isLegacy(file)) return null;
+  const text = fs.readFileSync(file, 'utf8');
+  const dir = path.dirname(file);
+  const base = path.basename(file, '.jsonl');
+  let stamp = now();
+  let target = path.join(dir, `${base}.unsigned-${stamp}.jsonl`);
+  while (fs.existsSync(target)) target = path.join(dir, `${base}.unsigned-${++stamp}.jsonl`);
+  fs.renameSync(file, target);
+  return { file: path.basename(target), lines: text.split('\n').filter((l) => l.length > 0).length, sha256: sha256Hex(text) };
+}
+
+// For the readers (kula-node ledger --verify, the brain, the dashboard): a ledger still in the
+// old unsigned shape is settled before it is checked. False when there was nothing to do.
+export function settleLegacy(file: string, key: DeviceKey): boolean {
+  if (!isLegacy(file)) return false;
+  return !!new Ledger(file, key).setAside;
+}
+
 export class Ledger {
   private prev: string;
   private size: number;
   // an append threw (disk full, killed write): look for a torn line before the next one
   private dirty = false;
+  // the old unsigned file this ledger set aside when it opened (null: there was none)
+  readonly setAside: SetAside | null;
 
   constructor(readonly file: string, readonly key: DeviceKey, readonly now: () => number = Date.now, readonly rotateBytes = ROTATE_BYTES) {
     fs.mkdirSync(path.dirname(file), { recursive: true });
+    this.setAside = setAsideLegacy(file, now);
     const torn = cutTorn(file);
     // the live file may hold nothing yet (or nothing whole) after a rotation: then the
     // chain goes on from the newest rotated file
@@ -143,6 +185,7 @@ export class Ledger {
     this.prev = last ? sha256Hex(last) : GENESIS;
     try { this.size = fs.statSync(file).size; } catch { this.size = 0; }
     // the cut is itself written down and signed
+    if (this.setAside) this.append('health', 'self', { setAside: this.setAside.file, lines: this.setAside.lines, sha256: this.setAside.sha256 });
     if (torn > 0) this.append('health', 'self', { torn });
   }
 

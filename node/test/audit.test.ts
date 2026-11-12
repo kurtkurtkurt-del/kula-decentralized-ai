@@ -7,7 +7,7 @@ import net from 'node:net';
 import { createPublicKey } from 'node:crypto';
 import vectors from './audit-vectors.json' with { type: 'json' };
 import { fromSeed, generate, loadOrCreate, loadOrCreateKey, publicKeyDer, signText, verifyText } from '../src/audit/key.ts';
-import { Ledger, GENESIS, makeLine, sha256Hex, verifyChain, verifyLines, chainFiles, readLines } from '../src/audit/ledger.ts';
+import { Ledger, GENESIS, makeLine, sha256Hex, verifyChain, verifyLines, chainFiles, readLines, isLegacy } from '../src/audit/ledger.ts';
 import { loadOrCreateIdentity } from '../src/tls.ts';
 import { ReplayCheck, clockCheck, claimCheck, modelCheck, boundsCheck, healthWarnings } from '../src/audit/checks.ts';
 import { Auditor } from '../src/audit/auditor.ts';
@@ -318,4 +318,65 @@ test('a broken gate key is moved aside the same way and gets a new certificate',
   assert.equal(fs.readdirSync(dir).filter((n) => /^gate_key\.pem\.broken\.\d+$/.test(n)).length, 1);
   assert.equal(loadOrCreateIdentity(dir, ed, () => {}).fp, b.fp);
   fs.rmSync(dir, { recursive: true, force: true });
+});
+
+// selcukv1 (11 Nov), T19: the Mac's ledger.jsonl began with 24 unsigned gate lines from before the
+// signed ledger, so --verify said "broken" for good and the trust branch never let go.
+test('a ledger that starts with the old unsigned gate lines is set aside whole, the new chain says so and verifies; a tampered signed ledger stays broken', async () => {
+  const dir = tmp();
+  process.env.KULA_NODE_HOME = dir;
+  try {
+    const { ledgerCommand } = await import('../src/ledgercmd.ts');
+    const key = loadOrCreate(path.join(dir, 'device_key.pem'));
+    const file = path.join(dir, 'ledger.jsonl');
+    const old = [
+      '{"type":"open","channel":"rpc","peer":"10.0.80.200","at":1793831037593}',
+      '{"type":"close","channel":"rpc","peer":"10.0.80.200","at":1793831037594,"ms":1,"bytesIn":0,"bytesOut":0}',
+      '{"type":"reject","channel":"api","peer":"10.0.80.200","at":1793831037648,"reason":"wrong secret"}',
+    ].join('\n') + '\n';
+    fs.writeFileSync(file, old);
+    // a signed line chained on top of them, as the Mac's was
+    fs.appendFileSync(file, makeLine(key, 1793870640561, 'claim', 'self', { what: 'ram', claimed: 1, measured: 1, level: 'ok' }, sha256Hex(old.trim().split('\n').at(-1)!)).line + '\n');
+    assert.equal(isLegacy(file), true);
+    let out: string[] = [];
+    assert.equal(ledgerCommand({ verify: true }, (s) => out.push(s)), 0);
+    assert.ok(out.some((l) => /set aside the old unsigned lines/.test(l)));
+    assert.match(out.at(-1)!, /^ledger ok: 1 lines/);
+    const aside = fs.readdirSync(dir).filter((n) => /^ledger\.unsigned-\d+\.jsonl$/.test(n));
+    assert.equal(aside.length, 1);
+    const kept = fs.readFileSync(path.join(dir, aside[0]), 'utf8');
+    assert.ok(kept.startsWith(old), 'the old lines are kept, not deleted');
+    const first = JSON.parse(readLines(file)[0]);
+    assert.equal(first.kind, 'health');
+    assert.equal(first.setAside, aside[0]);
+    assert.equal(first.lines, 4);
+    assert.equal(first.sha256, sha256Hex(kept));
+    assert.equal(first.prev, GENESIS);
+    // a second check finds nothing to do and the chain goes on
+    out = [];
+    assert.equal(ledgerCommand({ verify: true }, (s) => out.push(s)), 0);
+    assert.ok(!out.some((l) => /set aside/.test(l)));
+    new Ledger(file, key).append('health', 'self', { i: 1 });
+    assert.equal(verifyChain(file, key.publicKey).ok, true);
+
+    // a signed ledger whose first line was changed is not in the old shape: it stays broken
+    const dir2 = tmp();
+    const f2 = path.join(dir2, 'ledger.jsonl');
+    const l2 = new Ledger(f2, key);
+    l2.append('health', 'self', { i: 1 });
+    l2.append('health', 'self', { i: 2 });
+    const lines = readLines(f2);
+    lines[0] = lines[0].replace('"i":1', '"i":9');
+    fs.writeFileSync(f2, lines.join('\n') + '\n');
+    assert.equal(isLegacy(f2), false);
+    assert.equal(new Ledger(f2, key).setAside, null);
+    assert.equal(verifyChain(f2, key.publicKey).ok, false);
+    // an old-looking line that carries a signature or a prev is not the old shape either
+    fs.writeFileSync(f2, '{"type":"open","peer":"x","prev":"00","sig":"AA=="}\n');
+    assert.equal(isLegacy(f2), false);
+    fs.rmSync(dir2, { recursive: true, force: true });
+  } finally {
+    delete process.env.KULA_NODE_HOME;
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });

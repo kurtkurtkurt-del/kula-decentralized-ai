@@ -8,7 +8,7 @@ import { DashboardState, peerView, readPassport, type LedgerView, type SelfView 
 import { readPeers, probePeers, writePeers, type Peer } from '../peers.js';
 import { ledgerFile } from '../ledgercmd.js';
 import { loadOrCreate } from '../audit/key.js';
-import { chainFiles, readLines, verifyChain } from '../audit/ledger.js';
+import { chainFiles, readLines, settleLegacy, verifyChain } from '../audit/ledger.js';
 import { totalRamMB } from '../sysinfo.js';
 
 export const DASHBOARD_PORT = 50580;
@@ -20,6 +20,7 @@ export function selfView(x: { name: string; id: string; host: string | null; ram
 
 export function ledgerView(verify = false, tail = 12): LedgerView {
   const file = ledgerFile();
+  if (verify) { try { settleLegacy(file, loadOrCreate()); } catch {} }
   const lines = readLines(file);
   const view: LedgerView = { file, lines: lines.slice(-tail), total: chainFiles(file).reduce((n, f) => n + readLines(f).length, 0), verify: null };
   if (verify) {

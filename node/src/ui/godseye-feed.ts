@@ -11,7 +11,7 @@ import type { EyeDevice, EyeTrust, Snapshot } from '../godseye/index.js';
 import { freeRamMB } from '../sysinfo.js';
 import { ledgerFile } from '../ledgercmd.js';
 import { loadOrCreate } from '../audit/key.js';
-import { chainFiles, verifyChain } from '../audit/ledger.js';
+import { chainFiles, settleLegacy, verifyChain } from '../audit/ledger.js';
 
 const trustOf = (t: TrustLook | null): EyeTrust | null => (t ? { ...t, lines: [...t.lines], rejectsDay: { ...t.rejectsDay }, rejectsLast: t.rejectsLast.map((r) => ({ ...r })), attest: t.attest ? { ...t.attest } : null } : null);
 
@@ -19,6 +19,7 @@ const trustOf = (t: TrustLook | null): EyeTrust | null => (t ? { ...t, lines: [.
 let hostLedgerSeen: { stamp: string; v: Snapshot['host']['ledger'] } | null = null;
 export function hostLedger(file = ledgerFile()): Snapshot['host']['ledger'] {
   if (!fs.existsSync(file)) return null;
+  try { settleLegacy(file, loadOrCreate()); } catch {}
   const stamp = chainFiles(file).map((f) => { try { const s = fs.statSync(f); return `${f}:${s.size}:${s.mtimeMs}`; } catch { return f; } }).join('|');
   if (hostLedgerSeen?.stamp === stamp) return hostLedgerSeen.v;
   let v: Snapshot['host']['ledger'];
