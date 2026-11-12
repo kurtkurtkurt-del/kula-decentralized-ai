@@ -236,6 +236,46 @@ test('a stale probe is not a look: 3 h of 5 s looks with a fixed checkedAt fold 
   assert.deepEqual(run(() => undefined), ['21', '22', '23']);
 });
 
+test('a device in the current load is there even with a stale probe: the engine does not probe a device in use (lookOnce), nor a cable one', () => {
+  const start = hourAt(0, 21);
+  // a cable-only phone: one record, so the feed's device id and the load's id are the same record id
+  const ID = 'cable:R3CW70ABCDE';
+  const phone = (o: Record<string, unknown> = {}) => dev({ id: ID, name: 'SM S936B', via: 'cable', where: 'usb', plugged: true, checkedAt: start - 10 * 60_000, ...o });
+  const seat = (o: Record<string, unknown> = {}) => ({ id: ID, name: 'SM S936B', local: false, busy: true, tps: null, done: 0, ...o });
+  const here = { id: 'local', name: 'this computer', local: true, busy: false, tps: null, done: 0 };
+  const run = (devices: (at: number) => any[], loaded: any[] | null) => {
+    const { c, ctx } = fakeCtx();
+    const b = create(ctx);
+    const end = start + 3 * 3600_000;
+    for (let at = start; at <= end; at += 5000) {
+      if (at === end) c.t += 61_000;                                                      // the last look saves
+      b.observe(snap(devices(at), at, loaded ? loadedWith(loaded) : null), null);
+    }
+    return (c.stored as any)?.dev ?? {};
+  };
+  const slots = (notes: any, id: string) => Object.fromEntries(Object.entries(notes[id]?.slots ?? {}).map(([k, v]: any) => [k, v.slice(0, 2)]));
+  const there3 = { 21: [1, 1], 22: [1, 1], 23: [1, 1] };
+  // working in the load with a probe 10 min old: there every look, its hours fold as there
+  assert.deepEqual(slots(run(() => [phone()], [here, seat()]), ID), there3);
+  // the old probe's answer does not matter while it works (false, or never answered)
+  assert.deepEqual(slots(run(() => [phone({ reachable: false, reason: 'timeout' })], [seat()]), ID), there3);
+  assert.deepEqual(slots(run(() => [phone({ reachable: null, checkedAt: null })], [seat()]), ID), there3);
+  // out of the load the 120 s rule stands: no load, or a load on other seats only
+  assert.deepEqual(slots(run(() => [phone()], null), ID), {});
+  assert.deepEqual(slots(run(() => [phone()], [here, seat({ id: '192.168.1.40:50551', name: 'pixel 7' })]), ID), {});
+  // a local entry in the load changes nothing for the others, even one carrying the same id
+  assert.deepEqual(slots(run(() => [phone()], [here]), ID), {});
+  assert.deepEqual(slots(run(() => [phone()], [seat({ local: true })]), ID), {});
+  // a fresh probe still speaks for itself: a seat that a probe just found gone is not there
+  assert.deepEqual(slots(run((at) => [phone({ reachable: false, reason: 'timeout', checkedAt: at })], [seat()]), ID), { 21: [1, 0], 22: [1, 0], 23: [1, 0] });
+  // an unplugged cable phone is not there, load or not (util.active's own rule)
+  assert.deepEqual(slots(run(() => [phone({ plugged: false })], [seat()]), ID), { 21: [1, 0], 22: [1, 0], 23: [1, 0] });
+  // the others are untouched: a fresh wi-fi phone beside the working one folds as before
+  const both = run((at) => [phone(), dev({ id: '192.168.1.40:50551', name: 'pixel 7', checkedAt: at })], [here, seat()]);
+  assert.deepEqual(slots(both, '192.168.1.40:50551'), there3);
+  assert.deepEqual(slots(both, ID), there3);
+});
+
 test('a feed line when the firm guess flips, with the interval, not on every look', () => {
   const { c, ctx } = fakeCtx();
   const b = create(ctx);

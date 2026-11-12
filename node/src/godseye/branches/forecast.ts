@@ -2,7 +2,10 @@
 // beta-binomial per device and hour of the week:
 //  - slot = hour of the week, 0..167 = day (0 = sunday, local clock of snapshot.at) * 24 + hour.
 //    While the slot of snapshot.at stays the same, accumulate per device cur = { slot, looks, there }
-//    (there: util.active(dev); a look with reachable == null says nothing and is skipped). When a
+//    (there: util.active(dev); a look with reachable == null, or a probe more than 120 s from the
+//    look, says nothing and is skipped; a device working in the current load, work.loaded.devices
+//    without local entries, is there instead unless a fresh probe says otherwise or its cable is
+//    plugged out: the engine does not probe a device in use). When a
 //    look falls in another slot (or the same slot number but more than one hour later), fold the
 //    finished one: if cur.looks >= 12, x = there/looks is ONE observation of weight 1 for that slot:
 //    with dtWeeks = max(0, (tFold - slot.t) / (7*24*3600*1000)) and d = 0.5 ** (dtWeeks / HALF_LIFE_WEEKS),
@@ -321,6 +324,19 @@ function tonightOf(d: DevNotes, at: number): { N: number; mean: number; lo: numb
   return { N: pr.N, mean, lo, hi, guess, night, hours };
 }
 
+/** the ids of the other devices the current load sits on (work.loaded.devices, local entries left
+ *  out), matched to the snapshot's devices by id as limits and planner do */
+function seatedIds(snap: Snapshot): Set<string> {
+  const out = new Set<string>();
+  const L = snap.work && typeof snap.work === 'object' ? snap.work.loaded : null;
+  if (!L || typeof L !== 'object' || !Array.isArray(L.devices)) return out;
+  for (const ld of L.devices) {
+    if (!ld || typeof ld !== 'object' || ld.local === true) continue;
+    if (typeof ld.id === 'string' && ld.id.length > 0 && ld.id.length <= MAX_ID) out.add(ld.id);
+  }
+  return out;
+}
+
 export function create(ctx: BranchCtx): Branch {
   const notes = sane(ctx.load<unknown>(null));
   let snap: Snapshot | null = null;
@@ -369,11 +385,17 @@ export function create(ctx: BranchCtx): Branch {
       snap = now;
       notes.lastGood = now.at;
       const slot = slotOf(now.at);
+      const working = seatedIds(now);
       for (const { id, name, dev } of snapshotDevices(now)) {
-        if (typeof dev.reachable !== 'boolean') continue;            // not looked at, or not a real answer
         // a probe carried along unchanged (the page closed overnight) is not a look at this time:
         // only one within STALE_MS of the look, either way, counts. no checkedAt: as before
-        if (typeof dev.checkedAt === 'number' && !(Math.abs(dev.checkedAt - now.at) <= STALE_MS)) continue;
+        const fresh = typeof dev.reachable === 'boolean'
+          && !(typeof dev.checkedAt === 'number' && !(Math.abs(dev.checkedAt - now.at) <= STALE_MS));
+        // a device working in the current load is there: the engine leaves a device in use out of
+        // its probe (lookOnce) and never probes a cable one there, so its own probe goes stale while
+        // it works. a fresh probe still speaks for itself; a plugged-out cable phone is not there
+        const seated = !fresh && working.has(id);
+        if (!fresh && !seated) continue;                             // not looked at, a non-answer, or stale
         const d = (notes.dev[id] ??= { name, seen: now.at, slots: Object.create(null), cur: null, tps: Object.create(null), pairs: [] });
         d.name = name;
         d.seen = now.at;
@@ -402,7 +424,7 @@ export function create(ctx: BranchCtx): Branch {
         }
         if (!d.cur) d.cur = { slot, looks: 0, there: 0, t: now.at };
         d.cur.looks++;
-        if (active(dev)) d.cur.there++;
+        if (seated ? dev.plugged !== false : active(dev)) d.cur.there++;
         const t = tonightOf(d, now.at);
         if ((t.guess === 'likely' || t.guess === 'unlikely') && t.guess !== d.last) {
           if (d.last) ctx.emit(`forecast: ${name} is now ${t.guess} tonight 22–07 (${fmtPct(t.mean)}%, ${fmtPct(t.lo)}–${fmtPct(t.hi)}%)`);
