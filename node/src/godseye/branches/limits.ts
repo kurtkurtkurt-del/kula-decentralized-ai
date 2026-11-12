@@ -621,15 +621,18 @@ export function create(ctx: BranchCtx): Branch {
       const file = l && isObject(l.model) && typeof l.model.file === 'string' ? l.model.file.slice(0, DEVICE_MAX) : null;
       const load = JSON.stringify([since, file]);
       const speedSeen = new Set<string>();
+      // devices whose slow card goes because their load went (an unload, a reload, or they left
+      // the load), not because they recovered: their warning ends with no "no longer slowed" line
+      const speedGone = new Set<string>();
       for (const d of loaded) {
         if (!usableNamed(d) || speedSeen.has(d.id)) continue;
         speedSeen.add(d.id);
         let sp = speeds.get(d.id);
-        if (sp && sp.load !== load) { speeds.delete(d.id); sp = undefined; }   // a reload starts over
+        if (sp && sp.load !== load) { speeds.delete(d.id); sp = undefined; speedGone.add(d.id); }   // a reload starts over
         const tps = isNumber(d.tps) && d.tps > 0 && d.tps <= TPS_MAX ? d.tps : null;
         if (tps != null) {
           if (!sp) {
-            if (speeds.size >= SPEED_DEVICES) { const oldest = speeds.keys().next().value; if (oldest !== undefined) speeds.delete(oldest); }
+            if (speeds.size >= SPEED_DEVICES) { const oldest = speeds.keys().next().value; if (oldest !== undefined) { speeds.delete(oldest); speedGone.add(oldest); } }
             sp = { load, first: [], after: [], lastTps: null, lastDone: null, slow: false };
             speeds.set(d.id, sp);
           }
@@ -663,10 +666,14 @@ export function create(ctx: BranchCtx): Branch {
           });
         }
       }
-      for (const id of [...speeds.keys()]) if (!speedSeen.has(id)) speeds.delete(id);
+      for (const id of [...speeds.keys()]) if (!speedSeen.has(id)) { speeds.delete(id); speedGone.add(id); }
 
       for (const [k, w] of next) if (!warns.has(k)) ctx.emit(`limits: ${w.text}`);
-      for (const [k, w] of warns) if (!next.has(k)) ctx.emit(`limits: ${w.ended}`);
+      for (const [k, w] of warns) {
+        if (next.has(k)) continue;
+        if (k.startsWith('slow:') && speedGone.has(k.slice('slow:'.length))) continue;   // its load went, it never recovered
+        ctx.emit(`limits: ${w.ended}`);
+      }
       warns = next;
       gauge = gaugeOf(heads);
 

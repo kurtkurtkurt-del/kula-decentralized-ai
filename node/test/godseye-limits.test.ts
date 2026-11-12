@@ -1376,7 +1376,13 @@ function slowRig(views: Record<string, unknown> = {}) {
     return b.view();
   };
   const run = (list: unknown[], o: Parameters<typeof look>[1] = {}) => { let v = b.view(); for (const t of list) v = look(t, o); return v; };
-  return { b, out, look, run };
+  /** a look with nothing loaded (work.loaded = null), the device still in the list */
+  const unload = () => {
+    at += 15_000;
+    b.observe(snap(at, { devices: [dev()], loaded: null }) as any, null);
+    return b.view();
+  };
+  return { b, out, look, run, unload };
 }
 
 test('slow: 64, 64, 63 then 40, 37, 37 is one card with both numbers, a warning line and one feed line', () => {
@@ -1431,11 +1437,38 @@ test('slow: a reload, a new since or a new model file, starts over', () => {
     assert.deepEqual(slowCards(run([64, 64, 63, 40, 37, 37])), [SLOW()]);
     let v = look(37, reload);
     assert.deepEqual(slowCards(v), [], JSON.stringify(reload));
-    assert.equal(out.events.at(-1), 'limits: pixel is no longer slowed down');
+    // the device never recovered: a reload is no "no longer slowed down" (review F2)
+    assert.ok(!out.events.includes('limits: pixel is no longer slowed down'), out.events.join('\n'));
     // the new load's own first readings are its baseline: steady at 37 is no slowdown
     v = run([37, 37, 37, 37, 37, 37], reload);
     assert.deepEqual(slowCards(v), [], JSON.stringify(reload));
   }
+});
+
+// review F2: an unload or a reload drops the slow card without a recovery line; only a real
+// recovery (back to 85% of where the load began) says "no longer slowed down"
+test('slow: an unload drops the card with no "no longer slowed down" line', () => {
+  const { out, run, unload } = slowRig();
+  assert.deepEqual(slowCards(run([64, 64, 63, 40, 37, 37])), [SLOW()]);
+  const v = unload();
+  assert.deepEqual(slowCards(v), []);
+  assert.ok(!v.lines.some((l) => l.includes('slowed down')), v.lines.join('\n'));
+  assert.deepEqual(out.events, ['limits: pixel slowed down: 64 -> 37 tok/s since this load began']);
+});
+
+test('slow: a reload with a new since drops the card with no "no longer slowed down" line', () => {
+  const { out, run, look } = slowRig();
+  assert.deepEqual(slowCards(run([64, 64, 63, 40, 37, 37])), [SLOW()]);
+  const v = look(37, { since: T0 + HOUR });
+  assert.deepEqual(slowCards(v), []);
+  assert.deepEqual(out.events, ['limits: pixel slowed down: 64 -> 37 tok/s since this load began']);
+});
+
+test('slow: a real recovery within the same load still says "no longer slowed down"', () => {
+  const { out, run } = slowRig();
+  assert.deepEqual(slowCards(run([64, 64, 63, 40, 37, 37])), [SLOW()]);
+  assert.deepEqual(slowCards(run([60, 60, 60])), []);
+  assert.deepEqual(out.events, ['limits: pixel slowed down: 64 -> 37 tok/s since this load began', 'limits: pixel is no longer slowed down']);
 });
 
 test('slow: a null tps is no reading', () => {
