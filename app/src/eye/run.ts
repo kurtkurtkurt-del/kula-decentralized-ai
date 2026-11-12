@@ -40,6 +40,7 @@ const thisName = () => lastPassport()?.device ?? 'this phone';
 
 const side = {
   freeMb: null as number | null,
+  diskFreeMb: null as number | null,
   workerId: null as string | null,
   ledger: null as PhoneInput['ledger'],
   chain: null as { ok: boolean; lines: number } | null,
@@ -51,7 +52,7 @@ const since = { key: '', loaded: null as number | null, loading: null as number 
 
 function readSide(now: number) {
   if (!hasNative()) return;
-  llama!.info().then((i) => { side.freeMb = i.ramFreeMb; side.workerId = i.workerId; }, () => {});
+  llama!.info().then((i) => { side.freeMb = i.ramFreeMb; side.diskFreeMb = i.freeDiskMb; side.workerId = i.workerId; }, () => {});
   if (now - side.slowAt < SIDE_EVERY_MS) return;
   side.slowAt = now;
   llama!.auditLedger(LEDGER).then((lines) => {
@@ -86,6 +87,7 @@ export function readPhone(now = Date.now()): PhoneInput {
     at: now,
     name: thisName(),
     freeMb: side.freeMb,
+    diskFreeMb: side.diskFreeMb,
     ledger: side.ledger,
     power: side.power,
     engine: engine(),
@@ -284,5 +286,5 @@ export function resetEye(makers: Partial<Record<BranchId, BranchMaker>> = {}) {
   view = null;
   since.key = '';
   for (const k of Object.keys(reach)) delete reach[k];
-  Object.assign(side, { freeMb: null, workerId: null, ledger: null, chain: null, power: null, slowAt: 0 });
+  Object.assign(side, { freeMb: null, diskFreeMb: null, workerId: null, ledger: null, chain: null, power: null, slowAt: 0 });
 }
