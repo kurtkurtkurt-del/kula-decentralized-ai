@@ -297,6 +297,34 @@ test('owner-blind: a warning card for a device in the running cluster that fails
   assert.deepEqual(ok.b.view().suggestions, []);
 });
 
+test('a full window of 64 KiB lines: the next answer hashes only its new line, and the verdict is the same (A8)', () => {
+  const d = device();
+  const pad = 'x'.repeat(64 * 1024 - 200);   // a line as long as the engine lets one be (64 KiB)
+  for (let i = 0; i < TRUST_WINDOW; i++) d.add('connect', { pad });
+  const { b, events } = branch();
+  b.observe(snap([eyeDev(d, trustOf(d))]) as any, null);
+  assert.equal(b.view().report!.verdict, 'ok');
+  assert.match(check(b.view(), 'ledger').text, new RegExp(`${TRUST_WINDOW} lines checked`));
+  // one new line: the window slides by one, as the engine keeps it
+  d.add('connect', { pad });
+  const t = trustOf(d, { lines: d.lines.slice(-TRUST_WINDOW) });
+  const t0 = performance.now();
+  b.observe(snap([eyeDev(d, t)]) as any, null);
+  const ms = performance.now() - t0;
+  assert.ok(ms < 150, `the second answer took ${ms.toFixed(1)} ms`);
+  assert.equal(b.view().report!.verdict, 'ok');
+  assert.match(check(b.view(), 'ledger').text, new RegExp(`${TRUST_WINDOW + 1} lines checked`));
+  assert.deepEqual(events, []);
+  // the next new line, forged: it is checked in full as before, the cache changes nothing
+  const lines = d.lines.slice(-TRUST_WINDOW);
+  d.add('connect', { pad });
+  const forged = d.lines.at(-1)!.replace('"kind":"connect"', '"kind":"pair"');
+  b.observe(snap([eyeDev(d, trustOf(d, { lines: [...lines.slice(1), forged] }))]) as any, null);
+  assert.equal(b.view().report!.verdict, 'bad');
+  assert.equal(check(b.view(), 'ledger').ok, false);
+  assert.match(events.join('\n'), /a signature does not match the device key/);
+});
+
 test('the engine asks for a proof once an hour, and keeps only what the check found', async () => {
   const { attestDue, foldAttest, ATTEST_EVERY } = await import('../src/ui/engine.ts');
   assert.equal(attestDue(null, 1), true);

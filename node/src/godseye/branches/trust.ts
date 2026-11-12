@@ -220,6 +220,23 @@ export function create(ctx: BranchCtx): Branch {
   let snap: Snapshot | null = null;
   let report: TrustReport | null = null;
   const said = new Map<string, Verdict>();
+  // each device's last window, line -> its sha256 (A8): only lines not in the last answer are
+  // hashed again. Keyed by the whole line, so a line changed by one byte is a new line and hashed;
+  // rebuilt from this answer's lines every time, so it never holds more than one window per device.
+  // Memory only: nothing here is a verdict, and losing it costs one full hash of the window.
+  const hashed = new Map<string, Map<string, string>>();
+  function hashesOf(id: string, lines: string[]): string[] {
+    const was = hashed.get(id);
+    const now = new Map<string, string>();
+    const out = lines.map((l) => {
+      let h = now.get(l) ?? was?.get(l);
+      if (h === undefined) h = sha(l);
+      now.set(l, h);
+      return h;
+    });
+    hashed.set(id, now);
+    return out;
+  }
 
   // a new answer (t.at changed, no t.error, a sane clock): the device's new ledger lines, joined to
   // the last one verified and checked one by one, the ledger length, then the refusals into their
@@ -231,7 +248,7 @@ export function create(ctx: BranchCtx): Branch {
     const name = devName(d);
     const restartedAt = typeof t.restartedAt === 'number' && Number.isFinite(t.restartedAt) && t.restartedAt >= 0 ? t.restartedAt : null;
     const lines = Array.isArray(t.lines) ? t.lines.filter((l) => typeof l === 'string') : [];   // a missing window is none
-    const hashes = lines.map((l) => sha(l));
+    const hashes = hashesOf(d.id, lines);
     const countIn = typeof t.count === 'number' && Number.isFinite(t.count) && t.count >= 0 && t.count <= COUNT_MAX
       ? Math.floor(t.count) : null;   // whole lines only: 40.7 is 40; null: this answer carries no usable count
     const restart = restartedAt != null && restartedAt !== s.restartSeen;
@@ -492,6 +509,10 @@ export function create(ctx: BranchCtx): Branch {
       for (const id of left.slice(0, left.length - MAX_DEVICES)) delete notes[id];
     }
   }
+  // a device the notes no longer keep keeps no hashes either
+  function trimHashes() {
+    for (const id of hashed.keys()) if (!(id in notes)) hashed.delete(id);
+  }
 
   // a warning card for each device running the loaded model whose owner could read its jobs
   function ownerBlindCards(): Suggestion[] {
@@ -525,6 +546,7 @@ export function create(ctx: BranchCtx): Branch {
       }
       report = build(now);
       trim(new Set(devs.map((d) => d.id)));
+      trimHashes();
       if (changed) ctx.save(notes);
     },
     act(action, arg) {
