@@ -45,6 +45,16 @@
       ],
       "port": 8082,
       "cwd": "app"
+    },
+    {
+      "name": "kula-ui",
+      "runtimeExecutable": "node",
+      "runtimeArgs": [
+        "node/dist/bin/kula-node.js",
+        "ui",
+        "--no-open"
+      ],
+      "port": 50590
     }
   ]
 }
