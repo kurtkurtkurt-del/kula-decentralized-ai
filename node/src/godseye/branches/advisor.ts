@@ -1,7 +1,8 @@
 // 12 advisor: the one or two things worth doing first, said for a person, before they ask. It reads
 // the other branches (peek: it runs last, so it sees this look's views) and never loads, moves or
 // stops anything. Its own cards, at most two:
-//   night    a waiting night project whose device is gone or whose model does not fit them
+//   night    a waiting night project whose device is gone or whose model does not fit them; a device
+//            the forecast has likely there by the start hour is only a line until an hour before
 //   tonight  no project planned, and the forecast says two or more devices are likely there tonight:
 //            the hour most of them are, to plan the project for (between noon and 22:00 only)
 //   first    two or more cards on the panel from the others: which one first, in plain words,
@@ -82,8 +83,26 @@ export function create(ctx: BranchCtx): Branch {
     const waiting = s.projects.filter((p) => p.state === 'waiting').sort((x, y) => x.start - y.start)[0];
     const running = s.projects.find((p) => p.state === 'running');
     if (waiting) {
-      const { problems, gone } = nightProblems(s, waiting);
+      // a device away now that the forecast has likely there at the start hour is no warning yet (C8):
+      // a phone at work at noon and home at night is the normal case. Unknown (no forecast, a start
+      // hour outside the night's hours) or under an hour to the start: checked against now, as before
+      const hour = new Date(waiting.start).getHours();
+      const slot = NIGHT_HOURS.indexOf(hour);
+      const later = new Set<string>();
+      if (slot >= 0 && waiting.start - s.at >= 3_600_000) {
+        const hints = hintsOf(ctx);
+        for (const id of waiting.peers) {
+          const d = s.devices.find((x) => x.id === id);
+          if (!d || active(d)) continue;
+          const t = hints.get(id)?.find((h) => h.tonight)?.tonight;
+          const p = t && t.guess !== 'unknown' && Array.isArray(t.hours) && t.hours.length === NIGHT_HOURS.length ? t.hours[slot] : null;
+          if (typeof p === 'number' && Number.isFinite(p) && p >= LIKELY) later.add(id);
+        }
+      }
+      const rest = later.size ? { ...waiting, peers: waiting.peers.filter((id) => !later.has(id)) } : waiting;
+      const { problems, gone } = nightProblems(s, rest);
       const when = `${masked(waiting.title)} at ${hhmm(waiting.start)}`;
+      if (later.size) night.push(`night project ${when}: ${names([...later].map((id) => ({ name: s.devices.find((d) => d.id === id)!.name })))} not here now, likely by ${String(hour).padStart(2, '0')}:00.`);
       if (problems.length) {
         night.push(`night project ${when}: ${problems.join('; ')}. fix it before it starts.`);
         out.push({
@@ -92,7 +111,7 @@ export function create(ctx: BranchCtx): Branch {
           title: `the night project at ${hhmm(waiting.start)} would not start well: ${problems[0]}`,
           why: `night project ${when}: ${problems.join('; ')}. there is time to fix it before it starts.`,
         });
-      } else night.push(`night project ${when}: its ${waiting.peers.length || 'no'} device${waiting.peers.length === 1 ? '' : 's'} answer now and ${modelOf(s, waiting.model)!.name} fits.`);
+      } else if (!later.size || rest.peers.length) night.push(`night project ${when}: its ${later.size ? 'other ' : ''}${rest.peers.length || 'no'} device${rest.peers.length === 1 ? '' : 's'} answer now and ${modelOf(s, waiting.model)!.name} fits.`);
     }
 
     // tonight: when most devices are likely there, from the forecast's hours

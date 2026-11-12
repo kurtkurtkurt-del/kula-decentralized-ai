@@ -129,6 +129,40 @@ test('first: privacy before health before speed; a weight-1 privacy warning beat
   assert.equal(v.suggestions.find((x: any) => x.id.startsWith('advisor:first:')).id, 'advisor:first:trust:owner-blind:p1');
 });
 
+test('night: a device away now but likely there by the start hour is a line, not a warning (C8)', () => {
+  const TEN = new Date(2026, 10, 8, 22, 0).getTime();
+  const away = [dev({ reachable: false, reason: 'timeout' }), dev({ id: 'p2', name: 'galaxy' })];
+  const p = proj({ title: 'summaries', start: TEN, mode: 'phone', peers: ['p1'] });
+  const fc = (hours: number[], guess = 'likely') => ({ forecast: { built: true, stat: 'x', hints: [night('p1', hours, guess)] } });
+  const nightCard = (v: any) => v.suggestions.find((x: any) => x.id === 'advisor:night:n1');
+  const HIGH = [0.9, 0.9, 0.9, 0.9, 0.9, 0.9, 0.9, 0.8, 0.5];
+  // at noon, pixel is at work; the forecast has it home at 22:00 with 90 %
+  let v = branch(fc(HIGH)).look(snap({ devices: away, projects: [p] }));
+  assert.equal(nightCard(v), undefined);
+  assert.ok(v.lines.some((l: string) => l === 'night project summaries at 22:00: pixel not here now, likely by 22:00.'), v.lines.join(' | '));
+  // under LIKELY at that hour: the card as today
+  v = branch(fc([0.5, 0.9, 0.9, 0.9, 0.9, 0.9, 0.9, 0.9, 0.9])).look(snap({ devices: away, projects: [p] }));
+  assert.equal(nightCard(v).title, 'the night project at 22:00 would not start well: pixel not reachable now');
+  assert.equal(nightCard(v).weight, 3);
+  // the forecast does not know: the card as today
+  v = branch(fc(HIGH, 'unknown')).look(snap({ devices: away, projects: [p] }));
+  assert.ok(nightCard(v));
+  assert.ok(nightCard(branch().look(snap({ devices: away, projects: [p] }))), 'no forecast at all');
+  // less than an hour to the start: the card as today
+  v = branch(fc(HIGH)).look(snap({ at: new Date(2026, 10, 8, 21, 30).getTime(), devices: away, projects: [p] }));
+  assert.deepEqual(nightCard(v).action, { do: 'probe', devices: ['p1'] });
+  // a start hour outside the night's hours is unknown: the card as today
+  v = branch(fc(HIGH)).look(snap({ devices: away, projects: [proj({ start: new Date(2026, 10, 8, 20, 0).getTime(), mode: 'phone', peers: ['p1'] })] }));
+  assert.ok(nightCard(v));
+  // two away, only pixel likely back: the card names galaxy alone and probes galaxy alone
+  const both = { forecast: { built: true, stat: 'x', hints: [night('p1', HIGH), night('p2', [0.2, 0.2, 0.2, 0.2, 0.2, 0.2, 0.2, 0.2, 0.2])] } };
+  v = branch(both).look(snap({ devices: [dev({ reachable: false }), dev({ id: 'p2', name: 'galaxy', reachable: false })], projects: [proj({ start: TEN, peers: ['p1', 'p2'] })] }));
+  assert.equal(nightCard(v).title, 'the night project at 22:00 would not start well: galaxy not reachable now');
+  assert.deepEqual(nightCard(v).action, { do: 'probe', devices: ['p2'] });
+  assert.ok(v.lines.some((l: string) => /: pixel not here now, likely by 22:00\.$/.test(l)));
+  accepted(v);
+});
+
 test('night: a model that fits once the model loaded here goes is no problem (C2: heldHere counted back)', () => {
   const s = snap({
     host: { name: 'mac', freeMb: 3000 },
