@@ -85,9 +85,10 @@ test('the forecast\'s scored hours stay behind peek: not in the eye\'s view, sti
   const dir = path.join(HOME, 'eye-pairs');
   const hour0 = new Date(2026, 10, 8, 22, 0, 0).getTime();
   const HOUR = 3600_000;
-  let i = 0, checked = 0;
+  let i = 0;
   const eye = new GodsEye({
-    snapshot: () => snap([dev({ checkedAt: ++checked })], hour0 + Math.floor(i / 12) * HOUR + (i % 12) * 5000),
+    // each look is a fresh probe at the look's own time (the forecast skips a probe over 120 s old)
+    snapshot: () => { const at = hour0 + Math.floor(i / 12) * HOUR + (i % 12) * 5000; return snap([dev({ checkedAt: at })], at); },
     dir,
     now: () => 0,
   });

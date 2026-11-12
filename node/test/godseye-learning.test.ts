@@ -588,7 +588,7 @@ test('three weeks of a weekly pattern, through the real forecast branch: the row
   const hourLooks = (day: number, hour: number, there: boolean) => {
     const t = hourAt(day, hour);
     for (let i = 0; i < 12; i++) {
-      const s = snap([dev({ reachable: there, reason: there ? null : 'off' })], t + i * 5000) as any;
+      const s = snap([dev({ reachable: there, reason: there ? null : 'off', checkedAt: t + i * 5000 })], t + i * 5000) as any;
       fc.observe(s, null);
       f.peeked = fc.view();
       b.observe(s, null);
@@ -612,7 +612,9 @@ test('three weeks of a weekly pattern, through the real forecast branch: the row
   // 42 hours looked at: 41 folds, the first four not scored (the device was not known yet)
   assert.equal(v.rows.find((r) => r[0] === 'forecast scored')![1], '37 hours');
   assert.match(v.rows.find((r) => r[0] === 'forecast skill')![1], /^\+0\.\d\d against each device's own average \(Brier 0\.\d\d vs 0\.\d\d\)$/);
-  assert.equal(f.events.length, 0, 'a weekly pattern is not worse than the device\'s own average');
+  // each look carries a new probe, so learning scores its own reachability guesses and may say so;
+  // what must stay silent is the forecast verdict
+  assert.deepEqual(f.events.filter((e) => /the forecast is doing/.test(e)), [], 'a weekly pattern is not worse than the device\'s own average');
 });
 
 test('a habit flip: the skill goes negative, said once, and comes back once the habit returns', () => {
@@ -624,7 +626,7 @@ test('a habit flip: the skill goes negative, said once, and comes back once the 
   const hourLooks = (day: number, hour: number, there: boolean) => {
     const t = hourAt(day, hour);
     for (let i = 0; i < 12; i++) {
-      const s = snap([dev({ reachable: there, reason: there ? null : 'off' })], t + i * 5000) as any;
+      const s = snap([dev({ reachable: there, reason: there ? null : 'off', checkedAt: t + i * 5000 })], t + i * 5000) as any;
       fc.observe(s, null);
       f.peeked = fc.view();
       b.observe(s, null);
@@ -1030,9 +1032,11 @@ test('an always-there device through the real eye: the skill stays hidden and no
   const dir = path.join(HOME, 'eye-always');
   const hour0 = new Date(2026, 10, 8, 22, 0, 0).getTime();
   const HOUR = 3600_000;
-  let i = 0, checked = 0;
-  // twelve 5 s looks at the top of each hour: enough for that hour to fold, 300 hours in all
-  const eye = new GodsEye({ snapshot: () => snap([dev({ checkedAt: ++checked })], hour0 + Math.floor(i / 12) * HOUR + (i % 12) * 5000), dir, now: () => 0 });
+  let i = 0;
+  // twelve 5 s looks at the top of each hour: enough for that hour to fold, 300 hours in all; each
+  // look carries a new probe, made at the look's own time
+  const atNow = () => hour0 + Math.floor(i / 12) * HOUR + (i % 12) * 5000;
+  const eye = new GodsEye({ snapshot: () => snap([dev({ checkedAt: atNow() })], atNow()), dir, now: () => 0 });
   for (; i < 300 * 12; i++) eye.tick();
   const tile = eye.view().branches.find((b) => b.id === 'learning')!;
   assert.equal(tile.error, undefined, 'learning was not stopped');
@@ -1051,12 +1055,13 @@ function hourRun(dir: string, hours: number, there: (h: number) => boolean) {
   const hour0 = new Date(2026, 10, 8, 22, 0, 0).getTime();
   const HOUR = 3600_000;
   const emitted: { at: number; text: string }[] = [];
-  let look = 0, checked = 0;
+  let look = 0;
   const atNow = () => hour0 + Math.floor(look / 12) * HOUR + (look % 12) * 5000;
   const eye = new GodsEye({
     snapshot: () => {
       const h = Math.floor(look / 12);
-      return snap([dev({ checkedAt: ++checked, reachable: there(h), reason: there(h) ? null : 'off' })], atNow());
+      // every look carries a new probe, made at the look's own time
+      return snap([dev({ checkedAt: atNow(), reachable: there(h), reason: there(h) ? null : 'off' })], atNow());
     },
     dir,
     now: atNow,

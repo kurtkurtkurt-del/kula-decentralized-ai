@@ -77,6 +77,7 @@ const NAME_LEN = 80;                 // names shown are cut to this
 const MAX_N = 1e4;                   // a slot's decayed count beyond this is not plausible
 const MAX_LOOKS = 1e9;               // looks beyond this is not plausible (5 s looks for decades)
 const DAY_MS = 86400_000;            // a whole day, for "last seen N days ago"
+const STALE_MS = 120_000;            // a probe further than this from the look (either way) is not counted
 
 type Guess = 'likely' | 'maybe' | 'unlikely' | 'unknown';
 
@@ -370,6 +371,9 @@ export function create(ctx: BranchCtx): Branch {
       const slot = slotOf(now.at);
       for (const { id, name, dev } of snapshotDevices(now)) {
         if (typeof dev.reachable !== 'boolean') continue;            // not looked at, or not a real answer
+        // a probe carried along unchanged (the page closed overnight) is not a look at this time:
+        // only one within STALE_MS of the look, either way, counts. no checkedAt: as before
+        if (typeof dev.checkedAt === 'number' && !(Math.abs(dev.checkedAt - now.at) <= STALE_MS)) continue;
         const d = (notes.dev[id] ??= { name, seen: now.at, slots: Object.create(null), cur: null, tps: Object.create(null), pairs: [] });
         d.name = name;
         d.seen = now.at;

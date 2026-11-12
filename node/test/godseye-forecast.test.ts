@@ -15,7 +15,8 @@ after(() => fs.rmSync(HOME, { recursive: true, force: true }));
 
 const dev = (o: Record<string, unknown> = {}) => ({
   id: 'p1', name: 'pixel', kind: 'phone', via: 'wifi', where: '192.168.1.33:50551', reachable: true, reachMs: 12, reason: null,
-  checkedAt: 1, lastOk: null, ramMb: 3400, bwGBs: 60, gpu: null, tls: true, waitingPair: false, plugged: null, holds: null, ...o,
+  // checkedAt null: the probe's time is not given, so every look counts (a number far from the look's at is stale)
+  checkedAt: null, lastOk: null, ramMb: 3400, bwGBs: 60, gpu: null, tls: true, waitingPair: false, plugged: null, holds: null, ...o,
 });
 const snap = (devices: any[], at: number, loaded: any = null): any => ({
   at, host: { name: 'mac', freeMb: 4000 }, devices,
@@ -211,6 +212,28 @@ test('eleven looks in an hour are dropped, twelve are folded', () => {
   const saved = c.stored as any;
   assert.ok(!('22' in saved.dev.p1.slots), 'eleven looks are dropped');
   assert.deepEqual(saved.dev.p1.slots['23'].slice(0, 2), [1, 1], 'twelve looks fold into the slot');
+});
+
+test('a stale probe is not a look: 3 h of 5 s looks with a fixed checkedAt fold no slot; a fresh (or no) checkedAt still folds', () => {
+  const start = hourAt(0, 21);
+  const run = (checked: (at: number) => unknown) => {
+    const { c, ctx } = fakeCtx();
+    const b = create(ctx);
+    for (let at = start; at < start + 3 * 3600_000; at += 5000) b.observe(snap([dev({ checkedAt: checked(at) })], at), null);
+    c.t += 61_000;
+    b.observe(snap([dev({ checkedAt: checked(start + 3 * 3600_000) })], start + 3 * 3600_000), null);   // and this one saves
+    return Object.keys((c.stored as any)?.dev?.p1?.slots ?? {}).sort();
+  };
+  // the page was closed: the 21:00 probe is carried along unchanged, it must not teach "there tonight"
+  assert.deepEqual(run(() => start), []);
+  // a probe stamped far in the future is no better
+  assert.deepEqual(run((at) => at + 121_000), []);
+  // fresh probes (within 120 s either way), and a missing checkedAt (today's behaviour), fold 21:00..23:00
+  assert.deepEqual(run((at) => at), ['21', '22', '23']);
+  assert.deepEqual(run((at) => at - 120_000), ['21', '22', '23']);
+  assert.deepEqual(run((at) => at + 120_000), ['21', '22', '23']);
+  assert.deepEqual(run(() => null), ['21', '22', '23']);
+  assert.deepEqual(run(() => undefined), ['21', '22', '23']);
 });
 
 test('a feed line when the firm guess flips, with the interval, not on every look', () => {
