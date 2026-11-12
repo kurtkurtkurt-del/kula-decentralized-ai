@@ -24,6 +24,9 @@ export type PhoneInput = {
   at: number;
   name: string;                                   // this phone, as its passport names it
   freeMb: number | null;                          // free memory, from the native info
+  // free disk where the models live, from the native info (NativeInfo.freeDiskMb; scan D M3): an
+  // observation only. absent: the look did not read it (host.diskFreeMb stays absent)
+  diskFreeMb?: number | null;
   ledger: { ok: boolean; count: number; problem: string | null } | null;
   power: Power | null;
   engine: Pick<EngineState, 'model' | 'mode' | 'loading' | 'plan' | 'split' | 'devices' | 'generating' | 'load' | 'loadedAt'>;
@@ -162,11 +165,18 @@ export function projectOf(t: Task, at: number): EyeProject {
   };
 }
 
+/** a free-disk reading as the eye takes it: a finite, non-negative number, else unknown */
+const diskOf = (v: number | null): number | null => (typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v : null);
+
 /** One look for the eye. Plain data, nothing of the app's objects in it. */
 export function phoneSnapshot(i: PhoneInput): Snapshot {
   return {
     at: i.at,
-    host: { name: i.name, freeMb: i.freeMb, ledger: i.ledger, ...(i.power ? { power: { ...i.power } } : {}) },
+    host: {
+      name: i.name, freeMb: i.freeMb,
+      ...(i.diskFreeMb !== undefined ? { diskFreeMb: diskOf(i.diskFreeMb) } : {}),
+      ledger: i.ledger, ...(i.power ? { power: { ...i.power } } : {}),
+    },
     devices: i.peers.map((p) => deviceOf(p, i)),
     work: workOf(i),
     models: modelsOf(i),

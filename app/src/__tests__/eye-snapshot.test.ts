@@ -175,4 +175,22 @@ describe('the phone\'s look', () => {
     // no stamp (an older state): the first look that saw it, as before
     expect(phoneSnapshot(input({ engine: { ...idle, model: m, mode: 'alone' }, since: { loaded: AT - 5000, loading: null } })).work.loaded!.since).toBe(AT - 5000);
   });
+
+  // P23 (scan D M3): this phone's free disk, an observation only (NativeInfo.freeDiskMb)
+  it('host: this phone\'s free disk when the look has it; absent stays absent, nonsense is unknown', () => {
+    const s = phoneSnapshot(input({ diskFreeMb: 18_250 }));
+    expect(s.host.diskFreeMb).toBe(18_250);
+    expect(clean(structuredClone(s))).toEqual(s);
+    expect('diskFreeMb' in phoneSnapshot(input()).host).toBe(false);
+    expect(phoneSnapshot(input({ diskFreeMb: null })).host.diskFreeMb).toBeNull();
+    for (const bad of [NaN, Infinity, -5]) expect(phoneSnapshot(input({ diskFreeMb: bad })).host.diskFreeMb).toBeNull();
+  });
+
+  // P23: the phone's trust notes keep no ledger lines (llm/trust.ts TrustNote), so a peer's health
+  // is not read here; absent (not looked), never null (looked, no reading)
+  it('a paired device carries no health on the phone: its notes keep no ledger lines', () => {
+    const note = { ...freshNote(), at: AT - 60_000, answered: true, verified: 40, head: 'ab'.repeat(32) };
+    const d = phoneSnapshot(input({ peers: [peer()], trust: { p1: note } })).devices[0];
+    expect('health' in d).toBe(false);
+  });
 });
