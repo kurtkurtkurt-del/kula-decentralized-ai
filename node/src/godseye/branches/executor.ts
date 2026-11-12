@@ -6,7 +6,8 @@
 //   slow     apart: a device answering at under a third of the fastest one's tok/s (both measured,
 //            both with 2 answers or more): leave it out
 //   rest     a device limits says should rest: leave it out (apart), or look at limits
-//   failing  a device of the loaded model found unreachable in 3 or more of its last checks: look again
+//   failing  a device of the loaded model found unreachable in 3 or more of its last checks, counting
+//            only checks of the last ten minutes, and none from before it answered again: look again
 //   idle     apart: a device that took no prompt for the whole window while another answered in
 //            three quarters of it: look again (it may have dropped quietly)
 // Each card holds SHOW looks before it shows and goes HIDE looks after its reason went, with a
@@ -26,7 +27,12 @@ const BUSY_STAY = 0.5;
 const MIN_DONE = 2;                // answers behind a tok/s before it counts
 
 interface Track { busy: boolean[]; done: number[] }
-interface Checks { at: number | null; oks: boolean[]; reason: string | null }
+/** a device's reachability checks: the last checkedAt seen, and each check with its own time */
+interface Checks { last: number | null; seen: { at: number; ok: boolean }[]; reason: string | null }
+
+export const CHECK_MS = 10 * 60_000;   // only checks this young count (finding C4: a device in use is not probed)
+/** the checks within CHECK_MS of the look */
+const recent = (c: Checks | undefined | null, at: number) => (c ? c.seen.filter((x) => x.at >= at - CHECK_MS) : []);
 
 /** the load that leaves these devices out, the same model and mode; null when nothing would be left */
 function without(s: Snapshot, out: Set<string>): SuggestAction | null {
@@ -36,13 +42,16 @@ function without(s: Snapshot, out: Set<string>): SuggestAction | null {
   if (!left.length) return null;
   const peers = left.filter((d) => !d.local).map((d) => d.id);
   if (!peers.length) return { do: 'load', model: L.model.id, mode: 'here', devices: [] };
-  return { do: 'load', model: L.model.id, mode: L.mode === 'phone' ? 'phone' : 'apart', devices: peers };
+  if (L.mode === 'phone') return { do: 'load', model: L.model.id, mode: 'phone', devices: peers };
+  // kula's engine runs this computer in apart unless here:false: say it when its seat is not kept (C1)
+  return { do: 'load', model: L.model.id, mode: 'apart', devices: peers, ...(left.some((d) => d.local) ? {} : { here: false as const }) };
 }
 
 export function create(ctx: BranchCtx): Branch {
   let snap: Snapshot | null = null;
   const track = new Map<string, Track>();
   const checks = new Map<string, Checks>();
+  const answers = new Map<string, number>();   // per peer of this load, its answer count at the last look
   let loadedKey: string | null = null;
   let shown: Suggestion[] = [];
   const steady = new Steady();
@@ -83,16 +92,17 @@ export function create(ctx: BranchCtx): Branch {
       });
     }
 
-    // failing: unreachable in several of its last checks
+    // failing: unreachable in several of its checks of the last ten minutes
     for (const d of devs) {
       if (d.local) continue;
       const c = checks.get(d.id);
-      const fails = c ? c.oks.filter((x) => !x).length : 0;
+      const r = recent(c, s.at);
+      const fails = r.filter((x) => !x.ok).length;
       if (!c || fails < (strict ? FAILS : FAILS_STAY)) continue;
       out.push({
         id: cardId('executor', 'failing', d.id), kind: 'warn', weight: 2, action: { do: 'probe', devices: [d.id] }, label: 'look again',
         title: `${d.name} keeps dropping out`,
-        why: `${fails} of its last ${c.oks.length} checks found it unreachable${c.reason ? ` (last: ${c.reason})` : ''}; a prompt sent to it may wait or fail.`,
+        why: `${fails} of its last ${r.length} checks found it unreachable${c.reason ? ` (last: ${c.reason})` : ''}; a prompt sent to it may wait or fail.`,
       });
     }
 
@@ -120,7 +130,7 @@ export function create(ctx: BranchCtx): Branch {
       snap = now;
       const L = now.work.loaded;
       const key = L ? `${L.model.file}|${L.mode}|${L.since}` : null;
-      if (key !== loadedKey) { track.clear(); loadedKey = key; }
+      if (key !== loadedKey) { track.clear(); answers.clear(); loadedKey = key; }
       if (L) {
         for (const d of L.devices) {
           const k = d.local ? 'local' : d.id;
@@ -135,16 +145,26 @@ export function create(ctx: BranchCtx): Branch {
       for (const d of now.devices) {
         ids.add(d.id);
         if (d.reachable == null || d.checkedAt == null) continue;
-        const c = checks.get(d.id) ?? { at: null, oks: [], reason: null };
-        if (c.at !== d.checkedAt) {
-          c.at = d.checkedAt;
-          c.oks.push(d.reachable);
+        const c = checks.get(d.id) ?? { last: null, seen: [], reason: null };
+        if (c.last !== d.checkedAt) {
+          c.last = d.checkedAt;
+          c.seen.push({ at: d.checkedAt, ok: d.reachable });
           if (!d.reachable) c.reason = d.reason;
-          if (c.oks.length > CHECKS) c.oks.shift();
+          if (c.seen.length > CHECKS) c.seen.shift();
         }
         checks.set(d.id, c);
       }
       for (const id of [...checks.keys()]) if (!ids.has(id)) checks.delete(id);
+      // a device of this load whose answer count grew has answered since: its misses are over (C4)
+      if (L) {
+        for (const d of L.devices) {
+          if (d.local) continue;
+          const before = answers.get(d.id);
+          const c = checks.get(d.id);
+          if (before != null && d.done > before && c) { c.seen = c.seen.filter((x) => x.ok); c.reason = null; }
+          answers.set(d.id, d.done);
+        }
+      }
       shown = steady.step(cards(now, true), cards(now, false));
     },
     view(): BranchView {
@@ -155,11 +175,11 @@ export function create(ctx: BranchCtx): Branch {
       const tps = Math.max(0, ...devs.map((d) => d.tps || 0));
       const lines = devs.map((d) => {
         const t = track.get(d.local ? 'local' : d.id);
-        const c = d.local ? null : checks.get(d.id);
-        const fails = c ? c.oks.filter((x) => !x).length : 0;
+        const r = d.local || !snap ? [] : recent(checks.get(d.id), snap.at);
+        const fails = r.filter((x) => !x.ok).length;
         return `${d.name} · ${d.busy ? 'answering now' : 'free'} · ${d.tps ? `${d.tps} tok/s` : 'speed not measured yet'} · ${d.done} answer${d.done === 1 ? '' : 's'}`
           + (t && t.busy.length >= 2 ? ` · busy in ${Math.round(share(t) * 100)}% of the last ${t.busy.length} looks` : '')
-          + (fails ? ` · ${fails} of its last ${c!.oks.length} checks failed` : '');
+          + (fails ? ` · ${fails} of its last ${r.length} checks failed` : '');
       });
       return {
         built: true,

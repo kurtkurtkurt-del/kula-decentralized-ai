@@ -49,6 +49,8 @@ export function route(a: SuggestAction | null, env: PhoneEnv): PhoneAct | null {
         if (a.devices.some((d) => !self.has(d))) return null;   // one other phone: the computer's to arrange
         mode = 'alone';
       } else {
+        // the phone's apart always runs a copy on this phone too: a card that leaves it out has no way here
+        if (a.mode === 'apart' && a.here === false) return null;
         const want = new Set(a.devices.filter((d) => !self.has(d)));
         peers = env.peers().filter((p) => want.has(p.id));
         if (!peers.length || peers.length < want.size) return null;   // a device it has not paired

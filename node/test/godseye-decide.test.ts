@@ -105,7 +105,8 @@ test('planner: loaded on one phone while two hold it: apart answers two at once;
   let v = branch(planner.create).look(s);
   const c = v.suggestions.find((x: any) => x.id === 'planner:apart:gemma3-4b');
   assert.match(c.title, /^apart would answer 2 at once: pixel and galaxy each hold Gemma 3 4B$/);
-  assert.deepEqual(c.action, { do: 'load', model: 'gemma3-4b', mode: 'apart', devices: ['p1', 'p2'] });
+  // this computer is not one of its places: the tap leaves it out (C1)
+  assert.deepEqual(c.action, { do: 'load', model: 'gemma3-4b', mode: 'apart', devices: ['p1', 'p2'], here: false });
   accepted(v, 'planner');
 
   v = branch(planner.create, { limits: { hints: [{ id: 'p2', no: 'should rest (limits)' }] } }).look(s);
@@ -190,7 +191,7 @@ test('executor: in apart mode a device at under a third of the fastest one\'s to
 
 test('executor: a device that keeps dropping out gets a look-again card; one failed check is not enough', () => {
   const s = (i: number) => snap({
-    devices: [dev({ checkedAt: 100 + i, reachable: i % 2 === 0, reason: i % 2 === 0 ? null : 'timed out' }), dev({ id: 'p2', name: 'galaxy', checkedAt: 100 + i })],
+    devices: [dev({ checkedAt: AT - 60_000 + i * 5000, reachable: i % 2 === 0, reason: i % 2 === 0 ? null : 'timed out' }), dev({ id: 'p2', name: 'galaxy', checkedAt: AT - 60_000 + i * 5000 })],
     work: { loaded: loaded(GEMMA, 'apart', [on('p1', 'pixel', 9), on('p2', 'galaxy', 9)]) },
   });
   const { look } = branch(executor.create);
@@ -222,11 +223,80 @@ test('executor: limits says a device should rest: leave it out in apart, the lim
   let c = v.suggestions.find((x: any) => x.id === 'executor:rest:p2');
   assert.equal(c.title, 'galaxy should rest (limits)');
   assert.equal(c.weight, 3);
-  assert.deepEqual(c.action, { do: 'load', model: 'gemma3-4b', mode: 'apart', devices: ['p1'] });
+  // this computer sat out of that load and stays out (C1)
+  assert.deepEqual(c.action, { do: 'load', model: 'gemma3-4b', mode: 'apart', devices: ['p1'], here: false });
   v = branch(executor.create, peeks).look(snap({ work: { loaded: loaded(GEMMA, 'phone', [on('p2', 'galaxy', 9)]) } }));
   c = v.suggestions.find((x: any) => x.id === 'executor:rest:p2');
   assert.deepEqual(c.action, { do: 'open', panel: 'branch', branch: 'limits' });
   accepted(v, 'executor');
+});
+
+// finding C1 (12.11.2026): kula's engine runs this computer in apart unless here === false, so a
+// card that leaves this computer out must say so, and one that keeps it must not
+test('executor: limits says this computer should rest: "leave it out" loads apart with here:false; a peer left out keeps it in', () => {
+  const peeks = { limits: { hints: [{ id: 'local', no: 'should rest: it is hot' }] } };
+  const s = snap({ work: { loaded: loaded(GEMMA, 'apart', [here(20, 5), on('p1', 'pixel', 20, 5)]) } });
+  const v = branch(executor.create, peeks).look(s);
+  const c = v.suggestions.find((x: any) => x.id === 'executor:rest:local');
+  assert.equal(c.label, 'leave it out');
+  assert.deepEqual(c.action, { do: 'load', model: 'gemma3-4b', mode: 'apart', devices: ['p1'], here: false });
+  accepted(v, 'executor');
+  // the slow one is a peer: this computer stays in, no here key
+  const slow = snap({ work: { loaded: loaded(GEMMA, 'apart', [here(14, 6), on('p1', 'pixel', 12, 5), on('p2', 'galaxy', 3, 3)]) } });
+  const k = branch(executor.create).look(slow).suggestions.find((x: any) => x.id === 'executor:slow:p2');
+  assert.equal('here' in k.action, false);
+});
+
+test('decide.apart: this computer barred by limits: the apart action carries here:false; a seat here: no here key', () => {
+  const s = snap({ models: [TINY] });
+  const free = decide.apart(decide.field(s, { peek: () => null }), TINY);
+  assert.ok(free.seats.some((x: any) => x.local), 'this computer holds a copy');
+  assert.deepEqual(free.action, { do: 'load', model: 'qwen3-0.6b', mode: 'apart', devices: ['p1', 'p2'] });
+  const peeks: Record<string, any> = { limits: { hints: [{ id: 'local', no: 'should rest: it is hot' }] } };
+  const f = decide.field(s, { peek: (id: string) => peeks[id] ?? null });
+  assert.ok(f.barred.some((x: any) => x.id === 'local'));
+  const p = decide.apart(f, TINY);
+  assert.deepEqual(p.action, { do: 'load', model: 'qwen3-0.6b', mode: 'apart', devices: ['p1', 'p2'], here: false });
+  assert.equal(cleanCard({ id: 'planner:apart:x', kind: 'suggest', title: 't', why: 'w', action: p.action })!.action!.here, false, 'the eye keeps it');
+});
+
+// finding C4 (12.11.2026): the engine does not probe a device in use, so old misses must not stay
+// "its last checks" while the device answers prompt after prompt
+test('executor: three misses before the load, then an hour of answers: no "keeps dropping out"', () => {
+  const { look } = branch(executor.create);
+  const t0 = AT - 3_700_000;
+  const probes: [number, boolean][] = [[t0, false], [t0 + 15_000, false], [t0 + 30_000, false], [t0 + 45_000, true]];
+  for (const [t, ok] of probes) look(snap({ at: t + 1000, devices: [dev({ checkedAt: t, reachable: ok, reason: ok ? null : 'timeout' })] }), 1);
+  const lastProbe = probes[3][0];
+  let at = lastProbe + 1000, done = 0, v: any = null;
+  const since = at;
+  for (let i = 0; i < 720; i++) {
+    at += 5000;
+    if (i % 6 === 0) done++;
+    v = look(snap({ at, devices: [dev({ checkedAt: lastProbe, reachable: true })],
+      work: { loaded: loaded(GEMMA, 'apart', [here(20, 0), on('p1', 'pixel', 18, done, true)], { since }) } }), 1);
+    if (i === decide.SHOW - 1) assert.ok(v.suggestions.some((x: any) => x.id === 'executor:failing:p1'), 'fresh misses still warn');
+  }
+  assert.equal(v.suggestions.find((x: any) => x.id === 'executor:failing:p1'), undefined);
+  assert.ok(!v.lines.some((l: string) => /checks failed/.test(l)));
+});
+
+test('executor: misses older than ten minutes no longer count; a loaded device that answers clears its misses', () => {
+  const miss = (t: number) => dev({ checkedAt: t, reachable: false, reason: 'timeout' });
+  // three misses 11 minutes before the look: no card
+  let b = branch(executor.create);
+  const L = loaded(GEMMA, 'apart', [on('p1', 'pixel', 9, 3), on('p2', 'galaxy', 9, 3)]);
+  for (const t of [AT - 700_000, AT - 690_000, AT - 680_000]) b.look(snap({ at: t + 1000, devices: [miss(t)], work: { loaded: L } }), 1);
+  let v = b.look(snap({ at: AT, devices: [miss(AT - 680_000)], work: { loaded: L } }));
+  assert.equal(v.suggestions.find((x: any) => x.id === 'executor:failing:p1'), undefined);
+  // three misses a minute ago: the card; then pixel answers (done grows): gone
+  b = branch(executor.create);
+  for (const t of [AT - 60_000, AT - 50_000, AT - 40_000]) b.look(snap({ at: t + 1000, devices: [miss(t)], work: { loaded: L } }), 1);
+  v = b.look(snap({ at: AT, devices: [miss(AT - 40_000)], work: { loaded: L } }));
+  assert.ok(v.suggestions.some((x: any) => x.id === 'executor:failing:p1'));
+  const answered = loaded(GEMMA, 'apart', [on('p1', 'pixel', 9, 4), on('p2', 'galaxy', 9, 3)]);
+  v = b.look(snap({ at: AT + 5000, devices: [miss(AT - 40_000)], work: { loaded: answered } }), decide.HIDE + 1);
+  assert.equal(v.suggestions.find((x: any) => x.id === 'executor:failing:p1'), undefined);
 });
 
 test('executor: no flapping over 50 looks of a tok/s hovering near a third', () => {

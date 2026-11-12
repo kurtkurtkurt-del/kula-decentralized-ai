@@ -165,6 +165,8 @@ describe('a card\'s tap on the phone', () => {
     expect(route({ do: 'load', model: 'qwen', mode: 'phone', devices: ['p1'] }, e)).toBeNull();          // one other phone
     expect(route({ do: 'load', model: 'qwen', mode: 'apart', devices: ['p1', 'stranger'] }, e)).toBeNull();
     expect(route({ do: 'load', model: 'qwen', mode: 'split', devices: [] }, e)).toBeNull();
+    // C1: the phone's apart always runs this phone too, so a card that leaves it out gets no button
+    expect(route({ do: 'load', model: 'qwen', mode: 'apart', devices: ['p1', 'p2'], here: false }, e)).toBeNull();
     expect(route({ do: 'probe', devices: ['stranger'] }, e)).toBeNull();
     expect(route({ do: 'fetch', model: 'qwen' }, e)).toBeNull();                                         // not a catalog model
     expect(route({ do: 'fetch', model: CATALOG[0].id }, env({ models: () => [model({ id: CATALOG[0].id })] }))).toBeNull();   // already here

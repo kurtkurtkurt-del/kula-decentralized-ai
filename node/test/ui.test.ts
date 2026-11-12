@@ -521,6 +521,18 @@ test('brain/apply runs only the action the person saw: a changed or missing acti
     assert.match((await ok.json()).word, /loading tiny/);
     assert.equal(loads.length, 1);
     assert.deepEqual((loads[0] as any).peers, ['p1', 'p2']);
+    // finding C1: a card that leaves this computer out reaches the engine with here === false
+    const outA = { do: 'load', model: 'tiny', mode: 'apart', devices: ['p1'], here: false };
+    say.planner.push({ id: 'planner:out', kind: 'suggest', title: 'leave it out', why: 'w', action: outA });
+    eye.tick();
+    const keepsIt = await apply({ id: 'planner:out', action: { do: 'load', model: 'tiny', mode: 'apart', devices: ['p1'] } });
+    assert.equal(keepsIt.status, 409, 'the action seen without here:false is not this card');
+    assert.equal(loads.length, 1);
+    const out = await apply({ id: 'planner:out', action: outA });
+    assert.equal(out.status, 200);
+    assert.equal(loads.length, 2);
+    assert.equal((loads[1] as any).here, false, 'this computer stays out');
+    assert.equal((loads[0] as any).here, undefined, 'a card without here leaves the default');
     // open only moves the page: no action needed
     const open = await apply({ id: 'planner:open' });
     assert.equal(open.status, 200);

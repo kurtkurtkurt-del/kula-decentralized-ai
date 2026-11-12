@@ -401,7 +401,8 @@ export async function startUi(opts: UiOptions): Promise<UiServer> {
         if (a.do === 'load') {
           if (engine.status().loading) throw new Error('already loading: wait, or stop it');
           // in the background like the person's own load; the page follows it in status
-          engine.load({ model: a.model, mode: a.mode, peers: a.devices, ctx: a.ctx, all: a.devices.length > 0 }, () => {})
+          // here:false (apart only, finding C1): the card leaves this computer out, as it says
+          engine.load({ model: a.model, mode: a.mode, peers: a.devices, ctx: a.ctx, all: a.devices.length > 0, here: a.here }, () => {})
             .catch((e) => log(`brain card ${card.id}: ${(e as Error).message}`));
           word = `loading ${a.model} (${a.mode})`;
         } else if (a.do === 'unload') { await engine.unload(); word = 'unloaded'; }
