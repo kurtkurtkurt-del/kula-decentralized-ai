@@ -313,6 +313,24 @@ test('models: photos that nothing here could see: fetch the smallest model that 
 
 // ---- the whole eye
 
+test('field: a stranger\'s device (world) is barred, never a seat; home, circle and no ring stay seats', () => {
+  const s = snap({ devices: [
+    dev({ id: 'w1', name: 'stranger', ring: 'world' }),
+    dev({ id: 'w2', name: 'odd ring', ring: 'nearby' }),   // a ring word kula does not know is treated as world
+    dev({ id: 'h1', name: 'mine', ring: 'home' }),
+    dev({ id: 'c1', name: 'friend', ring: 'circle' }),
+    dev({ id: 'n1', name: 'old pairing' }),
+  ] });
+  const f = decide.field(s, { peek: () => null });
+  const seats = f.seats.map((x: any) => x.id);
+  assert.ok(!seats.includes('w1') && !seats.includes('w2'), seats.join());
+  for (const id of ['h1', 'c1', 'n1', 'local']) assert.ok(seats.includes(id), id);
+  assert.deepEqual(f.barred.filter((x: any) => x.id === 'w1' || x.id === 'w2').map((x: any) => x.why), ["a stranger's device (world)", "a stranger's device (world)"]);
+  // a split over the strangers' phones is never suggested: only world devices besides this computer
+  const only = snap({ host: { name: 'mac', freeMb: 4600 }, devices: [dev({ id: 'w1', name: 'stranger', ring: 'world', ramMb: 6000, bwGBs: 70 })], work: { loaded: loaded(GEMMA, 'here', [here(8.8, 3)]) } });
+  assert.deepEqual(decide.field(only, { peek: () => null }).seats.map((x: any) => x.id), ['local']);
+});
+
 test('the eye with the real branches: cards from planner, executor and models reach the panel, each accepted; the eye loads nothing', () => {
   const tablet = dev({ id: 't1', name: 'tablet', kind: 'phone', via: 'cable', ramMb: 3000, bwGBs: 70 });
   let i = 0;

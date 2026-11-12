@@ -112,6 +112,10 @@ export function field(s: Snapshot, ctx: Pick<BranchCtx, 'peek'>, measured?: Map<
   const noOf = (id: string) => trust.get(id) ?? hints.get(id)?.find((h) => h.no)?.no ?? null;
   for (const d of s.devices) {
     if (!active(d) || d.waitingPair || !(d.ramMb != null && d.ramMb > 0)) continue;
+    // a stranger's phone sees the prompt in plain text: never a seat in a card. no ring is home
+    // (paired before rings); a ring word kula does not know is taken as world, never as closer
+    const ring = d.ring == null ? 'home' : d.ring;
+    if (ring !== 'home' && ring !== 'circle') { barred.push({ id: d.id, name: d.name, why: 'a stranger\'s device (world)' }); continue; }
     const no = noOf(d.id);
     if (no) { barred.push({ id: d.id, name: d.name, why: no }); continue; }
     seats.push({ id: d.id, name: d.name, local: false, kind: d.kind, via: d.via, ramMb: d.ramMb, capMb: Math.floor(d.ramMb * WORKER_SHARE), speed: speedOf(s, d.id, d.kind, d.bwGBs, speeds.get(d.id)), tonight: tonightOf(d.id) });
