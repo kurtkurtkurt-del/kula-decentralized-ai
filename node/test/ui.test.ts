@@ -564,3 +564,35 @@ test('brain/apply: a rejected engine.load brings the card back in the next view,
     assert.equal(loads, 1, 'nothing retried the load');
   } finally { await ui.close(); eye.stop(); await engine.close(); }
 });
+
+// finding F1 (12.11.2026): while the load runs the planner stops saying the card and a look forgets
+// it; the rejection that comes after is still written in the box, and the card shows once said again
+test('brain/apply: a look between the tap and the rejection still records apply-failed, nothing loads again (F1)', async () => {
+  const { GodsEye, dark } = await import('../src/godseye/index.ts');
+  const { engine } = newEngine();
+  let loads = 0;
+  let reject: (e: Error) => void = () => {};
+  (engine as any).load = () => { loads++; return new Promise((_, no) => { reject = no; }); };
+  const loadA = { do: 'load', model: 'tiny', mode: 'apart', devices: ['p1'] };
+  const card = { id: 'planner:load', kind: 'suggest', title: 'load', why: 'w', action: loadA };
+  const say: unknown[] = [card];
+  const eye = new GodsEye({ snapshot: () => ({ at: 1000, host: { name: 'mac', freeMb: 4000 }, devices: [], work: { loaded: null, loading: null, chatting: 0, plan: [], decisions: [], llama: true }, models: [], projects: [] }) as any,
+    dir: path.join(HOME, 'eye-f1'), makers: { planner: () => ({ id: 'planner', observe() {}, view: () => ({ ...dark(), built: true, stat: 'x', suggestions: say as any }) }) } });
+  eye.tick();
+  const failed: string[] = [];
+  const e = eye as any, real = e.recordAct.bind(eye);
+  e.recordAct = (id: string, action: string, arg: string, word: string | null) => { if (action === 'apply-failed') failed.push(`${arg}: ${word}`); real(id, action, arg, word); };
+  const ui = await startUi({ port: 0, engine, eye, store: new ChatStore(path.join(HOME, 'chats-f1')), token: 'kula-' + 'cd'.repeat(20) } as any);
+  try {
+    const r = await post(`${ui.url}api/brain/apply`, ui.port, { id: 'planner:load', action: loadA });
+    assert.equal(r.status, 200);
+    say.length = 0; eye.tick();                    // loading: the card is gone and forgotten
+    reject(new Error('not enough memory on p1'));
+    await new Promise((r) => setTimeout(r, 50));
+    assert.deepEqual(failed, ['planner:load: the load failed: not enough memory on p1'], 'the failure is in the box');
+    say.push(card); eye.tick();
+    assert.ok(eye.view().cards.some((c: any) => c.id === 'planner:load'), 'the card shows again');
+    await new Promise((r) => setTimeout(r, 50));
+    assert.equal(loads, 1, 'nothing retried the load');
+  } finally { await ui.close(); eye.stop(); await engine.close(); }
+});

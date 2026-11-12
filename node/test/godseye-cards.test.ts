@@ -250,6 +250,49 @@ test('unhide shows an applied card again at once and runs nothing', () => {
   assert.deepEqual(eye.view().cards.map((c) => c.id), []);
   assert.equal(eye.unhide('planner:a', 'the load failed'), true);
   assert.deepEqual(eye.view().cards.map((c) => c.id), ['planner:a']);
-  assert.equal(eye.unhide('planner:a', 'again'), false, 'not hidden: nothing to do');
-  assert.equal(eye.unhide('nobody:x', 'x'), false);
+  assert.equal(eye.unhide('nobody:x', 'x'), false, 'no branch: nothing recorded');
+});
+
+// finding F1 (12.11.2026): a load card goes away while its load runs (the planner says nothing during
+// work.loading), so the look forgets its hidden entry before the rejection arrives. The failure is
+// still written in the box; unhide only records and shows again, it never retries or touches a dismissal
+function spyActs(eye: object): [string, string, string, string | null][] {
+  const acts: [string, string, string, string | null][] = [];
+  const e = eye as any, real = e.recordAct.bind(eye);
+  e.recordAct = (id: string, action: string, arg: string, word: string | null) => { acts.push([id, action, arg, word]); real(id, action, arg, word); };
+  return acts;
+}
+
+test('unhide records apply-failed even after the look forgot the card during its load (F1)', () => {
+  let at = 1_000_000;
+  const say: unknown[] = [{ id: 'planner:a', kind: 'suggest', title: 'a', why: 'w', action: load }];
+  const eye = new GodsEye({ snapshot: () => snap(at), dir: path.join(HOME, 'f1'), now: () => at,
+    makers: { planner: () => ({ id: 'planner', observe() {}, view: () => ({ ...dark(), built: true, stat: 'x', suggestions: say as any }) }) } });
+  eye.tick();
+  const acts = spyActs(eye);
+  eye.applied('planner:a', 'loading');
+  say.length = 0; at += 5000; eye.tick();          // loading: the planner says nothing, the look forgets it
+  assert.equal(eye.unhide('planner:a', 'the load failed', load), true);
+  assert.deepEqual(acts.filter((a) => a[1] === 'apply-failed').map((a) => [a[0], a[2], a[3]]), [['planner', 'planner:a', 'the load failed']]);
+  say.push({ id: 'planner:a', kind: 'suggest', title: 'a', why: 'w', action: load });
+  at += 5000; eye.tick();
+  assert.deepEqual(eye.view().cards.map((c) => c.id), ['planner:a'], 'back after the failed load');
+});
+
+test('unhide never ends a dismissal or an applied card with another action, but writes the failure (F1)', () => {
+  const other = { ...load, devices: ['p1', 'p2'] };
+  const say: unknown[] = [
+    { id: 'planner:a', kind: 'suggest', title: 'a', why: 'w', action: load },
+    { id: 'planner:b', kind: 'suggest', title: 'b', why: 'w', action: load },
+  ];
+  const eye = eyeWith({ planner: say });
+  const acts = spyActs(eye);
+  eye.dismiss('planner:a');
+  eye.applied('planner:b', 'loading');
+  assert.equal(eye.unhide('planner:a', 'the load failed', load), true);
+  assert.equal(eye.unhide('planner:b', 'the load failed', other), true);
+  assert.deepEqual(eye.view().cards.map((c) => c.id), [], 'the dismissal and the other action stay hidden');
+  assert.equal(acts.filter((a) => a[1] === 'apply-failed').length, 2);
+  assert.equal(eye.unhide('planner:b', 'the load failed', load), true);
+  assert.deepEqual(eye.view().cards.map((c) => c.id), ['planner:b']);
 });

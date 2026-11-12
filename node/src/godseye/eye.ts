@@ -404,16 +404,16 @@ export class GodsEye {
     this.recordAct(c.branch, 'apply', c.id, String(word).slice(0, WORD_MAX));
   }
 
-  /** kula's engine could not carry out an applied card (a load that failed in the background): the
-   *  card shows again at the next view, and the box says so. Only an applied card with this action
-   *  (when one is given) comes back, never a dismissal. The eye retries nothing: only the person's tap does. */
+  /** kula's engine could not carry out an applied card (a load that failed in the background): the box
+   *  says so whenever the id names a branch, even when a look already forgot the card (it went away
+   *  while its load ran, finding F1). Only an applied card with this action (when one is given) shows
+   *  again; a dismissal is never touched. The eye retries nothing: only the person's tap does. */
   unhide(id: string, why: string, action?: SuggestAction | null): boolean {
+    const branch = String(id).slice(0, String(id).indexOf(':')) as BranchId;
+    if (!BRANCH_IDS.includes(branch)) return false;
     const h = this.hidden.get(id);
-    if (!h || !h.applied) return false;
-    if (action !== undefined && !(h.action === null ? action === null : sameAction(h.action, action))) return false;
-    this.hidden.delete(id);
-    const branch = id.slice(0, id.indexOf(':')) as BranchId;
-    if (BRANCH_IDS.includes(branch)) this.recordAct(branch, 'apply-failed', id, String(why).slice(0, WORD_MAX));
+    if (h && h.applied && (action === undefined || (h.action === null ? action === null : sameAction(h.action, action)))) this.hidden.delete(id);
+    this.recordAct(branch, 'apply-failed', id, String(why).slice(0, WORD_MAX));
     return true;
   }
 
