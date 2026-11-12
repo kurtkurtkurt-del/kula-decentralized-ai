@@ -202,12 +202,48 @@ describe('a card\'s tap on the phone', () => {
     const e = env();
     expect(actOf(v.cards[0], e)?.kind).toBe('load');
     expect(actOf(v.cards[1], e)).toBeNull();   // drawn without a button
-    await expect(applyCard('advisor:load', e)).resolves.toBe('loaded Qwen (alone)');
+    await expect(applyCard('advisor:load', v.cards[0].action, e)).resolves.toBe('loaded Qwen (alone)');
     expect(calls).toEqual(['load qwen alone 2048 ']);
     expect(look().cards.map((c) => c.id)).toEqual(['advisor:mac']);
-    await expect(applyCard('advisor:mac', e)).rejects.toThrow('not here');
+    await expect(applyCard('advisor:mac', v.cards[1].action, e)).rejects.toThrow('not here');
     expect(dismissCard('advisor:mac')).toBe(true);
     expect(look().cards).toEqual([]);
-    await expect(applyCard('advisor:load', e)).rejects.toThrow('gone');
+    await expect(applyCard('advisor:load', v.cards[0].action, e)).rejects.toThrow('gone');
+  });
+
+  it('applyCard carries out only the action the person saw: a device that joined between showing and pressing is refused as changed (A5-phone)', async () => {
+    let devices = ['p1'];
+    const planner: BranchMaker = () => ({
+      id: 'planner', observe() {},
+      view: () => ({ ...dark(), built: true, stat: 'one plan', suggestions: [
+        { id: 'planner:apart:m', kind: 'suggest', title: 'run qwen apart', why: 'it fits across', action: { do: 'load', model: 'qwen', mode: 'apart', devices: [...devices] } },
+      ] }),
+    });
+    resetEye({ planner });
+    const shown = look().cards[0];
+    expect(shown.id).toBe('planner:apart:m');
+    const first = shown.action!;
+    devices = ['p1', 'p2'];   // the tablet joins before the tap
+    const now = look().cards[0].action!;
+    let loads = 0;
+    const e = env({ load: async () => { loads++; } });
+    await expect(applyCard('planner:apart:m', first, e)).rejects.toThrow('changed');
+    expect(loads).toBe(0);
+    await expect(applyCard('planner:apart:m', now, e)).resolves.toMatch(/loaded/);
+    expect(loads).toBe(1);
+  });
+
+  it('an open card needs no match: it only moves the page', async () => {
+    const pager: BranchMaker = () => ({
+      id: 'advisor', observe() {},
+      view: () => ({ ...dark(), built: true, stat: 'see', suggestions: [
+        { id: 'advisor:see', kind: 'suggest', title: 'look', why: 'why', action: { do: 'open', panel: 'branch', branch: 'limits' } },
+      ] }),
+    });
+    resetEye({ advisor: pager });
+    look();
+    calls.length = 0;
+    await applyCard('advisor:see', null, env());
+    expect(calls).toEqual(['branch limits']);
   });
 });

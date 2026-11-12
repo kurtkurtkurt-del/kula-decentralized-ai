@@ -96,10 +96,10 @@ export function EyeCardView({ card, act, state, onApply, onDismiss }: {
 export function EyeCards({ cards, actOf, apply, dismiss }: {
   cards: EyeCard[];
   actOf: (c: EyeCard) => { kind: string } | null;
-  apply: (id: string) => Promise<string>;
+  apply: (id: string, shown: EyeCard['action']) => Promise<string>;
   dismiss: (id: string) => void;
 }) {
-  const { t } = useLang();
+  const { t, tx } = useLang();
   const [states, setStates] = useState<Record<string, CardState>>({});
   const set = (id: string, s: CardState) => setStates((x) => ({ ...x, [id]: s }));
   return (
@@ -112,9 +112,12 @@ export function EyeCards({ cards, actOf, apply, dismiss }: {
           state={states[c.id]}
           onApply={() => {
             set(c.id, { busy: true });
-            apply(c.id).then(
+            // the action this card showed: if the card says another by now, nothing runs ('changed')
+            apply(c.id, c.action).then(
               () => set(c.id, { said: t('eye.card.done') }),
-              (e: Error) => set(c.id, { said: t('eye.card.failed', { why: e?.message || '?' }), failed: true }),
+              (e: Error) => set(c.id, e?.message === 'changed'
+                ? { said: tx('eye.card.changed', 'the card changed, look again'), failed: true }
+                : { said: t('eye.card.failed', { why: e?.message || '?' }), failed: true }),
             );
           }}
           onDismiss={() => dismiss(c.id)}

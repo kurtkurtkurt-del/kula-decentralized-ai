@@ -44,6 +44,7 @@ export const eye = {
   'eye.card.dismiss': { en: 'dismiss', de: 'ausblenden', tr: 'kapat' },
   'eye.card.notHere': { en: 'only the computer can do this one', de: 'das kann nur der computer', tr: 'bunu yalnızca bilgisayar yapabilir' },
   'eye.card.done': { en: 'done', de: 'erledigt', tr: 'tamam' },
+  'eye.card.changed': { en: 'the card changed, look again', de: 'die karte hat sich geändert, schau noch einmal', tr: 'kart değişti, yeniden bak' },
   'eye.card.failed': { en: 'it did not work: {why}', de: 'das hat nicht geklappt: {why}', tr: 'olmadı: {why}' },
   'eye.apply.load': { en: 'load', de: 'laden', tr: 'yükle' },
   'eye.apply.unload': { en: 'unload', de: 'entladen', tr: 'boşalt' },

@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { AppState, type AppStateStatus } from 'react-native';
 import * as Battery from 'expo-battery';
 import { router } from 'expo-router';
-import { GodsEye, type BranchId, type BranchMaker, type EyeCard, type EyeView } from '@godseye/core';
+import { GodsEye, sameAction, type BranchId, type BranchMaker, type EyeCard, type EyeView } from '@godseye/core';
 import { lastPassport } from '@/data/passport';
 import { getLang, translator } from '@/i18n/core';
 import { verifyChain } from '@/llm/audit';
@@ -221,11 +221,15 @@ export const phoneEnv: PhoneEnv = {
 /** What a tap on this card would do on the phone, or null: no button. */
 export const actOf = (c: EyeCard, env: PhoneEnv = phoneEnv): PhoneAct | null => route(c.action, env);
 
-/** Carries a card out; the card is hidden while its branch still says it. Throws what failed. */
-export async function applyCard(id: string, env: PhoneEnv = phoneEnv): Promise<string> {
+/** Carries a card out; the card is hidden while its branch still says it. Throws what failed.
+ *  [shown] is the action the person saw: when the card now says another (a device joined between
+ *  showing and pressing), nothing runs and it throws 'changed', like the computer's brain/apply 409.
+ *  An open card only moves the page and needs no match. */
+export async function applyCard(id: string, shown: unknown, env: PhoneEnv = phoneEnv): Promise<string> {
   const e = theEye();
   const c = e.card(id);
   if (!c) throw new Error('gone');
+  if (c.action?.do !== 'open' && !sameAction(shown, c.action)) throw new Error('changed');
   const act = route(c.action, env);
   if (!act) throw new Error('not here');
   const word = await act.run();
