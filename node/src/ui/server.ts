@@ -27,6 +27,7 @@ import { Engine, hostLabel, type LoadEvent } from './engine.js';
 import { ChatStore, ID_RE } from './store.js';
 import { ProjectRunner } from './projects.js';
 import { GodsEye } from '../godseye/index.js';
+import { sameAction } from '../godseye/eye.js';
 import { kulaSnapshot } from './godseye-feed.js';
 import { openBox } from '../godseye/box.js';
 import { replayBox } from '../godseye/replay.js';
@@ -390,6 +391,11 @@ export async function startUi(opts: UiOptions): Promise<UiServer> {
       if (!card) return json(res, 404, { error: 'that card is gone' });
       const a = card.action;
       if (!a) return json(res, 400, { error: 'this card has nothing to apply' });
+      // finding A5: the id leaves out the devices, so the page sends the action it drew; anything but
+      // `open` runs only while the card still says exactly that, else the fresh view and nothing run
+      if (a.do !== 'open' && !sameAction(body?.action, a)) {
+        return json(res, 409, { error: 'this card changed since you saw it: look again', view: eye.view() });
+      }
       let word: string;
       try {
         if (a.do === 'load') {

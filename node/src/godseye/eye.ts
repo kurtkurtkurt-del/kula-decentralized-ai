@@ -70,6 +70,19 @@ export function cleanAction(a: unknown): SuggestAction | null {
   }
 }
 
+/** the action the person saw is the action the card says now: deep equality of plain data, key order
+ *  aside (finding A5: a card's id leaves out its devices). Missing on either side is never the same. */
+export function sameAction(a: unknown, b: unknown): boolean {
+  const canon = (x: unknown): unknown => {
+    if (Array.isArray(x)) return x.map(canon);
+    if (!x || typeof x !== 'object') return x;
+    const o = x as Record<string, unknown>;
+    return Object.fromEntries(Object.keys(o).filter((k) => o[k] !== undefined).sort().map((k) => [k, canon(o[k])]));
+  };
+  if (a == null || b == null) return false;
+  try { return JSON.stringify(canon(a)) === JSON.stringify(canon(b)); } catch { return false; }
+}
+
 /** a branch's suggestion checked field by field, or null */
 export function cleanCard(s: unknown): Suggestion | null {
   const x = s as Record<string, unknown> | null;

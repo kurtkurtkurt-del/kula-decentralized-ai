@@ -1098,7 +1098,7 @@ async function applyCard(id) {
   if (!c?.action || cardBusy.has(id)) return;
   const a = c.action;
   if (a.do === 'open') {   // the page moves; the server only notes the card as used
-    postJson('brain/apply', { id }).then((r) => { if (r?.view) S.brain = r.view; renderBrain(); }).catch(() => {});
+    postJson('brain/apply', { id, action: a }).then((r) => { if (r?.view) S.brain = r.view; renderBrain(); }).catch(() => {});
     if (a.panel === 'branch' && a.branch) openBranch(a.branch);
     else if (a.panel === 'devices') openDevices();
     else if (a.panel === 'models') openConnect();
@@ -1107,10 +1107,14 @@ async function applyCard(id) {
   }
   cardBusy.add(id); renderBrain();
   try {
-    const r = await postJson('brain/apply', { id });
+    // the action drawn goes along: the server runs it only while the card still says exactly that (A5)
+    const r = await postJson('brain/apply', { id, action: a });
     if (r?.view) S.brain = r.view;
     feed(c.branch, `you applied: ${c.title} (${r?.word ?? 'done'})`);
-  } catch (e) { feed(c.branch, `could not apply "${c.title}": ${e.message}`); }
+  } catch (e) {
+    feed(c.branch, `could not apply "${c.title}": ${e.message}`);
+    try { S.brain = await getJson('brain'); } catch {}   // a changed card (409): draw what it says now
+  }
   cardBusy.delete(id);
   renderBrain(); refreshStatus?.();
 }

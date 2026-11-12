@@ -100,12 +100,12 @@ test('the page applies and dismisses cards through the server; a gone card is a 
   const ui = await startUi({ engine, eye, port: 0, prefix: 'ab'.repeat(12), token: 'cd'.repeat(16) } as any);
   const post = (route: string, body: unknown) => fetch(`${ui.url}api/${route}`, { method: 'POST', headers: { 'content-type': 'application/json', origin: `http://127.0.0.1:${ui.port}`, 'sec-fetch-site': 'same-origin' }, body: JSON.stringify(body) });
   try {
-    const a = await post('brain/apply', { id: 'planner:unload' });
+    const a = await post('brain/apply', { id: 'planner:unload', action: { do: 'unload' } });
     assert.equal(a.status, 200);
     assert.equal((await a.json()).word, 'unloaded');
     assert.equal((await post('brain/apply', { id: 'planner:unload' })).status, 404, 'applied: hidden, gone');
     assert.equal((await post('brain/apply', { id: 'planner:look' })).status, 400, 'a warning has nothing to apply');
-    const f = await post('brain/apply', { id: 'planner:fetch' });
+    const f = await post('brain/apply', { id: 'planner:fetch', action: { do: 'fetch', model: 'no-such-model' } });
     assert.equal(f.status, 400);
     assert.match((await f.json()).error, /unknown model/);
     assert.equal((await post('brain/dismiss', { id: 'planner:look' })).status, 200);

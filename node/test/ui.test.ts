@@ -479,3 +479,51 @@ test('picked devices: with all the load uses exactly the ticked ones (none is no
     await tab.close();
   }
 });
+
+// finding A5 (12.11.2026): a card's id leaves out its devices, so the page sends the action it drew
+// and the server runs it only while the card still says exactly that; otherwise the fresh view, nothing run
+test('brain/apply runs only the action the person saw: a changed or missing action is a 409 with the fresh view, nothing loads', async () => {
+  const { GodsEye, dark } = await import('../src/godseye/index.ts');
+  const { sameAction } = await import('../src/godseye/eye.ts');
+  assert.equal(sameAction({ do: 'load', model: 'm', mode: 'apart', devices: ['p1'] }, { devices: ['p1'], mode: 'apart', model: 'm', do: 'load' }), true, 'key order does not matter');
+  assert.equal(sameAction({ do: 'load', model: 'm', mode: 'apart', devices: ['p1'] }, { do: 'load', model: 'm', mode: 'apart', devices: ['p1', 'p2'] }), false);
+  assert.equal(sameAction({ do: 'unload' }, { do: 'unload', extra: 1 }), false);
+  assert.equal(sameAction({ do: 'unload' }, undefined), false);
+  const { engine } = newEngine();
+  const loads: unknown[] = [];
+  (engine as any).load = async (o: unknown) => { loads.push(o); return engine.status(); };
+  const loadA = { do: 'load', model: 'tiny', mode: 'apart', devices: ['p1'] };
+  const say: { planner: unknown[] } = { planner: [
+    { id: 'planner:load', kind: 'suggest', title: 'load', why: 'w', action: loadA },
+    { id: 'planner:open', kind: 'suggest', title: 'open', why: 'w', action: { do: 'open', panel: 'devices' } },
+  ] };
+  const eye = new GodsEye({ snapshot: () => ({ at: 1000, host: { name: 'mac', freeMb: 4000 }, devices: [], work: { loaded: null, loading: null, chatting: 0, plan: [], decisions: [], llama: true }, models: [], projects: [] }) as any,
+    dir: path.join(HOME, 'eye-a5'), makers: { planner: () => ({ id: 'planner', observe() {}, view: () => ({ ...dark(), built: true, stat: 'x', suggestions: say.planner as any }) }) } });
+  eye.tick();
+  const ui = await startUi({ port: 0, engine, eye, store: new ChatStore(path.join(HOME, 'chats-a5')), token: 'kula-' + 'cd'.repeat(20) } as any);
+  const apply = (body: unknown) => post(`${ui.url}api/brain/apply`, ui.port, body);
+  try {
+    // a phone joined between drawing and tapping: the card now loads on two devices
+    say.planner[0] = { id: 'planner:load', kind: 'suggest', title: 'load', why: 'w', action: { ...loadA, devices: ['p1', 'p2'] } };
+    eye.tick();
+    const stale = await apply({ id: 'planner:load', action: loadA });
+    assert.equal(stale.status, 409);
+    const sv = await stale.json();
+    assert.deepEqual(sv.view.cards.find((c: any) => c.id === 'planner:load').action.devices, ['p1', 'p2'], 'the fresh view to draw again');
+    assert.deepEqual(loads, [], 'the changed card was not run');
+    const bare = await apply({ id: 'planner:load' });
+    assert.equal(bare.status, 409, 'a load without the action seen is not run');
+    assert.ok((await bare.json()).view);
+    assert.deepEqual(loads, []);
+    // what the person sees now, key order shuffled: applied
+    const ok = await apply({ id: 'planner:load', action: { devices: ['p1', 'p2'], mode: 'apart', do: 'load', model: 'tiny' } });
+    assert.equal(ok.status, 200);
+    assert.match((await ok.json()).word, /loading tiny/);
+    assert.equal(loads.length, 1);
+    assert.deepEqual((loads[0] as any).peers, ['p1', 'p2']);
+    // open only moves the page: no action needed
+    const open = await apply({ id: 'planner:open' });
+    assert.equal(open.status, 200);
+    assert.equal((await open.json()).word, 'opened');
+  } finally { await ui.close(); eye.stop(); await engine.close(); }
+});
