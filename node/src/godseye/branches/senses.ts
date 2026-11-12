@@ -5,7 +5,11 @@
 // device. The latency is robust: the median and MAD spot a spike, RFC 6298 smooths the usual
 // range (SRTT ± 4 * RTTVAR, its low end floored at 0, shown as "usually X ms (lo–hi)"), and a
 // Nagios-style weighted count of ups and downs decides flapping with hysteresis; a stale line
-// does not say flapping, and ten usual gaps without a new reading clear the flag. Its notes are
+// does not say flapping, and ten usual gaps without a new reading clear the flag; while a link
+// flaps the feed gets its one "is flapping" line, not an up/down line per flip. A device the
+// current load works on (work.loaded.devices or parts) is not probed by the engine: it reads "in
+// use", never stale. The stat and gauge count a device active only when its look is fresh or it is
+// in use; a stale one is "not checked lately". Its notes are
 // one small json (ctx.save), bounded and saved at most once a minute; the view lists 40 device
 // lines at most and then how many it left out.
 // Every value taken from the snapshot is checked first: a reading only enters the notes when the
@@ -168,6 +172,24 @@ function trim(dev: Record<string, DevNotes>, present?: Set<string>): boolean {
   return true;
 }
 
+/** the ids of the other devices the current load works on: work.loaded.devices (local entries left
+ *  out) and work.loaded.parts. the engine does not probe a device in use, so its checkedAt ages
+ *  while it answers; such a device is "in use", not stale. */
+function inUseIds(s: Snapshot | null): Set<string> {
+  const out = new Set<string>();
+  const w = s && isObject(s.work) ? s.work : null;
+  const L = w && isObject(w.loaded) ? w.loaded : null;
+  if (!L) return out;
+  for (const list of [L.devices, L.parts] as unknown[]) {
+    if (!Array.isArray(list)) continue;
+    for (const x of list) {
+      if (!isObject(x) || x.local === true) continue;
+      if (typeof x.id === 'string' && x.id.length > 0 && x.id.length <= DEVICE_MAX) out.add(x.id);
+    }
+  }
+  return out;
+}
+
 /** a null prototype: a device id from the snapshot must not reach Object.prototype */
 const fresh = (): SensesNotes => ({ v: 1, dev: Object.create(null) as Record<string, DevNotes> });
 
@@ -283,7 +305,8 @@ export function create(ctx: BranchCtx): Branch {
           if (notes.dev[d.id]) held++;
         }
         const was = earlierById.get(d.id);
-        if (was && typeof d.reachable === 'boolean' && was.reachable !== d.reachable) ctx.emit(flipLine(d));
+        // a flapping link already has its one "is flapping" line: no up/down line on every flip
+        if (was && typeof d.reachable === 'boolean' && was.reachable !== d.reachable && !notes.dev[d.id]?.flapping) ctx.emit(flipLine(d));
       }
       for (const d of devices) {
         if (!usable(d)) continue;
@@ -344,10 +367,11 @@ export function create(ctx: BranchCtx): Branch {
       const s: Snapshot | null = isObject(snap) ? snap : null;
       const at = s && isTime(s.at) ? s.at : null;
       const devs = (s && Array.isArray(s.devices) ? s.devices : []).filter(usable);
-      const on = devs.filter(active).length;
+      const inUse = inUseIds(s);
       const seen = devs.map((d) => {
         const n = notes.dev[d.id] ?? null;
-        const stale = isStale(at, d.checkedAt, n ? gapsOf(n.r) : []);
+        const used = inUse.has(d.id);
+        const stale = !used && isStale(at, d.checkedAt, n ? gapsOf(n.r) : []);
         const oks = n ? n.r.filter((r) => r.ok && r.ms != null).length : 0;
         const usual = !stale && n && n.srtt != null && n.rttvar != null && oks >= OK_MIN ? n : null;
         const bits: string[] = [shownName(d), reachOf(d, !stale)];
@@ -361,6 +385,7 @@ export function create(ctx: BranchCtx): Branch {
         } else if (!stale && n && n.r.length) {
           bits.push('not enough looks yet');
         }
+        if (used) bits.push('in use');
         if (n?.flapping && !stale) bits.push('flapping');   // stale readings keep no verdict
         if (stale) {
           const ago = Math.round(((at as number) - (d.checkedAt as number)) / 1000);   // stale: at is past checkedAt
@@ -372,11 +397,15 @@ export function create(ctx: BranchCtx): Branch {
       });
       const flapping = seen.filter((x) => x.n?.flapping && !x.stale).map((x) => shownName(x.d));
       const stale = seen.filter((x) => x.stale).map((x) => shownName(x.d));
+      // active: answered the last look, and that look is fresh or the device is in use. a stale
+      // device is "not checked lately", never active from an old probe
+      const on = seen.filter((x) => !x.stale && active(x.d)).length;
+      const lately = stale.length ? ` · ${stale.length} not checked lately` : '';
       const lines = seen.slice(0, MAX_DEVICES).map((x) => x.line);
       if (seen.length > MAX_DEVICES) lines.push(`and ${seen.length - MAX_DEVICES} more`);
       return {
         built: true,
-        stat: devs.length ? `${on} of ${devs.length} devices active` : 'no device yet',
+        stat: devs.length ? `${on} of ${devs.length} devices active${lately}` : 'no device yet',
         gauge: devs.length ? pct(on, devs.length) : null,
         rows: [
           ['devices', String(devs.length)],

@@ -848,3 +848,113 @@ test('a third outlier on the other side is still a spike: the usual stays at 50 
   assert.equal(saved.dev.p1.srtt, 50);
   close(saved.dev.p1.rttvar, 1.8771171569824219);
 });
+
+// ---- C7: freshness. the engine does not probe a device in use, and the phone sends checkedAt =
+// last heard, so a device in the loaded model is "in use", not stale; a stale device is not active.
+
+/** a look with work.loaded set: devs sit on the load (work.loaded.devices), partIds hold layers */
+const loadedSnap = (devices: any[], at: number, devs: string[], partIds: string[] = []): any => ({
+  ...snap(devices, at),
+  work: {
+    loaded: {
+      mode: partIds.length ? 'split' : 'apart', model: { id: 'm', name: 'M', file: 'm.gguf', size: 1e9 }, ctx: 4096, since: at - 900_000,
+      devices: [
+        { id: 'local', name: 'this computer', local: true, busy: false, tps: 20, done: 30 },
+        ...devs.map((id) => ({ id, name: id, local: false, busy: true, tps: 18, done: 41 })),
+      ],
+      ...(partIds.length ? { parts: partIds.map((id) => ({ id, name: id, local: false, mb: 900, layers: 12 })) } : {}),
+    },
+    loading: null, chatting: 1, plan: [], decisions: [], llama: true,
+  },
+});
+
+/** five 15 s probes of pixel and tab, the last at 61 000 */
+function probedTwo() {
+  const { c, ctx } = fakeCtx();
+  const b = create(ctx);
+  let t = 1_000;
+  for (let i = 0; i < 5; i++) {
+    b.observe(snap([dev({ checkedAt: t }), dev({ id: 'p2', name: 'tab', checkedAt: t })], t), null);
+    t += 15_000;
+  }
+  return { c, b, last: t - 15_000 };
+}
+
+test('c7 (a): a device answering in the loaded model is in use, not stale: whole line, usual latency kept', () => {
+  const { b, last } = probedTwo();
+  const at = last + 600_000;
+  b.observe(loadedSnap([dev({ checkedAt: last }), dev({ id: 'p2', name: 'tab', checkedAt: at })], at, ['p1']), null);
+  const v = b.view();
+  assert.equal(v.lines[0], 'pixel · reachable · 12 ms · usually 12 ms (4–20) · in use · 3.3 GB free · 60 GB/s');
+  assert.doesNotMatch(v.lines[0], /stale/);
+  assert.equal(row(v, 'stale'), 'none');
+  assert.equal(v.stat, '2 of 2 devices active');
+  assert.equal(v.gauge, 100);
+});
+
+test('c7 (a): a device holding layers of a split (work.loaded.parts) is in use, not stale', () => {
+  const { b, last } = probedTwo();
+  const at = last + 600_000;
+  b.observe(loadedSnap([dev({ checkedAt: last }), dev({ id: 'p2', name: 'tab', checkedAt: at })], at, [], ['p1']), null);
+  const v = b.view();
+  assert.doesNotMatch(v.lines[0], /stale/);
+  assert.match(v.lines[0], / · in use · /);
+  assert.equal(row(v, 'stale'), 'none');
+});
+
+test('c7 (a): a local entry or a bad id in the load marks nothing; a device not in the load still goes stale', () => {
+  const { b, last } = probedTwo();
+  const at = last + 600_000;
+  const s = loadedSnap([dev({ checkedAt: last }), dev({ id: 'p2', name: 'tab', checkedAt: last })], at, ['p2']);
+  s.work.loaded.devices.push(null, { id: 42 }, { id: 'p1', name: 'pixel', local: true });   // a local p1 is this computer
+  s.work.loaded.parts = [null, 'p1', { id: '' }];
+  b.observe(s, null);
+  const v = b.view();
+  assert.equal(v.lines[0], 'pixel · reachable · stale: last looked at 600 s ago · 3.3 GB free · 60 GB/s');
+  assert.match(v.lines[1], /^tab · reachable · 12 ms · usually 12 ms \(4–20\) · in use · /);
+  assert.equal(row(v, 'stale'), 'pixel');
+});
+
+test('c7 (b): a stale device is left out of the active count, the stat and the gauge', () => {
+  const { b, last } = probedTwo();
+  const at = last + 8 * 3600_000;
+  b.observe(snap([dev({ checkedAt: at }), dev({ id: 'p2', name: 'tab', checkedAt: last })], at), null);
+  const v = b.view();
+  assert.equal(row(v, 'stale'), 'tab');
+  assert.equal(v.stat, '1 of 2 devices active · 1 not checked lately');
+  assert.equal(v.gauge, 50);
+  // both stale: none active, and the stat still starts "N of M" for the brain map
+  b.observe(snap([dev({ checkedAt: last }), dev({ id: 'p2', name: 'tab', checkedAt: last })], at), null);
+  assert.equal(b.view().stat, '0 of 2 devices active · 2 not checked lately');
+  assert.equal(b.view().gauge, 0);
+});
+
+// ---- B5: a flapping link floods the feed with up/down lines
+
+test('b5: 40 alternating probes give one flapping line and no flip lines while flapping; stopped flapping still comes', () => {
+  const { c, ctx } = fakeCtx();
+  const b = create(ctx);
+  let t = 1_000;
+  let before: any = null;
+  const look = (ok: boolean) => {
+    const s = snap([dev({ reachable: ok, reachMs: ok ? 12 : null, reason: ok ? null : 'gone', checkedAt: t })], t);
+    b.observe(s, before);
+    before = s;
+    t += 15_000;
+  };
+  for (let i = 0; i < 40; i++) look(i % 2 === 0);
+  const flips = (xs: string[]) => xs.filter((x) => /answers again|stopped answering/.test(x));
+  const startAt = c.feed.findIndex((x) => x.startsWith('pixel is flapping'));
+  assert.ok(startAt >= 0, 'it says flapping');
+  assert.equal(c.feed.filter((x) => /is flapping/.test(x)).length, 1, 'one flapping line');
+  // flapping starts at the 8th reading: the 7 flips up to it are said, none after
+  assert.equal(flips(c.feed.slice(0, startAt)).length, 7);
+  assert.deepEqual(flips(c.feed.slice(startAt)), [], 'no flip lines while flapping');
+  assert.equal(c.feed.length, 8);
+  // the last look was down: 17 steady down looks end it (0.123 <= 0.15), as in the hysteresis test
+  for (let i = 0; i < 17; i++) look(false);
+  assert.equal(c.feed[c.feed.length - 1], 'pixel stopped flapping');
+  assert.equal(c.feed.length, 9);
+  look(true);                                                   // no longer flapping: the flip is said again
+  assert.equal(c.feed[c.feed.length - 1], 'pixel answers again');
+});
