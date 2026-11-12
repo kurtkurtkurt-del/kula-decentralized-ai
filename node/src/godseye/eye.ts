@@ -86,6 +86,15 @@ export function sameAction(a: unknown, b: unknown): boolean {
   try { return JSON.stringify(canon(a)) === JSON.stringify(canon(b)); } catch { return false; }
 }
 
+/** a dismissed card is the same card while it says the same kind of action: do, model and mode. Its
+ *  devices (they follow who is reachable), ctx and here may change without the person's "no" ending;
+ *  load → unload, another model or another mode is a new card. Missing on either side is never the same. */
+export function sameDismissal(a: unknown, b: unknown): boolean {
+  if (a == null || b == null || typeof a !== 'object' || typeof b !== 'object') return false;
+  const x = a as Record<string, unknown>, y = b as Record<string, unknown>;
+  return x.do === y.do && x.model === y.model && x.mode === y.mode;
+}
+
 /** a branch's suggestion checked field by field, or null */
 export function cleanCard(s: unknown): Suggestion | null {
   const x = s as Record<string, unknown> | null;
@@ -234,7 +243,13 @@ export class GodsEye {
         }
       },
       // a broken branch's last view is not quoted for ever: peek sees nothing of it
-      peek: (other: BranchId) => (this.broken.has(other) ? null : this.views.get(other) ?? null),
+      peek: (other: BranchId) => {
+        const v = this.broken.has(other) ? null : this.views.get(other) ?? null;
+        // finding D3: the advisor ranks only the cards the panel shows; a card the person dismissed
+        // or applied is never its "first:" or "then:"
+        if (id !== 'advisor' || v === null || this.hidden.size === 0 || !Array.isArray(v.suggestions)) return v;
+        return { ...v, suggestions: v.suggestions.filter((s) => !this.hidesRaw(s)) };
+      },
     };
   }
 
@@ -290,18 +305,40 @@ export class GodsEye {
     } catch (e) {
       this.log(`god's eye: ${why(e)}`);
     }
+    try { this.settle(); } catch (e) { this.log(`god's eye: cards: ${why(e)}`); }
     this.record(snap, broken, left);
   }
 
   // ---- cards: the branches' suggestions, gathered for the panel; the eye itself never applies one
 
+  // the bookkeeping (since, and when a dismissal ends) is the look's: settle() at the end of tick().
+  // cards() only reads, so whether the page asks or not, the cards are the same (finding D4)
   private cardSince = new Map<string, number>();   // card id → when it first showed
-  private hidden = new Set<string>();              // dismissed or applied: hidden while the branch still says it
+  /** dismissed or applied, with the action the person saw: hidden while the branch says that id with
+   *  that action (finding D2: the same id with another action is another card to the person) */
+  private hidden = new Map<string, { action: SuggestAction | null; applied: boolean }>();
 
-  /** every card the branches say now, checked, the hidden ones left out, most important first */
-  cards(): EyeCard[] {
-    const out: EyeCard[] = [];
-    const live = new Set<string>();
+  /** a card with this id and this action is one the person dismissed or applied; no action on both
+   *  sides is the same (a warning with nothing to apply). An applied card needs the very action; a
+   *  dismissed one only the same kind of action (sameDismissal), so it survives device flaps */
+  private isHidden(id: string, action: SuggestAction | null): boolean {
+    const h = this.hidden.get(id);
+    if (!h) return false;
+    if (h.action === null) return action === null;
+    return h.applied ? sameAction(h.action, action) : sameDismissal(h.action, action);
+  }
+
+  /** a raw suggestion (as a branch's view holds it) the panel hides now */
+  private hidesRaw(s: unknown): boolean {
+    const x = s as { id?: unknown; action?: unknown } | null;
+    if (!x || typeof x !== 'object' || typeof x.id !== 'string' || !this.hidden.has(x.id)) return false;
+    return this.isHidden(x.id, x.action == null ? null : cleanAction(x.action));
+  }
+
+  /** every card the branches say now, checked, before anything is hidden; in the map's order */
+  private liveCards(): (Suggestion & { branch: BranchId })[] {
+    const out: (Suggestion & { branch: BranchId })[] = [];
+    const seen = new Set<string>();
     for (const m of BRANCHES) {
       if (this.broken.has(m.id)) continue;
       const list = this.views.get(m.id)?.suggestions;
@@ -310,18 +347,38 @@ export class GodsEye {
       for (const raw of list) {
         if (n >= CARDS_PER_BRANCH) break;
         const c = cleanCard(raw);
-        if (!c || !c.id.startsWith(`${m.id}:`) || live.has(c.id)) continue;   // a branch speaks only for itself
-        live.add(c.id);
+        if (!c || !c.id.startsWith(`${m.id}:`) || seen.has(c.id)) continue;   // a branch speaks only for itself
+        seen.add(c.id);
         n++;
-        if (!this.cardSince.has(c.id)) this.cardSince.set(c.id, this.lastAt || this.now());
-        if (this.hidden.has(c.id)) continue;
-        // the advisor's "first: <card>" leans on another branch's card: hidden with it
-        if (c.id.startsWith('advisor:first:') && this.hidden.has(c.id.slice('advisor:first:'.length))) continue;
-        out.push({ ...c, branch: m.id, since: this.cardSince.get(c.id)! });
+        out.push({ ...c, branch: m.id });
       }
     }
-    // a card whose reason is gone is forgotten, and so is its dismissal: if it comes back, it shows again
-    for (const id of [...this.cardSince.keys()]) if (!live.has(id)) { this.cardSince.delete(id); this.hidden.delete(id); }
+    return out;
+  }
+
+  /** after each look: a new card gets its since; a card whose reason is gone is forgotten, and so is
+   *  its dismissal (if it comes back, it shows again); a dismissal whose card now says another action ends */
+  private settle(): void {
+    const live = new Map<string, SuggestAction | null>();
+    for (const c of this.liveCards()) {
+      live.set(c.id, c.action);
+      if (!this.cardSince.has(c.id)) this.cardSince.set(c.id, this.lastAt || this.now());
+    }
+    for (const id of [...this.cardSince.keys()]) if (!live.has(id)) this.cardSince.delete(id);
+    for (const id of [...this.hidden.keys()]) if (!live.has(id) || !this.isHidden(id, live.get(id) ?? null)) this.hidden.delete(id);
+  }
+
+  /** every card the branches say now, checked, the hidden ones left out, most important first. Only reads. */
+  cards(): EyeCard[] {
+    const all = this.liveCards();
+    const hiddenNow = new Set(all.filter((c) => this.isHidden(c.id, c.action)).map((c) => c.id));
+    const out: EyeCard[] = [];
+    for (const c of all) {
+      if (hiddenNow.has(c.id)) continue;
+      // the advisor's "first: <card>" leans on another branch's card: hidden with it
+      if (c.id.startsWith('advisor:first:') && hiddenNow.has(c.id.slice('advisor:first:'.length))) continue;
+      out.push({ ...c, since: this.cardSince.get(c.id) ?? (this.lastAt || this.now()) });
+    }
     return out.sort((a, b) => cardRank(b) - cardRank(a) || a.since - b.since).slice(0, CARDS_MAX);
   }
 
@@ -330,11 +387,11 @@ export class GodsEye {
     return this.cards().find((c) => c.id === id) ?? null;
   }
 
-  /** the person closed a card: hidden until its branch stops saying it */
+  /** the person closed a card: hidden until its branch stops saying it or says another action */
   dismiss(id: string): boolean {
     const c = this.card(id);
     if (!c) return false;
-    this.hidden.add(c.id);
+    this.hidden.set(c.id, { action: c.action, applied: false });
     this.recordAct(c.branch, 'dismiss', c.id, 'dismissed');
     return true;
   }
@@ -343,8 +400,21 @@ export class GodsEye {
   applied(id: string, word: string): void {
     const c = this.cards().find((x) => x.id === id);
     if (!c) return;
-    this.hidden.add(c.id);
+    this.hidden.set(c.id, { action: c.action, applied: true });
     this.recordAct(c.branch, 'apply', c.id, String(word).slice(0, WORD_MAX));
+  }
+
+  /** kula's engine could not carry out an applied card (a load that failed in the background): the
+   *  card shows again at the next view, and the box says so. Only an applied card with this action
+   *  (when one is given) comes back, never a dismissal. The eye retries nothing: only the person's tap does. */
+  unhide(id: string, why: string, action?: SuggestAction | null): boolean {
+    const h = this.hidden.get(id);
+    if (!h || !h.applied) return false;
+    if (action !== undefined && !(h.action === null ? action === null : sameAction(h.action, action))) return false;
+    this.hidden.delete(id);
+    const branch = id.slice(0, id.indexOf(':')) as BranchId;
+    if (BRANCH_IDS.includes(branch)) this.recordAct(branch, 'apply-failed', id, String(why).slice(0, WORD_MAX));
+    return true;
   }
 
   /** Hands a decision from the branch's page to the branch (it never reaches a device), then looks again. */

@@ -146,3 +146,110 @@ test('the advisor\'s "first: <card>" hides with the card it points at', () => {
   eye.dismiss('planner:split:m');
   assert.deepEqual(eye.view().cards.map((c) => c.id), []);
 });
+
+// finding D2 (12.11.2026): a tapped card was hidden by its id alone, so the same id carrying a
+// different action (a worse problem, another fix) stayed hidden for as long as the reason held
+test('a tapped card that now says another action shows again (D2)', () => {
+  let card: any = { id: 'models:tight:local', kind: 'warn', weight: 3, title: 'M no longer fits the Mac: 3.0 GB free now', why: 'answers may crawl', action: { do: 'load', model: 's', mode: 'here', devices: [] }, label: 'load S' };
+  let at = 1_000_000;
+  const eye = new GodsEye({ snapshot: () => snap(at), dir: path.join(HOME, 'd2'), now: () => at,
+    makers: { models: () => ({ id: 'models', observe() {}, view: () => ({ ...dark(), built: true, stat: 'x', suggestions: [card] }) }) } });
+  eye.tick();
+  eye.applied('models:tight:local', 'loading s (here)');
+  for (let i = 0; i < 3; i++) { at += 5000; eye.tick(); }
+  assert.deepEqual(eye.view().cards.map((c) => c.id), [], 'the same action: still hidden');
+  card = { ...card, title: 'M no longer fits the Mac: 0.9 GB free now', action: { do: 'unload' }, label: 'unload' };
+  for (let i = 0; i < 20; i++) { at += 5000; eye.tick(); }
+  const shown = eye.view().cards;
+  assert.deepEqual(shown.map((c) => c.id), ['models:tight:local'], 'it says unload now: shown');
+  assert.equal(shown[0].action?.do, 'unload');
+  assert.equal(eye.dismiss('models:tight:local'), true, 'and it can be dismissed again');
+  eye.tick();
+  assert.deepEqual(eye.view().cards.map((c) => c.id), []);
+});
+
+// finding D3: the advisor ranked the cards as the branches said them, dismissed ones too, so its
+// "first:" pointed at a hidden card and was hidden with it while two cards stayed on the panel
+test('after the top card is dismissed, the advisor names the most important card still shown (D3)', () => {
+  const card = (id: string, weight: number, title: string) => ({ id, kind: 'warn', weight, title, why: 'w', action: { do: 'open', panel: 'devices' } });
+  const stub = (id: string, list: unknown[]) => () => ({ id, observe() {}, view: () => ({ ...dark(), built: true, stat: 'x', suggestions: list as any }) });
+  let at = 1_000_000;
+  const eye = new GodsEye({ snapshot: () => snap(at), dir: path.join(HOME, 'd3'), now: () => at, makers: {
+    models: stub('models', [card('models:tight:local', 3, 'M no longer fits the Mac')]),
+    planner: stub('planner', [card('planner:alone:m', 2, 'split is slower than the Mac alone')]),
+    executor: stub('executor', [card('executor:slow:p1', 2, 'pixel answers slowly')]),
+  } as any });
+  for (let i = 0; i < 4; i++) { at += 5000; eye.tick(); }
+  assert.ok(eye.view().cards.some((c) => c.id === 'advisor:first:models:tight:local'));
+  eye.dismiss('models:tight:local');
+  for (let i = 0; i < 8; i++) { at += 5000; eye.tick(); }
+  const v = eye.view();
+  const ids = v.cards.map((c) => c.id);
+  const adv = v.branches.find((b) => b.id === 'advisor')!;
+  assert.ok(ids.some((id) => id.startsWith('advisor:first:') && id !== 'advisor:first:models:tight:local'), `a "first:" for a card still shown: ${JSON.stringify(ids)}`);
+  assert.doesNotMatch(String(adv.stat), /no longer fits/, 'the advisor no longer quotes the dismissed card');
+  assert.ok(!v.cards.some((c) => /no longer fits/.test(c.why)), '"then:" names no dismissed card');
+});
+
+// finding D4 (the proof is scratch d5): the reason-gone reset ran only inside cards(), which on
+// kula-node runs only while the brain page asks; the eye ticks every 5 s regardless
+test('a dismissed warning that went and came back while nobody looked at the cards shows again (D4)', () => {
+  let on = true;
+  const drop = { id: 'executor:drops:p1', kind: 'warn', weight: 3, title: 'pixel keeps dropping out', why: '3 of the last 12 looks', action: { do: 'probe', devices: ['p1'] } };
+  let at = 1_000_000;
+  const eye = new GodsEye({ snapshot: () => snap(at), dir: path.join(HOME, 'd4'), now: () => at,
+    makers: { executor: () => ({ id: 'executor', observe() {}, view: () => ({ ...dark(), built: true, stat: 'x', suggestions: (on ? [drop] : []) as any }) }) } });
+  eye.tick();
+  eye.dismiss('executor:drops:p1');
+  on = false; for (let i = 0; i < 100; i++) { at += 5000; eye.tick(); }
+  on = true; const back = at + 5000; for (let i = 0; i < 10; i++) { at += 5000; eye.tick(); }
+  const c = eye.view().cards.find((x) => x.id === 'executor:drops:p1');
+  assert.ok(c, 'the returning warning shows');
+  assert.equal(c!.since, back, 'since: when it came back, not the morning');
+});
+
+test('cards() and view() only read: looking at the cards twice changes nothing', () => {
+  let at = 1_000_000;
+  const say: unknown[] = [{ id: 'planner:a', kind: 'suggest', title: 'a', why: 'w', action: load }];
+  const eye = new GodsEye({ snapshot: () => snap(at), dir: path.join(HOME, 'ro'), now: () => at,
+    makers: { planner: () => ({ id: 'planner', observe() {}, view: () => ({ ...dark(), built: true, stat: 'x', suggestions: say as any }) }) } });
+  eye.tick();
+  eye.dismiss('planner:a');
+  say.length = 0;
+  assert.deepEqual(eye.cards(), []);
+  say.push({ id: 'planner:a', kind: 'suggest', title: 'a', why: 'w', action: load });
+  assert.deepEqual(eye.cards(), [], 'no look between: the dismissal stands');
+});
+
+// a dismissal survives device flaps: for a dismissed card only do, model and mode count, so a load
+// card whose device list follows who is reachable stays closed; another model or mode opens it again
+test('a dismissed load card stays hidden while only its devices change, and shows again for another model', () => {
+  let at = 1_000_000;
+  const card = (devices: string[], model = 'tiny') => ({ id: 'planner:split:m', kind: 'suggest', title: 'split it', why: 'w', action: { do: 'load', model, mode: 'apart', devices } });
+  let say: unknown[] = [card(['p1', 'p2'])];
+  const eye = new GodsEye({ snapshot: () => snap(at), dir: path.join(HOME, 'flap'), now: () => at,
+    makers: { planner: () => ({ id: 'planner', observe() {}, view: () => ({ ...dark(), built: true, stat: 'x', suggestions: say as any }) }) } });
+  eye.tick();
+  assert.equal(eye.dismiss('planner:split:m'), true);
+  for (const devices of [['p1'], ['p1'], ['p1', 'p2'], ['p2'], ['p1', 'p2']]) {
+    say = [card(devices)];
+    at += 5000; eye.tick();
+    assert.deepEqual(eye.view().cards.map((c) => c.id), [], `devices ${devices.join(',')}: still dismissed`);
+  }
+  say = [card(['p1', 'p2'], 'bigger')];
+  at += 5000; eye.tick();
+  assert.deepEqual(eye.view().cards.map((c) => c.id), ['planner:split:m'], 'another model: shown again');
+});
+
+// unhide: a tap whose work failed (the load's rejection on kula-node) shows its card again; the eye
+// only records it, nothing is retried
+test('unhide shows an applied card again at once and runs nothing', () => {
+  const say: unknown[] = [{ id: 'planner:a', kind: 'suggest', title: 'a', why: 'w', action: load }];
+  const eye = eyeWith({ planner: say });
+  eye.applied('planner:a', 'loading');
+  assert.deepEqual(eye.view().cards.map((c) => c.id), []);
+  assert.equal(eye.unhide('planner:a', 'the load failed'), true);
+  assert.deepEqual(eye.view().cards.map((c) => c.id), ['planner:a']);
+  assert.equal(eye.unhide('planner:a', 'again'), false, 'not hidden: nothing to do');
+  assert.equal(eye.unhide('nobody:x', 'x'), false);
+});

@@ -539,3 +539,28 @@ test('brain/apply runs only the action the person saw: a changed or missing acti
     assert.equal((await open.json()).word, 'opened');
   } finally { await ui.close(); eye.stop(); await engine.close(); }
 });
+
+// finding D2 (12.11.2026): the load runs in the background after the card is hidden; when it fails,
+// the card shows again in the next view. Nothing tries the load again: only the person's tap does.
+test('brain/apply: a rejected engine.load brings the card back in the next view, and nothing loads again', async () => {
+  const { GodsEye, dark } = await import('../src/godseye/index.ts');
+  const { engine } = newEngine();
+  let loads = 0;
+  (engine as any).load = async () => { loads++; await new Promise((r) => setTimeout(r, 20)); throw new Error('not enough memory on p1'); };
+  const loadA = { do: 'load', model: 'tiny', mode: 'apart', devices: ['p1'] };
+  const say = [{ id: 'planner:load', kind: 'suggest', title: 'load', why: 'w', action: loadA }];
+  const eye = new GodsEye({ snapshot: () => ({ at: 1000, host: { name: 'mac', freeMb: 4000 }, devices: [], work: { loaded: null, loading: null, chatting: 0, plan: [], decisions: [], llama: true }, models: [], projects: [] }) as any,
+    dir: path.join(HOME, 'eye-d2'), makers: { planner: () => ({ id: 'planner', observe() {}, view: () => ({ ...dark(), built: true, stat: 'x', suggestions: say as any }) }) } });
+  eye.tick();
+  const ui = await startUi({ port: 0, engine, eye, store: new ChatStore(path.join(HOME, 'chats-d2')), token: 'kula-' + 'cd'.repeat(20) } as any);
+  try {
+    const r = await post(`${ui.url}api/brain/apply`, ui.port, { id: 'planner:load', action: loadA });
+    assert.equal(r.status, 200);
+    assert.ok(!(await r.json()).view.cards.some((c: any) => c.id === 'planner:load'), 'hidden while the load runs');
+    await new Promise((r) => setTimeout(r, 100));
+    eye.tick();
+    assert.ok(eye.view().cards.some((c: any) => c.id === 'planner:load'), 'the load failed: the card shows again');
+    await new Promise((r) => setTimeout(r, 100));
+    assert.equal(loads, 1, 'nothing retried the load');
+  } finally { await ui.close(); eye.stop(); await engine.close(); }
+});
