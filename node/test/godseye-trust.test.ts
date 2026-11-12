@@ -66,6 +66,30 @@ test('one device, everything right: all clear, every check ticked; ed25519 and p
   }
 });
 
+test('a device that reports 5000 ledger lines but sends none: not checked, never "every ledger holds"', () => {
+  const d = device();
+  const { b } = branch();
+  for (let i = 0; i < 3; i++) b.observe(snap([eyeDev(d, trustOf(d, { count: 5000, head: 'f'.repeat(64), lines: [] }))]) as any, null);
+  const v = b.view();
+  assert.notEqual(v.report!.verdict, 'ok', JSON.stringify(v.report));
+  assert.equal(v.report!.verdict, 'unknown');
+  assert.doesNotMatch(v.report!.headline, /every ledger holds/);
+  assert.equal(check(v, 'ledger').ok, null);
+  assert.equal(check(v, 'ledger').text, 'it reports 5000 lines, none checked here yet');
+  // it then stops saying its length: still nothing checked here, still not all clear
+  b.observe(snap([eyeDev(d, trustOf(d, { count: null, head: 'f'.repeat(64), lines: [] }))]) as any, null);
+  assert.equal(check(b.view(), 'ledger').ok, null);
+  assert.equal(b.view().report!.verdict, 'unknown');
+  // a device with no ledger lines at all (count 0, or no count) is still all clear
+  for (const o of [{}, { count: undefined }]) {
+    const e = device();
+    const r = branch();
+    r.b.observe(snap([eyeDev(e, trustOf(e, o))]) as any, null);
+    assert.equal(check(r.b.view(), 'ledger').text, 'no ledger lines yet');
+    assert.equal(r.b.view().report!.verdict, 'ok', JSON.stringify(o));
+  }
+});
+
 test('identity: another certificate than the pinned one, a key that is not the claimed id, a cn of another device', () => {
   const d = device();
   d.add();
@@ -192,6 +216,27 @@ test('the engine folds /trust answers: new lines join the window, a ledger that 
   assert.equal(foldTrust(null, withCert, 1, 'f'.repeat(64)).certPinned, false);
   assert.equal(foldTrust(null, withCert, 1, null).certPinned, null);
   assert.ok(!JSON.stringify(foldTrust(null, withCert, 1, fingerprint(der))).includes(fingerprint(der)));
+});
+
+test('the engine folds /trust answers: an answer to a since that leaves out found (or sends null) is a ledger that started over, never a quiet gap', () => {
+  const body = (lines: string[], ledger: Record<string, unknown> = {}) => ({ v: 1, id: 'a'.repeat(32), key: { alg: 'ed25519', pub: 'AA==', store: 'file' }, cert: null, gate: { v1: false, tls: true, paired: 1 }, ledger: { count: 9, head: 'c'.repeat(64), self: 'ok', more: false, lines, ...ledger } });
+  // the first answer: no since was asked (upTo null), so no found is no restart
+  const first = foldTrust(null, body(['a', 'b']), 10);
+  assert.equal(first.restartedAt, null);
+  assert.equal(foldTrust(null, body(['a'], { found: null }), 10).restartedAt, null);
+  assert.ok(first.upTo, 'the next look asks since the last line');
+  // the next look asked since=upTo: an answer without found, or with found null, cannot say it holds the line
+  for (const ledger of [{}, { found: null }, { found: 'yes' }, { found: 1 }]) {
+    const t = foldTrust(first, body(['x'], ledger), 20);
+    assert.equal(t.restartedAt, 20, JSON.stringify(ledger));
+    assert.deepEqual(t.lines, ['x'], 'the window starts again');
+  }
+  assert.equal(foldTrust(first, body(['c'], { found: true }), 20).restartedAt, null, 'found true: the chain goes on');
+  assert.equal(foldTrust(first, body(['x'], { found: false }), 20).restartedAt, 20);
+  // a look that had nothing to ask since (no upTo: nothing received yet) sets no restart either
+  const empty = foldTrust(null, body([]), 5);
+  assert.equal(empty.upTo, null);
+  assert.equal(foldTrust(empty, body(['a']), 6).restartedAt, null);
 });
 
 // ---- owner-blind (11.11.2026): can the device's owner read the jobs it runs ---------------------

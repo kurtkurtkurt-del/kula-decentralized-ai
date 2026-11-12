@@ -369,6 +369,7 @@ export function create(ctx: BranchCtx): Branch {
     const err = typeof t?.error === 'string' && t.error.length > 0 && t.error.length <= 200 ? t.error : null;
     const rejects = cleanDay(t?.rejectsDay);
     const checks: TrustCheck[] = [];
+    let unchecked = false;        // it reports ledger lines, none verified here: its ledger null counts
     checks.push(tls
       ? { k: 'pinned', ok: true, text: 'certificate pinned from its qr' }
       : { k: 'pinned', ok: false, text: 'older pairing: a shared secret, no certificate. pair it again with its qr' });
@@ -404,6 +405,11 @@ export function create(ctx: BranchCtx): Branch {
               ? { k: 'refused', ok: false, text: `refusals still above its usual: ${fmt(Math.min(s.lastBurst, K_MAX))} in the last finished hour, usually about ${lambda.toFixed(1)}` }
               : { k: 'refused', ok: true, text: (refused.length ? `refused today: ${words}` : 'nothing refused today') + (known ? '' : ` (still learning what is usual: ${fmt(s.hist.length)} of ${fmt(HIST_NEED)} hours; a device that already refuses often takes longer to judge)`) });
       const hasCount = typeof t!.count === 'number' && Number.isFinite(t!.count) && t!.count >= 0 && t!.count <= COUNT_MAX;
+      const reported = hasCount ? Math.floor(t!.count as number) : 0;
+      // a device that says (or once said) it has lines but never handed one over that held here is
+      // not checked, and must not pass as "every ledger holds". a device with no lines at all (count
+      // 0 or none) stays exempt, and so does one whose chain holds here but that stopped saying its length
+      unchecked = !s.head && (reported > 0 || (!hasCount && s.count > 0));
       checks.push(s.fault
         ? { k: 'ledger', ok: false, text: s.fault }
         : t!.self === 'broken'
@@ -412,7 +418,9 @@ export function create(ctx: BranchCtx): Branch {
             ? { k: 'ledger', ok: null, text: `it stopped reporting its ledger length (${fmt(s.count)} lines before)` }
             : s.head
               ? { k: 'ledger', ok: true, text: `${plural(s.verified, 'line')} checked here since ${day(s.since)}: the chain and every signature hold${s.gap ? ' (one stretch between two looks was too long to join)' : ''}` }
-              : { k: 'ledger', ok: null, text: 'no ledger lines yet' });
+              : reported > 0
+                ? { k: 'ledger', ok: null, text: `it reports ${plural(reported, 'line')}, none checked here yet` }
+                : { k: 'ledger', ok: null, text: 'no ledger lines yet' });
       checks.push(t!.store === 'keystore'
         ? { k: 'key', ok: true, text: 'its key is in the phone’s keystore and cannot be copied out' }
         : { k: 'key', ok: null, text: t!.store === 'file' ? 'its key is in a file on the device' : 'it did not say where its key is' });
@@ -421,7 +429,7 @@ export function create(ctx: BranchCtx): Branch {
     // the key's place is the device's word, not checked, and owner-blind is informational for now:
     // neither turns a device red or green
     const counted = checks.filter((c) => !INFO.has(c.k));
-    const verdict: Verdict = counted.some((c) => c.ok === false) ? 'bad' : !answered || counted.some((c) => c.ok === null && c.k !== 'ledger') ? 'unknown' : 'ok';
+    const verdict: Verdict = counted.some((c) => c.ok === false) ? 'bad' : !answered || counted.some((c) => c.ok === null && (c.k !== 'ledger' || unchecked)) ? 'unknown' : 'ok';
     const rd = answered ? dayTotal(rejects) : 0;
     return { id: d.id, name, verdict, checks, refused: rd ? `${rd} refused today` : '', accept: !!s.fault };
   }
