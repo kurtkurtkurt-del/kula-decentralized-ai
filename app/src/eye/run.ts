@@ -4,7 +4,7 @@ import * as Battery from 'expo-battery';
 import { router } from 'expo-router';
 import { GodsEye, sameAction, type BranchId, type BranchMaker, type EyeCard, type EyeView } from '@godseye/core';
 import { lastPassport } from '@/data/passport';
-import { getLang, translator } from '@/i18n/core';
+import { getLang, t, translator } from '@/i18n/core';
 import { verifyChain } from '@/llm/audit';
 import { brainLog, latest } from '@/llm/brainlog';
 import { CATALOG } from '@/llm/catalog';
@@ -16,7 +16,7 @@ import { clusterReport, deviceReport, hostCheck } from '@/llm/trust';
 import { trustNotes } from '@/llm/trustStore';
 import { passportHot } from '@/night/conditions';
 import { listTasks } from '@/tasks/store';
-import { route, type PhoneAct, type PhoneEnv } from './apply';
+import { LeftOut, route, type PhoneAct, type PhoneEnv } from './apply';
 import { kvNotes } from './notes';
 import { phoneSnapshot, type PhoneInput, type Power, type Reach } from './snapshot';
 import { phoneTrust } from './trustBranch';
@@ -204,7 +204,12 @@ export const phoneEnv: PhoneEnv = {
   busy: () => !!engine().loading,
   loaded: () => !!engine().model,
   ctx: () => settings().ctx,
-  load: (m, mode, ctx, peers) => load(m, mode, ctx, peers),
+  // the other devices the loaded model really uses: apart drops a peer that failed and still resolves
+  load: async (m, mode, ctx, peers) => {
+    await load(m, mode, ctx, peers);
+    const s = engine();
+    return mode === 'split' ? (s.plan?.used ?? []).map((p) => p.id) : s.devices.filter((d) => !d.local).map((d) => d.id);
+  },
   unload,
   fetch: (c) => startDownload(describe(c)),
   probe: async (list) => {
@@ -224,7 +229,10 @@ export const actOf = (c: EyeCard, env: PhoneEnv = phoneEnv): PhoneAct | null => 
 /** Carries a card out; the card is hidden while its branch still says it. Throws what failed.
  *  [shown] is the action the person saw: when the card now says another (a device joined between
  *  showing and pressing), nothing runs and it throws 'changed', like the computer's brain/apply 409.
- *  An open card only moves the page and needs no match. */
+ *  An open card only moves the page and needs no match.
+ *  A load card (finding D2) is hidden while its load runs, like the computer's; a load that throws,
+ *  or an apart load that left out every device the card named, shows it again (eye.unhide, written
+ *  in the box as apply-failed) and the tap says why. Nothing retries: only the person's next tap loads. */
 export async function applyCard(id: string, shown: unknown, env: PhoneEnv = phoneEnv): Promise<string> {
   const e = theEye();
   const c = e.card(id);
@@ -232,10 +240,24 @@ export async function applyCard(id: string, shown: unknown, env: PhoneEnv = phon
   if (c.action?.do !== 'open' && !sameAction(shown, c.action)) throw new Error('changed');
   const act = route(c.action, env);
   if (!act) throw new Error('not here');
-  const word = await act.run();
-  e.applied(c.id, word);
-  view = e.view();
-  notify();
+  const fresh = () => { view = e.view(); notify(); };
+  const loading = c.action?.do === 'load' ? c.action : null;
+  if (loading) {
+    e.applied(c.id, `loading ${loading.model} (${loading.mode})`);
+    fresh();
+  }
+  let word: string;
+  try {
+    word = await act.run();
+  } catch (err) {
+    if (!loading) throw err;
+    const left = err instanceof LeftOut ? err : null;
+    e.unhide(c.id, left ? `every device was left out: ${left.leftOut.join(', ')}` : `the load failed: ${(err as Error)?.message ?? String(err)}`, loading);
+    fresh();
+    throw left ? new Error(t('eye.card.leftOut', { list: left.leftOut.join(', '), model: left.model })) : err;
+  }
+  if (!loading) e.applied(c.id, word);
+  fresh();
   return word;
 }
 

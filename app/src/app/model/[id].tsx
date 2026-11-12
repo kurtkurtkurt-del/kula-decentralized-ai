@@ -170,7 +170,7 @@ export default function ModelScreen() {
           ) : null}
           <Text style={styles.k}>{up(t('model.split'))}</Text>
           <Text style={styles.v}>{t('model.loaded', { s: (engine.load.loadMs / 1000).toFixed(1), layers: engine.load.layers, ctx: engine.load.ctx })}</Text>
-          {engine.split.map((s) => <Text key={s.name} style={styles.v}>{s.name.toLowerCase()} · {s.gb} gb</Text>)}
+          {engine.split.map((s) => <Text key={s.id ?? s.name} style={styles.v}>{s.name.toLowerCase()} · {s.gb} gb</Text>)}
           {engine.plan?.skipped.length ? <Text style={styles.hint}>{t('model.skipped', { list: engine.plan.skipped.map((s) => `${s.peer.name} (${s.why})`).join(', ') })}</Text> : null}
         </View>
       ) : null}

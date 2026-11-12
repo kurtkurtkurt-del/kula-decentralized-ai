@@ -18,7 +18,9 @@ export type PhoneEnv = {
   busy: () => boolean;                                   // a load under way
   loaded: () => boolean;
   ctx: () => number;                                     // the person's context setting
-  load: (model: LocalModel, mode: Mode, ctx: number, peers: Peer[]) => Promise<void>;
+  /** resolves with the ids of the other devices the loaded model actually uses (the engine drops
+   *  the ones that failed and still resolves, finding D2) */
+  load: (model: LocalModel, mode: Mode, ctx: number, peers: Peer[]) => Promise<string[]>;
   unload: () => Promise<void>;
   fetch: (model: CatalogModel) => Promise<void>;
   probe: (peers: Peer[]) => Promise<{ ok: number; bad: number }>;
@@ -28,6 +30,14 @@ export type PhoneEnv = {
 
 /** What a tap does: the kind for the button's word, and the work, which says what it did. */
 export type PhoneAct = { kind: SuggestAction['do']; run: () => Promise<string> };
+
+/** An apart load that ran on this phone with every device the card named left out: not what the
+ *  card promised (finding D2). The model stays loaded alone; applyCard shows the card again. */
+export class LeftOut extends Error {
+  constructor(readonly model: string, readonly leftOut: string[]) {
+    super(`${leftOut.join(', ')} did not join: ${model} runs on this phone alone`);
+  }
+}
 
 const PAGES = { devices: '/peers', models: '/models', settings: '/settings' } as const;
 
@@ -61,7 +71,8 @@ export function route(a: SuggestAction | null, env: PhoneEnv): PhoneAct | null {
         kind: 'load',
         run: async () => {
           if (env.busy()) throw new Error('already loading');
-          await env.load(model, mode, ctx, peers);
+          const used = new Set(await env.load(model, mode, ctx, peers));
+          if (mode === 'apart' && !peers.some((p) => used.has(p.id))) throw new LeftOut(model.name, peers.map((p) => p.name));
           return `loaded ${model.name} (${mode})`;
         },
       };

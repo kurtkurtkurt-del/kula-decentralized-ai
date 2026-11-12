@@ -22,7 +22,7 @@ import { kvNotes, NOTES_PREFIX } from '@/eye/notes';
 import { actOf, applyCard, dismissCard, eyeRunning, holdEye, look, resetEye } from '@/eye/run';
 import { phoneSnapshot, type PhoneInput } from '@/eye/snapshot';
 import { phoneTrust } from '@/eye/trustBranch';
-import { translator } from '@/i18n/core';
+import { setCurrentLang, translator } from '@/i18n/core';
 import type { LocalModel, Peer } from '@/llm/store';
 import { clusterReport, deviceReport, hostCheck, freshNote } from '@/llm/trust';
 import { CATALOG } from '@/llm/catalog';
@@ -135,7 +135,7 @@ const calls: string[] = [];
 const env = (o: Partial<PhoneEnv> = {}): PhoneEnv => ({
   native: true, models: () => [model()], catalog: CATALOG, peers: () => [peer(), peer({ id: 'p2', name: 'Tab' })], selfIds: () => ['me', 'w-self'],
   busy: () => false, loaded: () => true, ctx: () => 2048,
-  load: async (m, mode, ctx, peers) => { calls.push(`load ${m.id} ${mode} ${ctx} ${peers.map((p) => p.id).join(',')}`); },
+  load: async (m, mode, ctx, peers) => { calls.push(`load ${m.id} ${mode} ${ctx} ${peers.map((p) => p.id).join(',')}`); return peers.map((p) => p.id); },
   unload: async () => { calls.push('unload'); },
   fetch: async (c) => { calls.push(`fetch ${c.id}`); },
   probe: async (list) => { calls.push(`probe ${list.map((p) => p.id).join(',')}`); return { ok: list.length, bad: 0 }; },
@@ -228,11 +228,62 @@ describe('a card\'s tap on the phone', () => {
     devices = ['p1', 'p2'];   // the tablet joins before the tap
     const now = look().cards[0].action!;
     let loads = 0;
-    const e = env({ load: async () => { loads++; } });
+    const e = env({ load: async (_m, _mode, _ctx, peers) => { loads++; return peers.map((p) => p.id); } });
     await expect(applyCard('planner:apart:m', first, e)).rejects.toThrow('changed');
     expect(loads).toBe(0);
     await expect(applyCard('planner:apart:m', now, e)).resolves.toMatch(/loaded/);
     expect(loads).toBe(1);
+  });
+
+  // D2, the phone half: a load card is hidden while its load runs; a load that throws, or an apart
+  // load that resolves with every device the card named left out, shows the card again. Nothing retries.
+  const apartCard = (): BranchMaker => () => ({
+    id: 'planner', observe() {},
+    view: () => ({ ...dark(), built: true, stat: 'one plan', suggestions: [
+      { id: 'planner:apart:qwen', kind: 'suggest', title: 'run qwen apart', why: 'it fits across', action: { do: 'load', model: 'qwen', mode: 'apart', devices: ['me', 'p1', 'p2'] } },
+    ] }),
+  });
+
+  it('route: an apart load that took none of the card\'s devices is not "loaded" (D2-phone)', async () => {
+    const a: SuggestAction = { do: 'load', model: 'qwen', mode: 'apart', devices: ['me', 'p1', 'p2'] };
+    await expect(run(a, env({ load: async () => [] }))).rejects.toMatchObject({ leftOut: ['Pixel', 'Tab'], model: 'Qwen' });
+    await expect(run(a, env({ load: async () => ['p2'] }))).resolves.toBe('loaded Qwen (apart)');   // one joined: that is apart
+    await expect(run({ do: 'load', model: 'qwen', mode: 'here', devices: [] }, env({ load: async () => [] }))).resolves.toBe('loaded Qwen (alone)');
+  });
+
+  it('applyCard: an apart load that left every device out shows the card again and says so; nothing retries (D2-phone)', async () => {
+    setCurrentLang('en');
+    resetEye({ planner: apartCard() });
+    const shown = look().cards[0];
+    let loads = 0;
+    let during: string[] | null = null;
+    const e = env({ load: async () => { loads++; during = look().cards.map((c) => c.id); return []; } });
+    await expect(applyCard(shown.id, shown.action, e)).rejects.toThrow(/Pixel, Tab did not join.*Qwen runs on this phone alone/);
+    expect(during).toEqual([]);   // hidden while it loaded
+    expect(look().cards.map((c) => c.id)).toEqual(['planner:apart:qwen']);
+    look();
+    look();
+    expect(loads).toBe(1);
+  });
+
+  it('applyCard: a load that throws shows the card again; nothing retries (D2-phone)', async () => {
+    resetEye({ planner: apartCard() });
+    const shown = look().cards[0];
+    let loads = 0;
+    let during: string[] | null = null;
+    const e = env({ load: async () => { loads++; during = look().cards.map((c) => c.id); throw new Error('toobig'); } });
+    await expect(applyCard(shown.id, shown.action, e)).rejects.toThrow('toobig');
+    expect(during).toEqual([]);   // hidden while it loaded, like the computer's card
+    expect(look().cards.map((c) => c.id)).toEqual(['planner:apart:qwen']);
+    look();
+    expect(loads).toBe(1);
+  });
+
+  it('applyCard: an apart load that took a device stays hidden (D2-phone)', async () => {
+    resetEye({ planner: apartCard() });
+    const shown = look().cards[0];
+    await expect(applyCard(shown.id, shown.action, env({ load: async () => ['p1'] }))).resolves.toBe('loaded Qwen (apart)');
+    expect(look().cards).toEqual([]);
   });
 
   it('an open card needs no match: it only moves the page', async () => {

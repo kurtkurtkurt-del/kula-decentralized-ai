@@ -208,7 +208,7 @@ export default function BrainScreen() {
             speed={loaded ? speedOf(mode, engine.devices, engine.plan?.est?.tps) : null}
             together={mode === 'apart' && engine.devices.length > 1}
             split={engine.split}
-            devices={mode === 'split' ? engine.split.map((s) => ({ id: s.name, busy: engine.generating })) : engine.devices}
+            devices={mode === 'split' ? engine.split.map((s) => ({ id: s.id ?? s.name, busy: engine.generating })) : engine.devices}
             loading={engine.loading ? t('brain.loading', { what: tx(`model.loading.${engine.loading}`, engine.loading).replace(/…$/, '') }) : null}
             aloneFaster={!!engine.plan?.aloneFaster}
             generating={engine.generating}
