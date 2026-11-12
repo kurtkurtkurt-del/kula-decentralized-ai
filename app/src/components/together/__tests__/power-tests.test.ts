@@ -89,7 +89,7 @@ describe('ping', () => {
 });
 
 describe('speed test', () => {
-  const dev = (id: string, local: boolean): Device => ({ id, name: id, local, busy: false, tps: 1, busyUntil: 0 });
+  const dev = (id: string, local: boolean): Device => ({ id, name: id, local, busy: false, tps: 1, busyUntil: 0, done: 0, heardAt: 0 });
   it('runs every device at once and adds the speeds', async () => {
     const devices = [dev('me', true), dev('a', false), dev('b', false)];
     const reply = (tps: number) => Promise.resolve({ tokens: 32, ms: 1000, firstMs: 100, tps, stopped: false, device: '' });

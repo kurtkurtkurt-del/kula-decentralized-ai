@@ -52,7 +52,9 @@ function reachOf(p: Peer, i: PhoneInput): Reach | null {
   // an older kula without /trust answered with a 404: it was there
   if (n && n.at > 0) seen.push(n.answered || n.error === OLD_WORKER ? { ok: true, at: n.at, why: null } : { ok: false, at: n.at, why: n.error ?? 'no answer' });
   const d = i.engine.devices.find((x) => x.id === p.id);
-  if (d) seen.push(d.out ? { ok: false, at: i.at, why: 'it dropped a request and sits out' } : { ok: true, at: i.at, why: null });
+  // stamped when the engine last heard it (load, answer, drop), not the look's own time: a look
+  // with nothing new heard is not a new probe
+  if (d) seen.push(d.out ? { ok: false, at: d.heardAt, why: 'it dropped a request and sits out' } : { ok: true, at: d.heardAt, why: null });
   return seen.sort((a, b) => b.at - a.at)[0] ?? null;
 }
 
@@ -90,7 +92,7 @@ function workOf(i: PhoneInput): EyeWork {
         model: { id: m.id, name: m.name, file: m.file, size: m.size },
         ctx: e.load?.ctx ?? 0,
         since: i.since.loaded ?? i.at,
-        devices: e.devices.map((d) => ({ id: d.local ? 'me' : d.id, name: d.local ? i.name : d.name, local: d.local, busy: d.busy, tps: d.tps > 0 ? d.tps : null, done: 0 })),
+        devices: e.devices.map((d) => ({ id: d.local ? 'me' : d.id, name: d.local ? i.name : d.name, local: d.local, busy: d.busy, tps: d.done > 0 && d.tps > 0 ? d.tps : null, done: d.done })),
         ...(e.mode === 'split' ? { parts: e.split.map((s) => ({ id: s.name, name: s.name, local: s.name === i.name, mb: Math.round(s.gb * 1024), layers: 0 })) } : {}),
       }
     : null;

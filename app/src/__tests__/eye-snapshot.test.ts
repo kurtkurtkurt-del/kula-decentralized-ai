@@ -49,12 +49,12 @@ describe('the phone\'s look', () => {
 
   it('alone is "here", apart names every device and what it holds, split carries the parts', () => {
     const m = model();
-    const alone = phoneSnapshot(input({ engine: { ...idle, model: m, mode: 'alone', load: { ctx: 4096 } as EngineState['load'], devices: [{ id: 'me', name: 'pixel 8', local: true, busy: true, tps: 12.5, busyUntil: 0 }], generating: true }, since: { loaded: AT - 5000, loading: null } }));
+    const alone = phoneSnapshot(input({ engine: { ...idle, model: m, mode: 'alone', load: { ctx: 4096 } as EngineState['load'], devices: [{ id: 'me', name: 'pixel 8', local: true, busy: true, tps: 12.5, busyUntil: 0, done: 1, heardAt: AT - 1000 }], generating: true }, since: { loaded: AT - 5000, loading: null } }));
     expect(alone.work.loaded).toMatchObject({ mode: 'here', model: { id: 'qwen', file: 'qwen.gguf' }, ctx: 4096, since: AT - 5000, devices: [{ id: 'me', local: true, busy: true, tps: 12.5 }] });
     expect(alone.work.chatting).toBe(1);
 
     const p = peer();
-    const apart = phoneSnapshot(input({ peers: [p, peer({ id: 'p3', name: 'Idle' })], engine: { ...idle, model: m, mode: 'apart', devices: [{ id: 'me', name: 'pixel 8', local: true, busy: false, tps: 10, busyUntil: 0 }, { id: 'p1', name: 'Pixel', local: false, busy: false, tps: 7, busyUntil: 0, peer: p, out: true }] } }));
+    const apart = phoneSnapshot(input({ peers: [p, peer({ id: 'p3', name: 'Idle' })], engine: { ...idle, model: m, mode: 'apart', devices: [{ id: 'me', name: 'pixel 8', local: true, busy: false, tps: 10, busyUntil: 0, done: 0, heardAt: AT - 9000 }, { id: 'p1', name: 'Pixel', local: false, busy: false, tps: 7, busyUntil: 0, peer: p, out: true, done: 0, heardAt: AT - 2000 }] } }));
     expect(apart.work.loaded?.mode).toBe('apart');
     expect(apart.devices.map((d) => d.holds)).toEqual(['qwen.gguf', null]);
     expect(apart.devices[0]).toMatchObject({ reachable: false, reason: 'it dropped a request and sits out' });
@@ -67,6 +67,29 @@ describe('the phone\'s look', () => {
     const loading = phoneSnapshot(input({ engine: { ...idle, model: m, mode: 'split', loading: 'probing' }, since: { loaded: null, loading: AT - 2000 } }));
     expect(loading.work.loaded).toBeNull();
     expect(loading.work.loading).toEqual({ mode: 'split', model: 'Qwen 3 0.6B', since: AT - 2000, line: 'probing' });
+  });
+
+  // P6 (A12 + B7): what the engine measured, and when it last heard a device, not the look's own time
+  it('a device\'s speed is the measured one with how many answers it came from; no answer yet, no speed', () => {
+    const m = model();
+    const p = peer();
+    const loaded = (devices: EngineState['devices']) => phoneSnapshot(input({ peers: [p], engine: { ...idle, model: m, mode: 'apart', devices } })).work.loaded!;
+    const three = loaded([{ id: 'me', name: 'pixel 8', local: true, busy: false, tps: 9, busyUntil: 0, done: 0, heardAt: AT - 90_000 }, { id: 'p1', name: 'Pixel', local: false, busy: false, tps: 14.2, busyUntil: 0, peer: p, done: 3, heardAt: AT - 5_000 }]);
+    expect(three.devices[1]).toMatchObject({ id: 'p1', tps: 14.2, done: 3 });
+    // an estimate (or a bench) before the first answer is not a measurement: the eye gets null
+    expect(three.devices[0]).toMatchObject({ id: 'me', tps: null, done: 0 });
+  });
+
+  it('checkedAt is when the engine last heard the device, not the time of the look', () => {
+    const p = peer();
+    const devices: EngineState['devices'] = [{ id: 'me', name: 'pixel 8', local: true, busy: false, tps: 9, busyUntil: 0, done: 0, heardAt: AT - 90_000 }, { id: 'p1', name: 'Pixel', local: false, busy: false, tps: 14.2, busyUntil: 0, peer: p, done: 3, heardAt: AT - 5_000 }];
+    const s = phoneSnapshot(input({ peers: [p], engine: { ...idle, model: model(), mode: 'apart', devices } }));
+    expect(s.devices[0]).toMatchObject({ reachable: true, checkedAt: AT - 5_000 });
+    // a later look with nothing new heard keeps the same checkedAt: not a new probe
+    expect(phoneSnapshot(input({ at: AT + 30_000, peers: [p], engine: { ...idle, model: model(), mode: 'apart', devices } })).devices[0].checkedAt).toBe(AT - 5_000);
+    // the engine's word is older than a card's probe: the probe wins
+    const probed = phoneSnapshot(input({ peers: [p], reach: { p1: { ok: false, at: AT - 1_000, why: 'no answer' } }, engine: { ...idle, model: model(), mode: 'apart', devices } }));
+    expect(probed.devices[0]).toMatchObject({ reachable: false, checkedAt: AT - 1_000 });
   });
 
   it('models: the catalog with what is here, a model only here, each with kula-node\'s need', () => {

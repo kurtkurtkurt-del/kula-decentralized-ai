@@ -15,7 +15,10 @@ import { note, planEntries } from '@/llm/brainlog';
 // Screens subscribe with useEngine(); everything else is plain async functions.
 // A device in apart mode carries what the dispatcher (sim/model.ts pickDevice) needs: its
 // decoding speed (estimated until the first reply measures it) and when its queue ends.
-export type Device = { id: string; name: string; local: boolean; busy: boolean; apiPort?: number; peer?: Peer; tps: number; busyUntil: number; out?: boolean };
+// `done`: how many real answers measured that speed (0: tps is still the bench or the estimate).
+// `heardAt`: when the engine last heard the device (its probe and load, an answer, or the
+// request it dropped); god's eye reads it as the device's checkedAt (eye/snapshot.ts).
+export type Device = { id: string; name: string; local: boolean; busy: boolean; apiPort?: number; peer?: Peer; tps: number; busyUntil: number; out?: boolean; done: number; heardAt: number };
 export type EngineState = {
   model: LocalModel | null;
   mode: Mode;
@@ -50,8 +53,9 @@ export function useEngine(): EngineState {
 
 const thisName = () => lastPassport()?.device ?? 'this phone';
 // a bench on this model (bench/store.ts) wins over the estimate until the first reply measures it
-const me = (model: LocalModel, freeMb: number): Device => ({ id: 'me', name: thisName(), local: true, busy: false, tps: measuredFor('self', modelKey(model)) ?? estimateAlone(modelProfile(model), localFromPassport(lastPassport(), freeMb)).tps, busyUntil: 0 });
-const ofPeer = (model: LocalModel, p: Peer, apiPort: number): Device => ({ id: p.id, name: p.name, local: false, busy: false, apiPort, peer: p, tps: measuredFor(p.id, modelKey(model)) ?? estimateAlone(modelProfile(model), workerFromPeer(p)).tps, busyUntil: 0 });
+const me = (model: LocalModel, freeMb: number): Device => ({ id: 'me', name: thisName(), local: true, busy: false, tps: measuredFor('self', modelKey(model)) ?? estimateAlone(modelProfile(model), localFromPassport(lastPassport(), freeMb)).tps, busyUntil: 0, done: 0, heardAt: Date.now() });
+// built right after the peer answered its probe and loaded the model: heard now
+const ofPeer = (model: LocalModel, p: Peer, apiPort: number): Device => ({ id: p.id, name: p.name, local: false, busy: false, apiPort, peer: p, tps: measuredFor(p.id, modelKey(model)) ?? estimateAlone(modelProfile(model), workerFromPeer(p)).tps, busyUntil: 0, done: 0, heardAt: Date.now() });
 export const OUT_MS = 5 * 60 * 1000; // a device that dropped a request sits out this long
 
 /** Loads a model in a mode. `share` answers "keep it here or share" when it fits alone. */
@@ -260,13 +264,18 @@ export function chat(messages: Message[], onToken: (t: string) => void, opts: { 
   if (!opts.device && state.devices.length > 1) note({ at: now(), kind: 'dispatch', key: 'brain.dispatch', vars: { device: first.name.toLowerCase(), tps: Math.round(first.tps * 10) / 10, n: state.devices.filter((d) => !d.out).length }, tone: 'info' });
   let run = start(current);
   const measured = (r: Reply) => {
-    if (r.tps > 0) current.tps = Math.round(r.tps * 10) / 10;
+    current.heardAt = now();
+    if (r.tps > 0) {
+      current.tps = Math.round(r.tps * 10) / 10;
+      current.done += 1;
+    }
     return r;
   };
   const done = run.then(measured, (e: Error) => {
     if (current.local || sawToken) throw e;
     // the peer dropped the request before a token: out for a while, the request moves on
     current.out = true;
+    current.heardAt = now(); // the drop is news too: the eye sees it as a fresh 'no'
     current.busyUntil = now() + OUT_MS;
     emit();
     const next = pick(current.id);

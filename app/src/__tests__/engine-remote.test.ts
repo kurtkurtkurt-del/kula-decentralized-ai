@@ -95,7 +95,7 @@ afterEach(() => {
   globalThis.fetch = realFetch;
 });
 
-const dev: Device = { id: 'p1', name: 'tablet', local: false, busy: false, apiPort: 41001, tps: 10, busyUntil: 0 };
+const dev: Device = { id: 'p1', name: 'tablet', local: false, busy: false, apiPort: 41001, tps: 10, busyUntil: 0, done: 0, heardAt: 0 };
 const line = (o: unknown) => `data: ${JSON.stringify(o)}\n\n`;
 const doneLine = line({ done: true, tokens: 3, ms: 30, firstMs: 10, tps: 100 });
 const ask = (script: Script) => {
