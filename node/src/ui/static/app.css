@@ -975,3 +975,8 @@ ul.wiz-steps li::before { content: "› "; color: var(--meta); }
 .bc-go { white-space: nowrap; }
 .bc-go[disabled] { opacity: 0.6; cursor: default; }
 .bc-more { display: block; margin: 6px auto 0; font-size: 12px; }
+/* the cards make the top taller than the window (12.11.2026): the panel itself scrolls then (it was
+   overflow: hidden, so the map, the branch card and the feed under the cards could not be reached),
+   and the feed keeps a height of its own instead of being squeezed to its header */
+.brain { overflow-y: auto; }
+.bfeed-wrap { min-height: 220px; }
