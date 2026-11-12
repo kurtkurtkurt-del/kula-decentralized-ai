@@ -11,22 +11,27 @@ import type { EyeDevice, EyeHealth, EyeTrust, Snapshot } from '../godseye/index.
 import { freeRamMB } from '../sysinfo.js';
 import { ledgerFile } from '../ledgercmd.js';
 import { loadOrCreate } from '../audit/key.js';
-import { chainFiles, settleLegacy, verifyChain } from '../audit/ledger.js';
+import { chainFiles, isLegacy, verifyChain } from '../audit/ledger.js';
 
 const trustOf = (t: TrustLook | null): EyeTrust | null => (t ? { ...t, lines: [...t.lines], rejectsDay: { ...t.rejectsDay }, rejectsLast: t.rejectsLast.map((r) => ({ ...r })), attest: t.attest ? { ...t.attest } : null } : null);
 
-// this computer's own ledger, checked again only when one of its files changed (it can be 5 MB)
+// this computer's own ledger, checked again only when one of its files changed (it can be 5 MB).
+// A look only reads: a ledger still starting with the old unsigned gate lines is reported, and
+// setting them aside is left to an explicit `kula-node ledger --verify` (review A2, 12 Nov).
 let hostLedgerSeen: { stamp: string; v: Snapshot['host']['ledger'] } | null = null;
 export function hostLedger(file = ledgerFile()): Snapshot['host']['ledger'] {
   if (!fs.existsSync(file)) return null;
-  try { settleLegacy(file, loadOrCreate()); } catch {}
   const stamp = chainFiles(file).map((f) => { try { const s = fs.statSync(f); return `${f}:${s.size}:${s.mtimeMs}`; } catch { return f; } }).join('|');
   if (hostLedgerSeen?.stamp === stamp) return hostLedgerSeen.v;
   let v: Snapshot['host']['ledger'];
   try {
-    const r = verifyChain(file, loadOrCreate().publicKey);
-    const p = r.files.flatMap((f) => f.problems.map((x) => `line ${x.n} of ${path.basename(f.file)}: bad ${x.reason}`))[0] ?? null;
-    v = { ok: r.ok, count: r.count, problem: p };
+    const key = loadOrCreate();
+    const r = verifyChain(file, key.publicKey);
+    if (chainFiles(file).length === 1 && isLegacy(file, key.publicKey)) v = { ok: false, count: r.count, problem: 'the ledger still starts with the old unsigned lines from before the signed ledger; `kula-node ledger --verify` sets them aside' };
+    else {
+      const p = r.files.flatMap((f) => f.problems.map((x) => `line ${x.n} of ${path.basename(f.file)}: bad ${x.reason}`))[0] ?? null;
+      v = { ok: r.ok, count: r.count, problem: p };
+    }
   } catch (e) { v = { ok: false, count: 0, problem: (e as Error).message }; }
   hostLedgerSeen = { stamp, v };
   return v;

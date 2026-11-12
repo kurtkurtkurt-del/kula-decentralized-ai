@@ -129,6 +129,7 @@ export async function share(opts: ShareOptions): Promise<ShareHandle> {
   log(`device key ${key.alg} ${key.id}`);
   const ledgerFile = path.join(home(), 'ledger.jsonl');
   const ledger = new Ledger(ledgerFile, key);
+  if (ledger.setAside) log(`ledger: set aside the old unsigned lines from before the signed ledger as ${ledger.setAside.file} (${ledger.setAside.lines} lines); the signed chain starts again`);
   const auditor = new Auditor({ ledger, log });
   // when each paired device was last here (the dashboard's and `kula-node paired list`'s "last seen")
   const seen = new Seen(seenFile());

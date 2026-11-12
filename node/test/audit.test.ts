@@ -7,7 +7,7 @@ import net from 'node:net';
 import { createPublicKey } from 'node:crypto';
 import vectors from './audit-vectors.json' with { type: 'json' };
 import { fromSeed, generate, loadOrCreate, loadOrCreateKey, publicKeyDer, signText, verifyText } from '../src/audit/key.ts';
-import { Ledger, GENESIS, makeLine, sha256Hex, verifyChain, verifyLines, chainFiles, readLines, isLegacy } from '../src/audit/ledger.ts';
+import { Ledger, GENESIS, makeLine, sha256Hex, verifyChain, verifyLines, chainFiles, readLines, isLegacy, settleLegacy } from '../src/audit/ledger.ts';
 import { loadOrCreateIdentity } from '../src/tls.ts';
 import { ReplayCheck, clockCheck, claimCheck, modelCheck, boundsCheck, healthWarnings } from '../src/audit/checks.ts';
 import { Auditor } from '../src/audit/auditor.ts';
@@ -320,6 +320,13 @@ test('a broken gate key is moved aside the same way and gets a new certificate',
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
+// n of the gate's old unsigned lines (before 5 Nov), as one text ending in "\n"
+const oldLines = (n: number) => Array.from({ length: n }, (_, i) => [
+  `{"type":"open","channel":"rpc","peer":"10.0.80.200","at":${1793831037593 + i}}`,
+  `{"type":"close","channel":"rpc","peer":"10.0.80.200","at":${1793831037593 + i},"ms":1,"bytesIn":0,"bytesOut":0}`,
+  `{"type":"reject","channel":"api","peer":"10.0.80.200","at":${1793831037593 + i},"reason":"wrong secret"}`,
+][i % 3]).join('\n') + '\n';
+
 // selcukv1 (11 Nov), T19: the Mac's ledger.jsonl began with 24 unsigned gate lines from before the
 // signed ledger, so --verify said "broken" for good and the trust branch never let go.
 test('a ledger that starts with the old unsigned gate lines is set aside whole, the new chain says so and verifies; a tampered signed ledger stays broken', async () => {
@@ -329,15 +336,13 @@ test('a ledger that starts with the old unsigned gate lines is set aside whole, 
     const { ledgerCommand } = await import('../src/ledgercmd.ts');
     const key = loadOrCreate(path.join(dir, 'device_key.pem'));
     const file = path.join(dir, 'ledger.jsonl');
-    const old = [
-      '{"type":"open","channel":"rpc","peer":"10.0.80.200","at":1793831037593}',
-      '{"type":"close","channel":"rpc","peer":"10.0.80.200","at":1793831037594,"ms":1,"bytesIn":0,"bytesOut":0}',
-      '{"type":"reject","channel":"api","peer":"10.0.80.200","at":1793831037648,"reason":"wrong secret"}',
-    ].join('\n') + '\n';
+    // the Mac's file: 24 old unsigned lines, then 2 signed lines chained onto the last of them
+    const old = oldLines(24);
     fs.writeFileSync(file, old);
-    // a signed line chained on top of them, as the Mac's was
-    fs.appendFileSync(file, makeLine(key, 1793870640561, 'claim', 'self', { what: 'ram', claimed: 1, measured: 1, level: 'ok' }, sha256Hex(old.trim().split('\n').at(-1)!)).line + '\n');
-    assert.equal(isLegacy(file), true);
+    const s1 = makeLine(key, 1793870640561, 'claim', 'self', { what: 'ram', claimed: 1, measured: 1, level: 'ok' }, sha256Hex(old.trim().split('\n').at(-1)!)).line;
+    const s2 = makeLine(key, 1793870640562, 'health', 'self', { i: 1 }, sha256Hex(s1)).line;
+    fs.appendFileSync(file, s1 + '\n' + s2 + '\n');
+    assert.equal(isLegacy(file, key.publicKey), true);
     let out: string[] = [];
     assert.equal(ledgerCommand({ verify: true }, (s) => out.push(s)), 0);
     assert.ok(out.some((l) => /set aside the old unsigned lines/.test(l)));
@@ -349,9 +354,10 @@ test('a ledger that starts with the old unsigned gate lines is set aside whole, 
     const first = JSON.parse(readLines(file)[0]);
     assert.equal(first.kind, 'health');
     assert.equal(first.setAside, aside[0]);
-    assert.equal(first.lines, 4);
+    assert.equal(first.lines, 26);
     assert.equal(first.sha256, sha256Hex(kept));
     assert.equal(first.prev, GENESIS);
+    assert.equal(verifyChain(file, key.publicKey).ok, true);
     // a second check finds nothing to do and the chain goes on
     out = [];
     assert.equal(ledgerCommand({ verify: true }, (s) => out.push(s)), 0);
@@ -368,15 +374,79 @@ test('a ledger that starts with the old unsigned gate lines is set aside whole, 
     const lines = readLines(f2);
     lines[0] = lines[0].replace('"i":1', '"i":9');
     fs.writeFileSync(f2, lines.join('\n') + '\n');
-    assert.equal(isLegacy(f2), false);
+    assert.equal(isLegacy(f2, key.publicKey), false);
     assert.equal(new Ledger(f2, key).setAside, null);
     assert.equal(verifyChain(f2, key.publicKey).ok, false);
     // an old-looking line that carries a signature or a prev is not the old shape either
     fs.writeFileSync(f2, '{"type":"open","peer":"x","prev":"00","sig":"AA=="}\n');
-    assert.equal(isLegacy(f2), false);
+    assert.equal(isLegacy(f2, key.publicKey), false);
     fs.rmSync(dir2, { recursive: true, force: true });
   } finally {
     delete process.env.KULA_NODE_HOME;
     fs.rmSync(dir, { recursive: true, force: true });
   }
+});
+
+// review A2 (12 Nov): isLegacy looked at the first line only, so rewriting the first line of a
+// tampered signed ledger into the old shape got the whole file set aside and the chain read ok.
+const asideIn = (dir: string) => fs.readdirSync(dir).filter((n) => /^ledger\.unsigned-/.test(n));
+test('a tampered signed ledger whose first line is rewritten into the old shape is not set aside and stays broken', () => {
+  const dir = tmp();
+  try {
+    const file = path.join(dir, 'ledger.jsonl');
+    const key = generate();
+    const L = new Ledger(file, key);
+    for (let i = 0; i < 10; i++) L.append(i % 3 ? 'connect' : 'reject', `peer${i}`, { reason: 'wrong pin' });
+    assert.equal(verifyChain(file, key.publicKey).ok, true);
+    // drop the reject lines (the evidence) and put an old-shape line in front
+    const lines = readLines(file).filter((l) => !l.includes('"kind":"reject"'));
+    lines.unshift('{"type":"open","channel":"rpc","peer":"x"}');
+    fs.writeFileSync(file, lines.join('\n') + '\n');
+    const before = fs.readFileSync(file, 'utf8');
+    assert.equal(isLegacy(file, key.publicKey), false);
+    assert.equal(settleLegacy(file, key), false);
+    assert.equal(new Ledger(file, key).setAside, null);
+    assert.equal(fs.readFileSync(file, 'utf8'), before, 'nothing is written on top of it');
+    assert.equal(verifyChain(file, key.publicKey).ok, false);
+    assert.deepEqual(asideIn(dir), []);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('isLegacy: only old leading lines followed by an unbroken signed chain onto the last of them', () => {
+  const dir = tmp();
+  try {
+    const file = path.join(dir, 'ledger.jsonl');
+    const key = generate();
+    const old = oldLines(5);
+    const lastOld = sha256Hex(old.trim().split('\n').at(-1)!);
+    const a = makeLine(key, 1793870640561, 'claim', 'self', { what: 'ram', claimed: 1, measured: 1, level: 'ok' }, lastOld).line;
+    const b = makeLine(key, 1793870640562, 'health', 'self', { i: 1 }, sha256Hex(a)).line;
+    // only old lines: legacy (nothing signed after them)
+    fs.writeFileSync(file, old);
+    assert.equal(isLegacy(file, key.publicKey), true);
+    // old lines and a chained signed tail: legacy
+    fs.writeFileSync(file, old + a + '\n' + b + '\n');
+    assert.equal(isLegacy(file, key.publicKey), true);
+    // signed lines followed by an old-shape line: not legacy
+    fs.writeFileSync(file, a + '\n' + b + '\n' + old);
+    assert.equal(isLegacy(file, key.publicKey), false);
+    // old prefix, signed lines, then an old-shape line again: not legacy
+    fs.writeFileSync(file, old + a + '\n' + b + '\n' + '{"type":"open","channel":"rpc","peer":"y"}\n');
+    assert.equal(isLegacy(file, key.publicKey), false);
+    // old prefix plus a signed line with one byte changed: not legacy
+    fs.writeFileSync(file, old + a.replace('"measured":1', '"measured":2') + '\n' + b + '\n');
+    assert.equal(isLegacy(file, key.publicKey), false);
+    // old prefix plus a signed chain that starts at GENESIS (not on the old lines): not legacy
+    const g = makeLine(key, 1793870640561, 'health', 'self', { i: 1 }, GENESIS).line;
+    fs.writeFileSync(file, old + g + '\n');
+    assert.equal(isLegacy(file, key.publicKey), false);
+    // old prefix plus a signed tail from another key: not legacy
+    const other = generate();
+    fs.writeFileSync(file, old + makeLine(other, 1793870640561, 'health', 'self', { i: 1 }, lastOld).line + '\n');
+    assert.equal(isLegacy(file, key.publicKey), false);
+    // without a key nothing is legacy (verifyLines would skip the signatures)
+    assert.equal(isLegacy(file, null as any), false);
+    assert.equal(new Ledger(file, key).setAside, null);
+    assert.deepEqual(asideIn(dir), []);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });

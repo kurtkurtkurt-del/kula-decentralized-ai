@@ -128,27 +128,42 @@ export function cutTorn(file: string): number {
 }
 
 // Before the signed ledger (5 Nov 2026) the gate wrote its raw events into ledger.jsonl,
-// unsigned: {"type":"open","channel":"rpc","peer":...}. A chain started on top of them can never
-// verify. Such a file, when it is the whole chain, is set aside whole (renamed, never deleted, so
-// it can still be read) and the new chain's first line says which file went, its lines and its
-// sha256, signed. Only that old shape counts: a ledger whose signed lines were changed stays
-// broken and says so.
+// unsigned: {"type":"open","channel":"rpc","peer":...}; the first signed lines were then chained
+// onto the sha256 of the last of them, so the whole file can never verify. Such a file is legacy
+// only when ALL of this holds: one or more leading lines have the old shape (a type of the gate's,
+// no kind, sig or prev), and every line after them (there may be none) is signed by this device's
+// key and chains unbroken onto the last old line. Reading the first line alone is not enough: a
+// tampered signed ledger with its first line rewritten into the old shape would be set aside and
+// the brain would read a fresh, healthy chain (review A2, 12 Nov). A legacy file, when it is the
+// whole chain, is set aside whole (renamed, never deleted, so it can still be read) by the Ledger
+// that writes it or by an explicit check (`kula-node ledger --verify`, the dashboard's verify
+// button); the new chain's first line says which file went, its lines and its sha256, signed.
+// Anything else stays where it is and, if broken, says so.
 const LEGACY_TYPES = ['open', 'close', 'reject', 'pair'];
-export function isLegacy(file: string): boolean {
+function oldShape(line: string): boolean {
+  let obj: any;
+  try { obj = JSON.parse(line); } catch { return false; }
+  return !!obj && typeof obj === 'object' && LEGACY_TYPES.includes(obj.type) && !('kind' in obj) && !('sig' in obj) && !('prev' in obj);
+}
+export function isLegacy(file: string, publicKey: KeyObject): boolean {
+  // cheap first: a file whose first line is not the old shape is not legacy (no full read)
   let head = '';
   try {
     const fd = fs.openSync(file, 'r');
     try { const b = Buffer.alloc(4096); head = b.subarray(0, fs.readSync(fd, b, 0, b.length, 0)).toString('utf8'); } finally { fs.closeSync(fd); }
   } catch { return false; }
-  const first = head.split('\n')[0];
-  let obj: any;
-  try { obj = JSON.parse(first); } catch { return false; }
-  return !!obj && typeof obj === 'object' && LEGACY_TYPES.includes(obj.type) && !('kind' in obj) && !('sig' in obj) && !('prev' in obj);
+  if (!oldShape(head.split('\n')[0])) return false;
+  if (!publicKey) return false;
+  const lines = readLines(file);
+  let n = 0;
+  while (n < lines.length && oldShape(lines[n])) n++;
+  // n >= 1: the first line is the old shape (checked above)
+  return verifyLines(lines.slice(n), publicKey, sha256Hex(lines[n - 1])).ok;
 }
 
 export interface SetAside { file: string; lines: number; sha256: string }
-export function setAsideLegacy(file: string, now: () => number = Date.now): SetAside | null {
-  if (chainFiles(file).length !== 1 || !isLegacy(file)) return null;
+export function setAsideLegacy(file: string, publicKey: KeyObject, now: () => number = Date.now): SetAside | null {
+  if (chainFiles(file).length !== 1 || !isLegacy(file, publicKey)) return null;
   const text = fs.readFileSync(file, 'utf8');
   const dir = path.dirname(file);
   const base = path.basename(file, '.jsonl');
@@ -159,10 +174,11 @@ export function setAsideLegacy(file: string, now: () => number = Date.now): SetA
   return { file: path.basename(target), lines: text.split('\n').filter((l) => l.length > 0).length, sha256: sha256Hex(text) };
 }
 
-// For the readers (kula-node ledger --verify, the brain, the dashboard): a ledger still in the
-// old unsigned shape is settled before it is checked. False when there was nothing to do.
+// For an explicit check (kula-node ledger --verify, the dashboard's verify button): a ledger still
+// in the old unsigned shape is settled before it is checked. The brain's look only reports it
+// (godseye-feed hostLedger). False when there was nothing to do.
 export function settleLegacy(file: string, key: DeviceKey): boolean {
-  if (!isLegacy(file)) return false;
+  if (!isLegacy(file, key.publicKey)) return false;
   return !!new Ledger(file, key).setAside;
 }
 
@@ -176,7 +192,7 @@ export class Ledger {
 
   constructor(readonly file: string, readonly key: DeviceKey, readonly now: () => number = Date.now, readonly rotateBytes = ROTATE_BYTES) {
     fs.mkdirSync(path.dirname(file), { recursive: true });
-    this.setAside = setAsideLegacy(file, now);
+    this.setAside = setAsideLegacy(file, key.publicKey, now);
     const torn = cutTorn(file);
     // the live file may hold nothing yet (or nothing whole) after a rotation: then the
     // chain goes on from the newest rotated file
