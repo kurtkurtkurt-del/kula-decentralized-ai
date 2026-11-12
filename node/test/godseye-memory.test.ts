@@ -794,6 +794,80 @@ test('the notes hold no address, reason or trust data, and cut every string to 2
   assert.equal(ev[1].x.length, 200);
 });
 
+test('a decision\'s address (ipv4:port, [ipv6]:port, bare ipv6, host:port) reaches neither notes nor view; words and versions stay', () => {
+  const ds = [
+    decision(at(0) - 3_000, 'paired with pixel at 192.168.1.33:50551'),
+    decision(at(0) - 2_000, 'pixel answered on this wi-fi too ([fe80::1]:50551): the same phone'),
+    decision(at(0) - 1_000, 'pixel is ready over wi-fi (fe80::1ff:fe23:4567:890a) and at pixel.local:50551 or 10.0.0.7'),
+    decision(at(0) - 500, 'llama.cpp b11157 1.2.3 ready at 23:00 on 2 devices'),
+  ];
+  const { b, c } = drive([
+    snap([], at(0), work({ decisions: ds })),
+    snap([], at(70), work({ decisions: ds })),           // flush the save
+  ]);
+  const out = leaked(b, c);
+  for (const bad of ['192.168', '50551', 'fe80', '10.0.0.7', 'pixel.local']) assert.ok(!out.includes(bad), `no ${bad} in the notes or the view`);
+  assert.deepEqual((c.stored as any).ev.map((x: any) => x.x), [
+    'paired with pixel at an address',
+    'pixel answered on this wi-fi too (an address): the same phone',
+    'pixel is ready over wi-fi (an address) and at an address or an address',
+    'llama.cpp b11157 1.2.3 ready at 23:00 on 2 devices',
+  ]);
+  assert.deepEqual((c.stored as any).logged.map((x: any) => x.text), (c.stored as any).ev.map((x: any) => x.x), 'the ring holds the masked text');
+
+  // the same snapshot again after a restart: the masked ring still knows them, nothing is re-logged
+  const { ctx } = fakeCtx(c.stored);
+  const again = create(ctx);
+  again.observe(snap([], at(80), work({ decisions: ds })), null);
+  assert.equal(again.view().stat, '4 events kept · 4 today');
+});
+
+test('old notes holding an address in a decision are cleaned on load', () => {
+  const raw = 'paired with pixel at 192.168.1.33:50551 and [fe80::1]:50551';
+  const old = {
+    v: 1,
+    ev: [{ t: at(1), k: 'decision', d: null, n: null, x: raw }],
+    lastDecisionAt: at(0),
+    logged: [{ at: at(0), text: raw }],
+    future: [{ at: T + 400 * DAY, text: `later ${raw}` }],
+    state: { looked: true, devices: [], work: { loaded: null }, projects: [] },
+  };
+  const { c, ctx } = fakeCtx(old);
+  const b = create(ctx);
+  c.t = at(5);
+  b.observe(snap([], at(5), work({ decisions: [decision(at(0), raw)] })), null);   // the same decision: not re-logged
+  const out = leaked(b, c);
+  assert.ok(!out.includes('192.168') && !out.includes('fe80') && !out.includes('50551'), 'the old address is gone from the notes and the view');
+  assert.deepEqual(b.view().lines, ['23:00  paired with pixel at an address and an address']);
+  assert.deepEqual((c.stored as any).logged.map((x: any) => x.text), ['paired with pixel at an address and an address']);
+  assert.deepEqual((c.stored as any).future.map((x: any) => x.text), ['later paired with pixel at an address and an address']);
+  assert.equal(c.saves, 1, 'the cleaned notes are written back at once');
+});
+
+test('2000 up/down flips of one device do not push a decision out of the log', () => {
+  const snaps = [snap([dev({ reachable: true })], at(0), work({ decisions: [decision(at(0) - 1_000, 'added pixel')] }))];
+  for (let i = 1; i <= 2000; i++) snaps.push(snap([dev({ reachable: i % 2 === 1 ? false : true })], at(i)));
+  snaps.push(snap([dev({ reachable: true })], at(2070)));     // flush the save
+  const { b, c } = drive(snaps);
+  const ev = (c.stored as any).ev;
+  assert.equal(ev.length, MAX_EVENTS);
+  assert.deepEqual(ev.filter((x: any) => x.k === 'decision').map((x: any) => x.x), ['added pixel'], 'the decision stays');
+  assert.equal(ev[0].k, 'decision');
+  assert.equal(ev[1].t, at(2), 'the oldest flip went instead');
+  assert.equal(b.view().stat, '2000 events kept · 2000 today');
+});
+
+test('prune: over the cap, the oldest up/down/via go before anything else', () => {
+  const e = (t: number, k: string) => ({ t, k: k as any, d: 'p1', n: 'pixel', x: null });
+  const many = [e(1, 'decision'), e(2, 'appeared'), ...Array.from({ length: MAX_EVENTS }, (_, i) => e(i + 3, i % 3 === 0 ? 'via' : i % 2 ? 'up' : 'down'))];
+  const kept = prune(many, MAX_EVENTS + 3);
+  assert.equal(kept.length, MAX_EVENTS);
+  assert.deepEqual(kept.slice(0, 2).map((x) => x.k), ['decision', 'appeared']);
+  assert.equal(kept[2].t, 5, 'the two oldest flips went');
+  const noChurn = Array.from({ length: MAX_EVENTS + 2 }, (_, i) => e(i + 1, 'holds'));
+  assert.equal(prune(noChurn, MAX_EVENTS + 2)[0].t, 3, 'with no flip to drop, the oldest of anything goes');
+});
+
 // ---- the high-water marks, the odd containers and the unusual ids
 
 test('a far-future decision never silences the real ones, live and after a restart', () => {

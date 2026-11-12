@@ -14,6 +14,10 @@
 // so they never appear as new on every look. Saved at most once a minute and only when something
 // changed. The log never holds an address (where), a reason, trust data, or anything a person
 // wrote: for a project it keeps its id and its new state, never its title, request, line or error.
+// A decision's text is kula's own, but it names addresses: every IPv4[:port], IPv6 and host:port in
+// it becomes "an address" before it is logged, and notes from before that are cleaned on load.
+// Over MAX_EVENTS the oldest up/down/via lines go first, so a flapping device never pushes the
+// decisions out.
 // A decision's own at is the notes' watermark (lastDecisionAt); its event is stamped with the
 // look's at. The notes keep two lists of at + text, at most LOGGED_MAX each: the last LOGGED_MAX
 // logged decisions, so a watermark moved backwards never re-logs one, and the last LOGGED_MAX
@@ -111,6 +115,31 @@ const listOf = (x: unknown): unknown[] => (Array.isArray(x) ? x : []);
 const objOf = (x: unknown): Record<string, unknown> | null =>
   x !== null && typeof x === 'object' ? (x as Record<string, unknown>) : null;
 const sig = (at: number, text: string) => `${at}|${text}`;
+
+/** An address inside a person-readable text, replaced with "an address": a bracketed IPv6 with an
+ *  optional port, a bare IPv6 (with :: or all eight groups, so a time like 12:30:45 stays), an
+ *  IPv4 with an optional port, and a host:port whose host starts with a letter. A version such as
+ *  1.2.3, a time such as 23:00 and plain words stay. Applied before the cut, so a cut never leaves
+ *  half an address. */
+const ADDRESS = 'an address';
+const V6_BRACKETED = /\[[0-9A-Fa-f.]*:[0-9A-Fa-f:.]*(?:%[\w.-]+)?\](?::\d{1,5})?/g;
+const V6_BARE = /(?<![\w:.])[0-9A-Fa-f]{0,4}(?::[0-9A-Fa-f]{0,4}){2,7}(?:(?:\.\d{1,3}){3})?(?:%[\w.-]*\w)?(?![\w:]|\.\d)/g;
+const V4 = /(?<![\w.])(?:\d{1,3}\.){3}\d{1,3}(?::\d{1,5})?(?![\w]|\.\d)/g;
+const HOST_PORT = /(?<![\w.:-])[A-Za-z][\w-]*(?:\.[A-Za-z0-9][\w-]*)*:\d{1,5}(?![\w:]|\.\d)/g;
+const isV6 = (s: string): boolean => {
+  const core = s.replace(/%.*$/, '').replace(/(?:\.\d{1,3}){3}$/, '');
+  return /[0-9A-Fa-f]/.test(core) && (core.includes('::') || core.split(':').length === 8);
+};
+export function maskAddresses(text: string): string {
+  return text
+    .replace(V6_BRACKETED, ADDRESS)
+    .replace(V6_BARE, (m) => (isV6(m) ? ADDRESS : m))
+    .replace(V4, ADDRESS)
+    .replace(HOST_PORT, ADDRESS);
+}
+/** A decision's text as the notes keep it: no address, at most STR_MAX chars. */
+const decisionText = (text: string): string => cut(maskAddresses(text));
+const cleanLogged = (l: LoggedDecision): LoggedDecision => ({ at: l.at, text: decisionText(l.text) });
 /** The non-empty parts of a detail joined with ·: a missing name or mode leaves no gap. */
 const detail = (...parts: string[]): string | null => {
   const kept = parts.filter((p) => p.length > 0);
@@ -240,8 +269,8 @@ export function newDecisions(
   future: LoggedDecision[] = [],
 ): { events: MemoryEvent[]; last: number | null; logged: LoggedDecision[]; future: LoggedDecision[] } {
   const events: MemoryEvent[] = [];
-  const ring = logged.slice(-LOGGED_MAX);
-  const ahead = future.slice(-LOGGED_MAX);
+  const ring = logged.slice(-LOGGED_MAX).map(cleanLogged);
+  const ahead = future.slice(-LOGGED_MAX).map(cleanLogged);
   const seen = new Set([...ring, ...ahead].map((l) => sig(l.at, l.text)));
   const reanchored = lastDecisionAt !== null && lastDecisionAt > now.at;
   let last = reanchored ? now.at : lastDecisionAt;
@@ -254,7 +283,7 @@ export function newDecisions(
     const at = d.at;
     const text = textOf(d.text);
     if (!isTime(at) || text === null) continue;
-    const x = cut(text);
+    const x = decisionText(text);                              // never an address in the log
     if (seen.has(sig(at, x))) continue;                        // already logged: never again
     // the engine stamps and appends a decision in one step, so a first look is at or past its at;
     // one at or below the watermark is skipped, which only a same-millisecond tie can cause
@@ -274,12 +303,26 @@ export function newDecisions(
   return { events, last, logged: ring, future: ahead };
 }
 
+/** The kinds one flapping device can repeat without end: over the cap they go first, so a device
+ *  going up and down all night never pushes a person's decisions out of the log. */
+const CHURN = new Set<MemoryKind>(['up', 'down', 'via']);
+
 /** The log after its bounds: nothing older than KEEP_MS below the prune anchor, at most MAX_EVENTS
- *  events. The oldest recorded lines go first. Pure: the input array is not changed. */
+ *  events. Over the cap the oldest up/down/via lines go first, then the oldest of anything. Pure:
+ *  the input array is not changed. */
 export function prune(events: MemoryEvent[], newestT: number): MemoryEvent[] {
   const cutoff = newestT - KEEP_MS;
-  const kept = events.filter((e) => e.t >= cutoff);
-  return kept.length > MAX_EVENTS ? kept.slice(kept.length - MAX_EVENTS) : kept;
+  return capped(events.filter((e) => e.t >= cutoff));
+}
+
+/** At most MAX_EVENTS events: the oldest up/down/via first, then the oldest of anything. */
+function capped(kept: MemoryEvent[]): MemoryEvent[] {
+  const over = kept.length - MAX_EVENTS;
+  if (over <= 0) return kept;
+  const drop = new Set<number>();
+  for (let i = 0; i < kept.length && drop.size < over; i++) if (CHURN.has(kept[i].k)) drop.add(i);
+  const rest = drop.size > 0 ? kept.filter((_, i) => !drop.has(i)) : kept;
+  return rest.length > MAX_EVENTS ? rest.slice(rest.length - MAX_EVENTS) : rest;
 }
 
 const ev = (x: unknown): MemoryEvent | null => {
@@ -290,13 +333,23 @@ const ev = (x: unknown): MemoryEvent | null => {
   return { t: e.t, k: e.k as MemoryKind, d: cutOrNull(e.d), n: cutOrNull(e.n), x: cutOrNull(e.x) };
 };
 
-function saneLogged(x: unknown): LoggedDecision[] | null {
+/** Set when loading masked an address that older notes still held, so they are written back. */
+interface Load { masked: boolean }
+
+/** A decision's text from disk: notes written before the mask may still hold an address. */
+function loadedText(s: string, load: Load): string {
+  const clean = decisionText(s);
+  if (clean !== cut(s)) load.masked = true;
+  return clean;
+}
+
+function saneLogged(x: unknown, load: Load): LoggedDecision[] | null {
   if (!Array.isArray(x)) return null;
   const out: LoggedDecision[] = [];
   for (const raw of x.slice(-LOGGED_MAX)) {
     const e = objOf(raw);
     if (!e || !isTime(e.at) || typeof e.text !== 'string') return null;
-    out.push({ at: e.at, text: cut(e.text) });
+    out.push({ at: e.at, text: loadedText(e.text, load) });
   }
   return out;
 }
@@ -343,23 +396,24 @@ function saneState(x: unknown): Remembered | null {
 
 /** A notes file from disk, kept only if it has exactly the shape this file writes. A bad shape
  *  (or NaN / negative / past-Date times) gives fresh notes, never a throw. */
-function sane(x: unknown): MemoryNotes {
+function sane(x: unknown, load: Load = { masked: false }): MemoryNotes {
   const n = objOf(x) as unknown as MemoryNotes;
   if (!n || n.v !== 1 || !Array.isArray(n.ev)) return freshNotes();
   const events: MemoryEvent[] = [];
   for (const e of n.ev) {
     const one = ev(e);
     if (!one) return freshNotes();
+    if (one.k === 'decision' && one.x !== null) one.x = loadedText((e as MemoryEvent).x as string, load);
     events.push(one);
   }
   if (!(n.lastDecisionAt === null || isTime(n.lastDecisionAt))) return freshNotes();
-  const logged = saneLogged(n.logged);
+  const logged = saneLogged(n.logged, load);
   if (!logged) return freshNotes();
-  const future = n.future === undefined ? [] : saneLogged(n.future);   // memory-1 wrote no list
+  const future = n.future === undefined ? [] : saneLogged(n.future, load);   // memory-1 wrote no list
   if (!future) return freshNotes();
   const state = saneState(n.state);
   if (!state) return freshNotes();
-  return { v: 1, ev: events.slice(-MAX_EVENTS), lastDecisionAt: n.lastDecisionAt, logged, future, state };
+  return { v: 1, ev: capped(events), lastDecisionAt: n.lastDecisionAt, logged, future, state };
 }
 
 /** One event as the view's line, after the HH:MM. Plain words; never an address. */
@@ -384,7 +438,8 @@ function words(e: MemoryEvent): string {
 }
 
 export function create(ctx: BranchCtx): Branch {
-  const notes = sane(ctx.load<unknown>(null));
+  const load: Load = { masked: false };
+  const notes = sane(ctx.load<unknown>(null), load);
   let state: MemoryState = { ...notes.state, lastDecisionAt: notes.lastDecisionAt };
   let logged = notes.logged;
   let future = notes.future;
@@ -394,7 +449,7 @@ export function create(ctx: BranchCtx): Branch {
   let snap: Snapshot | null = null;
   let savedAt = Number.NEGATIVE_INFINITY;   // the first change after start is saved at once
   let lastPrune = Number.NEGATIVE_INFINITY;
-  let dirty = false;                        // something changed since the last save
+  let dirty = load.masked;                  // something changed since the last save (or an old address was masked)
 
   function save() {
     notes.ev = events;
