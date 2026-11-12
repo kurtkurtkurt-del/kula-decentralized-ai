@@ -82,6 +82,8 @@ export const ux = {
   'chat.again': { en: 'regenerate', de: 'neu erzeugen', tr: 'yeniden üret' },
   'chat.holdHint': { en: 'hold a reply to copy it', de: 'antwort gedrückt halten zum kopieren', tr: 'kopyalamak için cevaba basılı tut' },
   'chat.stopped': { en: 'stopped', de: 'gestoppt', tr: 'durduruldu' },
+  'chat.thoughtOut': { en: 'it was still thinking when its {n} tokens ran out, so no answer came out', de: 'es dachte noch nach, als seine {n} tokens zu ende waren, darum kam keine antwort', tr: '{n} token bittiğinde hâlâ düşünüyordu, bu yüzden cevap çıkmadı' },
+  'chat.noThink': { en: 'answer without thinking', de: 'ohne nachdenken antworten', tr: 'düşünmeden cevapla' },
   'chat.stat.tps': { en: 'tok/s', de: 'tok/s', tr: 'tok/sn' },
   'chat.stat.first': { en: 'first token', de: 'erstes token', tr: 'ilk token' },
   'chat.stat.tokens': { en: 'tokens', de: 'tokens', tr: 'token' },

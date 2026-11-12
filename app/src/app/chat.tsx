@@ -16,6 +16,7 @@ import { explain } from '@/llm/errors';
 import { tapLight, tapSelect } from '@/lib/haptics';
 import type { Message } from '@/llm/native';
 import { useSettings } from '@/llm/store';
+import { chatBudget, cutWhileThinking, withoutThinking } from '@/llm/think';
 import { colors, fonts, radius } from '@/theme/tokens';
 import { brand } from '@/theme/layout';
 
@@ -27,7 +28,7 @@ import { brand } from '@/theme/layout';
 // photos gets them directly ("seen by"); otherwise the chosen vision model reads them first
 // and its words go into the prompt ("read by"). The reading always happens on this phone;
 // in apart or split mode only the text goes to the other devices.
-type Turn = { role: 'user' | 'assistant'; text: string; stats?: Reply; error?: string; stopped?: boolean; photos?: string[]; seen?: Seen; seenBy?: string };
+type Turn = { role: 'user' | 'assistant'; text: string; stats?: Reply; error?: string; stopped?: boolean; photos?: string[]; seen?: Seen; seenBy?: string; thoughtOut?: boolean };
 const MAX_PHOTOS = 3;
 /** The conversation as text for the model: earlier photos become the vision model's notes. */
 const asMessages = (turns: Turn[]): Message[] => turns.map((x) => ({ role: x.role, content: x.role === 'user' ? withPhotos(x.text, x.photos?.length ?? 0, x.seen) : x.text }));
@@ -83,11 +84,12 @@ export default function ChatScreen() {
         acc += piece;
         setTurns((xs) => xs.map((x, i) => (i === xs.length - 1 ? { ...x, text: acc } : x)));
         if (atEndRef.current) scroll.current?.scrollToEnd({ animated: false });
-      }, { maxTokens: settings.maxTokens, temperature: settings.temperature, reset: resetNext.current || !!images, images });
+      }, { maxTokens: chatBudget(settings.maxTokens, engine.model?.id, history, engine.load?.ctx ?? 0), temperature: settings.temperature, reset: resetNext.current || !!images, images });
       resetNext.current = false;
       running.current = run;
       const stats = await run;
-      setTurns((xs) => xs.map((x, i) => (i === xs.length - 1 ? { ...x, text: acc, stats, stopped: stats.stopped } : x)));
+      const thoughtOut = !stats.stopped && cutWhileThinking(acc);
+      setTurns((xs) => xs.map((x, i) => (i === xs.length - 1 ? { ...x, text: acc, stats, stopped: stats.stopped, thoughtOut } : x)));
     } catch (e) {
       setTurns((xs) => xs.map((x, i) => (i === xs.length - 1 ? { ...x, text: acc, error: explain(e, tx) } : x)));
     } finally {
@@ -128,7 +130,7 @@ export default function ChatScreen() {
     }
   };
   // the last answer again: same question, a fresh draw (the kv cache is rebuilt)
-  const again = async () => {
+  const again = async (opts?: { noThink?: boolean }) => {
     if (!engine.load || engine.generating) return;
     const last = turns[turns.length - 1];
     const prior = last?.role === 'assistant' ? turns.slice(0, -1) : turns;
@@ -138,7 +140,7 @@ export default function ChatScreen() {
     // a photo the chat model saw itself goes to it again; a read one is in the text already
     const u = prior[prior.length - 1];
     const images = u.photos?.length && !u.seen ? { uris: u.photos, maxSide: photoSide(u.photos.length) } : undefined;
-    await ask(asMessages(prior), prior, images);
+    await ask(opts?.noThink ? withoutThinking(asMessages(prior)) : asMessages(prior), prior, images);
   };
   const copy = async (i: number, body: string) => {
     tapLight();
@@ -223,6 +225,14 @@ export default function ChatScreen() {
                 {x.seen ? <Text style={styles.by}>{t('vision.readBy', { model: x.seen.by.toLowerCase() })}</Text> : x.seenBy ? <Text style={styles.by}>{t('vision.seenBy', { model: x.seenBy.toLowerCase() })}</Text> : null}
                 {isReply && last && reading?.swap ? <Text style={styles.small}>{t('vision.swapping', { model: reading.by.toLowerCase() })}</Text> : null}
                 {x.error ? <Text style={styles.err}>{x.error}</Text> : null}
+                {x.thoughtOut ? (
+                  <View style={styles.statsRow}>
+                    <Text style={styles.err}>{t('chat.thoughtOut', { n: x.stats?.tokens ?? 0 })}</Text>
+                    {last && !engine.generating && engine.load ? (
+                      <Pressable onPress={() => again({ noThink: true })} hitSlop={8} accessibilityRole="button" accessibilityLabel={t('chat.noThink')} style={styles.againBtn} testID="chat-no-think"><Text style={styles.again}>↻ {t('chat.noThink')}</Text></Pressable>
+                    ) : null}
+                  </View>
+                ) : null}
                 {x.stats || copied === i || (isReply && last && !engine.generating) ? (
                   <View style={styles.statsRow}>
                     {x.stats ? (
@@ -232,7 +242,7 @@ export default function ChatScreen() {
                     ) : null}
                     {copied === i ? <Text style={styles.copied} accessibilityLiveRegion="polite">{t('chat.copied')}</Text> : null}
                     {isReply && last && !engine.generating && engine.load ? (
-                      <Pressable onPress={again} hitSlop={8} accessibilityRole="button" accessibilityLabel={t('chat.again')} style={styles.againBtn}><Text style={styles.again}>↻ {t('chat.again')}</Text></Pressable>
+                      <Pressable onPress={() => again()} hitSlop={8} accessibilityRole="button" accessibilityLabel={t('chat.again')} style={styles.againBtn}><Text style={styles.again}>↻ {t('chat.again')}</Text></Pressable>
                     ) : null}
                   </View>
                 ) : null}
