@@ -40,7 +40,7 @@ function fakeCtx(stored: unknown = null) {
   return { ctx, out };
 }
 
-test('nothing loaded: built, all within limits, full headroom, and the note says it cannot see battery or heat', () => {
+test('nothing loaded: built, all within limits, full headroom, and the note says where battery and heat come from', () => {
   const { ctx, out } = fakeCtx();
   const b = create(ctx as any);
   b.observe(snap(T0) as any, null);
@@ -48,7 +48,9 @@ test('nothing loaded: built, all within limits, full headroom, and the note says
   assert.equal(v.built, true);
   assert.equal(v.stat, 'all within limits');
   assert.equal(v.gauge, 100);
-  assert.match(v.note!, /battery or heat/);
+  assert.match(v.note!, /heat, battery and throttling come from each phone's signed health lines/);
+  assert.match(v.note!, /a phone's own brain does not see the other devices' health yet/);
+  assert.doesNotMatch(v.what!, /come later/);
   assert.deepEqual(out.events, []);
 });
 
@@ -224,7 +226,7 @@ test('pin: a good busy pc keeps its exact line, rows, gauge and note', () => {
     ['busy today', '1 min'],
     ['rules', 'memory tight over 80% · rest after 20 min · phone 3 W, pc 15 W'],
   ]);
-  assert.equal(v.note, 'it only warns, it never stops a device. it cannot see battery or heat yet.');
+  assert.equal(v.note, 'it only warns, it never stops a device. heat, battery and throttling come from each phone\'s signed health lines (fresh for 5 min); a phone\'s own brain does not see the other devices\' health yet.');
 });
 
 test('pin: the rest and night warning lines and their feed text are unchanged', () => {
@@ -1105,4 +1107,131 @@ test('a phone host says its battery and heat: a row, a warning when hot or low a
   // junk is unknown, never a warning
   b.observe(withPower(T0 + 3 * MIN, { battery: 'low', charging: 1, hot: 'yes' }) as any, null);
   assert.equal(b.view().stat, 'all within limits');
+});
+
+// ---------- the phones' own health (12.11.2026): the newest reading of their signed ledger health
+// lines, as the snapshot carries it (godseye-feed.ts healthOf, guard.ts)
+
+const H = (o: Record<string, unknown> = {}) => ({ at: T0, tempC: 36.5, battery: 72, charging: null, throttled: false, ...o });
+const withHealth = (at: number, health: unknown, o: Record<string, unknown> = {}) =>
+  snap(at, { devices: [dev({ health, ...o })], loaded: loaded([ld()]) });
+const CARD = (kind: string, id = 'p1') => ({ id: `limits:${kind}:${id}`, kind: 'warn', weight: 3, action: { do: 'open', panel: 'branch', branch: 'limits' } });
+const cardsOf = (v: any) => (v.suggestions ?? []).map((c: any) => ({ id: c.id, kind: c.kind, weight: c.weight, action: c.action }));
+
+test('health: hot, throttled and low battery each a warning line and a card; each ends with the reading', () => {
+  const { ctx, out } = fakeCtx();
+  const b = create(ctx as any);
+  b.observe(withHealth(T0, H()) as any, null);
+  let v = b.view();
+  assert.equal(v.stat, 'all within limits');
+  assert.deepEqual(cardsOf(v), []);
+  assert.match(v.lines[0], /^pixel · memory .* · health 36\.5 °C, battery 72%, not throttled$/);
+  assert.match(v.rows.find((r) => r[0] === 'rules')![1], /hot over 42 °C · battery under 20%/);
+
+  // 42 °C exactly is not hot, 20% exactly is not low
+  b.observe(withHealth(T0 + MIN, H({ at: T0 + MIN, tempC: 42, battery: 20 })) as any, null);
+  assert.equal(b.view().stat, 'all within limits');
+
+  b.observe(withHealth(T0 + 2 * MIN, H({ at: T0 + 2 * MIN, tempC: 44.5, battery: 12, throttled: true })) as any, null);
+  v = b.view();
+  assert.equal(v.stat, '3 warnings');
+  assert.deepEqual(cardsOf(v), [CARD('heat'), CARD('battery'), CARD('throttled')]);
+  const [heat, battery, throttled] = v.suggestions!;
+  assert.equal(heat.title, 'pixel is hot: 44.5 °C');
+  assert.equal(battery.title, 'pixel is at 12% and not charging');
+  assert.equal(throttled.title, 'pixel is throttled');
+  for (const c of v.suggestions!) { assert.ok(c.why.length > 20 && c.why.length <= 400, c.why); assert.equal(c.label, 'look'); }
+  assert.ok(v.lines.some((l) => l === 'warning: pixel is hot: 44.5 °C, above 42 °C'));
+  assert.ok(v.lines.some((l) => l === 'warning: pixel is at 12% and not charging'));
+  assert.ok(v.lines.some((l) => l === 'warning: pixel is throttled: its phone moved the work to its slow cores'));
+  assert.equal(v.gauge, 0);
+  assert.deepEqual(out.events.slice(-3), ['limits: pixel is hot: 44.5 °C, above 42 °C', 'limits: pixel is at 12% and not charging', 'limits: pixel is throttled: its phone moved the work to its slow cores']);
+  const n = out.events.length;
+  b.observe(withHealth(T0 + 2 * MIN + 5000, H({ at: T0 + 2 * MIN, tempC: 44.5, battery: 12, throttled: true })) as any, null);
+  assert.equal(out.events.length, n, 'no line on every look');
+
+  // charging, or plugged in on the cable: no battery card; the others stay
+  b.observe(withHealth(T0 + 3 * MIN, H({ at: T0 + 3 * MIN, tempC: 44.5, battery: 12, throttled: true, charging: true })) as any, null);
+  assert.deepEqual(cardsOf(b.view()).map((c: any) => c.id), ['limits:heat:p1', 'limits:throttled:p1']);
+  assert.equal(out.events.at(-1), 'limits: pixel is charging or above 20% again');
+  b.observe(withHealth(T0 + 4 * MIN, H({ at: T0 + 4 * MIN, battery: 12 }), { via: 'cable', plugged: true }) as any, null);
+  assert.deepEqual(cardsOf(b.view()), []);
+  b.observe(withHealth(T0 + 5 * MIN, H({ at: T0 + 5 * MIN, battery: 12 }), { via: 'cable', plugged: null }) as any, null);
+  assert.deepEqual(cardsOf(b.view()).map((c: any) => c.id), ['limits:battery:p1'], 'a cable not known to be plugged in is no charger');
+
+  b.observe(withHealth(T0 + 6 * MIN, H({ at: T0 + 6 * MIN })) as any, null);
+  v = b.view();
+  assert.equal(v.stat, 'all within limits');
+  assert.deepEqual(cardsOf(v), []);
+  assert.ok(out.events.includes('limits: pixel is no longer hot'));
+  assert.ok(out.events.includes('limits: pixel is no longer throttled'));
+});
+
+test('health: stale or absent is no card, and the row says health unknown; fresh is -2 min .. +5 min from the look', () => {
+  const { ctx, out } = fakeCtx();
+  const b = create(ctx as any);
+  const hot = (at: number) => H({ at, tempC: 50, battery: 5, throttled: true });
+  const look = (health: unknown) => { b.observe(withHealth(T0, health) as any, null); return b.view(); };
+
+  let v = look(hot(T0 - 300_000));
+  assert.equal(cardsOf(v).length, 3, 'five minutes old is still fresh');
+  v = look(hot(T0 + 120_000));
+  assert.equal(cardsOf(v).length, 3, 'two minutes ahead (the phone\'s clock) is still fresh');
+
+  for (const stale of [hot(T0 - 300_001), hot(T0 + 120_001)]) {
+    v = look(stale);
+    assert.deepEqual(cardsOf(v), []);
+    assert.equal(v.stat, 'all within limits');
+    assert.match(v.lines[0], / · health unknown$/);
+  }
+  v = look(null);
+  assert.deepEqual(cardsOf(v), []);
+  assert.match(v.lines[0], / · health unknown$/);
+  // garbage the guard would have caught is no reading either
+  v = look({ at: 'now', tempC: 99, battery: 1, throttled: true });
+  assert.deepEqual(cardsOf(v), []);
+  v = look({ at: T0, tempC: '99', battery: -5, charging: 'no', throttled: 'yes' });
+  assert.deepEqual(cardsOf(v), []);
+  assert.match(v.lines[0], / · health heat unknown, battery unknown, throttle unknown$/);
+  // an older snapshot without health says nothing about it
+  b.observe(snap(T0, { loaded: loaded([ld()]) }) as any, null);
+  assert.doesNotMatch(b.view().lines[0], /health/);
+  assert.ok(out.events.length > 0);
+});
+
+test('health: card ids are stable from look to look, at most 5 cards, heat before battery before throttle', () => {
+  const { ctx } = fakeCtx();
+  const b = create(ctx as any);
+  const hotDevs = ['a1', 'b2', 'c3'].map((id) => dev({ id, name: `phone ${id}`, health: H({ tempC: 45, battery: 10, throttled: true }) }));
+  const s = snap(T0, { devices: hotDevs, loaded: loaded(hotDevs.map((d) => ld({ id: d.id, name: d.name }))) });
+  b.observe(s as any, null);
+  const first = b.view().suggestions!.map((c) => c.id);
+  assert.deepEqual(first, ['limits:heat:a1', 'limits:battery:a1', 'limits:throttled:a1', 'limits:heat:b2', 'limits:battery:b2']);
+  assert.equal(b.view().stat, '9 warnings');
+  b.observe({ ...s, at: T0 + 5000 } as any, null);
+  assert.deepEqual(b.view().suggestions!.map((c) => c.id), first);
+  // an id a card cannot carry: a warning line, no card
+  const odd = dev({ id: 'p 1/<x>', name: 'odd', health: H({ tempC: 45 }) });
+  b.observe(snap(T0, { devices: [odd], loaded: loaded([ld({ id: odd.id, name: 'odd' })]) }) as any, null);
+  assert.deepEqual(cardsOf(b.view()), []);
+  assert.ok(b.view().lines.some((l) => l === 'warning: odd is hot: 45 °C, above 42 °C'));
+});
+
+test('health: the hints for the deciding branches are the same with and without health cards', () => {
+  const run = (health: unknown) => {
+    const { ctx } = fakeCtx();
+    const b = create(ctx as any);
+    let done = 0;
+    for (let at = T0; at <= T0 + 21 * MIN; at += 15_000) {
+      if ((at - T0) % MIN === 0) done++;
+      b.observe(snap(at, { devices: [dev({ health: health === null ? null : { ...(health as object), at } })], loaded: loaded([ld({ busy: true, done })]) }) as any, null);
+    }
+    return b.view();
+  };
+  const calm = run(null);
+  const hot = run(H({ tempC: 47, battery: 3, throttled: true }));
+  assert.equal(cardsOf(calm).length, 0);
+  assert.equal(cardsOf(hot).length, 3);
+  assert.deepEqual(hot.hints, calm.hints);
+  assert.deepEqual(hot.hints, [{ id: 'p1', no: 'should rest (limits)' }]);
 });

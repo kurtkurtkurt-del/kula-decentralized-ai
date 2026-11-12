@@ -7,7 +7,7 @@ import path from 'node:path';
 import type { Engine, PeerRow, TrustLook } from './engine.js';
 import { hostLabel } from './engine.js';
 import type { ProjectRunner } from './projects.js';
-import type { EyeDevice, EyeTrust, Snapshot } from '../godseye/index.js';
+import type { EyeDevice, EyeHealth, EyeTrust, Snapshot } from '../godseye/index.js';
 import { freeRamMB } from '../sysinfo.js';
 import { ledgerFile } from '../ledgercmd.js';
 import { loadOrCreate } from '../audit/key.js';
@@ -40,6 +40,35 @@ const via = (p: PeerRow): EyeDevice['via'] => {
   return v === 'wifi' && (p.reachedBy === 'ipv6' || p.reachedBy === 'mapped') ? 'internet' : v;
 };
 
+// A phone's health from the ledger lines it sent (12.11.2026). Its worker writes a signed health
+// line every 60 s or when its warnings change (WorkerService.kt, Auditor.kt onHealth), keys in this
+// order: {"t":<ms>,"kind":"health","throttled":bool,"batteryC":num,"batteryPct":int,"warn":[..]?,
+// "prev":..,"sig":..}. batteryPct is -1 when Android could not say it, batteryC 0.0 when unknown.
+// The ledger's other health lines (torn, a key replaced, an unpair) carry none of these fields and
+// are passed over. Nothing here is trusted beyond its shape: the trust branch checks the chain
+// and signatures of the same lines.
+const HEALTH_LINE = /^\{"t":\d{1,16},"kind":"health"/;
+export function healthOf(lines: string[]): EyeHealth | null {
+  if (!Array.isArray(lines)) return null;
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const l = lines[i];
+    if (typeof l !== 'string' || !HEALTH_LINE.test(l)) continue;   // cheap: no parse for other kinds
+    let o: Record<string, unknown>;
+    try { o = JSON.parse(l); } catch { continue; }
+    if (!o || typeof o !== 'object' || typeof o.throttled !== 'boolean') continue;   // not a reading
+    const t = o.t, c = o.batteryC, b = o.batteryPct;
+    if (typeof t !== 'number' || !Number.isSafeInteger(t) || t < 0) continue;
+    return {
+      at: t,
+      tempC: typeof c === 'number' && Number.isFinite(c) && c !== 0 ? c : null,
+      battery: typeof b === 'number' && Number.isFinite(b) && b >= 0 && b <= 100 ? b : null,
+      charging: typeof o.charging === 'boolean' ? o.charging : null,
+      throttled: o.throttled,
+    };
+  }
+  return null;
+}
+
 export function deviceOf(p: PeerRow, trust: TrustLook | null = null): EyeDevice {
   return {
     id: p.id, name: p.name, kind: p.kind, via: via(p), where: p.where, reachedBy: p.reachedBy ?? null,
@@ -48,6 +77,7 @@ export function deviceOf(p: PeerRow, trust: TrustLook | null = null): EyeDevice 
     tls: p.tls, waitingPair: p.waitingPair, plugged: p.cable ? p.cable.plugged : null, holds: p.holds,
     trust: trustOf(trust),
     ring: p.ring ?? 'home',
+    health: trust ? healthOf(trust.lines) : null,
   };
 }
 

@@ -73,10 +73,19 @@
 //   a device's ring: absent (or null) stays absent, which means home; home, circle and world are
 //   kept; any other value is world, the strictest reading (a ring nobody can read is no reason to
 //   send private work there).
+//   a device's health (12.11.2026): absent stays absent (a snapshot from before it); a health that
+//   is not an object, or whose at is not a usable time, is null. Its readings come from the
+//   phone's signed ledger health lines (WorkerService.kt writes one every 60 s or when its warnings
+//   change: batteryPct is -1 when Android could not say it, batteryC 0.0 when unknown; the
+//   feed's healthOf makes those null). Measurements outside their range are unknown (null), never
+//   clamped, since a clamped heat or battery would be a made-up alarm or a made-up calm:
+//     tempC (the battery's °C)   -30 .. 120              null
+//     battery (percent)          0 .. 100                null
+//   charging and throttled keep true and false, anything else is null.
 //   the engine's loaded.sees and a trust's upTo are not in the Snapshot type and no branch reads
 //   them: they are dropped.
 import { sha256Hex } from '../hash.js';
-import type { EyeDevice, EyeModel, EyeProject, EyeTrust, EyeWork, Snapshot } from '../types.js';
+import type { EyeDevice, EyeHealth, EyeModel, EyeProject, EyeTrust, EyeWork, Snapshot } from '../types.js';
 
 export const TIME_MAX = 8.64e15;     // the largest ms a Date can hold (ECMAScript)
 export const ID_MAX = 200;           // an id longer than this is not one of ours
@@ -114,6 +123,8 @@ const PAIRED_MAX = 1e6;
 const COUNT_MAX = 1e9;
 const PARTS_MAX = 100_000;
 const DAY_MAX = 1000;                // reasons in one rejectsDay
+const TEMP_MIN = -30;                // a phone battery's °C: a reading outside this is no reading
+const TEMP_MAX = 120;
 
 /** an object (an array too: typeof; the callers check further) */
 export const isObj = (x: unknown): x is Record<string, unknown> => !!x && typeof x === 'object';
@@ -214,6 +225,18 @@ function trustOf(raw: Record<string, unknown>): EyeTrust {
   };
 }
 
+/** a device's health: an object with a usable at, else null; a reading out of its range is unknown */
+function healthOf(raw: unknown): EyeHealth | null {
+  if (!isObj(raw) || !isTime(raw.at)) return null;
+  return {
+    at: raw.at,
+    tempC: num(raw.tempC, TEMP_MIN, TEMP_MAX),
+    battery: num(raw.battery, 0, 100),
+    charging: bool3(raw.charging),
+    throttled: bool3(raw.throttled),
+  };
+}
+
 function devOf(raw: Record<string, unknown>, id: string): EyeDevice {
   return {
     id,
@@ -237,6 +260,8 @@ function devOf(raw: Record<string, unknown>, id: string): EyeDevice {
     // only when the snapshot has it (an older one does not): one of the three kinds, else null
     ...('reachedBy' in raw ? { reachedBy: raw.reachedBy === 'lan' || raw.reachedBy === 'ipv6' || raw.reachedBy === 'mapped' ? raw.reachedBy : null } : {}),
     ...(raw.ring == null ? {} : { ring: raw.ring === 'home' || raw.ring === 'circle' ? raw.ring : 'world' }),
+    // only when the snapshot has it (an older one does not)
+    ...('health' in raw ? { health: healthOf(raw.health) } : {}),
   };
 }
 

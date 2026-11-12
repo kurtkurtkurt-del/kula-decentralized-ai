@@ -1,10 +1,19 @@
 // 9 limits: keep the devices within what they can bear. It only watches and warns, it never stops,
-// slows or unloads anything. The snapshot carries no battery and no temperature yet, so the first
-// rules use what it has:
+// slows or unloads anything, and its cards only open its page. Its rules:
 //   memory   the loaded model's need against each device's memory: ok, tight (over 80%), over
 //   rest     a device answering without a break for longer than 20 minutes should rest; answers per hour
 //   night    a night project still running past its end time, and its devices still working then
 //   energy   a guess: busy minutes × watts by kind (phone 3 W, pc 15 W), kept per day in its notes
+//   power    the host's own battery and heat, when it is a phone (host.power)
+//   health   each phone's own heat, battery and throttling (12.11.2026): the newest reading of the
+//            signed health lines its worker writes to its ledger every minute or when its warnings
+//            change, as the snapshot carries it (device.health, ui/godseye-feed.ts healthOf). Only a
+//            fresh reading counts: at most 5 min older than the look and at most 2 min ahead of it
+//            (the phone's clock). Hot over 42 °C (the phone's own line, audit/Checks.kt HOT_C),
+//            battery under 20% while not charging and not plugged in on this computer's cable,
+//            throttled when its phone moved the work to the slow cores: each a warning and a card
+//            (weight 3, opens this page; at most 5). A stale or absent reading is no warning: its
+//            row says "health unknown". These change no hint: the deciding branches hear only "rest".
 // A feed line is written only when a warning starts or ends, never on every look.
 // Every value taken from the snapshot is checked first: a look without a usable at changes nothing,
 // a null or wrong-typed field counts as empty or unknown, and a device id, name or project id that
@@ -22,7 +31,7 @@
 // jumps backwards or far ahead is survived: every time this branch remembers (last look, run
 // start, last busy, an answer in the hour) is re-anchored when it is ahead of the look's at, and
 // no duration is ever negative.
-import type { Branch, BranchCtx, Snapshot } from '../types.js';
+import type { Branch, BranchCtx, Snapshot, Suggestion } from '../types.js';
 import { gb, hhmm } from './util.js';
 import { masked } from './review.js';   // a project's title may hold personal data: shown masked, as review does
 
@@ -92,6 +101,30 @@ const powerWords = (p: Power): string => [
   p.charging === true ? 'charging' : p.charging === false ? 'not charging' : '',
   p.hot === true ? 'hot' : p.hot === false ? 'not hot' : '',
 ].filter(Boolean).join(' · ');
+
+/** a phone's own health (device.health): hot above the phone's own 42 °C (audit/Checks.kt), fresh
+ *  from 5 min before the look to 2 min after it (the phone's clock may run ahead a little) */
+export const HOT_C = 42;
+export const HEALTH_OLD_MS = 300_000;
+export const HEALTH_AHEAD_MS = 120_000;
+const CARDS_SHOWN = 5;
+const CARD_DEVICE = /^[\w.:@/-]{1,80}$/;        // a device id a card id can carry (eye.ts CARD_ID)
+type Health = { at: number; tempC: number | null; battery: number | null; charging: boolean | null; throttled: boolean | null };
+/** the reading when it is fresh for a look at `at`; anything not plain is unknown, a stale or
+ *  unusable reading none at all */
+export function freshHealth(x: unknown, at: number): Health | null {
+  if (!isObject(x) || !isTime(x.at)) return null;
+  const age = at - x.at;
+  if (age > HEALTH_OLD_MS || age < -HEALTH_AHEAD_MS) return null;
+  const within = (v: unknown, lo: number, hi: number) => (isNumber(v) && v >= lo && v <= hi ? v : null);
+  const tri = (v: unknown) => (v === true || v === false ? v : null);
+  return { at: x.at, tempC: within(x.tempC, -30, 120), battery: within(x.battery, 0, 100), charging: tri(x.charging), throttled: tri(x.throttled) };
+}
+const healthWords = (h: Health | null): string => !h ? 'health unknown' : `health ${[
+  h.tempC == null ? 'heat unknown' : `${round1(h.tempC)} °C`,
+  h.battery == null ? 'battery unknown' : `battery ${Math.round(h.battery)}%${h.charging === true ? ' charging' : ''}`,
+  h.throttled === true ? 'throttled' : h.throttled === false ? 'not throttled' : 'throttle unknown',
+].join(', ')}`;
 
 const arrayOf = (raw: Record<string, unknown> | null, key: string): unknown[] => {
   const v = raw?.[key];
@@ -221,6 +254,8 @@ export function create(ctx: BranchCtx): Branch {
   let warns = new Map<string, Warn>();
   let mems: Mem[] = [];
   let gauge = 100;
+  let cards: Suggestion[] = [];                         // the health cards of the last look, in device order
+  let healthFresh = false;                              // the last look had a fresh health reading
 
   const blankDay = (): Day => ({ wh: 0, busyMin: 0, by: Object.create(null) as Record<string, number> });
 
@@ -474,6 +509,42 @@ export function create(ctx: BranchCtx): Branch {
         }
       }
 
+      // each phone's own health (12.11.2026): the newest reading of its signed ledger health
+      // lines, when fresh. heat and battery are the phone's word, never a guess here; a warning
+      // and a card each, keyed apart from the host's ("dev:"), and no hint
+      cards = [];
+      healthFresh = false;
+      const healthSeen = new Set<string>();
+      for (const d of devices) {
+        if (!usableNamed(d) || healthSeen.has(d.id)) continue;
+        healthSeen.add(d.id);
+        const h = freshHealth(d.health, at);
+        if (!h) continue;
+        healthFresh = true;
+        const name = shownName(d);
+        const card = (topic: string, title: string, why: string) => {
+          if (CARD_DEVICE.test(d.id)) cards.push({ id: `limits:${topic}:${d.id}`, kind: 'warn', weight: 3, title, why, action: { do: 'open', panel: 'branch', branch: 'limits' }, label: 'look' });
+        };
+        if (h.tempC != null && h.tempC > HOT_C) {
+          const c = round1(h.tempC);
+          heads.push(0);
+          next.set(`dev:heat:${d.id}`, { text: `${name} is hot: ${c} °C, above ${HOT_C} °C`, ended: `${name} is no longer hot` });
+          card('heat', `${name} is hot: ${c} °C`, `its own signed health line says its battery is at ${c} °C, above the ${HOT_C} °C its phone itself warns at. kula never stops it: let it cool, or leave it out of the next load.`);
+        }
+        const onCable = d.via === 'cable' && d.plugged === true;
+        if (h.battery != null && h.battery < LOW_BATTERY && h.charging !== true && !onCable) {
+          const p = Math.round(h.battery);
+          heads.push(h.battery);
+          next.set(`dev:battery:${d.id}`, { text: `${name} is at ${p}% and not charging`, ended: `${name} is charging or above ${LOW_BATTERY}% again` });
+          card('battery', `${name} is at ${p}% and not charging`, `its own signed health line says ${p}%, and it is neither charging nor plugged in on this computer's cable. kula never stops it: plug it in, or leave it out of the next load.`);
+        }
+        if (h.throttled === true) {
+          heads.push(50);
+          next.set(`dev:throttled:${d.id}`, { text: `${name} is throttled: its phone moved the work to its slow cores`, ended: `${name} is no longer throttled` });
+          card('throttled', `${name} is throttled`, `its own signed health line says its phone moved kula's work to the slow cores (battery saving or heat): its answers are slower until that ends.`);
+        }
+      }
+
       for (const [k, w] of next) if (!warns.has(k)) ctx.emit(`limits: ${w.text}`);
       for (const [k, w] of warns) if (!next.has(k)) ctx.emit(`limits: ${w.ended}`);
       warns = next;
@@ -501,6 +572,9 @@ export function create(ctx: BranchCtx): Branch {
       const devs = all.filter(usableNamed);
       const memByName = new Map<string, Mem>();
       for (const m of mems) if (!memByName.has(m.name)) memByName.set(m.name, m);
+      // the snapshot's own device entries, for each row's health (a loaded row carries none)
+      const seenById = new Map<string, Record<string, unknown>>();
+      for (const x of arrayOf(rawOf(s), 'devices')) if (usableNamed(x) && !seenById.has(x.id)) seenById.set(x.id, x);
       const n = warns.size;
       const lines: string[] = [...warns.values()].map((w) => `warning: ${w.text}`);
       const devNames = new Set<string>();
@@ -517,6 +591,9 @@ export function create(ctx: BranchCtx): Branch {
         bits.push(`${plural(answers.get(d.id)?.length ?? 0, 'answer')} in the last hour`);
         const wh = day.by[name];
         if (typeof wh === 'number' && wh > 0) bits.push(`${round1(wh)} Wh today`);
+        // a snapshot from before 12.11.2026 has no health at all: nothing is said about it
+        const seen = seenById.get(d.id);
+        if (d.local !== true && seen && 'health' in seen) bits.push(healthWords(freshHealth(seen.health, at)));
         lines.push(bits.join(' · '));
       }
       for (const m of mems) if (!devNames.has(m.name) && m.share != null) lines.push(`${m.name} · memory ${gbShown(m.needMb)} of ${gbShown(m.ramMb!)} (${percentWord(m.percent)}%) ${m.level}`);
@@ -529,13 +606,15 @@ export function create(ctx: BranchCtx): Branch {
           ['busy today', `${Math.round(day.busyMin)} min`],
           ...(yesterday ? [['energy yesterday', `${round1(yesterday.wh)} Wh`] as [string, string]] : []),
           ...(pw ? [[hostNameOf(s), powerWords(pw)] as [string, string]] : []),
-          ['rules', `memory tight over ${TIGHT_PERCENT}% · rest after ${REST_AFTER_MS / 60_000} min · phone ${WATTS.phone} W, pc ${WATTS.pc} W${pw ? ` · battery under ${LOW_BATTERY}%` : ''}`],
+          ['rules', `memory tight over ${TIGHT_PERCENT}% · rest after ${REST_AFTER_MS / 60_000} min · phone ${WATTS.phone} W, pc ${WATTS.pc} W${healthFresh ? ` · hot over ${HOT_C} °C` : ''}${pw || healthFresh ? ` · battery under ${LOW_BATTERY}%` : ''}`],
         ],
         lines,
-        note: `it only warns, it never stops a device. ${pw ? 'battery and heat are this device\'s own; the others\' it cannot see yet' : 'it cannot see battery or heat yet'}${devs.length ? '' : '; no model loaded, nothing is working'}.`,
-        what: 'keeps devices within their limits: memory, rest, the night window and an energy guess. battery and heat come later.',
-        // for the deciding branches (peek): a device that should rest gets no new work suggested
+        note: `it only warns, it never stops a device. heat, battery and throttling come from each phone's signed health lines (fresh for ${HEALTH_OLD_MS / 60_000} min)${pw ? ', and this device\'s own battery and heat from itself' : ''}; a phone's own brain does not see the other devices' health yet${devs.length ? '' : '; no model loaded, nothing is working'}.`,
+        what: 'keeps devices within their limits: memory, rest, the night window, an energy guess, and each phone\'s heat, battery and throttling from its own signed health lines.',
+        // for the deciding branches (peek): a device that should rest gets no new work suggested.
+        // health warnings ("dev:") are cards for the person only, never a hint
         hints: [...warns.keys()].filter((k) => k.startsWith('rest:')).map((k) => ({ id: k.slice(5), no: 'should rest (limits)' })),
+        ...(cards.length ? { suggestions: cards.slice(0, CARDS_SHOWN) } : {}),
       };
     },
   };

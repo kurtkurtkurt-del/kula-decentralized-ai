@@ -59,7 +59,15 @@ export interface EyeDevice {
   holds: string | null;            // the model file it has loaded
   trust: EyeTrust | null;          // what the device said about itself (GET /trust); null: never asked
   ring?: Ring;                     // how far the person trusts it; absent: home (every device paired before 11.11.2026)
+  // its own health (12.11.2026): the newest reading of the signed health lines its worker writes
+  // to its ledger every minute or when its warnings change (WorkerService.kt, Auditor.kt
+  // onHealth), read from trust.lines (ui/godseye-feed.ts healthOf). at: the line's t, the phone's
+  // clock; tempC: its battery's °C; battery: percent; charging: no worker says it yet (null);
+  // null: no reading in the lines; absent: a snapshot from before 12.11.2026
+  health?: EyeHealth | null;
 }
+
+export interface EyeHealth { at: number; tempC: number | null; battery: number | null; charging: boolean | null; throttled: boolean | null }
 
 /** The three rings (11.11.2026): home is the person's own devices (everything may go there, a private
  *  chat included), circle a friend's (work the person trusts them with), world a stranger's (only

@@ -484,3 +484,45 @@ test('clean: a project\'s peers get a stand-in too; models and projects keep the
   const projects = clean({ at: 1, projects: [{ id: 'n1', title: 'one' }, { id: 'n1', title: 'two' }, { id: 'n2', title: 'three' }] })!.projects;
   assert.deepEqual(projects.map((x) => [x.id, x.title]), [['n1', 'one'], ['n2', 'three']]);
 });
+
+// a phone's health (12.11.2026): the newest reading of its signed ledger health lines
+const healthOfClean = (health: unknown) => clean({ at: 1, devices: [{ id: 'p1', health }] })!.devices[0].health;
+
+test('clean: a device\'s health absent stays absent; not an object, or without a usable at, is null', () => {
+  const [d] = clean({ at: 1, devices: [{ id: 'p1' }] })!.devices;
+  assert.equal('health' in d, false, 'an older snapshot has no health and gets none');
+  assert.equal(healthOfClean(null), null);
+  assert.equal(healthOfClean(undefined), null);
+  assert.equal(healthOfClean('hot'), null);
+  assert.equal(healthOfClean([1, 2]), null);
+  assert.equal(healthOfClean({ tempC: 40 }), null);
+  assert.equal(healthOfClean({ at: '1000', tempC: 40 }), null);
+  assert.equal(healthOfClean({ at: -1, tempC: 40 }), null);
+  assert.equal(healthOfClean({ at: TIME_MAX + 1, tempC: 40 }), null);
+});
+
+test('clean: a device\'s health, field by field: wrong types are unknown', () => {
+  assert.deepEqual(healthOfClean({ at: 5, tempC: '40', battery: true, charging: 1, throttled: 'yes' }),
+    { at: 5, tempC: null, battery: null, charging: null, throttled: null });
+  assert.deepEqual(healthOfClean({ at: 5 }), { at: 5, tempC: null, battery: null, charging: null, throttled: null });
+  assert.deepEqual(healthOfClean({ at: 5, tempC: NaN, battery: Infinity, charging: false, throttled: true }),
+    { at: 5, tempC: null, battery: null, charging: false, throttled: true });
+});
+
+test('clean: a device\'s health out of range is unknown, never clamped: heat -30..120 °C, battery 0..100 %', () => {
+  const h = (tempC: unknown, battery: unknown) => { const x = healthOfClean({ at: 5, tempC, battery, charging: null, throttled: false })!; return [x.tempC, x.battery]; };
+  assert.deepEqual(h(-30, 0), [-30, 0]);
+  assert.deepEqual(h(120, 100), [120, 100]);
+  assert.deepEqual(h(-30.1, -1), [null, null]);
+  assert.deepEqual(h(120.5, 100.5), [null, null]);
+  assert.deepEqual(h(1e300, -1e300), [null, null]);
+  assert.deepEqual(h(36.6, 57.5), [36.6, 57.5]);
+});
+
+test('clean leaves a healthy snapshot with health exactly as it is', () => {
+  const withHealth = healthy();
+  (withHealth.devices as any[])[0].health = { at: 950, tempC: 38.5, battery: 64, charging: null, throttled: false };
+  (withHealth.devices as any[]).push({ ...(withHealth.devices as any[])[0], id: 'p2', name: 'tab', health: null });
+  const s = structuredClone(withHealth);
+  assert.deepStrictEqual(clean(s), s);
+});

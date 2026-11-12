@@ -243,6 +243,7 @@ export interface EngineOptions {
   watch?: boolean;                       // look on mdns in the background while the page is open (kula-node ui); off in tests
   lookMs?: number;                       // how often that look is; 12 s (2.5 s while this computer's qr is up)
   watchIdleMs?: number;                  // the page silent this long: the looking stops; 45 s
+  healthMs?: number;                     // a device in use is asked for its /trust (its health lines) at most this often; 60 s
   peekMs?: number;                       // how long a look at an unknown device's gate waits; 2 s
   hostId?: string;                       // the id in this computer's qr; default: the device key's id
   now?: () => number;                    // tests: the clock the qr's code expires by
@@ -306,6 +307,8 @@ export class Engine {
   private held = new Map<string, string | null>();
   // each device's security report (its GET /trust), by device (its first record's id)
   private trusts = new Map<string, TrustLook>();
+  // when the look last asked a device in use for its /trust (refreshInUse), by device
+  private healthAskedAt = new Map<string, number>();
   private discovering: Promise<FoundRow[]> | null = null;
   // a paired wi-fi phone that mdns heard at another address than the peer book has (it got a
   // new ip on this network): tried by the next probe when the saved address does not answer,
@@ -865,7 +868,32 @@ export class Engine {
     return peek;
   }
 
+  // A device in use (in the cluster) is left out of the look's probe below, so while it worked
+  // nothing asked for its /trust unless the brain page was open (its 15 s probe): its health lines
+  // (heat, battery, throttled) went stale in god's eye. The look asks each one at most once per
+  // healthMs (60 s; a probe's answer counts too), over the api tunnel the cluster already holds to
+  // it: never its rpc channel, no new path. The answer is folded like a probe's (askTrust, which
+  // asks only for the lines after the last one received). This computer itself is not asked.
+  private async refreshInUse(): Promise<void> {
+    const remote = this.cluster?.devices.filter((d) => !d.local) ?? [];
+    if (!remote.length) return;
+    const every = this.opts.healthMs ?? 60_000;
+    const peers = readPeers(this.file());
+    const now = Date.now();
+    await Promise.all(remote.map(async (d) => {
+      const p = peers.find((x) => x.id === d.id);
+      if (!p) return;
+      const id = this.groupId(p.id);
+      const last = Math.max(this.healthAskedAt.get(id) ?? 0, this.trusts.get(id)?.at ?? 0);
+      if (now >= last && now - last < every) return;   // asked within the minute (a clock that went back asks again)
+      this.healthAskedAt.set(id, now);
+      await this.askTrust(p, d.apiPort, this.opts.statusMs ?? 2500);
+    }));
+  }
+
   private async lookOnce(): Promise<NearbyView> {
+    // the devices in use, alongside the look (their api tunnels are already open)
+    const health = this.refreshInUse().catch((e) => this.log(`look: ${(e as Error).message}`));
     const found = await this.hear();
     const now = Date.now();
     const wifiOf = (g: Peer[]) => g.find((p) => !p.cable && !p.relay) ?? null;
@@ -918,6 +946,7 @@ export class Engine {
         if (ok && was !== true) { try { const r = this.rowOf(id); this.note(`${r.name} is ready over wi-fi (${r.ways.wifi?.where ?? ''})`); } catch {} }
       }
     }
+    await health;
     const devices = new Map(this.peers().map((r) => [r.id, r]));
     for (const r of rows) if (r.peer) r.state = devices.get(r.peer)?.ways.wifi?.ok ? 'ready' : 'paired';
     this.near = { at: now, list: rows };
