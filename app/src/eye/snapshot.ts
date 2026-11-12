@@ -26,7 +26,7 @@ export type PhoneInput = {
   freeMb: number | null;                          // free memory, from the native info
   ledger: { ok: boolean; count: number; problem: string | null } | null;
   power: Power | null;
-  engine: Pick<EngineState, 'model' | 'mode' | 'loading' | 'plan' | 'split' | 'devices' | 'generating' | 'load'>;
+  engine: Pick<EngineState, 'model' | 'mode' | 'loading' | 'plan' | 'split' | 'devices' | 'generating' | 'load' | 'loadedAt'>;
   since: { loaded: number | null; loading: number | null };
   peers: Peer[];
   reach: Record<string, Reach>;                   // what the cards' probes saw, by peer id
@@ -83,6 +83,14 @@ export function deviceOf(p: Peer, i: PhoneInput): EyeDevice {
 
 const MODE: Record<string, string> = { alone: 'here', apart: 'apart', split: 'split' };
 
+/** A split part the engine named only (a state from before parts carried ids): the id of the one
+ *  device the plan used under that name; none or two of them, or this phone's own name: unknown. */
+function usedId(name: string, i: PhoneInput): string | null {
+  if (name === i.name) return null;
+  const hit = i.engine.plan?.used.filter((u) => u.name === name) ?? [];
+  return hit.length === 1 ? hit[0].id : null;
+}
+
 function workOf(i: PhoneInput): EyeWork {
   const e = i.engine;
   const m = e.model;
@@ -91,9 +99,11 @@ function workOf(i: PhoneInput): EyeWork {
         mode: MODE[e.mode] ?? e.mode,
         model: { id: m.id, name: m.name, file: m.file, size: m.size },
         ctx: e.load?.ctx ?? 0,
-        since: i.since.loaded ?? i.at,
+        // the engine's own load time: a reload of the same model between two looks is a new load
+        since: e.loadedAt ?? i.since.loaded ?? i.at,
         devices: e.devices.map((d) => ({ id: d.local ? 'me' : d.id, name: d.local ? i.name : d.name, local: d.local, busy: d.busy, tps: d.done > 0 && d.tps > 0 ? d.tps : null, done: d.done })),
-        ...(e.mode === 'split' ? { parts: e.split.map((s) => ({ id: s.name, name: s.name, local: s.name === i.name, mb: Math.round(s.gb * 1024), layers: 0 })) } : {}),
+        // the branches look parts up by device id: a peer's part carries its id, this phone's 'local'
+        ...(e.mode === 'split' ? { parts: e.split.map((s) => ({ id: s.id ?? usedId(s.name, i) ?? s.name, name: s.name, local: s.local ?? s.name === i.name, mb: Math.round(s.gb * 1024), layers: 0 })) } : {}),
       }
     : null;
   const plan: string[] = [];
@@ -117,6 +127,8 @@ function modelsOf(i: PhoneInput): EyeModel[] {
   const out: EyeModel[] = i.catalog.map((c) => ({
     id: c.id, name: c.name, file: c.file, size: c.size, quant: c.quant, params_b: c.params_b,
     catalog: true, here: here.has(c.id), needMb: needMb(c.size + (c.mmproj?.size ?? 0), c.kv_mb_per_1k),
+    // a mixture of experts reads only its active share per token (decide.ts readGb), as on kula-node
+    active_b: c.active_b ?? null, vision: !!c.mmproj,
   }));
   for (const m of i.models) {
     if (i.catalog.some((c) => c.id === m.id)) continue;

@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { lastPassport } from '@/data/passport';
 import { native, type LoadResult, type Message } from '@/llm/native';
-import { modelKey, peerArgs, peerRelay, peerTls, planSplit, probeAll, splitSummary, type Plan } from '@/llm/cluster';
+import { modelKey, peerArgs, peerRelay, peerTls, planSplit, probeAll, splitSummary, type Plan, type SplitPart } from '@/llm/cluster';
 import { measuredFor } from '@/bench/store';
 import { type LocalModel, type Mode, type Peer, mmprojPath, registerEngine, saveSettings, saveUxFlags } from '@/llm/store';
 import { assign, estimateAlone, pickDevice } from '@/llm/sim/model';
@@ -26,12 +26,15 @@ export type EngineState = {
   error: string | null;
   load: LoadResult | null;
   plan: Plan | null;
-  split: { name: string; gb: number }[];
+  split: SplitPart[];
   devices: Device[];
   generating: boolean;
+  // when the model now loaded finished loading (ms); null while nothing is loaded. God's eye sends
+  // it as the load's `since`, so a reload of the same model between two looks is a new load.
+  loadedAt?: number | null;
   vision?: boolean; // the loaded model's mmproj is loaded too: this phone can show it photos (loadVision)
 };
-const state: EngineState = { model: null, mode: 'alone', loading: null, error: null, load: null, plan: null, split: [], devices: [], generating: false, vision: false };
+const state: EngineState = { model: null, mode: 'alone', loading: null, error: null, load: null, plan: null, split: [], devices: [], generating: false, vision: false, loadedAt: null };
 const listeners = new Set<() => void>();
 const emit = () => listeners.forEach((fn) => fn());
 const set = (patch: Partial<EngineState>) => {
@@ -62,7 +65,7 @@ export const OUT_MS = 5 * 60 * 1000; // a device that dropped a request sits out
 export async function load(model: LocalModel, mode: Mode, ctx: number, peers: Peer[], share = false): Promise<void> {
   const llama = native();
   const t0 = Date.now();
-  set({ loading: 'preparing', error: null, model, mode, plan: null, load: null, split: [], devices: [], vision: false });
+  set({ loading: 'preparing', error: null, model, mode, plan: null, load: null, split: [], devices: [], vision: false, loadedAt: null });
   try {
     const info = await llama.info();
     const bw = Number(lastPassport()?.mem_bw_read_gbs) || Number(lastPassport()?.mem_bw_gbs) || 0;
@@ -71,12 +74,13 @@ export async function load(model: LocalModel, mode: Mode, ctx: number, peers: Pe
       const plan = await planSplit(model, info.ramFreeMb, bw, peers, share, ctx);
       set({ plan, loading: 'loading' });
       const res = await llama.loadModel(model.path, ctx, 0, peerArgs(plan), plan.localMb);
-      const names = new Map<string, string>(); // tunnels hide the real hosts; map by order
+      const names = new Map<string, { id: string; name: string }>(); // tunnels hide the real hosts; map by order
       // RPC buffers are named by the 127.0.0.1:<port> the tunnel listened on; the native side
-      // adds them in the order given, so pair them with plan.used by index.
+      // adds them in the order given, so pair them with plan.used by index. Keyed by the peer's
+      // id: god's eye looks parts up by device id, and two devices may carry the same name.
       const rpc = res.split.filter((s) => /^RPC\d+\[/.test(s.buffer)).map((s) => s.buffer.match(/\[([^\]]+)\]/)![1]);
-      Array.from(new Set(rpc)).forEach((ep, i) => names.set(ep, plan.used[i]?.name ?? ep));
-      set({ load: res, split: splitSummary(res.split, names, thisName()), devices: [me(model, info.ramFreeMb)], loading: null });
+      Array.from(new Set(rpc)).forEach((ep, i) => { const u = plan.used[i]; names.set(ep, u ? { id: u.id, name: u.name } : { id: ep, name: ep }); });
+      set({ load: res, split: splitSummary(res.split, names, thisName(), true), devices: [me(model, info.ramFreeMb)], loading: null, loadedAt: Date.now() });
     } else if (mode === 'apart') {
       set({ loading: 'probing' });
       const { ok, bad } = await probeAll(peers, 'api');
@@ -94,11 +98,11 @@ export async function load(model: LocalModel, mode: Mode, ctx: number, peers: Pe
           bad.push({ peer: p, why: (e as Error).message });
         }
       }));
-      set({ load: res, devices, plan: { mode: 'apart', used: [], skipped: bad, localMb: 0, fitsAlone: true, totalMb: 0, needMb: 0 }, split: [{ name: thisName(), gb: Math.round(model.size / 1024 ** 3 * 10) / 10 }], loading: null });
+      set({ load: res, devices, plan: { mode: 'apart', used: [], skipped: bad, localMb: 0, fitsAlone: true, totalMb: 0, needMb: 0 }, split: [{ name: thisName(), gb: Math.round(model.size / 1024 ** 3 * 10) / 10 }], loading: null, loadedAt: Date.now() });
     } else {
       set({ loading: 'loading' });
       const res = await llama.loadModel(model.path, ctx, 0, [], 1);
-      set({ load: res, split: [{ name: thisName(), gb: Math.round(model.size / 1024 ** 3 * 10) / 10 }], devices: [me(model, info.ramFreeMb)], loading: null });
+      set({ load: res, split: [{ name: thisName(), gb: Math.round(model.size / 1024 ** 3 * 10) / 10 }], devices: [me(model, info.ramFreeMb)], loading: null, loadedAt: Date.now() });
     }
     saveSettings({ modelId: model.id, ctx, lastMode: mode });
     saveUxFlags({ ran: true }); // the ladder's third rung, for good
@@ -113,7 +117,7 @@ export async function load(model: LocalModel, mode: Mode, ctx: number, peers: Pe
       ...(state.plan ? planEntries(Date.now(), model.name, mode, state.plan, [], thisName()) : []),
       { at: Date.now(), kind: 'error', key: why === 'toobig' ? 'brain.load.toobig' : why === 'local' ? 'brain.load.local' : 'brain.load.failed', vars: { model: model.name }, detail: why === 'toobig' || why === 'local' ? undefined : why, tone: 'bad' },
     ]);
-    set({ loading: null, error: (e as Error).message, model: null, load: null });
+    set({ loading: null, error: (e as Error).message, model: null, load: null, loadedAt: null });
     await llama.unload().catch(() => {});
     throw e;
   }
@@ -121,7 +125,7 @@ export async function load(model: LocalModel, mode: Mode, ctx: number, peers: Pe
 
 export async function unload() {
   await native().unload().catch(() => {});
-  set({ model: null, load: null, plan: null, split: [], devices: [], error: null, vision: false });
+  set({ model: null, load: null, plan: null, split: [], devices: [], error: null, vision: false, loadedAt: null });
 }
 
 /**

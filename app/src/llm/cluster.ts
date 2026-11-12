@@ -119,15 +119,32 @@ export const peerRelay = (p: Pick<Peer, 'relay'>): PeerRelay => p.relay ?? null;
 
 export const peerArgs = (plan: Plan): PeerArg[] => plan.used.map((p) => ({ host: p.host, port: p.port, secret: p.secret, weight: p.assignedMb, fp: p.fp ?? null, pin: p.pin ?? null }));
 
-/** "this phone 1.2 gb · pixel 0.8 gb" from the native split report. */
-export function splitSummary(split: { buffer: string; mb: number | null }[], names: Map<string, string>, thisName: string): { name: string; gb: number }[] {
-  const by = new Map<string, number>();
+/** One device's share of a split. `id` and `local` come when the endpoints were named with peer ids:
+ *  the peer's id, or 'local' for this phone (kula-node's id for its own part). */
+export type SplitPart = { id?: string; name: string; gb: number; local?: boolean };
+
+/** "this phone 1.2 gb · pixel 0.8 gb" from the native split report. Endpoints named by peer
+ *  ({id, name}) are kept apart by id, so two devices with the same name stay two parts and only
+ *  this phone's own buffers are local (12.11.2026, P13); named by a plain string, by that name.
+ *  `byId` asks for the id shape even when no peer holds a share (an empty map). */
+export function splitSummary(split: { buffer: string; mb: number | null }[], names: Map<string, string>, thisName: string): { name: string; gb: number }[];
+export function splitSummary(split: { buffer: string; mb: number | null }[], names: Map<string, { id: string; name: string }>, thisName: string, byId?: true): Required<SplitPart>[];
+export function splitSummary(split: { buffer: string; mb: number | null }[], names: Map<string, string | { id: string; name: string }>, thisName: string, ids?: true): SplitPart[] {
+  const byId = !!ids || Array.from(names.values()).some((v) => typeof v !== 'string');
+  const by = new Map<string, SplitPart & { mb: number }>();
   for (const s of split) {
     const m = s.buffer.match(/^RPC\d+\[([^\]]+)\]/);
-    const key = m ? names.get(m[1]) ?? m[1] : thisName;
-    by.set(key, (by.get(key) ?? 0) + (s.mb ?? 0));
+    const n = m ? names.get(m[1]) ?? m[1] : null;
+    const part: Omit<SplitPart, 'gb'> = !byId
+      ? { name: n === null ? thisName : (n as string) }
+      : n === null ? { id: 'local', name: thisName, local: true }
+      : typeof n === 'string' ? { id: n, name: n, local: false }
+      : { id: n.id, name: n.name, local: false };
+    const key = byId ? part.id! : part.name;
+    const had = by.get(key);
+    by.set(key, { ...part, gb: 0, mb: (had?.mb ?? 0) + (s.mb ?? 0) });
   }
-  return Array.from(by, ([name, mb]) => ({ name, gb: Math.round(mb / 102.4) / 10 })).sort((a, b) => b.gb - a.gb);
+  return Array.from(by.values(), ({ mb, ...p }) => ({ ...p, gb: Math.round(mb / 102.4) / 10 })).sort((a, b) => b.gb - a.gb);
 }
 
 /** How the bench history names a model: its id, or its file and size (docs/BENCH.md). */

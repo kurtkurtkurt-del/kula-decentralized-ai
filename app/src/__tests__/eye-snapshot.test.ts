@@ -1,8 +1,19 @@
 // god's eye on the phone (11.11.2026): the phone's look (src/eye/snapshot.ts), the twin of
 // kula-node's godseye-feed. Plain data in the eye's own shape, the guard's way in, no secret of a
 // device in it, and the phone's own words for alone, apart and split.
-import { describe, expect, it } from '@jest/globals';
+/* eslint-disable import/first -- jest.mock calls are hoisted above the imports anyway */
+import { describe, expect, it, jest } from '@jest/globals';
+
+// cluster.ts (splitSummary) reaches the store and the native module when required
+const mockKv = new Map<string, string>();
+jest.mock('expo-sqlite/kv-store', () => ({
+  __esModule: true,
+  default: { getItemSync: (k: string) => mockKv.get(k) ?? null, setItemSync: (k: string, v: string) => { mockKv.set(k, v); }, removeItemSync: (k: string) => mockKv.delete(k), getAllKeysSync: () => [...mockKv.keys()] },
+}));
+jest.mock('@/llm/native', () => ({ llama: null, native: () => null, hasNative: () => false, GATE_PORT: 50551 }));
+
 import { clean } from '@godseye/branches/guard';
+import { splitSummary } from '@/llm/cluster';
 import { needMb, phoneSnapshot, projectOf, type PhoneInput } from '@/eye/snapshot';
 import type { EngineState } from '@/llm/engine';
 import type { LocalModel, Peer } from '@/llm/store';
@@ -60,7 +71,7 @@ describe('the phone\'s look', () => {
     expect(apart.devices[0]).toMatchObject({ reachable: false, reason: 'it dropped a request and sits out' });
 
     const split = phoneSnapshot(input({ peers: [p], engine: { ...idle, model: m, mode: 'split', split: [{ name: 'pixel 8', gb: 0.3 }, { name: 'Pixel', gb: 0.2 }], plan: { mode: 'split', used: [{ ...p, assignedMb: 200 }], skipped: [{ peer: peer({ id: 'p9', name: 'Gone' }), why: 'no answer' }], localMb: 300, fitsAlone: true, totalMb: 500, needMb: 500, aloneFaster: true } } }));
-    expect(split.work.loaded?.parts).toEqual([{ id: 'pixel 8', name: 'pixel 8', local: true, mb: 307, layers: 0 }, { id: 'Pixel', name: 'Pixel', local: false, mb: 205, layers: 0 }]);
+    expect(split.work.loaded?.parts).toEqual([{ id: 'pixel 8', name: 'pixel 8', local: true, mb: 307, layers: 0 }, { id: 'p1', name: 'Pixel', local: false, mb: 205, layers: 0 }]);
     expect(split.devices[0].holds).toBe('qwen.gguf');
     expect(split.work.plan).toEqual(['1 other device(s) hold a share: Pixel', 'this phone alone would be faster by the estimate', 'Gone was left out: no answer']);
 
@@ -112,5 +123,56 @@ describe('the phone\'s look', () => {
     expect(projectOf(t, new Date(2026, 10, 12, 12, 0).getTime()).state).toBe('paused');
     expect(projectOf({ ...t, active: false }, AT).state).toBe('off');
     expect(projectOf({ ...t, run: null }, AT).state).toBe('waiting');
+  });
+
+  // P13 (D1): every branch looks a split's parts up by device id, so the phone keys them by id
+  it('split: each peer\'s part carries its device id, this phone\'s part is "local", same names stay apart', () => {
+    const a = peer({ id: 'w-7f3a', name: 'Pixel' });
+    const b = peer({ id: 'w-91c0', name: 'Pixel', host: '192.168.1.41' });
+    const c = peer({ id: 'w-c2d4', name: 'pixel 8', host: '192.168.1.42' }); // named like this phone
+    const names = new Map([
+      ['127.0.0.1:4001', { id: a.id, name: a.name }],
+      ['127.0.0.1:4002', { id: b.id, name: b.name }],
+      ['127.0.0.1:4003', { id: c.id, name: c.name }],
+    ]);
+    const split = splitSummary([
+      { buffer: 'CPU', mb: 400 }, { buffer: 'RPC0[127.0.0.1:4001]', mb: 300 },
+      { buffer: 'RPC1[127.0.0.1:4002]', mb: 200 }, { buffer: 'RPC2[127.0.0.1:4003]', mb: 100 },
+    ], names, 'pixel 8');
+    expect(split).toEqual([
+      { id: 'local', name: 'pixel 8', gb: 0.4, local: true },
+      { id: 'w-7f3a', name: 'Pixel', gb: 0.3, local: false },
+      { id: 'w-91c0', name: 'Pixel', gb: 0.2, local: false },
+      { id: 'w-c2d4', name: 'pixel 8', gb: 0.1, local: false },
+    ]);
+    const used = [a, b, c].map((p, i) => ({ ...p, assignedMb: 300 - i * 100 }));
+    const s = phoneSnapshot(input({ peers: [a, b, c], engine: { ...idle, model: model(), mode: 'split', split, plan: { mode: 'split', used, skipped: [], localMb: 400, fitsAlone: true, totalMb: 1000, needMb: 1000 } } }));
+    const parts = s.work.loaded!.parts!;
+    const ids = s.devices.map((d) => d.id);
+    for (const p of parts.filter((x) => !x.local)) expect(ids).toContain(p.id);
+    expect(parts.filter((x) => x.local)).toEqual([{ id: 'local', name: 'pixel 8', local: true, mb: 410, layers: 0 }]);
+    expect(parts.filter((x) => x.name === 'Pixel').map((x) => x.id)).toEqual(['w-7f3a', 'w-91c0']);
+    // no peer took a share: this phone's part is still 'local'
+    expect(splitSummary([{ buffer: 'CPU', mb: 512 }], new Map<string, { id: string; name: string }>(), 'pixel 8', true)).toEqual([{ id: 'local', name: 'pixel 8', gb: 0.5, local: true }]);
+  });
+
+  // P13 (D5): a mixture of experts reads only its active share per token; the speeds depend on it
+  it('models: a catalog mixture of experts keeps active_b, a vision model says so', () => {
+    const moe = CATALOG.find((c) => c.active_b)!;
+    const eyes = CATALOG.find((c) => c.mmproj)!;
+    const s = phoneSnapshot(input({ catalog: [moe, eyes, CATALOG.find((c) => !c.active_b && !c.mmproj)!] }));
+    expect(s.models[0]).toMatchObject({ id: moe.id, active_b: moe.active_b });
+    expect(s.models[1]).toMatchObject({ id: eyes.id, vision: true });
+    expect(s.models[2]).toMatchObject({ active_b: null, vision: false });
+  });
+
+  // P13 (D6): since is when the engine loaded the model, so a reload between two looks is seen
+  it('since follows the engine\'s load time, also for a reload of the same model in the same mode', () => {
+    const m = model();
+    const at = (loadedAt: number) => phoneSnapshot(input({ at: 5_000_000, engine: { ...idle, model: m, mode: 'alone', load: { ctx: 4096 } as EngineState['load'], loadedAt }, since: { loaded: 1_000_000, loading: null } })).work.loaded!.since;
+    expect(at(1_000_000)).toBe(1_000_000);
+    expect(at(4_600_000)).toBe(4_600_000);
+    // no stamp (an older state): the first look that saw it, as before
+    expect(phoneSnapshot(input({ engine: { ...idle, model: m, mode: 'alone' }, since: { loaded: AT - 5000, loading: null } })).work.loaded!.since).toBe(AT - 5000);
   });
 });
