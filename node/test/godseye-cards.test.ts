@@ -10,15 +10,16 @@ const HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'kula-cards-'));
 after(() => fs.rmSync(HOME, { recursive: true, force: true }));
 
 const { GodsEye, cleanCard, cleanAction, dark } = await import('../src/godseye/index.ts');
+const { sameAction } = await import('../src/godseye/eye.ts');
 
 const snap = (at = 1000) => ({
   at, host: { name: 'mac', freeMb: 4000 }, devices: [],
   work: { loaded: null, loading: null, chatting: 0, plan: [], decisions: [], llama: true }, models: [], projects: [],
 });
 // a branch whose suggestions the test sets
-function eyeWith(say: { planner?: unknown[]; models?: unknown[] }) {
-  const maker = (id: 'planner' | 'models') => () => ({ id, observe() {}, view: () => ({ ...dark(), built: true, stat: 'x', suggestions: say[id] as any }) });
-  const eye = new GodsEye({ snapshot: () => snap(), dir: path.join(HOME, String(Math.random())), makers: { planner: maker('planner'), models: maker('models') } });
+function eyeWith(say: { planner?: unknown[]; models?: unknown[]; trust?: unknown[]; limits?: unknown[] }) {
+  const maker = (id: 'planner' | 'models' | 'trust' | 'limits') => () => ({ id, observe() {}, view: () => ({ ...dark(), built: true, stat: 'x', suggestions: say[id] as any }) });
+  const eye = new GodsEye({ snapshot: () => snap(), dir: path.join(HOME, String(Math.random())), makers: { planner: maker('planner'), models: maker('models'), trust: maker('trust'), limits: maker('limits') } });
   eye.tick();
   return eye;
 }
@@ -33,6 +34,25 @@ test('actions are kept only exactly as types.ts spells them', () => {
   assert.equal(cleanAction({ do: 'open', panel: 'branch' }), null, 'a branch page needs a branch');
   assert.deepEqual(cleanAction({ do: 'open', panel: 'branch', branch: 'trust' }), { do: 'open', panel: 'branch', branch: 'trust' });
   assert.deepEqual(cleanAction({ do: 'unload', extra: 1 }), { do: 'unload' });
+});
+
+test('a load action keeps here:false only for apart; here:true or another mode gives no here key', () => {
+  assert.deepEqual(cleanAction({ ...load, here: false }), { ...load, here: false });
+  assert.ok(!('here' in cleanAction({ ...load, here: true })!));
+  assert.ok(!('here' in cleanAction({ ...load, mode: 'phone', here: false })!));
+  assert.ok(!('here' in cleanAction({ ...load, mode: 'split', here: false })!));
+  assert.ok(!('here' in cleanAction({ ...load, here: 'false' })!));
+  assert.ok(!sameAction({ ...load, here: false }, load), 'here:false is another action than a plain apart load');
+  assert.ok(sameAction({ ...load, here: false }, cleanAction({ ...load, here: false })));
+});
+
+test('the panel puts privacy first, then health, then speed: weight comes second (C5)', () => {
+  const eye = eyeWith({
+    planner: [{ id: 'planner:alone:m', kind: 'warn', title: 'faster alone', why: 'w', action: null, weight: 2 }],
+    limits: [{ id: 'limits:hot:p1', kind: 'warn', title: 'hot', why: 'w', action: null, weight: 3 }],
+    trust: [{ id: 'trust:owner-blind:p1', kind: 'warn', title: 'could read', why: 'w', action: null, weight: 1 }],
+  });
+  assert.deepEqual(eye.view().cards.map((c) => c.id), ['trust:owner-blind:p1', 'limits:hot:p1', 'planner:alone:m']);
 });
 
 test('a card needs an id of its own branch, a kind, words; a broken action drops the card, not just the action', () => {

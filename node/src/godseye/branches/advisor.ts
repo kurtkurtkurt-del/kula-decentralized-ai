@@ -13,7 +13,8 @@ import type { Branch, BranchCtx, BranchId, BranchView, Snapshot, Suggestion } fr
 import { BRANCH_IDS } from '../types.js';
 import { active, gb, hhmm, pct } from './util.js';
 import { masked } from './review.js';   // a project's title may hold personal data: shown masked, as review does
-import { LOCAL_SHARE, Steady, WORKER_SHARE, cardId, hintsOf, modelOf, names } from './decide.js';
+import { LOCAL_SHARE, Steady, WORKER_SHARE, cardId, heldHere, hintsOf, modelOf, names } from './decide.js';
+import { cardRank } from '../rank.js';
 
 const LIKELY = 0.6;                // an hour a device is there with this chance or more counts
 const PLAN_FROM = 12;              // hours: the tonight card shows from noon ...
@@ -29,7 +30,8 @@ export function nightProblems(s: Snapshot, p: Snapshot['projects'][number]): { p
   const devs = p.peers.map((id) => ({ id, d: s.devices.find((d) => d.id === id) ?? null }));
   const goneDevs = devs.filter((x) => !x.d || !active(x.d));
   const caps = devs.flatMap((x) => (x.d && active(x.d) && x.d.ramMb ? [{ name: x.d.name, capMb: Math.floor(x.d.ramMb * WORKER_SHARE) }] : []));
-  const hostCap = s.host.freeMb != null ? Math.floor(s.host.freeMb * LOCAL_SHARE) : 0;
+  // the project's load unloads the model here first (engine.load), so what it holds counts back (C2)
+  const hostCap = s.host.freeMb != null ? Math.floor((s.host.freeMb + heldHere(s)) * LOCAL_SHARE) : 0;
   const problems: string[] = [];
   if (goneDevs.length) problems.push(`${goneDevs.map((x) => x.d?.name ?? x.id).join(', ')} not reachable now`);
   if (!m) problems.push(`${p.model} is not in the model list`);
@@ -115,8 +117,7 @@ export function create(ctx: BranchCtx): Branch {
     }
 
     // first: of the others' cards, the one that matters most, said plainly
-    const rank = (c: Card) => (c.weight ?? 2) * 2 + (c.kind === 'warn' ? 1 : 0);
-    const top = [...others].sort((a, b) => rank(b) - rank(a));
+    const top = [...others].sort((a, b) => cardRank(b) - cardRank(a));   // privacy, health, speed; then weight
     if (top.length >= 2) {
       const [a, b] = top;
       out.push({

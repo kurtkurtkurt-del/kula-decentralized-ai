@@ -11,7 +11,7 @@ const HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'kula-eye-advisor-'));
 after(() => fs.rmSync(HOME, { recursive: true, force: true }));
 
 const { GodsEye, cleanCard } = await import('../src/godseye/index.ts');
-const { create, bestHour } = await import('../src/godseye/branches/advisor.ts');
+const { create, bestHour, nightProblems } = await import('../src/godseye/branches/advisor.ts');
 
 const dev = (o: Record<string, unknown> = {}) => ({
   id: 'p1', name: 'pixel', kind: 'phone', via: 'wifi', where: '192.168.1.33:50551', reachable: true, reachMs: 12, reason: null,
@@ -112,6 +112,33 @@ test('first: of the others\' cards the one that matters most, said plainly, unde
   assert.deepEqual(ids(branch({ planner }).look(snap())), []);
   // a branch's card under another's name is not taken
   assert.deepEqual(ids(branch({ planner, models: { suggestions: [{ ...models.suggestions[0], id: 'planner:spoof' }] } }).look(snap())), []);
+});
+
+test('first: privacy before health before speed; a weight-1 privacy warning beats a weight-2 speed card (C5)', () => {
+  const trust = { built: true, stat: 'x', suggestions: [{ id: 'trust:owner-blind:p1', kind: 'warn', weight: 1, title: 'pixel could read the jobs it runs', why: 'its bootloader is unlocked', action: { do: 'open', panel: 'branch', branch: 'trust' } }] };
+  const planner = { built: true, stat: 'x', suggestions: [{ id: 'planner:alone:m', kind: 'warn', weight: 2, title: 'M answers faster on pixel alone', why: 'apart is slower', action: { do: 'load', model: 'm', mode: 'phone', devices: ['p1'] } }] };
+  const limits = { built: true, stat: 'x', suggestions: [{ id: 'limits:hot:p1', kind: 'warn', weight: 1, title: 'pixel is hot', why: 'w', action: null }] };
+  let v = branch({ trust, planner }).look(snap());
+  let c = v.suggestions.find((x: any) => x.id.startsWith('advisor:first:'));
+  assert.equal(c.id, 'advisor:first:trust:owner-blind:p1');
+  assert.match(c.why, /this one matters most: pixel could read the jobs it runs \(trust\)\. then: M answers faster on pixel alone \(planner\)\.$/);
+  // health (limits) before speed, privacy before health
+  v = branch({ planner, limits }).look(snap());
+  assert.equal(v.suggestions.find((x: any) => x.id.startsWith('advisor:first:')).id, 'advisor:first:limits:hot:p1');
+  v = branch({ planner, limits, trust }).look(snap());
+  assert.equal(v.suggestions.find((x: any) => x.id.startsWith('advisor:first:')).id, 'advisor:first:trust:owner-blind:p1');
+});
+
+test('night: a model that fits once the model loaded here goes is no problem (C2: heldHere counted back)', () => {
+  const s = snap({
+    host: { name: 'mac', freeMb: 3000 },
+    models: [model('chat', 6000), model('night', 4000)],
+    work: { llama: true, loaded: { mode: 'here', model: { id: 'chat', name: 'chat', file: 'chat.gguf', size: 5e9 }, ctx: 4096, since: 1, devices: [{ id: 'local', name: 'this computer', local: true, busy: false, tps: 10, done: 3 }] } },
+  });
+  const p = proj({ mode: 'here', model: 'night', peers: [] });
+  assert.deepEqual(nightProblems(s, p).problems, []);
+  // nothing loaded: 3000 MB free is too little for it, as before
+  assert.equal(nightProblems(snap({ host: { name: 'mac', freeMb: 3000 }, models: s.models, work: { llama: true } }), p).problems.length, 1);
 });
 
 test('at most two cards, never one of another branch\'s ids; the others are quoted when lit', () => {

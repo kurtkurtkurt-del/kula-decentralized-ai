@@ -7,6 +7,7 @@ import { MAKERS } from './branches/index.js';
 import { clean, dropped, type Dropped } from './branches/guard.js';
 import type { Box, BoxStatus, EyeKeys, EyeNotes } from './platform.js';
 import { sha256Hex } from './hash.js';
+import { cardRank } from './rank.js';
 import { facts, diff, keyChunks, lookPayload, makeScrubber, secretScan, trimVerdicts, type Facts, type Scrubber, type Scrubbed } from './boxfacts.js';
 
 /** a deep copy of plain data: structuredClone where the platform has it (node), json elsewhere
@@ -55,7 +56,9 @@ export function cleanAction(a: unknown): SuggestAction | null {
       const model = str(x.model, 200), devices = ids(x.devices);
       if (!model || !devices || !MODES.includes(x.mode as string)) return null;
       const ctx = typeof x.ctx === 'number' && Number.isInteger(x.ctx) && x.ctx >= 512 && x.ctx <= 262144 ? x.ctx : undefined;
-      return { do: 'load', model, mode: x.mode as 'phone', devices, ...(ctx ? { ctx } : {}) };
+      // here:false (apart only): the load leaves this computer out; any other here is the default, no key
+      const here = x.mode === 'apart' && x.here === false ? { here: false as const } : {};
+      return { do: 'load', model, mode: x.mode as 'phone', devices, ...(ctx ? { ctx } : {}), ...here };
     }
     case 'unload': return { do: 'unload' };
     case 'fetch': { const model = str(x.model, 200); return model ? { do: 'fetch', model } : null; }
@@ -319,8 +322,7 @@ export class GodsEye {
     }
     // a card whose reason is gone is forgotten, and so is its dismissal: if it comes back, it shows again
     for (const id of [...this.cardSince.keys()]) if (!live.has(id)) { this.cardSince.delete(id); this.hidden.delete(id); }
-    const rank = (c: EyeCard) => (c.weight ?? 2) * 2 + (c.kind === 'warn' ? 1 : 0);
-    return out.sort((a, b) => rank(b) - rank(a) || a.since - b.since).slice(0, CARDS_MAX);
+    return out.sort((a, b) => cardRank(b) - cardRank(a) || a.since - b.since).slice(0, CARDS_MAX);
   }
 
   /** the card with this id as it stands now, or null */

@@ -190,7 +190,7 @@ export interface BranchEvent { at: number; text: string }
 /** What the person may do about a card (11.11.2026). The eye never does it: a tap on the card asks
  *  kula's engine to, the same way the person's own buttons do. `devices` are device ids from the snapshot. */
 export type SuggestAction =
-  | { do: 'load'; model: string; mode: 'phone' | 'apart' | 'split' | 'here'; devices: string[]; ctx?: number }
+  | { do: 'load'; model: string; mode: 'phone' | 'apart' | 'split' | 'here'; devices: string[]; ctx?: number; here?: false }  // here:false only with apart: this computer stays out
   | { do: 'unload' }
   | { do: 'fetch'; model: string }                  // a catalog model onto this computer
   | { do: 'probe'; devices: string[] }               // look at these devices again
