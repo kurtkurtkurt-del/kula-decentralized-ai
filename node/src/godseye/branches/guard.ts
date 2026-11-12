@@ -20,10 +20,16 @@
 //   why, peer and head 200; a host ledger's problem 500; a model's file and name and a device's
 //   holds 300; a project's title 300; its request 4000 (the engine cuts it there); a line, an
 //   error, a plan entry and a trust error 1000; a decision's text 300; a public key 4096 and a
-//   certificate 8192 (the engine admits exactly those); ledger lines kept as they are, the newest
-//   1000 (the engine keeps the last 500), each at most 65536 chars (the engine admits a line up to
-//   64 KiB). a cut ledger line or certificate would fail its own verification — a false "bad" —
-//   so these two bounds are the engine's, not smaller.
+//   certificate 8192 (the engine admits exactly those; a cut certificate would fail its own check,
+//   a false "bad", so that bound is the engine's, not smaller); ledger lines kept as they are, the
+//   newest 1000 (the engine keeps the last 500), each cut to at most 4096 chars (scan A A8). The
+//   engine admits a line up to 64 KiB, but no kula ledger writes one near this bound: every line
+//   is {t, kind, peer, a few fields, prev, sig} (node/src/audit/ledger.ts, the phone's
+//   Ledger.kt), and the biggest real ones — a load naming a 300-char model and two sha256s, a
+//   set-aside health naming a 1 KiB path, a phone's load over a split of 16 ipv6 peers — are
+//   under 2048. A cut line has lost its signature and fails its own check, which is the truth
+//   about a line no kula writes (never a pass). The bound also caps the trust branch's per-device
+//   cache of line hashes: one window of 500 lines × 4 KiB, 2 MB, where 64 KiB lines were 32 MB.
 //   counts and sizes (a finite number is clamped into its range: a count past its cap is kept at
 //   the cap, never dropped, so a red alarm never turns quiet; a value that is not a finite number
 //   is unknown: null where the type allows null, else 0):
@@ -61,7 +67,13 @@
 //   choosing such an id, and the same id always gets the same stand-in whatever else is in the look.
 //   A real id never starts with '~' (one that does is escaped too), so a stand-in never equals a
 //   real id and cannot take its place. A project's peer and a work.loaded row get the same stand-in
-//   as the device they name. An entry whose id is not a string or is empty is dropped; so is a
+//   as the device they name. The ids the branches use for this machine itself — 'local' (this
+//   computer, decide.ts and planner.ts) and 'me' (this phone, the phone's snapshot) — are never a
+//   peer's (scan A A13: a peer's id comes from its pairing code, which may say 'local'): a device
+//   with one, a project peer naming one and a work.loaded device or part that is not local:true
+//   get the stand-in, so a peer never shares this machine's hints, speeds or seat. A row with
+//   local:true is this machine's own and keeps the word; a model or a project is no seat, and
+//   'local' is an ordinary id there. An entry whose id is not a string or is empty is dropped; so is a
 //   second entry with the same id (the first wins, as before); dropped() counts both, so the eye
 //   can say how many were left out.
 //   A null work is the empty work: loaded null, loading null, chatting 0, plan [], decisions [],
@@ -125,7 +137,7 @@ const DECISION = 300;                // a decision's text
 const PUB = 4096;                    // a public key: the engine admits up to this
 const CERT = 8192;                   // a certificate, base64 der: the engine admits up to this
 const LEDGER_LINES_MAX = 1000;       // ledger lines kept at most, the newest (the engine keeps 500)
-const LEDGER_LINE_MAX = 65_536;      // one ledger line at most: the engine admits lines up to 64 KiB
+const LEDGER_LINE_MAX = 4096;        // one ledger line at most: real ones are under 2048 (A8, see above)
 
 const MS_MAX = 600_000;              // reachMs: no probe waits ten minutes
 const MB_MAX = 4 * 1024 * 1024;      // freeMb, ramMb, needMb, mb: 4 TB
@@ -196,11 +208,22 @@ const bool2 = (x: unknown): boolean => x === true;
  *  starts with '~' is escaped too, so a stand-in can never equal a real id. */
 export function safeId(id: string): string {
   if (id.length > 0 && id.length <= ID_MAX && !id.startsWith('~') && !(id in {})) return id;
-  return `~${sha256Hex(id).slice(0, HASHED)}~${id.slice(0, SHOWN).replace(SHOWN_SAFE, '_')}`;
+  return standIn(id);
 }
+
+const standIn = (id: string): string => `~${sha256Hex(id).slice(0, HASHED)}~${id.slice(0, SHOWN).replace(SHOWN_SAFE, '_')}`;
+
+/** the ids the branches give this machine itself: this computer, this phone (A13) */
+const SELF_IDS = new Set(['local', 'me']);
 
 /** an entry's id: safeId of a non-empty string; null when there is no id at all (the entry is left out) */
 const entryId = (x: unknown): string | null => (typeof x === 'string' && x.length > 0 ? safeId(x) : null);
+
+/** a peer's id: entryId, and this machine's own ids under their stand-in too (a peer is never 'local') */
+const peerId = (x: unknown): string | null => (typeof x === 'string' && SELF_IDS.has(x) ? standIn(x) : entryId(x));
+
+/** a work.loaded device or part: this machine's own row (local:true) keeps its word, any other is a peer */
+const seatId = (x: Record<string, unknown>): string | null => (x.local === true ? entryId(x.id) : peerId(x.id));
 
 /** the names that would change a plain object's shape when used as a key */
 const shapeKey = (k: string): boolean => k === '__proto__' || k === 'constructor' || k === 'prototype';
@@ -314,7 +337,7 @@ function devicesOf(raw: unknown): EyeDevice[] {
   const out: EyeDevice[] = [];
   for (const d of list(raw)) {
     if (!isObj(d)) continue;
-    const id = entryId(d.id);
+    const id = peerId(d.id);                     // a device in the list is a peer, never this machine
     if (id === null || seen.has(id)) continue;   // no usable id, or the same id twice: the first wins
     seen.add(id);
     out.push(devOf(d, id));
@@ -335,7 +358,7 @@ function loadedOf(raw: unknown): EyeWork['loaded'] {
   const devices: { id: string; name: string; local: boolean; busy: boolean; tps: number | null; done: number }[] = [];
   for (const d of list(raw.devices)) {
     if (!isObj(d)) continue;
-    const id = entryId(d.id);
+    const id = seatId(d);
     if (id === null) continue;
     devices.push({
       id,
@@ -356,7 +379,7 @@ function loadedOf(raw: unknown): EyeWork['loaded'] {
   if (raw.parts !== undefined) {
     loaded.parts = list(raw.parts).map((p) => {
       if (!isObj(p)) return null;
-      const id = entryId(p.id);
+      const id = seatId(p);
       if (id === null) return null;
       return { id, name: nameOf(p.name, id), local: bool2(p.local), mb: capped(p.mb, 0, MB_MAX) ?? 0, layers: capped(p.layers, 0, LAYERS_MAX) ?? 0 };
     }).filter((p): p is NonNullable<NonNullable<EyeWork['loaded']>['parts']>[number] => p !== null);
@@ -430,7 +453,7 @@ function projectsOf(raw: unknown): EyeProject[] {
       state: word(p.state, WORD),
       mode: word(p.mode, WORD),
       model: word(p.model, MODEL),
-      peers: list(p.peers).map((x) => entryId(x)).filter((x): x is string => x !== null),
+      peers: list(p.peers).map((x) => peerId(x)).filter((x): x is string => x !== null),
     };
     if (p.parts !== undefined) project.parts = capped(p.parts, 0, PARTS_MAX) ?? 0;
     if (p.done !== undefined) project.done = capped(p.done, 0, DONE_MAX) ?? 0;
@@ -471,9 +494,9 @@ export function dropped(raw: unknown): Dropped {
   const out: Dropped = { devices: 0, models: 0, projects: 0 };
   try {
     if (!isObj(raw)) return out;
-    out.devices = leftOut(raw.devices);
-    out.models = leftOut(raw.models);
-    out.projects = leftOut(raw.projects);
+    out.devices = leftOut(raw.devices, peerId);
+    out.models = leftOut(raw.models, entryId);
+    out.projects = leftOut(raw.projects, entryId);
   } catch {
     // a getter that throws is no look: clean() returns null and the eye skips it
   }
@@ -481,11 +504,11 @@ export function dropped(raw: unknown): Dropped {
 }
 
 /** one list's left-out entries: no usable id, and every entry after the first with the same id */
-function leftOut(xs: unknown): number {
+function leftOut(xs: unknown, idOfEntry: (x: unknown) => string | null): number {
   const seen = new Set<string>();
   let n = 0;
   for (const x of list(xs)) {
-    const id = isObj(x) ? entryId(x.id) : null;
+    const id = isObj(x) ? idOfEntry(x.id) : null;
     if (id === null || seen.has(id)) n++;
     else seen.add(id);
   }

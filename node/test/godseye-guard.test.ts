@@ -8,6 +8,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { TIME_MAX, ID_MAX, NAME_MAX, isObj, isTime, num, idOf, nameOf, list, median, clean, dropped, safeId } from '../src/godseye/branches/guard.ts';
+import { generate } from '../src/audit/key.ts';
+import { makeLine, unsignedOf, GENESIS } from '../src/audit/ledger.ts';
 
 const hash = (id: string) => createHash('sha256').update(id).digest('hex').slice(0, 16);
 /** the stand-in the guard prescribes for an unsafe id: '~' + 16 hex of sha256(id) + '~' + its first
@@ -296,9 +298,9 @@ test('clean: trust lines and refusals are bounded and checked; a refusal count i
   day['wrong pin'] = 1_000_000_001;
   const [d] = clean({
     at: 1,
-    devices: [{ id: 'p1', trust: { lines: ['a'.repeat(5000), 'b', 42, null], rejectsLast: [null, 'x', { t: NaN, why: 1, peer: 2 }, { t: 2, why: 'w', peer: 'p' }], rejectsDay: day } }],
+    devices: [{ id: 'p1', trust: { lines: ['a'.repeat(3000), 'b', 42, null], rejectsLast: [null, 'x', { t: NaN, why: 1, peer: 2 }, { t: 2, why: 'w', peer: 'p' }], rejectsDay: day } }],
   })!.devices;
-  assert.deepEqual(d.trust!.lines, ['a'.repeat(5000), 'b']);   // under 64 KiB: kept as it is
+  assert.deepEqual(d.trust!.lines, ['a'.repeat(3000), 'b']);   // under 4096: kept as it is
   assert.deepEqual(d.trust!.rejectsLast, [{ t: 2, why: 'w', peer: 'p' }]);
   // a count past the cap is kept at the cap; a non-number is unknown (dropped); prototype keys are skipped
   assert.deepEqual(d.trust!.rejectsDay, { ok: 2, bad: 0, 'wrong pin': 1e9 });
@@ -362,14 +364,68 @@ test('clean: strings are cut to their documented bound', () => {
   assert.equal(p.error, 'e'.repeat(1000));
 });
 
-test('clean: ledger lines are kept as they are, the newest 1000, each at most 65536 chars', () => {
+test('clean: ledger lines are kept as they are, the newest 1000, each at most 4096 chars (A8)', () => {
   const lines = Array.from({ length: 1500 }, (_, i) => `line ${i}`.repeat(60));
   const [d] = clean({ at: 1, devices: [{ id: 'p1', trust: { lines } }] })!.devices;
   assert.equal(d.trust!.lines.length, 1000);
   assert.equal(d.trust!.lines[0], `line ${500}`.repeat(60));    // the newest window, oldest first
   assert.equal(d.trust!.lines[999], `line ${1499}`.repeat(60));
-  const [long] = clean({ at: 1, devices: [{ id: 'p1', trust: { lines: ['x'.repeat(70_000)] } }] })!.devices;
-  assert.equal(long.trust!.lines[0].length, 65_536);            // the engine admits a line up to 64 KiB
+  const kept = (l: string) => clean({ at: 1, devices: [{ id: 'p1', trust: { lines: [l] } }] })!.devices[0].trust!.lines[0];
+  // a line is cut to 4096 chars, a 64 KiB one too (the engine admits that much; no ledger writes it)
+  assert.equal(kept('x'.repeat(4096)), 'x'.repeat(4096));
+  assert.equal(kept('x'.repeat(4097)), 'x'.repeat(4096));
+  assert.equal(kept('x'.repeat(70_000)), 'x'.repeat(4096));
+  // the biggest lines a kula ledger really writes pass whole. node (audit/ledger.ts, signed for real):
+  // a load naming a long model and both hashes, a set-aside health naming a 1 KiB path
+  const key = generate();
+  const load = makeLine(key, 1_763_000_000_000, 'load', 'fe80::1234:5678:9abc:def0%wlan0', { name: 'n'.repeat(300), sha256: 'a'.repeat(64), got: 'b'.repeat(64), ok: false, reason: 'model' }, GENESIS).line;
+  const aside = makeLine(key, 1_763_000_000_001, 'health', 'self', { setAside: '/' + 'p'.repeat(1023), lines: 1_000_000, sha256: 'c'.repeat(64) }, GENESIS).line;
+  // the phone (Ledger.kt): a load over a split of 16 ipv6 peers, with a reject and two warnings,
+  // signed with P-256 (a DER signature: at most 72 bytes, 96 base64 chars)
+  const split = Array.from({ length: 16 }, (_, i) => ({ peer: `2001:db8:85a3:0:0:8a2e:370:${7000 + i}`, layers: 99 }));
+  const phone = JSON.stringify({ t: 1_763_000_000_002, kind: 'load', split, sha: 'd'.repeat(64), reject: 'model sha256 differs', warn: ['hot', 'battery low'], prev: 'e'.repeat(64), sig: 'A'.repeat(96) });
+  for (const l of [load, aside, phone]) {
+    assert.ok(l.length < 2048, `a real line is ${l.length} chars`);   // at least 2x under the bound
+    assert.equal(kept(l), l);
+  }
+  // a cut line has lost its signature, so it can only fail its own check: never a forged pass
+  const padded = makeLine(key, 1_763_000_000_003, 'connect', 'p', { channel: 'rpc', pad: 'x'.repeat(5000) }, GENESIS).line;
+  assert.equal(unsignedOf(padded) !== null, true);
+  assert.equal(unsignedOf(kept(padded)), null);
+});
+
+test('clean: a peer cannot take a reserved id: "local" (this computer) and "me" (this phone) get stand-ins (A13)', () => {
+  const L = stand('local');
+  const M = stand('me');
+  assert.notEqual(L, 'local');
+  assert.notEqual(M, 'me');
+  const raw = {
+    at: 1,
+    devices: [{ id: 'local', name: 'evil' }, { id: 'me' }, { id: 'p1' }, { id: 'local', name: 'again' }],
+    work: { loaded: {
+      model: { id: 'local' },
+      // this computer's and this phone's own rows (local true) keep their name; a peer's row gets its device's stand-in
+      devices: [{ id: 'local', name: 'this computer', local: true }, { id: 'me', name: 'pixel', local: true }, { id: 'local', name: 'evil' }, { id: 'me', local: false }],
+      parts: [{ id: 'local', local: true, mb: 1 }, { id: 'local', mb: 2 }, { id: 'me', local: true, mb: 3 }],
+    } },
+    models: [{ id: 'local' }],
+    projects: [{ id: 'local', peers: ['local', 'me', 'p1'] }],
+  };
+  const s = clean(raw)!;
+  assert.deepEqual(s.devices.map((d) => d.id), [L, M, 'p1']);   // the second 'local' is the same device again: dropped
+  assert.deepEqual(s.devices.map((d) => d.name), ['evil', M, 'p1']);
+  assert.equal(dropped(raw).devices, 1);
+  const w = s.work.loaded!;
+  assert.deepEqual(w.devices.map((d) => d.id), ['local', 'me', L, M]);
+  assert.deepEqual(w.parts!.map((p) => p.id), ['local', L, 'me']);
+  assert.deepEqual(s.projects[0].peers, [L, M, 'p1']);          // a project's peers are always peers
+  // a model or a project is no seat: 'local' is an ordinary id there
+  assert.equal(w.model.id, 'local');
+  assert.deepEqual(s.models.map((m) => m.id), ['local']);
+  assert.deepEqual(s.projects.map((p) => p.id), ['local']);
+  // safeId itself is unchanged: it keys, it does not know seats
+  assert.equal(safeId('local'), 'local');
+  assert.equal(safeId('me'), 'me');
 });
 
 test('clean: a project field by field; a title that is not a string is empty', () => {
