@@ -199,19 +199,40 @@ function loadedSince(s: Snapshot | null): number | null {
   return L && isTime(L.since) ? L.since : null;
 }
 
+/** is a load under way in this look (work.loading set)? */
+function isLoading(s: Snapshot | null): boolean {
+  const w = s && isObject(s.work) ? s.work : null;
+  return !!w && isObject(w.loading);
+}
+
+/** the looks around the last load (F2): lastWith is the time of the last look with work.loading
+ *  set, firstClear the time of the first look without it after that one, or null. */
+interface LoadSeen { lastWith: number | null; firstClear: number | null }
+
+/** was this worker reading taken while a load may have been under way? while one is now, every
+ *  reading is; after it, a reading at or before the last loading look, or before the first look
+ *  that saw it gone (the load ended somewhere between the two). */
+function duringLoad(at: number, loadingNow: boolean, seen: LoadSeen): boolean {
+  if (loadingNow) return true;
+  if (seen.lastWith != null && at <= seen.lastWith) return true;
+  return seen.firstClear != null && at < seen.firstClear;
+}
+
 const CTX_FULL = 0.9;                    // a context this full is said
 
 /** what the device's own worker said at its last probe (scan D M2), as words for its line only:
  *  busy while it is not in our load is "answering someone else"; tokensUsed at 90% of ctx or more
  *  is "context N% full". An observation, nothing more: no card, no hint, ramMb untouched. Said
  *  only while the reading is current: the device answered the last look and is not stale, and for
- *  a device in our load (the engine does not probe it) only a reading from after the load began. */
-function workerBits(d: EyeDevice, used: boolean, stale: boolean, since: number | null): string[] {
+ *  a device in our load (the engine does not probe it) only a reading from after the load began.
+ *  A worker loading our model is busy with our /load before it is in work.loaded (F2), so busy is
+ *  not said while a load is under way, nor for a reading taken during one. */
+function workerBits(d: EyeDevice, used: boolean, stale: boolean, since: number | null, loadingNow: boolean, seen: LoadSeen): string[] {
   const w = isObject(d.worker) ? d.worker : null;
   if (!w || stale || d.reachable !== true || !isTime(w.at)) return [];
   if (used && (since == null || w.at < since)) return [];
   const out: string[] = [];
-  if (w.busy === true && !used) out.push('answering someone else');
+  if (w.busy === true && !used && !duringLoad(w.at, loadingNow, seen)) out.push('answering someone else');
   const t = w.tokensUsed, c = w.ctx;
   if (typeof t === 'number' && typeof c === 'number' && Number.isFinite(t) && Number.isFinite(c) && c > 0 && t >= 0 && t / c >= CTX_FULL) {
     out.push(`context ${Math.min(100, Math.floor((t / c) * 100))}% full`);
@@ -262,6 +283,8 @@ export function create(ctx: BranchCtx): Branch {
   let snap: Snapshot | null = null;
   let savedAt = ctx.now();
   let dirty = false;
+  // the looks around the last load, for workerBits (in memory only: a restart forgets them)
+  const loadSeen: LoadSeen = { lastWith: null, firstClear: null };
 
   /** take in one new reading: the usual range, then flapping, both from the window alone. */
   function add(dev: EyeDevice, n: DevNotes, reading: Reading) {
@@ -314,6 +337,10 @@ export function create(ctx: BranchCtx): Branch {
       snap = s;
       const at = s && isTime(s.at) ? s.at : null;          // the look's time, if it has a usable one
       let changed = false;
+      if (at != null) {
+        if (isLoading(s)) { loadSeen.lastWith = at; loadSeen.firstClear = null; }
+        else if (loadSeen.lastWith != null && loadSeen.firstClear == null && at >= loadSeen.lastWith) loadSeen.firstClear = at;
+      }
       // a devices field that is null or not an array counts as empty
       const devices = s && Array.isArray(s.devices) ? s.devices : [];
       const earlier = before && Array.isArray(before.devices) ? before.devices : [];
@@ -398,6 +425,7 @@ export function create(ctx: BranchCtx): Branch {
       const devs = (s && Array.isArray(s.devices) ? s.devices : []).filter(usable);
       const inUse = inUseIds(s);
       const since = loadedSince(s);
+      const loadingNow = isLoading(s);
       const seen = devs.map((d) => {
         const n = notes.dev[d.id] ?? null;
         const used = inUse.has(d.id);
@@ -417,7 +445,7 @@ export function create(ctx: BranchCtx): Branch {
         }
         if (used) bits.push('in use');
         if (n?.flapping && !stale) bits.push('flapping');   // stale readings keep no verdict
-        bits.push(...workerBits(d, used, stale, since));
+        bits.push(...workerBits(d, used, stale, since, loadingNow, loadSeen));
         if (stale) {
           const ago = Math.round(((at as number) - (d.checkedAt as number)) / 1000);   // stale: at is past checkedAt
           bits.push(`stale: last looked at ${ago <= AGO_MAX_S ? `${ago} s` : 'over a year'} ago`);

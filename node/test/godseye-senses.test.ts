@@ -1018,6 +1018,43 @@ test('m2: an old reading says nothing: a stale or unreachable device, a reading 
   assert.match(b.view().lines[0], / · in use · context 97% full · /);
 });
 
+test('f2: a worker busy while we load our model is not "answering someone else"; a reading from the load stays quiet after it', () => {
+  const { b, last } = probedTwo();
+  const loading = { mode: 'apart', model: 'm', since: last, line: 'loading M on pixel' };
+  const busy = (at: number) => ({ at, busy: true, tokensUsed: 10, ctx: 4096, ramFreeMb: null });
+  // the load is under way: pixel is busy with our /load and not yet in work.loaded
+  let t = last + 15_000;
+  const s1 = snap([dev({ checkedAt: t, worker: busy(t) })], t);
+  s1.work.loading = loading;
+  b.observe(s1, null);
+  assert.equal(b.view().lines[0], 'pixel · reachable · 12 ms · usually 12 ms (6–18) · 3.3 GB free · 60 GB/s');
+  // the next look, still loading, a reading taken between the two looks
+  const mid = t + 3_000;
+  t += 5_000;
+  const s2 = snap([dev({ checkedAt: mid, worker: busy(mid) })], t);
+  s2.work.loading = loading;
+  b.observe(s2, null);
+  assert.doesNotMatch(b.view().lines[0], /answering someone else/);
+  // the load ended (failed: pixel is not in work.loaded); the newest reading is still one from the
+  // load, or from between the last loading look and the first look without it
+  const gap = t + 2_000;
+  t += 5_000;
+  b.observe(snap([dev({ checkedAt: gap, worker: busy(gap) })], t), null);
+  assert.doesNotMatch(b.view().lines[0], /answering someone else/);
+  b.observe(snap([dev({ checkedAt: mid, worker: busy(mid) })], t), null);
+  assert.doesNotMatch(b.view().lines[0], /answering someone else/);
+  // a reading taken after the load is said again: busy then is someone else's
+  const after = t + 15_000;
+  b.observe(snap([dev({ checkedAt: after, worker: busy(after) })], after), null);
+  assert.match(b.view().lines[0], / · answering someone else · /);
+  // only busy is dropped while loading: a full context is still said
+  const s3 = snap([dev({ checkedAt: after, worker: { ...busy(after), tokensUsed: 4000 } })], after);
+  s3.work.loading = loading;
+  b.observe(s3, null);
+  assert.doesNotMatch(b.view().lines[0], /answering someone else/);
+  assert.match(b.view().lines[0], / · context 97% full · /);
+});
+
 test('m1: the worker\'s live free memory leaves ramMb as it is (observation only)', () => {
   const { b, last } = probedTwo();
   const at = last + 15_000;
