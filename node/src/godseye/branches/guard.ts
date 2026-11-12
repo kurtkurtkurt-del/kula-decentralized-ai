@@ -82,6 +82,16 @@
 //     tempC (the battery's °C)   -30 .. 120              null
 //     battery (percent)          0 .. 100                null
 //   charging and throttled keep true and false, anything else is null.
+//   a device's trust.attest (owner-blind, 12.11.2026): absent stays absent (a snapshot from before
+//   it); null stays null (never asked). Its producer is engine.ts foldAttest, `{ at, ok: r.ok,
+//   why: r.why, text: r.text }`, at being Date.now() when the proof came and r attest.ts
+//   ownerBlind's out(ok, why, text): ok true, false or null, why one of attest.ts's Why words (at
+//   most 10 chars), text a sentence that is usually under 200 chars but can be longer (the 'app'
+//   text names every package the proof lists). An attest that is not a plain object, whose at is
+//   not a usable time, whose ok is not true, false or null, or whose text is not a non-empty
+//   string is null, never a guess. A usable one keeps at and ok as they are; why is cut to 40
+//   (anything but a string is ''; no branch reads it); text is cut to 300, the most the trust
+//   branch's ownerBlindCheck reads, so a long red proof stays red instead of turning unreadable.
 //   the engine's loaded.sees and a trust's upTo are not in the Snapshot type and no branch reads
 //   them: they are dropped.
 import { sha256Hex } from '../hash.js';
@@ -125,6 +135,8 @@ const PARTS_MAX = 100_000;
 const DAY_MAX = 1000;                // reasons in one rejectsDay
 const TEMP_MIN = -30;                // a phone battery's °C: a reading outside this is no reading
 const TEMP_MAX = 120;
+const ATTEST_WHY = 40;               // an owner-blind proof's why: one of attest.ts's Why words (at most 10)
+const ATTEST_TEXT = 300;             // ... and its text: the trust branch reads no longer one
 
 /** an object (an array too: typeof; the callers check further) */
 export const isObj = (x: unknown): x is Record<string, unknown> => !!x && typeof x === 'object';
@@ -222,7 +234,17 @@ function trustOf(raw: Record<string, unknown>): EyeTrust {
     restartedAt: timeOr(raw.restartedAt, null),
     rejectsDay,
     rejectsLast,
+    // only when the snapshot has the key (an older one does not)
+    ...('attest' in raw ? { attest: attestOf(raw.attest) } : {}),
   };
+}
+
+/** a trust's owner-blind proof: a usable at, ok true/false/null and a non-empty text, else null */
+function attestOf(raw: unknown): NonNullable<EyeTrust['attest']> | null {
+  if (!isObj(raw) || !isTime(raw.at)) return null;
+  if (raw.ok !== true && raw.ok !== false && raw.ok !== null) return null;
+  if (typeof raw.text !== 'string' || raw.text.length === 0) return null;
+  return { at: raw.at, ok: raw.ok, why: word(raw.why, ATTEST_WHY), text: raw.text.slice(0, ATTEST_TEXT) };
 }
 
 /** a device's health: an object with a usable at, else null; a reading out of its range is unknown */

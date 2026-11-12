@@ -85,8 +85,10 @@ export function foldTrust(was: TrustLook | null, b: any, at: number, pin: string
   const got: string[] = Array.isArray(lg.lines) ? lg.lines.filter((l: unknown) => typeof l === 'string' && l.length <= 64 * 1024).slice(0, 200) : [];
   let lines: string[];
   let restartedAt = was?.restartedAt ?? null;
+  // askTrust sends since=was.upTo whenever there is one: an answer to it that does not say found
+  // true (left out, null, anything else) cannot show the chain goes on, so it started over
   if (lg.found === true && was) lines = [...was.lines, ...got].slice(-TRUST_WINDOW);
-  else { lines = got; if (lg.found === false) restartedAt = at; }
+  else { lines = got; if (lg.found === false || was?.upTo) restartedAt = at; }
   const day: Record<string, number> = {};
   if (b?.rejects?.day && typeof b.rejects.day === 'object') for (const [w, n] of Object.entries(b.rejects.day)) if (typeof n === 'number' && Number.isFinite(n)) day[String(w).slice(0, 40)] = n;
   const last = Array.isArray(b?.rejects?.last) ? b.rejects.last.slice(0, 5).map((r: any) => ({ t: Number(r?.t) || 0, why: String(r?.why ?? '').slice(0, 40), peer: String(r?.peer ?? '').slice(0, 80) })) : [];

@@ -1,9 +1,12 @@
 // god's eye guard (src/godseye/branches/guard.ts): the one gate every snapshot passes. Each
 // helper gets hand-made cases, clean() gets hostile ones, and a healthy snapshot comes out
 // exactly as it went in.
-import { test } from 'node:test';
+import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { TIME_MAX, ID_MAX, NAME_MAX, isObj, isTime, num, idOf, nameOf, list, median, clean, dropped, safeId } from '../src/godseye/branches/guard.ts';
 
 const hash = (id: string) => createHash('sha256').update(id).digest('hex').slice(0, 16);
@@ -525,4 +528,69 @@ test('clean leaves a healthy snapshot with health exactly as it is', () => {
   (withHealth.devices as any[]).push({ ...(withHealth.devices as any[])[0], id: 'p2', name: 'tab', health: null });
   const s = structuredClone(withHealth);
   assert.deepStrictEqual(clean(s), s);
+});
+
+// owner-blind (12.11.2026): the engine's last proof (engine.ts foldAttest, attest.ts ownerBlind)
+const attestOfClean = (attest: unknown) => (clean({ at: 1, devices: [{ id: 'p1', trust: { at: 1, attest } }] })!.devices[0].trust as any).attest;
+const PROOF = { at: 1_000, ok: false, why: 'unlocked', text: 'its bootloader is unlocked: its owner can change the system and read jobs' };
+
+test('clean: a trust\'s attest absent stays absent; null stays null; out of shape is null', () => {
+  const t = clean({ at: 1, devices: [{ id: 'p1', trust: { at: 1 } }] })!.devices[0].trust!;
+  assert.equal('attest' in t, false, 'an older snapshot has no attest and gets none');
+  assert.equal(attestOfClean(null), null);
+  assert.equal(attestOfClean(undefined), null);
+  for (const bad of ['proof', 42, [PROOF], { ...PROOF, at: '1000' }, { ...PROOF, at: -1 }, { ...PROOF, at: TIME_MAX + 1 }, { ...PROOF, at: NaN },
+    { ...PROOF, ok: 'yes' }, { ...PROOF, ok: 0 }, { ...PROOF, ok: undefined }, { ...PROOF, text: '' }, { ...PROOF, text: 42 }, { ...PROOF, text: undefined }]) {
+    assert.equal(attestOfClean(bad), null, JSON.stringify(bad));
+  }
+});
+
+test('clean: a trust\'s attest keeps ok true, false and null; why is a short word, text cut to 300 so a red proof stays red', () => {
+  assert.deepEqual(attestOfClean(PROOF), PROOF);
+  assert.deepEqual(attestOfClean({ ...PROOF, ok: true, why: 'ok' }), { ...PROOF, ok: true, why: 'ok' });
+  assert.deepEqual(attestOfClean({ at: 0, ok: null, why: 'computer', text: 'a computer cannot prove this' }), { at: 0, ok: null, why: 'computer', text: 'a computer cannot prove this' });
+  assert.equal(attestOfClean({ ...PROOF, why: null }).why, '');
+  assert.equal(attestOfClean({ ...PROOF, why: 7 }).why, '');
+  assert.equal(attestOfClean({ ...PROOF, why: 'w'.repeat(41) }).why, 'w'.repeat(40));
+  assert.equal(attestOfClean({ ...PROOF, text: 'x'.repeat(300) }).text, 'x'.repeat(300));
+  const long = attestOfClean({ ...PROOF, text: `its proof was made for another app (${'com.example.app, '.repeat(30)}), not kula` });
+  assert.deepEqual([long.ok, long.text.length], [false, 300]);
+  assert.deepEqual(Object.keys(attestOfClean({ ...PROOF, extra: 'x', facts: {} })).sort(), ['at', 'ok', 'text', 'why']);
+});
+
+test('clean leaves a healthy snapshot with attest exactly as it is', () => {
+  const withAttest = healthy();
+  ((withAttest.devices as any[])[0].trust as any).attest = PROOF;
+  (withAttest.devices as any[]).push({ ...(withAttest.devices as any[])[0], id: 'p2', name: 'tab', trust: { ...(withAttest.devices as any[])[0].trust, attest: null } });
+  const s = structuredClone(withAttest);
+  assert.deepStrictEqual(clean(s), s);
+});
+
+const EYE_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'kula-eye-guard-'));
+after(() => fs.rmSync(EYE_HOME, { recursive: true, force: true }));
+
+test('through the eye: a loaded, non-local phone whose proof says its owner can read jobs gets the trust:owner-blind card', async () => {
+  const { GodsEye } = await import('../src/godseye/index.ts');
+  const NOW = 2_000_000;
+  const trust = { at: NOW - 1_000, error: null, id: null, alg: null, pub: null, store: 'keystore', cert: null, certPinned: null, v1: false, paired: 1,
+    self: 'ok', count: 0, head: null, lines: [], restartedAt: null, rejectsDay: {}, rejectsLast: [], attest: { ...PROOF, at: NOW - 5_000 } };
+  const snap = (attest: unknown) => ({
+    at: NOW, host: { name: 'mac', freeMb: 4000 },
+    devices: [{ id: 'p1', name: 'pixel', kind: 'phone', via: 'wifi', where: '192.168.1.33:50551', reachable: true, reachMs: 12, reason: null,
+      checkedAt: NOW, lastOk: null, ramMb: 3400, bwGBs: 60, gpu: null, tls: true, waitingPair: false, plugged: null, holds: null, trust: { ...trust, attest } }],
+    work: { loaded: { mode: 'apart', model: { id: 'm', name: 'm', file: 'm.gguf', size: 1 }, ctx: 4096, since: 1,
+      devices: [{ id: 'p1', name: 'pixel', local: false, busy: false, tps: null, done: 0 }, { id: 'mac', name: 'mac', local: true, busy: false, tps: null, done: 0 }] },
+      loading: null, chatting: 0, plan: [], decisions: [], llama: true },
+    models: [], projects: [],
+  });
+  let s: any = snap(trust.attest);
+  const eye = new GodsEye({ snapshot: () => s, dir: path.join(EYE_HOME, 'eye'), now: () => NOW });
+  eye.tick();
+  const card = eye.view().cards.find((c) => c.id === 'trust:owner-blind:p1');
+  assert.ok(card, JSON.stringify(eye.view().cards.map((c) => c.id)));
+  assert.equal(card!.kind, 'warn');
+  assert.match(card!.why, /bootloader is unlocked/);
+  s = snap({ ...PROOF, at: NOW - 5_000, ok: true, why: 'ok', text: 'hardware key, locked, verified boot, official kula build: its owner cannot read jobs' });
+  eye.tick();
+  assert.equal(eye.view().cards.some((c) => c.id === 'trust:owner-blind:p1'), false, 'a passing proof: no card');
 });
