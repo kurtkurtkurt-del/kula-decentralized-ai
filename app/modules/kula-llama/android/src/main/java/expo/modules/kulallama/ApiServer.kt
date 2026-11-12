@@ -16,7 +16,7 @@ import kotlin.concurrent.thread
  * "Apart" mode on a worker: the worker runs the whole model itself and answers the master
  * over a small HTTP API behind the gate (127.0.0.1 only; the gate pipes the `api` channel).
  *
- *   GET  /status                       {loaded, model, sha256, tokensUsed, ctx, busy}
+ *   GET  /status                       {loaded, model, sha256, tokensUsed, ctx, busy, threads, ramFreeMb}
  *   POST /load  {url, sha256, size, name, ctx?}   downloads when missing, then loads; streams
  *                                      progress lines "data: {...}\n\n" and ends with {done:true}
  *                                      name is reduced to a file name under models/, url must be
@@ -112,6 +112,8 @@ class ApiServer(private val context: Context, private val modelsDir: File, priva
     .put("ctx", Native.contextSize())
     .put("busy", busy.get())
     .put("threads", threads)
+    // live free memory for the master's god's eye (scan D M1); kula-node reads it as null when absent
+    .put("ramFreeMb", WorkerService.availableRamMb(context))
 
   private fun load(out: OutputStream, req: JSONObject, master: String?) {
     // what the master asked for, checked before busy is taken: a bad request is a 400, not a stream

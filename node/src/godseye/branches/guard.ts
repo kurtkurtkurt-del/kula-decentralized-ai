@@ -82,6 +82,14 @@
 //     tempC (the battery's °C)   -30 .. 120              null
 //     battery (percent)          0 .. 100                null
 //   charging and throttled keep true and false, anything else is null.
+//   a device's worker (13.11.2026, scan D M2 M1): its worker's own GET /status at the last probe
+//   (engine.ts holds). absent stays absent; one that is not an object, or whose at is not a usable
+//   time, is null. Only these fields pass, so nothing else (no prompt) ever reaches a branch:
+//     busy                       true and false, anything else null
+//     tokensUsed, ctx            0 .. 1 000 000 000      null (a count, clamped)
+//     ramFreeMb                  0 .. 4 194 304 (4 TB)   null (a size, clamped)
+//   the host's diskFreeMb (scan D M3): absent stays absent; a finite number is clamped into
+//   0 .. 1 073 741 824 (1 PB: a disk may be far bigger than any memory); anything else is null.
 //   a device's trust.attest (owner-blind, 12.11.2026): absent stays absent (a snapshot from before
 //   it); null stays null (never asked). Its producer is engine.ts foldAttest, `{ at, ok: r.ok,
 //   why: r.why, text: r.text }`, at being Date.now() when the proof came and r attest.ts
@@ -95,7 +103,7 @@
 //   the engine's loaded.sees and a trust's upTo are not in the Snapshot type and no branch reads
 //   them: they are dropped.
 import { sha256Hex } from '../hash.js';
-import type { EyeDevice, EyeHealth, EyeModel, EyeProject, EyeTrust, EyeWork, Snapshot } from '../types.js';
+import type { EyeDevice, EyeHealth, EyeModel, EyeProject, EyeTrust, EyeWork, EyeWorker, Snapshot } from '../types.js';
 
 export const TIME_MAX = 8.64e15;     // the largest ms a Date can hold (ECMAScript)
 export const ID_MAX = 200;           // an id longer than this is not one of ours
@@ -121,6 +129,7 @@ const LEDGER_LINE_MAX = 65_536;      // one ledger line at most: the engine admi
 
 const MS_MAX = 600_000;              // reachMs: no probe waits ten minutes
 const MB_MAX = 4 * 1024 * 1024;      // freeMb, ramMb, needMb, mb: 4 TB
+const DISK_MB_MAX = 1024 * 1024 * 1024;   // the host's diskFreeMb: 1 PB
 const BW_MAX = 10_000;               // bwGBs
 const CHATTING_MAX = 1e6;
 const CTX_MAX = 1e9;
@@ -259,6 +268,18 @@ function healthOf(raw: unknown): EyeHealth | null {
   };
 }
 
+/** a worker's /status: an object with a usable at, else null; only its numbers and flags pass */
+function workerOf(raw: unknown): EyeWorker | null {
+  if (!isObj(raw) || !isTime(raw.at)) return null;
+  return {
+    at: raw.at,
+    busy: bool3(raw.busy),
+    tokensUsed: capped(raw.tokensUsed, 0, CTX_MAX),
+    ctx: capped(raw.ctx, 0, CTX_MAX),
+    ramFreeMb: capped(raw.ramFreeMb, 0, MB_MAX),
+  };
+}
+
 function devOf(raw: Record<string, unknown>, id: string): EyeDevice {
   return {
     id,
@@ -284,6 +305,7 @@ function devOf(raw: Record<string, unknown>, id: string): EyeDevice {
     ...(raw.ring == null ? {} : { ring: raw.ring === 'home' || raw.ring === 'circle' ? raw.ring : 'world' }),
     // only when the snapshot has it (an older one does not)
     ...('health' in raw ? { health: healthOf(raw.health) } : {}),
+    ...('worker' in raw ? { worker: workerOf(raw.worker) } : {}),
   };
 }
 
@@ -435,6 +457,7 @@ function hostOf(raw: unknown): Snapshot['host'] {
       ? { battery: capped(h.power.battery, 0, 100), charging: bool3(h.power.charging), hot: bool3(h.power.hot) }
       : null;
   }
+  if (h && h.diskFreeMb !== undefined) host.diskFreeMb = capped(h.diskFreeMb, 0, DISK_MB_MAX);
   return host;
 }
 

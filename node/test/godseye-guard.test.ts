@@ -530,6 +530,50 @@ test('clean leaves a healthy snapshot with health exactly as it is', () => {
   assert.deepStrictEqual(clean(s), s);
 });
 
+// a worker's own /status (13.11.2026, scan D M2 M1): numbers and flags only, an observation
+const workerOfClean = (worker: unknown) => clean({ at: 1, devices: [{ id: 'p1', worker }] })!.devices[0].worker;
+
+test('clean: a device\'s worker absent stays absent; not an object, or without a usable at, is null', () => {
+  const [d] = clean({ at: 1, devices: [{ id: 'p1' }] })!.devices;
+  assert.equal('worker' in d, false, 'an older snapshot has no worker and gets none');
+  assert.equal(workerOfClean(null), null);
+  assert.equal(workerOfClean('busy'), null);
+  assert.equal(workerOfClean({ busy: true }), null);
+  assert.equal(workerOfClean({ at: -1, busy: true }), null);
+  assert.equal(workerOfClean({ at: TIME_MAX + 1, busy: true }), null);
+});
+
+test('clean: a device\'s worker keeps its numbers and flags, wrong types unknown, counts clamped, nothing else', () => {
+  assert.deepEqual(workerOfClean({ at: 5, busy: true, tokensUsed: 3700, ctx: 4096, ramFreeMb: 2100 }),
+    { at: 5, busy: true, tokensUsed: 3700, ctx: 4096, ramFreeMb: 2100 });
+  assert.deepEqual(workerOfClean({ at: 5 }), { at: 5, busy: null, tokensUsed: null, ctx: null, ramFreeMb: null });
+  assert.deepEqual(workerOfClean({ at: 5, busy: 'yes', tokensUsed: '9', ctx: NaN, ramFreeMb: Infinity }),
+    { at: 5, busy: null, tokensUsed: null, ctx: null, ramFreeMb: null });
+  assert.deepEqual(workerOfClean({ at: 5, busy: false, tokensUsed: -3, ctx: 1e12, ramFreeMb: 1e12 }),
+    { at: 5, busy: false, tokensUsed: 0, ctx: 1e9, ramFreeMb: 4 * 1024 * 1024 });
+  // a prompt or any other field never passes the guard
+  assert.equal('prompt' in (workerOfClean({ at: 5, busy: true, prompt: 'secret words' }) as object), false);
+});
+
+test('clean: the host\'s diskFreeMb absent stays absent; a number is clamped, anything else null', () => {
+  assert.equal('diskFreeMb' in clean({ at: 1, host: { name: 'mac', freeMb: 1 } })!.host, false);
+  assert.equal(clean({ at: 1, host: { name: 'mac', freeMb: 1, diskFreeMb: 52_000 } })!.host.diskFreeMb, 52_000);
+  assert.equal(clean({ at: 1, host: { name: 'mac', freeMb: 1, diskFreeMb: null } })!.host.diskFreeMb, null);
+  assert.equal(clean({ at: 1, host: { name: 'mac', freeMb: 1, diskFreeMb: '5' } })!.host.diskFreeMb, null);
+  assert.equal(clean({ at: 1, host: { name: 'mac', freeMb: 1, diskFreeMb: -5 } })!.host.diskFreeMb, 0);
+  // free disk may be far past the 4 TB memory cap: a big drive's number is kept
+  assert.equal(clean({ at: 1, host: { name: 'mac', freeMb: 1, diskFreeMb: 9_000_000 } })!.host.diskFreeMb, 9_000_000);
+});
+
+test('clean leaves a healthy snapshot with worker and diskFreeMb exactly as it is', () => {
+  const s0 = healthy();
+  (s0.host as any).diskFreeMb = 120_000;
+  (s0.devices as any[])[0].worker = { at: 950, busy: false, tokensUsed: 12, ctx: 4096, ramFreeMb: null };
+  (s0.devices as any[]).push({ ...(s0.devices as any[])[0], id: 'p2', name: 'tab', worker: null });
+  const s = structuredClone(s0);
+  assert.deepStrictEqual(clean(s), s);
+});
+
 // owner-blind (12.11.2026): the engine's last proof (engine.ts foldAttest, attest.ts ownerBlind)
 const attestOfClean = (attest: unknown) => (clean({ at: 1, devices: [{ id: 'p1', trust: { at: 1, attest } }] })!.devices[0].trust as any).attest;
 const PROOF = { at: 1_000, ok: false, why: 'unlocked', text: 'its bootloader is unlocked: its owner can change the system and read jobs' };

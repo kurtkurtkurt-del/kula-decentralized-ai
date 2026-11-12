@@ -148,6 +148,9 @@ export function deviceOf(p: PeerRow, trust: TrustLook | null = null): EyeDevice 
     trust: trustOf(trust),
     ring: p.ring ?? 'home',
     health: trust ? healthOf(trust.lines) : null,
+    // its worker's own /status at the last probe (scan D M2 M1): numbers and flags only; absent
+    // until one answered here
+    ...(p.worker ? { worker: { at: p.worker.at, busy: p.worker.busy, tokensUsed: p.worker.tokensUsed, ctx: p.worker.ctx, ramFreeMb: p.worker.ramFreeMb } } : {}),
   };
 }
 
@@ -157,6 +160,9 @@ export function kulaSnapshot(engine: Engine, projects: ProjectRunner, now = Date
   const st = engine.status();
   let freeMb: number | null = null;
   try { freeMb = freeRamMB(); } catch {}
+  // free disk where a fetched model goes (scan D M3); an engine that cannot say it gives null
+  let diskFreeMb: number | null = null;
+  try { diskFreeMb = engine.diskFreeMb(); } catch {}
   // one id per device (G1, 12 Nov): status().loaded and a project's peers name a device by the
   // record of the route it went over, a row by its group's first record. A phone with a cable and
   // a wi-fi record loaded over wi-fi is the same device; every id the eye gets is the row's id.
@@ -172,7 +178,7 @@ export function kulaSnapshot(engine: Engine, projects: ProjectRunner, now = Date
   } : null;
   return structuredClone({
     at: now,
-    host: { name: hostLabel(), freeMb, ledger: hostLedger() },
+    host: { name: hostLabel(), freeMb, diskFreeMb, ledger: hostLedger() },
     devices: rows.map((p) => deviceOf(p, engine.trustOf(p.id))),
     work: { loaded, loading: st.loading, chatting: st.chatting, plan: st.plan, decisions: st.decisions, llama: st.llama, photos: engine.photos() },
     models: engine.models().map((m) => ({ id: m.id, name: m.name, file: m.file, size: m.size, quant: m.quant, params_b: m.params_b, catalog: m.catalog, here: m.here, needMb: m.needMb, active_b: m.active_b, vision: m.vision })),

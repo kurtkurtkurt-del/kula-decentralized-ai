@@ -958,3 +958,69 @@ test('b5: 40 alternating probes give one flapping line and no flip lines while f
   look(true);                                                   // no longer flapping: the flip is said again
   assert.equal(c.feed[c.feed.length - 1], 'pixel answers again');
 });
+
+// ---- scan D M2: a worker's own /status, observed only (no card, no hint, ramMb untouched)
+
+test('m2: a busy worker not in our load is "answering someone else"; only a line, no card and no hint', () => {
+  const { c, b, last } = probedTwo();
+  const at = last;                                   // the same probe looked at again: the usual stays (4–20)
+  const feedBefore = c.feed.length;
+  b.observe(snap([dev({ checkedAt: at, worker: { at, busy: true, tokensUsed: 10, ctx: 4096, ramFreeMb: 500 } }), dev({ id: 'p2', name: 'tab', checkedAt: at })], at), null);
+  const v = b.view();
+  assert.equal(v.lines[0], 'pixel · reachable · 12 ms · usually 12 ms (4–20) · answering someone else · 3.3 GB free · 60 GB/s');
+  assert.doesNotMatch(v.lines[1], /answering someone else|context/);
+  assert.equal(v.suggestions, undefined, 'no card');
+  assert.equal(v.hints, undefined, 'no hint');
+  assert.equal(c.feed.length, feedBefore, 'no feed line either');
+});
+
+test('m2: a busy worker in our own load says nothing more; a free one says nothing', () => {
+  const { b, last } = probedTwo();
+  const at = last + 15_000;
+  b.observe(loadedSnap([dev({ checkedAt: at, worker: { at, busy: true, tokensUsed: 10, ctx: 4096, ramFreeMb: null } }), dev({ id: 'p2', name: 'tab', checkedAt: at, worker: { at, busy: false, tokensUsed: 0, ctx: 0, ramFreeMb: null } })], at, ['p1']), null);
+  const v = b.view();
+  assert.doesNotMatch(v.lines[0], /answering someone else/);
+  assert.doesNotMatch(v.lines[1], /answering someone else|context/);
+});
+
+test('m2: a context 90% full is said; under 90% or no ctx is not', () => {
+  const look = (worker: any) => {
+    const { b, last } = probedTwo();
+    const at = last;
+    b.observe(snap([dev({ checkedAt: at, worker: { at, ramFreeMb: null, busy: false, ...worker } })], at), null);
+    return b.view().lines[0];
+  };
+  assert.equal(look({ tokensUsed: 3700, ctx: 4096 }), 'pixel · reachable · 12 ms · usually 12 ms (4–20) · context 90% full · 3.3 GB free · 60 GB/s');
+  assert.match(look({ tokensUsed: 4096, ctx: 4096 }), / · context 100% full · /);
+  assert.doesNotMatch(look({ tokensUsed: 3000, ctx: 4096 }), /context/);
+  assert.doesNotMatch(look({ tokensUsed: 3000, ctx: 0 }), /context/);
+  assert.doesNotMatch(look({ tokensUsed: null, ctx: 4096 }), /context/);
+  // both at once, busy first
+  assert.match(look({ busy: true, tokensUsed: 4000, ctx: 4096 }), / · answering someone else · context 97% full · /);
+});
+
+test('m2: an old reading says nothing: a stale or unreachable device, a reading from before our load', () => {
+  const { b, last } = probedTwo();
+  const at = last + 600_000;
+  const w = { at: last, busy: true, tokensUsed: 4000, ctx: 4096, ramFreeMb: null };
+  b.observe(snap([dev({ checkedAt: last, worker: w }), dev({ id: 'p2', name: 'tab', checkedAt: at, reachable: false, reason: 'no answer', worker: { ...w, at } })], at), null);
+  let v = b.view();
+  assert.match(v.lines[0], /stale/);
+  assert.doesNotMatch(v.lines[0], /answering someone else|context/);
+  assert.doesNotMatch(v.lines[1], /answering someone else|context/);
+  // in use: the engine does not probe it, so a reading older than the load is not about our work
+  const s = loadedSnap([dev({ checkedAt: last, worker: { ...w, at: at - 10_001 } })], at, ['p1']);
+  s.work.loaded.since = at - 10_000;
+  b.observe(s, null);
+  assert.doesNotMatch(b.view().lines[0], /context/);
+  s.devices[0].worker.at = at - 1_000;
+  b.observe(s, null);
+  assert.match(b.view().lines[0], / · in use · context 97% full · /);
+});
+
+test('m1: the worker\'s live free memory leaves ramMb as it is (observation only)', () => {
+  const { b, last } = probedTwo();
+  const at = last + 15_000;
+  b.observe(snap([dev({ checkedAt: at, ramMb: 3400, worker: { at, busy: false, tokensUsed: 0, ctx: 0, ramFreeMb: 800 } })], at), null);
+  assert.match(b.view().lines[0], / · 3.3 GB free · /);
+});

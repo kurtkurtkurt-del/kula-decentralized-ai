@@ -130,6 +130,18 @@ export interface PeerRow {
   // how far the person trusts it (11.11.2026): home (their own), circle (a friend's), world (a
   // stranger's); the widest over its records. God's eye's request review reads it.
   ring: Ring;
+  // its worker's own GET /status at the last probe that got one (13.11.2026, scan D M2 M1):
+  // numbers and flags only, never prompt text; at is when it came. Absent until a /status answered.
+  worker?: WorkerLook;
+}
+export interface WorkerLook { at: number; busy: boolean | null; tokensUsed: number | null; ctx: number | null; ramFreeMb: number | null }
+
+// a worker's /status as numbers and flags: anything else in it, or of another type, is left out
+const countOf = (x: unknown): number | null => (typeof x === 'number' && Number.isFinite(x) && x >= 0 ? x : null);
+function workerLook(st: unknown, at: number): WorkerLook | null {
+  if (!st || typeof st !== 'object' || Array.isArray(st)) return null;
+  const o = st as Record<string, unknown>;
+  return { at, busy: typeof o.busy === 'boolean' ? o.busy : null, tokensUsed: countOf(o.tokensUsed), ctx: countOf(o.ctx), ramFreeMb: countOf(o.ramFreeMb) };
 }
 export interface Way { id: string; where: string; ok: boolean | null; ms: number | null; reason: string | null }
 export interface Ways {
@@ -307,6 +319,8 @@ export class Engine {
   private installedBy = new Map<string, boolean>();
   private jobs = new Map<string, CableJob>();
   private held = new Map<string, string | null>();
+  // each record's last worker /status (holds), by record id
+  private workers = new Map<string, WorkerLook>();
   // each device's security report (its GET /trust), by device (its first record's id)
   private trusts = new Map<string, TrustLook>();
   // when the look last asked a device in use for its /trust (refreshInUse), by device
@@ -360,6 +374,20 @@ export class Engine {
   private paired(): Paired { return (this.pairedBook ??= new Paired(this.opts.pairedFile ?? pairedFile())); }
   private dirs(): string[] { return this.opts.modelDirs ?? defaultModelDirs(); }
 
+  /** free disk, MB, where a fetched model goes (fetchChecked: the first model dir, or the nearest
+   *  folder above it that exists yet), the way download.ts measures it (statfs, bavail); null when
+   *  it cannot be said. God's eye's host.diskFreeMb (scan D M3): read only. */
+  diskFreeMb(): number | null {
+    let dir = this.dirs()[0];
+    if (!dir) return null;
+    for (;;) {
+      try { const s = fs.statfsSync(dir); return Math.floor((Number(s.bavail) * Number(s.bsize)) / MB); } catch {}
+      const up = path.dirname(dir);
+      if (up === dir) return null;
+      dir = up;
+    }
+  }
+
   // ---- peers: one row per device (devices.ts), its ways side by side
 
   peers(): PeerRow[] {
@@ -394,6 +422,8 @@ export class Engine {
     const known = <T>(f: (p: Peer) => T | null | undefined): T | null => { const b = f(best); if (b != null) return b; for (const p of g) { const v = f(p); if (v != null) return v; } return null; };
     const lastOk = g.map((p) => p.last_ok ?? '').sort().pop() || null;
     const heardAt = Math.max(0, ...g.map((p) => this.heardAt.get(p.id) ?? 0)) || null;
+    // the newest worker /status over its records
+    const worker = g.map((p) => this.workers.get(p.id)).reduce<WorkerLook | undefined>((a, w) => (w && (!a || w.at > a.at) ? w : a), undefined);
     return {
       ...row,
       id: first.id,
@@ -415,6 +445,7 @@ export class Engine {
       heardAt,
       usesThisComputer: g.some((p) => !!p.fp && this.paired().has(p.fp)),
       ring: widestRing(g),
+      ...(worker ? { worker: { ...worker } } : {}),
     };
   }
 
@@ -492,8 +523,11 @@ export class Engine {
       let held = mine;
       try {
         const r = await fetch(`http://127.0.0.1:${dev.apiPort}/status`, { signal: AbortSignal.timeout(ms) });
-        const st = (await r.json()) as { loaded?: unknown; model?: unknown };
-        if (st.loaded === true && typeof st.model === 'string' && st.model) held = path.basename(st.model).slice(0, 200);
+        const st = (await r.json()) as { loaded?: unknown; model?: unknown } | null;
+        // its busy, tokensUsed, ctx and ramFreeMb for god's eye (scan D M2 M1): observed, nothing acts on them
+        const w = workerLook(st, Date.now());
+        if (w) this.workers.set(p.id, w);
+        if (st && st.loaded === true && typeof st.model === 'string' && st.model) held = path.basename(st.model).slice(0, 200);
       } catch {}
       // the same tunnel carries the device's security report
       await this.askTrust(p, dev.apiPort, ms);
@@ -680,7 +714,7 @@ export class Engine {
     const row = this.deviceRow(g);
     writePeers(list.filter((p) => !g.includes(p)), file);
     for (const p of g) {
-      this.reach.delete(p.id); this.held.delete(p.id); this.trusts.delete(p.id); this.heard.delete(p.id); this.heardAt.delete(p.id);
+      this.reach.delete(p.id); this.held.delete(p.id); this.workers.delete(p.id); this.trusts.delete(p.id); this.heard.delete(p.id); this.heardAt.delete(p.id);
       if (p.cable) this.jobs.delete(p.cable.serial);
     }
     const ways = [row.ways.cable && 'cable', row.ways.wifi && 'wi-fi', row.ways.relay && 'relay'].filter(Boolean);

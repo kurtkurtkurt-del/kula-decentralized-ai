@@ -65,7 +65,15 @@ export interface EyeDevice {
   // clock; tempC: its battery's °C; battery: percent; charging: no worker says it yet (null);
   // null: no reading in the lines; absent: a snapshot from before 12.11.2026
   health?: EyeHealth | null;
+  // its worker's own GET /status at the last probe (13.11.2026, scan D M2 M1): an observation,
+  // numbers and flags only, never prompt text. at: when the answer came (this computer's clock);
+  // busy: it is answering someone (us or another master); tokensUsed of ctx: how full its context
+  // is; ramFreeMb: its live free memory (a worker from the apk after 13.11.2026; older: null).
+  // ramMb above stays what it advertised at pairing. absent: never answered a /status here
+  worker?: EyeWorker | null;
 }
+
+export interface EyeWorker { at: number; busy: boolean | null; tokensUsed: number | null; ctx: number | null; ramFreeMb: number | null }
 
 export interface EyeHealth { at: number; tempC: number | null; battery: number | null; charging: boolean | null; throttled: boolean | null }
 
@@ -149,6 +157,8 @@ export interface Snapshot {
     name: string; freeMb: number | null; ledger?: { ok: boolean; count: number; problem: string | null } | null;
     /** the host's own battery and heat, when it has them (a phone: app/src/eye/snapshot.ts); a computer leaves it out */
     power?: { battery: number | null; charging: boolean | null; hot: boolean | null } | null;
+    /** free disk where this computer fetches models, MB (13.11.2026, scan D M3); null: could not say; absent: an older look */
+    diskFreeMb?: number | null;
   };
   devices: EyeDevice[];
   work: EyeWork;

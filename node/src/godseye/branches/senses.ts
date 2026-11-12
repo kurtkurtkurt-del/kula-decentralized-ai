@@ -9,7 +9,9 @@
 // flaps the feed gets its one "is flapping" line, not an up/down line per flip. A device the
 // current load works on (work.loaded.devices or parts) is not probed by the engine: it reads "in
 // use", never stale. The stat and gauge count a device active only when its look is fresh or it is
-// in use; a stale one is "not checked lately". Its notes are
+// in use; a stale one is "not checked lately". A device's line also says what its own worker
+// reported at the last probe (scan D M2): "answering someone else", "context N% full"; words only,
+// never a card or a hint. Its notes are
 // one small json (ctx.save), bounded and saved at most once a minute; the view lists 40 device
 // lines at most and then how many it left out.
 // Every value taken from the snapshot is checked first: a reading only enters the notes when the
@@ -186,6 +188,33 @@ function inUseIds(s: Snapshot | null): Set<string> {
       if (!isObject(x) || x.local === true) continue;
       if (typeof x.id === 'string' && x.id.length > 0 && x.id.length <= DEVICE_MAX) out.add(x.id);
     }
+  }
+  return out;
+}
+
+/** when the current load began (work.loaded.since), or null */
+function loadedSince(s: Snapshot | null): number | null {
+  const w = s && isObject(s.work) ? s.work : null;
+  const L = w && isObject(w.loaded) ? w.loaded : null;
+  return L && isTime(L.since) ? L.since : null;
+}
+
+const CTX_FULL = 0.9;                    // a context this full is said
+
+/** what the device's own worker said at its last probe (scan D M2), as words for its line only:
+ *  busy while it is not in our load is "answering someone else"; tokensUsed at 90% of ctx or more
+ *  is "context N% full". An observation, nothing more: no card, no hint, ramMb untouched. Said
+ *  only while the reading is current: the device answered the last look and is not stale, and for
+ *  a device in our load (the engine does not probe it) only a reading from after the load began. */
+function workerBits(d: EyeDevice, used: boolean, stale: boolean, since: number | null): string[] {
+  const w = isObject(d.worker) ? d.worker : null;
+  if (!w || stale || d.reachable !== true || !isTime(w.at)) return [];
+  if (used && (since == null || w.at < since)) return [];
+  const out: string[] = [];
+  if (w.busy === true && !used) out.push('answering someone else');
+  const t = w.tokensUsed, c = w.ctx;
+  if (typeof t === 'number' && typeof c === 'number' && Number.isFinite(t) && Number.isFinite(c) && c > 0 && t >= 0 && t / c >= CTX_FULL) {
+    out.push(`context ${Math.min(100, Math.floor((t / c) * 100))}% full`);
   }
   return out;
 }
@@ -368,6 +397,7 @@ export function create(ctx: BranchCtx): Branch {
       const at = s && isTime(s.at) ? s.at : null;
       const devs = (s && Array.isArray(s.devices) ? s.devices : []).filter(usable);
       const inUse = inUseIds(s);
+      const since = loadedSince(s);
       const seen = devs.map((d) => {
         const n = notes.dev[d.id] ?? null;
         const used = inUse.has(d.id);
@@ -387,6 +417,7 @@ export function create(ctx: BranchCtx): Branch {
         }
         if (used) bits.push('in use');
         if (n?.flapping && !stale) bits.push('flapping');   // stale readings keep no verdict
+        bits.push(...workerBits(d, used, stale, since));
         if (stale) {
           const ago = Math.round(((at as number) - (d.checkedAt as number)) / 1000);   // stale: at is past checkedAt
           bits.push(`stale: last looked at ${ago <= AGO_MAX_S ? `${ago} s` : 'over a year'} ago`);
