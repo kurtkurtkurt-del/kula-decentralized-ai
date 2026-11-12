@@ -6,8 +6,13 @@
 //   energy   a guess: busy minutes × watts by kind (phone 3 W, pc 15 W), kept per day in its notes
 //   power    the host's own battery and heat, when it is a phone (host.power)
 //   health   each phone's own heat, battery and throttling (12.11.2026): the newest reading of the
-//            signed health lines its worker writes to its ledger every minute or when its warnings
-//            change, as the snapshot carries it (device.health, ui/godseye-feed.ts healthOf). Only a
+//            health lines its worker writes to its ledger every minute or when its warnings
+//            change, as the snapshot carries it (device.health, ui/godseye-feed.ts healthOf). This
+//            branch checks no signature itself (finding A14): the trust branch verifies every new
+//            ledger line of a device and stops at the first bad one, so a reading is said to come
+//            "from its signed ledger" only when trust's report (peek, trust runs first) shows that
+//            device's identity and ledger checks both ok; otherwise it is "not verified (see
+//            trust)". Verified or not, a fresh reading warns the same: device health comes first. Only a
 //            fresh reading counts: at most 5 min older than the look and at most 2 min ahead of it
 //            (the phone's clock). Hot over 42 °C (the phone's own line, audit/Checks.kt HOT_C),
 //            battery under 20% while not charging and not plugged in on this computer's cable,
@@ -132,11 +137,31 @@ export function freshHealth(x: unknown, at: number): Health | null {
   const tri = (v: unknown) => (v === true || v === false ? v : null);
   return { at: x.at, tempC: within(x.tempC, -30, 120), battery: within(x.battery, 0, 100), charging: tri(x.charging), throttled: tri(x.throttled) };
 }
-const healthWords = (h: Health | null): string => !h ? 'health unknown' : `health ${[
+const healthWords = (h: Health | null, verified: boolean): string => !h ? 'health unknown' : `health ${[
   h.tempC == null ? 'heat unknown' : `${round1(h.tempC)} °C`,
   h.battery == null ? 'battery unknown' : `battery ${Math.round(h.battery)}%${h.charging === true ? ' charging' : ''}`,
   h.throttled === true ? 'throttled' : h.throttled === false ? 'not throttled' : 'throttle unknown',
+  verified ? 'from its signed ledger' : 'not verified (see trust)',
 ].join(', ')}`;
+
+/** the devices whose health line is the device's own signed word: the trust branch's report shows
+ *  its identity check and its ledger check both ok. trust verifies every new ledger line and stops
+ *  at the first bad one; this branch never checks a signature again. no report (none yet, trust
+ *  broken, a wrong shape) verifies nobody. */
+export function verifiedIds(trust: unknown): Set<string> {
+  const ids = new Set<string>();
+  const report = isObject(trust) && isObject(trust.report) ? trust.report : null;
+  const devs = report && Array.isArray(report.devices) ? (report.devices as unknown[]) : [];
+  for (const d of devs) {
+    if (!isObject(d) || typeof d.id !== 'string' || !Array.isArray(d.checks)) continue;
+    const ok = (k: string) => (d.checks as unknown[]).some((c) => isObject(c) && c.k === k && c.ok === true);
+    if (ok('identity') && ok('ledger')) ids.add(d.id);
+  }
+  return ids;
+}
+
+/** who says a health reading, in a card's why */
+const saysOf = (verified: boolean): string => (verified ? 'its health line from its signed ledger says' : 'its health line, not verified (see trust), says');
 
 /** a device that slows down over a load: now (the median of its last 3 readings) against where the
  *  load began (the median of its first 3); at or under 70% warns, back to 85% or more ends it */
@@ -156,12 +181,12 @@ export function median(xs: number[]): number {
   return n % 2 ? s[(n - 1) / 2] : (s[n / 2 - 1] + s[n / 2]) / 2;
 }
 /** what the phone's fresh health says beside a slowdown: hot or throttled, else its heat */
-const slowHeat = (h: Health | null): string => {
+const slowHeat = (h: Health | null, verified: boolean): string => {
   const said: string[] = [];
   if (h?.tempC != null && h.tempC > HOT_C) said.push(`hot (${round1(h.tempC)} °C)`);
   if (h?.throttled === true) said.push('throttled');
-  if (said.length) return `its own signed health line says it is ${said.join(' and ')}`;
-  return h?.tempC != null ? `not hot (${round1(h.tempC)} °C)` : 'heat unknown';
+  if (said.length) return `${saysOf(verified)} it is ${said.join(' and ')}`;
+  return h?.tempC != null ? `${saysOf(verified)} it is not hot (${round1(h.tempC)} °C)` : 'heat unknown';
 };
 
 const arrayOf = (raw: Record<string, unknown> | null, key: string): unknown[] => {
@@ -295,6 +320,7 @@ export function create(ctx: BranchCtx): Branch {
   let gauge = 100;
   let cards: Suggestion[] = [];                         // the health cards of the last look, in device order
   let healthFresh = false;                              // the last look had a fresh health reading
+  let verified = new Set<string>();                     // the last look's devices trust verified (identity and ledger ok)
 
   const blankDay = (): Day => ({ wh: 0, busyMin: 0, by: Object.create(null) as Record<string, number> });
 
@@ -548,11 +574,13 @@ export function create(ctx: BranchCtx): Branch {
         }
       }
 
-      // each phone's own health (12.11.2026): the newest reading of its signed ledger health
-      // lines, when fresh. heat and battery are the phone's word, never a guess here; a warning
-      // and a card each, keyed apart from the host's ("dev:"), and no hint
+      // each phone's own health (12.11.2026): the newest reading of its ledger health lines, when
+      // fresh. heat and battery are the phone's word, never a guess here; a warning and a card
+      // each, keyed apart from the host's ("dev:"), and no hint. "signed" only when the trust
+      // branch verified the device (it runs before limits: peek sees this look's report)
       cards = [];
       healthFresh = false;
+      verified = verifiedIds(ctx.peek('trust'));
       const healthSeen = new Set<string>();
       const healthById = new Map<string, Health>();
       for (const d of devices) {
@@ -563,6 +591,7 @@ export function create(ctx: BranchCtx): Branch {
         healthById.set(d.id, h);
         healthFresh = true;
         const name = shownName(d);
+        const says = saysOf(verified.has(d.id));
         const card = (topic: string, title: string, why: string) => {
           if (CARD_DEVICE.test(d.id)) cards.push({ id: `limits:${topic}:${d.id}`, kind: 'warn', weight: 3, title, why, action: { do: 'open', panel: 'branch', branch: 'limits' }, label: 'look' });
         };
@@ -570,19 +599,19 @@ export function create(ctx: BranchCtx): Branch {
           const c = round1(h.tempC);
           heads.push(0);
           next.set(`dev:heat:${d.id}`, { text: `${name} is hot: ${c} °C, above ${HOT_C} °C`, ended: `${name} is no longer hot` });
-          card('heat', `${name} is hot: ${c} °C`, `its own signed health line says its battery is at ${c} °C, above the ${HOT_C} °C its phone itself warns at. kula never stops it: let it cool, or leave it out of the next load.`);
+          card('heat', `${name} is hot: ${c} °C`, `${says} its battery is at ${c} °C, above the ${HOT_C} °C its phone itself warns at. kula never stops it: let it cool, or leave it out of the next load.`);
         }
         const onCable = d.via === 'cable' && d.plugged === true;
         if (h.battery != null && h.battery < LOW_BATTERY && h.charging !== true && !onCable) {
           const p = Math.round(h.battery);
           heads.push(h.battery);
           next.set(`dev:battery:${d.id}`, { text: `${name} is at ${p}% and not charging`, ended: `${name} is charging or above ${LOW_BATTERY}% again` });
-          card('battery', `${name} is at ${p}% and not charging`, `its own signed health line says ${p}%, and it is neither charging nor plugged in on this computer's cable. kula never stops it: plug it in, or leave it out of the next load.`);
+          card('battery', `${name} is at ${p}% and not charging`, `${says} ${p}%, and it is neither charging nor plugged in on this computer's cable. kula never stops it: plug it in, or leave it out of the next load.`);
         }
         if (h.throttled === true) {
           heads.push(50);
           next.set(`dev:throttled:${d.id}`, { text: `${name} is throttled: its phone moved the work to its slow cores`, ended: `${name} is no longer throttled` });
-          card('throttled', `${name} is throttled`, `its own signed health line says its phone moved kula's work to the slow cores (battery saving or heat): its answers are slower until that ends.`);
+          card('throttled', `${name} is throttled`, `${says} its phone moved kula's work to the slow cores (battery saving or heat): its answers are slower until that ends.`);
         }
       }
 
@@ -629,7 +658,7 @@ export function create(ctx: BranchCtx): Branch {
         if (CARD_DEVICE.test(d.id)) {
           cards.push({
             id: `limits:slow:${d.id}`, kind: 'warn', weight: 2, title: `${name} slowed down: ${from} -> ${to} tok/s`,
-            why: `${from} -> ${to} tok/s since this load began (the median of its first 3 readings against its last 3); ${slowHeat(healthById.get(d.id) ?? null)}. kula never stops it or moves its work: let it rest or cool, or leave it out of the next load.`,
+            why: `${from} -> ${to} tok/s since this load began (the median of its first 3 readings against its last 3); ${slowHeat(healthById.get(d.id) ?? null, verified.has(d.id))}. kula never stops it or moves its work: let it rest or cool, or leave it out of the next load.`,
             action: { do: 'open', panel: 'branch', branch: 'limits' }, label: 'look',
           });
         }
@@ -684,7 +713,7 @@ export function create(ctx: BranchCtx): Branch {
         if (typeof wh === 'number' && wh > 0) bits.push(`${round1(wh)} Wh today`);
         // a snapshot from before 12.11.2026 has no health at all: nothing is said about it
         const seen = seenById.get(d.id);
-        if (d.local !== true && seen && 'health' in seen) bits.push(healthWords(freshHealth(seen.health, at)));
+        if (d.local !== true && seen && 'health' in seen) bits.push(healthWords(freshHealth(seen.health, at), verified.has(d.id)));
         lines.push(bits.join(' · '));
       }
       for (const m of mems) if (!devNames.has(m.name) && m.share != null) lines.push(`${m.name} · memory ${gbShown(m.needMb)} of ${gbShown(m.ramMb!)} (${percentWord(m.percent)}%) ${m.level}`);
@@ -700,8 +729,8 @@ export function create(ctx: BranchCtx): Branch {
           ['rules', `memory tight over ${TIGHT_PERCENT}% · rest after ${REST_AFTER_MS / 60_000} min · phone ${WATTS.phone} W, pc ${WATTS.pc} W${healthFresh ? ` · hot over ${HOT_C} °C` : ''}${pw || healthFresh ? ` · battery under ${LOW_BATTERY}%` : ''}`],
         ],
         lines,
-        note: `it only warns, it never stops a device. heat, battery and throttling come from each phone's signed health lines (fresh for ${HEALTH_OLD_MS / 60_000} min)${pw ? ', and this device\'s own battery and heat from itself' : ''}; a phone's own brain does not see the other devices' health yet${devs.length ? '' : '; no model loaded, nothing is working'}.`,
-        what: 'keeps devices within their limits: memory, rest, the night window, an energy guess, each phone\'s heat, battery and throttling from its own signed health lines, and a device that slows down over a load.',
+        note: `it only warns, it never stops a device. heat, battery and throttling come from each phone's newest health line (fresh for ${HEALTH_OLD_MS / 60_000} min), from its signed ledger only when trust verified its identity and its ledger${pw ? ', and this device\'s own battery and heat from itself' : ''}; a phone's own brain does not see the other devices' health yet${devs.length ? '' : '; no model loaded, nothing is working'}.`,
+        what: 'keeps devices within their limits: memory, rest, the night window, an energy guess, each phone\'s heat, battery and throttling from its newest health line (signed only when trust verified it), and a device that slows down over a load.',
         // for the deciding branches (peek): a device that should rest gets no new work suggested.
         // health warnings ("dev:") are cards for the person only, never a hint
         hints: [...warns.keys()].filter((k) => k.startsWith('rest:')).map((k) => ({ id: k.slice(5), no: 'should rest (limits)' })),

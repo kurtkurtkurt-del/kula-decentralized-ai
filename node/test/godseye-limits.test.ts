@@ -28,14 +28,14 @@ const snap = (at: number, o: { devices?: any[]; loaded?: any; needMb?: number; p
   models: [model(o.needMb ?? 2000)], projects: o.projects ?? [],
 });
 
-function fakeCtx(stored: unknown = null) {
+function fakeCtx(stored: unknown = null, views: Record<string, unknown> = {}) {
   const out = { saved: [] as any[], events: [] as string[], file: stored };
   const ctx = {
     now: () => T0,
     load: <T>(fb: T): T => (out.file ?? fb) as T,
     save: (d: unknown) => { out.file = structuredClone(d); out.saved.push(out.file); },
     emit: (t: string) => { out.events.push(t); },
-    peek: () => null,
+    peek: (id: string) => views[id] ?? null,
   };
   return { ctx, out };
 }
@@ -48,7 +48,7 @@ test('nothing loaded: built, all within limits, full headroom, and the note says
   assert.equal(v.built, true);
   assert.equal(v.stat, 'all within limits');
   assert.equal(v.gauge, 100);
-  assert.match(v.note!, /heat, battery and throttling come from each phone's signed health lines/);
+  assert.match(v.note!, /heat, battery and throttling come from each phone's newest health line \(fresh for 5 min\), from its signed ledger only when trust verified its identity and its ledger/);
   assert.match(v.note!, /a phone's own brain does not see the other devices' health yet/);
   assert.doesNotMatch(v.what!, /come later/);
   assert.deepEqual(out.events, []);
@@ -226,7 +226,7 @@ test('pin: a good busy pc keeps its exact line, rows, gauge and note', () => {
     ['busy today', '1 min'],
     ['rules', 'memory tight over 80% · rest after 20 min · phone 3 W, pc 15 W'],
   ]);
-  assert.equal(v.note, 'it only warns, it never stops a device. heat, battery and throttling come from each phone\'s signed health lines (fresh for 5 min); a phone\'s own brain does not see the other devices\' health yet.');
+  assert.equal(v.note, 'it only warns, it never stops a device. heat, battery and throttling come from each phone\'s newest health line (fresh for 5 min), from its signed ledger only when trust verified its identity and its ledger; a phone\'s own brain does not see the other devices\' health yet.');
 });
 
 test('pin: the rest and night warning lines and their feed text are unchanged', () => {
@@ -1109,8 +1109,8 @@ test('a phone host says its battery and heat: a row, a warning when hot or low a
   assert.equal(b.view().stat, 'all within limits');
 });
 
-// ---------- the phones' own health (12.11.2026): the newest reading of their signed ledger health
-// lines, as the snapshot carries it (godseye-feed.ts healthOf, guard.ts)
+// ---------- the phones' own health (12.11.2026): the newest reading of their ledger health lines,
+// as the snapshot carries it (godseye-feed.ts healthOf, guard.ts); whether it is signed is trust's word
 
 const H = (o: Record<string, unknown> = {}) => ({ at: T0, tempC: 36.5, battery: 72, charging: null, throttled: false, ...o });
 const withHealth = (at: number, health: unknown, o: Record<string, unknown> = {}) =>
@@ -1125,7 +1125,7 @@ test('health: hot, throttled and low battery each a warning line and a card; eac
   let v = b.view();
   assert.equal(v.stat, 'all within limits');
   assert.deepEqual(cardsOf(v), []);
-  assert.match(v.lines[0], /^pixel · memory .* · health 36\.5 °C, battery 72%, not throttled$/);
+  assert.match(v.lines[0], /^pixel · memory .* · health 36\.5 °C, battery 72%, not throttled, not verified \(see trust\)$/);
   assert.match(v.rows.find((r) => r[0] === 'rules')![1], /hot over 42 °C · battery under 20%/);
 
   // 42 °C exactly is not hot, 20% exactly is not low
@@ -1192,7 +1192,7 @@ test('health: stale or absent is no card, and the row says health unknown; fresh
   assert.deepEqual(cardsOf(v), []);
   v = look({ at: T0, tempC: '99', battery: -5, charging: 'no', throttled: 'yes' });
   assert.deepEqual(cardsOf(v), []);
-  assert.match(v.lines[0], / · health heat unknown, battery unknown, throttle unknown$/);
+  assert.match(v.lines[0], / · health heat unknown, battery unknown, throttle unknown, not verified \(see trust\)$/);
   // an older snapshot without health says nothing about it
   b.observe(snap(T0, { loaded: loaded([ld()]) }) as any, null);
   assert.doesNotMatch(b.view().lines[0], /health/);
@@ -1236,6 +1236,124 @@ test('health: the hints for the deciding branches are the same with and without 
   assert.deepEqual(hot.hints, [{ id: 'p1', no: 'should rest (limits)' }]);
 });
 
+// ---------- whose word a health reading is (finding A14): limits never checks a signature itself.
+// The trust branch verifies every new ledger line of a device and stops at the first bad one; a
+// reading is "from its signed ledger" only when trust's report shows that device's identity and
+// ledger checks both ok, else it is "not verified (see trust)". The card is raised either way.
+
+/** the trust branch's view as limits peeks at it: one device with its identity and ledger checks */
+const trustView = (identity: boolean | null, ledger: boolean | null, id = 'p1') => ({
+  trust: {
+    built: true, stat: '', gauge: null, rows: [], lines: [],
+    report: {
+      verdict: 'ok', headline: '', at: T0, host: { name: 'mac', checks: [] },
+      devices: [{ id, name: 'pixel', verdict: 'ok', refused: '', accept: false, checks: [
+        { k: 'tls', ok: true, text: '' }, { k: 'identity', ok: identity, text: '' }, { k: 'ledger', ok: ledger, text: '' }] }],
+    },
+  },
+});
+const SIGNED = /from its signed ledger/;
+const UNVERIFIED = /not verified \(see trust\)/;
+const HOT = H({ tempC: 44.5, battery: 12, throttled: true });
+
+test('health: trust runs before limits, so limits peeks at the same look\'s trust report', async () => {
+  const { BRANCH_IDS } = await import('../src/godseye/types.ts');
+  assert.ok(BRANCH_IDS.indexOf('trust') < BRANCH_IDS.indexOf('limits'));
+});
+
+test('health: verified by trust (identity and ledger ok) says "from its signed ledger" on every card and the row', () => {
+  const { ctx } = fakeCtx(null, trustView(true, true));
+  const b = create(ctx as any);
+  b.observe(withHealth(T0, HOT) as any, null);
+  const v = b.view();
+  assert.deepEqual(cardsOf(v), [CARD('heat'), CARD('battery'), CARD('throttled')]);
+  for (const c of v.suggestions!) { assert.match(c.why, SIGNED, c.why); assert.doesNotMatch(c.why, UNVERIFIED, c.why); }
+  const row = v.lines.find((l) => l.startsWith('pixel · '))!;
+  assert.match(row, /health 44\.5 °C, battery 12%, throttled, from its signed ledger$/);
+});
+
+test('health: not verified by trust is still a warning and a card, said "not verified (see trust)", never "signed"', () => {
+  const cases: [string, Record<string, unknown>][] = [
+    ['identity ok, ledger not ok', trustView(true, false)],
+    ['identity ok, ledger not checked yet', trustView(true, null)],
+    ['ledger ok, identity not ok', trustView(false, true)],
+    ['ledger ok, identity not checked', trustView(null, true)],
+    ['no trust view', {}],
+    ['a trust view without a report', { trust: { built: true, stat: '', gauge: null, rows: [], lines: [] } }],
+    ['trust verified another device only', trustView(true, true, 'other')],
+    ['a report of the wrong shape', { trust: { built: true, report: { devices: [{ id: 'p1', checks: 'all ok' }] } } }],
+  ];
+  for (const [what, views] of cases) {
+    const { ctx, out } = fakeCtx(null, views);
+    const b = create(ctx as any);
+    b.observe(withHealth(T0, HOT) as any, null);
+    const v = b.view();
+    assert.deepEqual(cardsOf(v), [CARD('heat'), CARD('battery'), CARD('throttled')], what);
+    assert.equal(v.stat, '3 warnings', what);
+    assert.equal(out.events.length, 3, what);
+    for (const c of v.suggestions!) {
+      assert.match(c.why, UNVERIFIED, `${what}: ${c.why}`);
+      assert.doesNotMatch(c.why, /signed/, `${what}: ${c.why}`);
+    }
+    const row = v.lines.find((l) => l.startsWith('pixel · '))!;
+    assert.match(row, /health 44\.5 °C, battery 12%, throttled, not verified \(see trust\)$/, what);
+    assert.doesNotMatch(row, /signed/, what);
+    assert.doesNotMatch(v.note!, /signed health/, what);
+    assert.doesNotMatch(v.what!, /signed health/, what);
+  }
+});
+
+test('health: no reading needs no verification: a stale reading still says only "health unknown"', () => {
+  const { ctx } = fakeCtx(null, trustView(true, true));
+  const b = create(ctx as any);
+  b.observe(withHealth(T0, H({ at: T0 - 10 * MIN })) as any, null);
+  assert.match(b.view().lines[0], / · health unknown$/);
+});
+
+test('slow: the why\'s heat part is "from its signed ledger" only when trust verified the device', () => {
+  const series = [64, 64, 63, 40, 37, 37];
+  const why = (views: Record<string, unknown>, health: Record<string, unknown>) => {
+    const v = slowRig(views).run(series, { health });
+    const card = v.suggestions!.find((c) => c.id === 'limits:slow:p1');
+    assert.ok(card, JSON.stringify(views));
+    return card!.why;
+  };
+  for (const h of [H({ tempC: 44.5 }), H({ throttled: true }), H()]) {
+    assert.match(why(trustView(true, true), h), SIGNED);
+    for (const views of [trustView(true, false), trustView(false, true), {}]) {
+      const w = why(views, h);
+      assert.match(w, UNVERIFIED, w);
+      assert.doesNotMatch(w, /signed/, w);
+    }
+  }
+  // no reading: nothing to verify, nothing said about it
+  const none = slowRig(trustView(true, true)).run(series, {}).suggestions!.find((c) => c.id === 'limits:slow:p1')!.why;
+  assert.match(none, /heat unknown/);
+  assert.doesNotMatch(none, /signed|not verified/);
+});
+
+test('health: the hints are the same whether trust verified the device, did not, or is not there', () => {
+  const run = (views: Record<string, unknown>) => {
+    const { ctx } = fakeCtx(null, views);
+    const b = create(ctx as any);
+    let done = 0;
+    for (let at = T0; at <= T0 + 21 * MIN; at += 15_000) {
+      if ((at - T0) % MIN === 0) done++;
+      b.observe(snap(at, { devices: [dev({ health: { ...HOT, at } })], loaded: loaded([ld({ busy: true, done })]) }) as any, null);
+    }
+    return b.view();
+  };
+  const verified = run(trustView(true, true));
+  const unverified = run(trustView(true, false));
+  const none = run({});
+  assert.equal(cardsOf(verified).length, 3);
+  assert.deepEqual(cardsOf(unverified), cardsOf(verified));
+  assert.deepEqual(cardsOf(none), cardsOf(verified));
+  assert.deepEqual(unverified.hints, verified.hints);
+  assert.deepEqual(none.hints, verified.hints);
+  assert.deepEqual(verified.hints, [{ id: 'p1', no: 'should rest (limits)' }]);
+});
+
 // ---------- a device that slows down over a load (12.11.2026, field test selcukv1 T25: a Galaxy S25+
 // went 64 -> 46.5 -> 37 tok/s within three minutes, warm, while charging)
 
@@ -1244,8 +1362,8 @@ const slowCards = (v: any) => cardsOf(v).filter((c: any) => c.id.startsWith('lim
 
 /** one branch and a look per tps value 15 s apart, each with one more answer done unless the look
  *  says its own done; since and file name the load, health is stamped with the look's own at */
-function slowRig() {
-  const { ctx, out } = fakeCtx();
+function slowRig(views: Record<string, unknown> = {}) {
+  const { ctx, out } = fakeCtx(null, views);
   const b = create(ctx as any);
   let at = T0;
   let done = 0;
