@@ -251,6 +251,30 @@ describe('a card\'s tap on the phone', () => {
     await expect(run({ do: 'load', model: 'qwen', mode: 'here', devices: [] }, env({ load: async () => [] }))).resolves.toBe('loaded Qwen (alone)');
   });
 
+  it('route: a split load that used no peer is not "loaded (split)"', async () => {
+    const a: SuggestAction = { do: 'load', model: 'qwen', mode: 'split', devices: ['p1'] };
+    await expect(run(a, env({ load: async () => [] }))).rejects.toMatchObject({ leftOut: ['Pixel'], model: 'Qwen' });
+    await expect(run(a, env({ load: async () => ['p1'] }))).resolves.toBe('loaded Qwen (split)');
+  });
+
+  it('applyCard: a split load that used no peer shows the card again; nothing retries', async () => {
+    const splitter: BranchMaker = () => ({
+      id: 'planner', observe() {},
+      view: () => ({ ...dark(), built: true, stat: 'one plan', suggestions: [
+        { id: 'planner:split:qwen', kind: 'suggest', title: 'split qwen', why: 'it fits across', action: { do: 'load', model: 'qwen', mode: 'split', devices: ['p1'] } },
+      ] }),
+    });
+    setCurrentLang('en');
+    resetEye({ planner: splitter });
+    const shown = look().cards[0];
+    let loads = 0;
+    const e = env({ load: async () => { loads++; return []; } });
+    await expect(applyCard(shown.id, shown.action, e)).rejects.toThrow(/Pixel did not join/);
+    expect(look().cards.map((c) => c.id)).toEqual(['planner:split:qwen']);
+    look();
+    expect(loads).toBe(1);
+  });
+
   it('applyCard: an apart load that left every device out shows the card again and says so; nothing retries (D2-phone)', async () => {
     setCurrentLang('en');
     resetEye({ planner: apartCard() });

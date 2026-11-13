@@ -83,6 +83,18 @@ export const cleanName = (s: string): string =>
     .replace(/\s+/g, ' ')
     .trim();
 
+/**
+ * A stored peer's name as the screen may show it. A peer saved before names were checked can
+ * carry a number, an object or an array there: then its host, then its id, then '?'.
+ */
+export function peerName(p: { name?: unknown; host?: unknown; id?: unknown }): string {
+  const name = typeof p.name === 'string' ? cleanName(p.name).slice(0, 80) : '';
+  if (name) return name;
+  if (typeof p.host === 'string' && p.host) return p.host;
+  if (typeof p.id === 'string' && p.id) return p.id;
+  return '?';
+}
+
 /** Parses a peer qr into a Peer (nothing stored). Throws 'notPeer' | 'self' | 'old'. */
 export function parsePeerQr(text: string): Peer {
   let o: PeerQr;

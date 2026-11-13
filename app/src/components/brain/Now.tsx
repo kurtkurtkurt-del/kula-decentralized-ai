@@ -11,7 +11,7 @@ import { partColor, STATE_COLOR } from './colors';
 export type NowProps = {
   speed: number | null;
   together: boolean; // apart: the devices' speeds added up
-  split: { name: string; gb: number }[];
+  split: { id?: string; name: string; gb: number }[];
   devices: { id: string; busy: boolean; out?: boolean }[];
   loading: string | null; // the stage, already in words
   aloneFaster: boolean;
@@ -50,12 +50,12 @@ export default function Now({ speed, together, split, devices, loading, aloneFas
         <View accessible accessibilityLabel={`${t('brain.shares')}: ${segs.map((s) => `${s.name.toLowerCase()} ${s.gb} gb`).join(', ')}`}>
           <View style={styles.bar}>
             {segs.map((s, i) => (
-              <View key={s.name} style={[styles.part, { flex: s.frac, backgroundColor: partColor(i) }]} />
+              <View key={`${i}:${s.id}`} style={[styles.part, { flex: s.frac, backgroundColor: partColor(i) }]} />
             ))}
           </View>
           <View style={styles.legend}>
             {segs.map((s, i) => (
-              <View key={s.name} style={styles.key}>
+              <View key={`${i}:${s.id}`} style={styles.key}>
                 <View style={[styles.keyDot, { backgroundColor: partColor(i) }]} />
                 <Text style={styles.keyName} numberOfLines={1}>{s.name.toLowerCase()}</Text>
                 <Text style={styles.keyGb}>{s.gb} gb</Text>

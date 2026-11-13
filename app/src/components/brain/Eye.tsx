@@ -57,6 +57,12 @@ export function EyeGrid({ view, onOpen }: { view: EyeView | null; onOpen: (id: B
 
 export type CardState = { busy?: boolean; said?: string; failed?: boolean };
 
+/** What a tap did, in the phone's own words ('looked again: 1 answered…'); nothing, or only 'opened', says done. */
+export function sayWord(w: unknown, done: string): string {
+  const s = typeof w === 'string' ? w.trim().slice(0, 120) : '';
+  return s && s !== 'opened' ? s : done;
+}
+
 /** One card: what the branch says, and what the phone can do about it. */
 export function EyeCardView({ card, act, state, onApply, onDismiss }: {
   card: EyeCard;
@@ -114,7 +120,7 @@ export function EyeCards({ cards, actOf, apply, dismiss }: {
             set(c.id, { busy: true });
             // the action this card showed: if the card says another by now, nothing runs ('changed')
             apply(c.id, c.action).then(
-              () => set(c.id, { said: t('eye.card.done') }),
+              (word) => set(c.id, { said: sayWord(word, t('eye.card.done')) }),
               (e: Error) => set(c.id, e?.message === 'changed'
                 ? { said: tx('eye.card.changed', 'the card changed, look again'), failed: true }
                 : { said: t('eye.card.failed', { why: e?.message || '?' }), failed: true }),

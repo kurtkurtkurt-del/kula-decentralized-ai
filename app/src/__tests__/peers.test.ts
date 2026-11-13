@@ -20,7 +20,7 @@ jest.mock('@/lib/offline', () => ({ newId: () => Math.random().toString(36).slic
 const mockLlama = { info: async () => ({ available: true, abi: 'arm64-v8a', fastCores: 4, ramFreeMb: 3000, modelsDir: '/m', freeDiskMb: 9000, workerId: 'me-1', wifiIp: '192.168.1.20' }), workerStatus: async () => null };
 jest.mock('@/llm/native', () => ({ get llama() { return mockLlama; }, native: () => mockLlama, hasNative: () => true, GATE_PORT: 50551 }));
 
-import { isPeerQr, myPeerQr, parsePeerQr, setMyWorkerId, takePeerQr } from '@/llm/peers';
+import { isPeerQr, myPeerQr, parsePeerQr, peerName, setMyWorkerId, takePeerQr } from '@/llm/peers';
 import { peers, share } from '@/llm/store';
 
 const good = { k: 'kula-peer', v: 2, id: 'w-1', name: 'MacBook', host: '192.168.1.5', port: 50551, secret: 'ab'.repeat(32), kind: 'pc', ram: 16000, bw: 60 };
@@ -130,6 +130,21 @@ describe('parsePeerQr against odd names, ids and hosts (E6, E5)', () => {
     expect(parsePeerQr(JSON.stringify({ ...v3, pin: '1234' }))).toMatchObject({ id: 'w-3', name: 'Pixel', host: '192.168.1.40', port: 50551, fp: 'a1'.repeat(32), pin: '1234', secret: '', relay: null });
     const relayed = parsePeerQr(JSON.stringify({ ...v3, host: undefined, port: undefined, name: undefined, relay: { url: 'https://relay.example', code: '123456' } }));
     expect(relayed).toMatchObject({ name: 'code 123456', host: '', port: 0, relay: { url: 'wss://relay.example', code: '123456' } });
+  });
+});
+
+describe('peerName: a peer stored before the name was checked (old peers)', () => {
+  it('falls back to the host, then the id, for a name that is not a string', () => {
+    expect(peerName({ name: 7, host: '10.0.0.5', id: 'w-1' })).toBe('10.0.0.5');
+    expect(peerName({ name: {}, id: 'w-1' })).toBe('w-1');
+    expect(peerName({ name: [], id: 'w-1' })).toBe('w-1');
+    expect(peerName({})).toBe('?');
+  });
+  it('cleans a string name and cuts it to 80 chars', () => {
+    expect(peerName({ name: 'pixel\n\u{202e}8', id: 'w-1' })).toBe('pixel 8');
+    const long = peerName({ name: '\u{202e}' + 'x'.repeat(100) + '\n', id: 'w-1' });
+    expect(long).toBe('x'.repeat(80));
+    expect(peerName({ name: '\n\u{202e}', host: '10.0.0.5', id: 'w-1' })).toBe('10.0.0.5');
   });
 });
 

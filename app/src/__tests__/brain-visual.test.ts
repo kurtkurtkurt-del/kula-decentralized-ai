@@ -67,6 +67,17 @@ describe('rings and the share bar', () => {
     expect(nodeShare('split', split, 'pixel', false)).toBe(0);
   });
 
+  it('keeps two devices with the same name apart by id (E9)', () => {
+    const split = [{ id: 'local', name: 'Galaxy S25', gb: 3 }, { id: 'w-1', name: 'Galaxy S25', gb: 1 }];
+    expect(nodeShare('split', split, { id: 'local', name: 'Galaxy S25' }, true)).toBe(0.75);
+    expect(nodeShare('split', split, { id: 'w-1', name: 'Galaxy S25' }, true)).toBe(0.25);
+    expect(nodeShare('split', split, { id: 'w-9', name: 'Galaxy S25' }, true)).toBe(0);
+    // parts without ids: an object still matches by name
+    expect(nodeShare('split', [{ name: 'Pixel', gb: 1 }, { name: 'me', gb: 3 }], { id: 'p1', name: 'pixel' }, true)).toBe(0.25);
+    expect(shareSegments(split).map((s) => s.id)).toEqual(['local', 'w-1']);
+    expect(shareSegments([{ name: 'me', gb: 1 }]).map((s) => s.id)).toEqual(['me']);
+  });
+
   it('draws a sparkline with the highest at the top and zeros on the floor', () => {
     expect(sparkPath([], 10, 10)).toBe('');
     expect(sparkPath([0, 0], 10, 10, 0)).toBe('M0 10 L10 10');

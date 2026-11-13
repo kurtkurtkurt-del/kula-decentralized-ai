@@ -31,8 +31,9 @@ export type PhoneEnv = {
 /** What a tap does: the kind for the button's word, and the work, which says what it did. */
 export type PhoneAct = { kind: SuggestAction['do']; run: () => Promise<string> };
 
-/** An apart load that ran on this phone with every device the card named left out: not what the
- *  card promised (finding D2). The model stays loaded alone; applyCard shows the card again. */
+/** An apart or split load that ran on this phone with every device the card named left out (a
+ *  split's plan.used empty): not what the card promised (finding D2). The model stays loaded
+ *  alone; applyCard shows the card again. */
 export class LeftOut extends Error {
   constructor(readonly model: string, readonly leftOut: string[]) {
     super(`${leftOut.join(', ')} did not join: ${model} runs on this phone alone`);
@@ -72,7 +73,7 @@ export function route(a: SuggestAction | null, env: PhoneEnv): PhoneAct | null {
         run: async () => {
           if (env.busy()) throw new Error('already loading');
           const used = new Set(await env.load(model, mode, ctx, peers));
-          if (mode === 'apart' && !peers.some((p) => used.has(p.id))) throw new LeftOut(model.name, peers.map((p) => p.name));
+          if ((mode === 'apart' || mode === 'split') && !peers.some((p) => used.has(p.id))) throw new LeftOut(model.name, peers.map((p) => p.name));
           return `loaded ${model.name} (${mode})`;
         },
       };

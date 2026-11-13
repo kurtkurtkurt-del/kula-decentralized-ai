@@ -43,14 +43,14 @@ export function edge(a: Pt, b: Pt, r: number): Pt {
   return { x: round(a.x + (dx / d) * r), y: round(a.y + (dy / d) * r) };
 }
 
-export type Segment = { name: string; gb: number; frac: number; start: number };
+export type Segment = { id: string; name: string; gb: number; frac: number; start: number };
 
 /**
  * The model's parts as one stacked bar: each device's share of the whole, oldest order kept.
  * A part under min still shows (min of the bar), the rest give way so it adds up to 1.
  * Nothing measured (all 0 gb) → equal parts.
  */
-export function shareSegments(split: { name: string; gb: number }[], min = 0.04): Segment[] {
+export function shareSegments(split: { id?: string; name: string; gb: number }[], min = 0.04): Segment[] {
   const parts = split.filter((s) => s.gb >= 0);
   if (!parts.length) return [];
   const total = parts.reduce((a, s) => a + s.gb, 0);
@@ -61,18 +61,31 @@ export function shareSegments(split: { name: string; gb: number }[], min = 0.04)
   const fracs = small && room > 0 && bigSum > 0 ? raw.map((f) => (f < min ? min : (f / bigSum) * room)) : raw;
   let start = 0;
   return parts.map((s, i) => {
-    const seg = { name: s.name, gb: s.gb, frac: fracs[i], start };
+    const seg = { id: s.id ?? s.name, name: s.name, gb: s.gb, frac: fracs[i], start };
     start += fracs[i];
     return seg;
   });
 }
 
-/** What part of the model one device holds: split by its gb, apart and alone a whole copy each. */
-export function nodeShare(mode: 'alone' | 'apart' | 'split', split: { name: string; gb: number }[], name: string, inModel: boolean): number {
+/**
+ * What part of the model one device holds: split by its gb, apart and alone a whole copy each.
+ * A device given as {id, name} is found by id when the parts carry ids (two devices with one
+ * name stay two, E9), else by name; a plain string is a name.
+ */
+export function nodeShare(
+  mode: 'alone' | 'apart' | 'split',
+  split: { id?: string; name: string; gb: number }[],
+  who: string | { id: string; name: string },
+  inModel: boolean,
+): number {
   if (!inModel) return 0;
   if (mode !== 'split') return 1;
   const total = split.reduce((a, s) => a + s.gb, 0);
-  const mine = split.find((s) => s.name.toLowerCase() === name.toLowerCase());
+  const byId = typeof who !== 'string' && split.some((s) => s.id != null);
+  const name = (typeof who === 'string' ? who : who.name).toLowerCase();
+  const mine = byId
+    ? split.find((s) => s.id === (who as { id: string }).id)
+    : split.find((s) => s.name.toLowerCase() === name);
   return mine && total > 0 ? clamp01(mine.gb / total) : 0;
 }
 

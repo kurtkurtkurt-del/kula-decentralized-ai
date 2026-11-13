@@ -13,7 +13,7 @@ jest.mock('@/i18n', () => {
 
 import { act, create, type ReactTestRenderer } from 'react-test-renderer';
 import { BRANCHES, dark, type EyeCard, type EyeView } from '@godseye/core';
-import { EyeCards, EyeGrid, toneOf } from '@/components/brain/Eye';
+import { EyeCards, EyeGrid, sayWord, toneOf } from '@/components/brain/Eye';
 
 const render = (el: React.ReactElement) => {
   let r: ReactTestRenderer | undefined;
@@ -56,11 +56,11 @@ describe('the twelve on the brain tab', () => {
     expect(JSON.stringify(render(<EyeGrid view={null} onOpen={() => {}} />).toJSON())).toContain('ilk bakış birazdan geliyor');
   });
 
-  it('a card: the phone\'s button when it can, "only the computer" when it cannot, a dismiss always; a tap says done', async () => {
+  it('a card: the phone\'s button when it can, "only the computer" when it cannot, a dismiss always; a tap says what it did', async () => {
     const applied: string[] = [];
     const dismissed: string[] = [];
     const cards = [card(), card({ id: 'advisor:mac', title: 'on the mac' })];
-    const r = render(<EyeCards cards={cards} actOf={(c) => (c.id === 'advisor:x' ? { kind: 'load' } : null)} apply={async (id) => { applied.push(id); return 'ok'; }} dismiss={(id) => dismissed.push(id)} />);
+    const r = render(<EyeCards cards={cards} actOf={(c) => (c.id === 'advisor:x' ? { kind: 'load' } : null)} apply={async (id) => { applied.push(id); return 'looked again: 1 answered, 2 did not'; }} dismiss={(id) => dismissed.push(id)} />);
     const text = JSON.stringify(r.toJSON());
     expect(text).toContain('yükle');
     expect(text).toContain('bunu yalnızca bilgisayar yapabilir');
@@ -72,10 +72,25 @@ describe('the twelve on the brain tab', () => {
       presses()[0].props.onPress();
     });
     expect(applied).toEqual(['advisor:x']);
-    expect(JSON.stringify(r.toJSON())).toContain('tamam');
+    expect(JSON.stringify(r.toJSON())).toContain('looked again: 1 answered, 2 did not');
     act(() => {
       presses()[2].props.onPress();
     });
     expect(dismissed).toEqual(['advisor:mac']);
+  });
+
+  it('a tap that says nothing, or only "opened", says done', async () => {
+    for (const word of ['', 'opened']) {
+      const r = render(<EyeCards cards={[card()]} actOf={() => ({ kind: 'load' })} apply={async () => word} dismiss={() => {}} />);
+      const apply = r.root.findAll((n) => n.props.accessibilityRole === 'button' && typeof n.props.onPress === 'function')[0];
+      await act(async () => {
+        apply.props.onPress();
+      });
+      expect(JSON.stringify(r.toJSON())).toContain('tamam');
+    }
+    expect(sayWord('  loaded Qwen (split)  ', 'done')).toBe('loaded Qwen (split)');
+    expect(sayWord(7, 'done')).toBe('done');
+    expect(sayWord('   ', 'done')).toBe('done');
+    expect(sayWord('x'.repeat(200), 'done')).toHaveLength(120);
   });
 });

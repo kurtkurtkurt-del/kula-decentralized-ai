@@ -27,6 +27,7 @@ import { parseLedger, peerBadge, summarize, verdictOf, verifyChain, type AuditEn
 import { clearBrainLog, latest, useBrainLog } from '@/llm/brainlog';
 import { useEngine, type Device } from '@/llm/engine';
 import { hasNative, llama } from '@/llm/native';
+import { peerName } from '@/llm/peers';
 import { usePeers } from '@/llm/store';
 import { selfTitle } from '@/llm/trust';
 import { startTrustRhythm, useTrustReport } from '@/llm/trustStore';
@@ -117,7 +118,7 @@ export default function BrainScreen() {
   const center: FigureNode = {
     id: 'me',
     name: t('brain.this'),
-    share: loaded ? nodeShare(mode, engine.split, me?.name ?? '', true) : 0,
+    share: loaded ? nodeShare(mode, engine.split, { id: 'local', name: me?.name ?? '' }, true) : 0,
     state: loaded ? nodeState(me ?? { busy: false }, 'none', working) : 'saved',
     badge: 'none',
   };
@@ -126,7 +127,8 @@ export default function BrainScreen() {
     // apart: a device of its own · split: in the model when the plan used it, working with this phone
     let d: Pick<Device, 'busy' | 'out'> | undefined = loaded ? engine.devices.find((x) => x.id === p.id) : undefined;
     if (loaded && !d && mode === 'split' && engine.plan?.used.some((u) => u.id === p.id)) d = { busy: false };
-    return { id: p.id, name: p.name.toLowerCase(), share: nodeShare(mode, engine.split, p.name, !!d), state: nodeState(d, badge, !!d && working), badge, kind: KIND(p.kind) };
+    const name = peerName(p);   // a peer stored before names were checked may hold no string there
+    return { id: p.id, name: name.toLowerCase(), share: nodeShare(mode, engine.split, { id: p.id, name }, !!d), state: nodeState(d, badge, !!d && working), badge, kind: KIND(p.kind) };
   });
   const inModel = loaded ? (mode === 'split' ? Math.max(1, engine.split.length) : mode === 'apart' ? engine.devices.length : 1) : 0;
   const modelName = (engine.model?.name ?? '').toLowerCase();
