@@ -135,6 +135,7 @@ test('the stat and the lines keep today\'s beginning; the new parts are appended
     ['kinds', 'cable 2 · wifi 3 · relay 1'],
     ['switches today', '0'],
     ['assumed', ASSUMED_LINE],
+    ['remote links', '1 device · not enough answers yet'],
   ]);
 });
 
@@ -180,7 +181,101 @@ test('a kind called internet works today, with no code change', () => {
 
   assert.equal(v.stat, '0 cable · 0 wi-fi · 1 internet');
   assert.deepEqual(v.rows[0], ['kinds', 'internet 1']);
-  assert.equal(v.lines[0], 'pixel · internet · 203.0.113.7:50551 · reachable · 12 ms · answers 100% over internet · usually 12 ms');
+  // the remote tail (P35): ten equal times are one number; loss 0 of 10 is 0–14% (z²/n = 0.16425,
+  // hi = 0.16425 / 1.16425 = 0.141); a split across 12 ms is at best floor(1000 / 12) = 83 tok/s
+  assert.equal(v.lines[0], 'pixel · internet · 203.0.113.7:50551 · reachable · 12 ms · answers 100% over internet · usually 12 ms'
+    + ' · 8 in 10 answers within 12 ms · loses 0–14% of probes · a split across it: at best ~83 tok/s');
+  assert.deepEqual(v.rows[3], ['remote links', '1 device · slowest usually 12 ms']);
+});
+
+// ---- a remote peer's link, in words (P35): no new probing, no card, no feed line
+
+/** n looks of one device, each a new probe; o(i) gives the i-th look's fields */
+const probes = (n: number, o: (i: number) => Record<string, unknown>) =>
+  Array.from({ length: n }, (_, i) => snap([dev({ checkedAt: 1000 * (i + 1), ...o(i) })], at(i)));
+
+test('an internet device with 20 answers says its spread, its loss and what a split across it costs', () => {
+  const { b, c } = drive(probes(20, (i) => ({ via: 'internet', where: '203.0.113.7:50551', reachMs: 100 + 10 * i })));
+  const v = b.view();
+  // by hand, ms 100..290: median (190 + 200) / 2 = 195; a = sorted[floor(1.9)] = 110,
+  // b = sorted[ceil(17.1)] = 280; Wilson 80% of 0 in 20: hi = 0.082125 / 1.082125 = 0.0759 -> 8;
+  // best floor(1000 / 195) = 5, slow floor(1000 / 280) = 3
+  assert.ok(v.lines[0].endsWith(' · usually 195 ms · 8 in 10 answers within 110–280 ms · loses 0–8% of probes · a split across it: at best ~3–5 tok/s'), v.lines[0]);
+  assert.equal(v.lines[0], 'pixel · internet · 203.0.113.7:50551 · reachable · 290 ms · answers 100% over internet'
+    + ' · usually 195 ms · 8 in 10 answers within 110–280 ms · loses 0–8% of probes · a split across it: at best ~3–5 tok/s');
+  assert.deepEqual(v.rows[3], ['remote links', '1 device · slowest usually 195 ms']);
+  // words only: no hint, no card id beyond today's, no feed line
+  assert.equal((v as any).hints, undefined);
+  assert.deepEqual((v.suggestions ?? []).map((s: any) => s.id), ['connections:internet:p1']);
+  assert.deepEqual(c.feed, []);
+});
+
+test('a relay gets the words, and a wifi device reached at its router\'s port gets them from its wifi readings', () => {
+  const relay = drive(probes(10, () => ({ via: 'relay', where: 'relay pc', reachMs: 400 }))).b.view();
+  assert.equal(relay.lines[0], 'pixel · relay · relay pc · reachable · 400 ms · answers 100% over relay · usually 400 ms'
+    + ' · 8 in 10 answers within 400 ms · loses 0–14% of probes · a split across it: at best ~2 tok/s');
+  assert.deepEqual(relay.rows[3], ['remote links', '1 device · slowest usually 400 ms']);
+
+  const mapped = drive(probes(10, (i) => ({ via: 'wifi', reachedBy: 'mapped', reachMs: 50 + i }))).b.view();
+  // ms 50..59: a = sorted[0] = 50, b = sorted[9] = 59; median 54.5 rounds to 55; 1000/55 -> 18, 1000/59 -> 16
+  assert.equal(mapped.lines[0], 'pixel · wifi · 192.168.1.33:50551 · reachable · 59 ms · answers 100% over wifi · usually 55 ms'
+    + ' · 8 in 10 answers within 50–59 ms · loses 0–14% of probes · a split across it: at best ~16–18 tok/s');
+
+  // the same wifi device on the lan: today's line, byte for byte
+  const lan = drive(probes(10, (i) => ({ via: 'wifi', reachedBy: 'lan', reachMs: 50 + i }))).b.view();
+  assert.equal(lan.lines[0], 'pixel · wifi · 192.168.1.33:50551 · reachable · 59 ms · answers 100% over wifi · usually 55 ms');
+  assert.deepEqual(lan.rows[3], ['remote links', 'none']);
+  const cable = drive(probes(10, () => ({ via: 'cable', reachedBy: null }))).b.view();
+  assert.equal(cable.lines[0], 'pixel · cable · reachable · 12 ms · answers 100% over cable · usually 12 ms');
+});
+
+test('nine probes give no new words; nine answer times give no range, and the split says only its best', () => {
+  const nine = drive(probes(9, () => ({ via: 'internet', where: 'x' }))).b.view();
+  assert.equal(nine.lines[0], 'pixel · internet · x · reachable · 12 ms · not enough looks yet');
+  assert.deepEqual(nine.rows[3], ['remote links', '1 device · not enough answers yet']);
+
+  // 10 probes, the last one missed: 9 answer times. Wilson 80% of 1 miss in 10: mid 0.1564,
+  // half 0.1260 -> 3–28%; median 100 -> floor(1000 / 100) = 10 tok/s, no range
+  const missed = drive(probes(10, (i) => (i === 9
+    ? { via: 'internet', where: 'x', reachable: false, reachMs: null, reason: 'connect timeout' }
+    : { via: 'internet', where: 'x', reachMs: 100 }))).b.view();
+  assert.equal(missed.lines[0], 'pixel · internet · x · not reachable: connect timeout · answers 90% over internet · usually 100 ms'
+    + ' · loses 3–28% of probes · a split across it: at best ~10 tok/s');
+});
+
+test('a link slower than a second says under 1 tok/s; one with fewer than 5 answer times says no split', () => {
+  const slow = drive(probes(10, () => ({ via: 'internet', where: 'x', reachMs: 1500 }))).b.view();
+  assert.ok(slow.lines[0].endsWith(' · usually 1500 ms · slower than a internet link usually is · 8 in 10 answers within 1500 ms · loses 0–14% of probes · a split across it: at best under 1 tok/s'), slow.lines[0]);
+
+  // 4 answers in 10: no usual latency, so no split cost; the loss still stands (6 of 10: mid 0.5859, half 0.1846 -> 40–77%)
+  const few = drive(probes(10, (i) => (i < 6
+    ? { via: 'internet', where: 'x', reachable: false, reachMs: null }
+    : { via: 'internet', where: 'x' }))).b.view();
+  assert.equal(few.lines[0], 'pixel · internet · x · reachable · 12 ms · answers 40% over internet · loses 40–77% of probes');
+  assert.deepEqual(few.rows[3], ['remote links', '1 device · not enough answers yet']);
+});
+
+test('the remote row counts every remote device and names the slowest usual latency', () => {
+  const looks = Array.from({ length: 10 }, (_, i) => snap([
+    dev({ id: 'a', name: 'a', via: 'internet', reachMs: 120, checkedAt: 1000 * (i + 1) }),
+    dev({ id: 'b', name: 'b', via: 'relay', reachMs: 340, checkedAt: 1000 * (i + 1) }),
+    dev({ id: 'c', name: 'c', via: 'wifi', reachedBy: 'ipv6', checkedAt: i < 9 ? 1 : 2 }),   // 2 probes only
+    dev({ id: 'd', name: 'd', via: 'wifi', reachMs: 900, checkedAt: 1000 * (i + 1) }),        // the lan: not remote
+  ], at(i)));
+  const v = drive(looks).b.view();
+  assert.deepEqual(v.rows[3], ['remote links', '3 devices · slowest usually 340 ms']);
+});
+
+test('the saved notes keep exactly today\'s shape with a remote link', () => {
+  const { c } = drive([...probes(20, (i) => ({ via: 'internet', reachMs: 100 + 10 * i })),
+    snap([dev({ via: 'internet', reachMs: 100, checkedAt: 99_000 })], at(70))]);
+  const file = c.stored as any;
+  assert.deepEqual(Object.keys(file), ['v', 'dev']);
+  const [id, e] = file.dev[0];
+  assert.equal(id, 'p1');
+  assert.deepEqual(Object.keys(e), ['name', 'seen', 'kind', 'at', 'k', 'sw']);
+  assert.deepEqual(Object.keys(e.k[0][1]), ['ring', 'ms', 'last']);
+  assert.equal(typeof e.k[0][1].ring, 'string');
 });
 
 test('slower than the kind usually is, exactly at the 3x boundary of the assumption', () => {
@@ -322,6 +417,7 @@ test('an empty snapshot is a normal look: built, bounded and empty', () => {
     ['kinds', 'none yet'],
     ['switches today', '0'],
     ['assumed', ASSUMED_LINE],
+    ['remote links', 'none'],
   ]);
   assert.deepEqual(before.lines, []);
   assert.equal(before.note, 'no device yet.');

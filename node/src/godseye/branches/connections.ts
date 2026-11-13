@@ -32,6 +32,14 @@
 // address or its router's port, gets one card: it is reached over the internet, answers are
 // slower and only apart mode works there (split needs the lan). Something to know; its button
 // only looks again (a probe), which puts it back on the lan once the lan answers.
+//
+// A remote peer's link, in words (13.11.2026): for a device reached over the internet or a relay,
+// once its kind has 10 probes, the line also says what the ring and the ms list already hold, and
+// nothing new is probed: the spread (8 in 10 of its last answer times fall within a range, from at
+// least 10 of them), the loss (the 80% Wilson interval of the missed share, whole percents) and
+// what that costs a split (one round trip per token before any compute, so at best 1000/ms tok/s:
+// an upper bound). A fourth row, 'remote links', says how many such devices the look holds and the
+// slowest usual latency among them. Words only: no card, no hint, no feed line.
 import type { Branch, BranchCtx, BranchView, EyeDevice, Snapshot, Suggestion } from '../types.js';
 import { reachWord } from './util.js';
 import { cardId } from './decide.js';
@@ -151,6 +159,25 @@ const reasonOf = (x: unknown): string | null =>
 const listOf = (x: unknown): unknown[] => (Array.isArray(x) ? x : []);
 const objOf = (x: unknown): Record<string, unknown> | null =>
   x !== null && typeof x === 'object' ? (x as Record<string, unknown>) : null;
+/** The 80% Wilson interval of k successes in n (z 1.2816), clamped to 0..1; null without trials. */
+function wilson80(k: number, n: number): [number, number] | null {
+  if (!(n > 0)) return null;
+  const z = 1.2816, z2 = z * z, p = k / n;
+  const den = 1 + z2 / n;
+  const mid = (p + z2 / (2 * n)) / den;
+  const half = (z * Math.sqrt(p * (1 - p) / n + z2 / (4 * n * n))) / den;
+  return [Math.max(0, mid - half), Math.min(1, mid + half)];
+}
+/** Where 8 in 10 of the ms values fall: the 10th and 90th percentile of the sorted values (a =
+ *  sorted[floor(0.1(m-1))], b = sorted[ceil(0.9(m-1))]). Needs at least 10, else null. */
+function spreadOf(ms: number[]): [number, number] | null {
+  const m = ms.length;
+  if (m < 10) return null;
+  const sorted = [...ms].sort((x, y) => x - y);
+  return [sorted[Math.floor(0.1 * (m - 1))], sorted[Math.ceil(0.9 * (m - 1))]];
+}
+/** A range as a line says it: one number when both ends are equal. */
+const rangeWords = (a: number, b: number) => (a === b ? `${a}` : `${a}–${b}`);
 const dayKey = (ms: number) => { const d = new Date(ms); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
 
 const freshNotes = (): ConnectionsNotes => ({ v: 1, dev: new Map() });
@@ -292,9 +319,55 @@ export function create(ctx: BranchCtx): Branch {
     return `${best.kind} has been the steadier link (${rateWords(best.rate, second.rate)})`;
   }
 
+  /** A snapshot device reached over the internet or a relay: the ones whose link gets the words. */
+  const isRemote = (d: Record<string, unknown>) => overInternet(d) || kindOf(d.via) === 'relay';
+
+  /** What the probes say of the kind a snapshot device names (its via): null until that kind
+   *  has 10 probes; med is null until 5 of the ring's answers carry a time. */
+  function readingOf(d: Record<string, unknown>): { n: number; ok: number; ms: number[]; med: number | null } | null {
+    const id = idOf(d.id);
+    const st = id === null ? undefined : devs.get(id)?.k.get(kindOf(d.via));
+    if (!st || st.ring.length < 10) return null;
+    const ok = st.ring.filter((x) => x).length;
+    // only the last ok answer times can be this ring's: earlier answers are another window
+    const ms = ok > 0 ? st.ms.slice(-ok) : [];
+    return { n: st.ring.length, ok, ms, med: ok > 0 ? usualMs(ms) : null };
+  }
+
+  /** The remote link's words: spread, loss and what a split across it can do at best. */
+  function remoteWords(r: { n: number; ok: number; ms: number[]; med: number | null }): string {
+    let w = '';
+    const spread = spreadOf(r.ms);
+    if (spread) w += ` · 8 in 10 answers within ${rangeWords(spread[0], spread[1])} ms`;
+    const loss = wilson80(r.n - r.ok, r.n);
+    if (loss) w += ` · loses ${rangeWords(Math.round(loss[0] * 100), Math.round(loss[1] * 100))}% of probes`;
+    if (r.med !== null && r.med >= 1) {
+      const best = Math.floor(1000 / r.med);
+      const slow = spread && spread[1] >= 1 ? Math.floor(1000 / spread[1]) : null;
+      const say = best === 0 ? 'under 1' : `~${slow === null ? best : rangeWords(slow, best)}`;
+      w += ` · a split across it: at best ${say} tok/s`;
+    }
+    return w;
+  }
+
+  /** The 'remote links' row: how many devices the look reaches over the internet or a relay,
+   *  and the slowest usual latency among them. */
+  function remoteRow(objs: (Record<string, unknown> | null)[]): string {
+    const remote = objs.filter((o): o is Record<string, unknown> => o !== null && isRemote(o));
+    if (!remote.length) return 'none';
+    const n = `${remote.length} device${remote.length === 1 ? '' : 's'}`;
+    let slowest: number | null = null;
+    for (const o of remote) {
+      const med = readingOf(o)?.med ?? null;
+      if (med !== null && (slowest === null || med > slowest)) slowest = med;
+    }
+    return slowest === null ? `${n} · not enough answers yet` : `${n} · slowest usually ${slowest} ms`;
+  }
+
   /** One device's line: the words it always had, then what the probes say about the kind the
    *  line's beginning names (the snapshot's via): the rate of that kind, or nothing until a
-   *  probe on it arrives. The remembered last-reading kind never leaks into a line of another. */
+   *  probe on it arrives. The remembered last-reading kind never leaks into a line of another.
+   *  A remote link (internet or relay) then gets its spread, loss and split cost. */
   function deviceLine(raw: unknown): string {
     const d = objOf(raw) ?? {};
     const kind = kindOf(d.via);
@@ -317,6 +390,8 @@ export function create(ctx: BranchCtx): Branch {
         const a = ASSUMED_BY_KIND.get(kind);
         if (a && med > SLOWER_X * a.ms) line += ` · slower than a ${kind} link usually is`;
       }
+      const r = isRemote(d) ? readingOf(d) : null;
+      if (r) line += remoteWords(r);
     }
     const best = e ? bestPath(e) : null;
     return best ? `${line} · ${best}` : line;
@@ -446,6 +521,7 @@ export function create(ctx: BranchCtx): Branch {
           ['kinds', kinds.length ? kinds.map(([k, n]) => `${k} ${n}`).join(' · ') : 'none yet'],
           ['switches today', String(switches)],
           ['assumed', ASSUMED_LINE],
+          ['remote links', remoteRow(objs)],
         ],
         lines: objs.filter((o) => o !== null).map((o) => deviceLine(o)),
         note: objs.length ? undefined : 'no device yet.',
