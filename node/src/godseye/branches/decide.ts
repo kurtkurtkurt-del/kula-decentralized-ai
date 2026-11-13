@@ -15,7 +15,10 @@
 // part plus a hop per worker; the bytes go to the fastest device first, as sim.ts does. The hop is
 // HOP_MS, or, when the planner hands split() a k (hop.ts) and senses gave the worker's link, k times
 // that link's usual round trip (srtt); such a split also says its chain (compute time and links), so
-// the planner can learn k from the split's own answers and say the range (L9 P49).
+// the planner can learn k from the split's own answers and say the range (L9 P49). With such a k
+// split() also tries the workers nearest-cost first (compute per MB plus the link over the room a
+// worker gives) and takes a set from that order only when it is strictly faster, so a fast far phone
+// no longer always comes before a slower near one; a greedy second order, not a search (L10 P56).
 //
 // A device's free memory is its worker's live reading (GET /status, `worker.ramFreeMb`) when that
 // is fresh (WORKER_FRESH_MS) and it holds none of our model; when it holds our model, a reading
@@ -288,10 +291,22 @@ export function split(f: Field, m: EyeModel, slack = 1, k?: number): Place | nul
   const usable = typeof k === 'number' && Number.isFinite(k) && k > 0;
   const gbsOf = (x: Seat): number | null => gbsFor(x, m, gb);
   const speed = (x: Seat) => gbsOf(x) ?? -1;
-  const workers = f.seats.filter((x) => !x.local && x.via !== 'relay').sort((a, b) => speed(b) - speed(a) || b.capMb - a.capMb);
+  const bySpeed = f.seats.filter((x) => !x.local && x.via !== 'relay').sort((a, b) => speed(b) - speed(a) || b.capMb - a.capMb);
+  const hopOf = (x: Seat) => (usable && x.link ? k! * x.link.srtt : HOP_MS);
+  // a worker's cost per MB of the model it takes: its compute plus its link spread over its room (L10 P56)
+  const perMb = (x: Seat): number => {
+    const g = gbsOf(x);
+    const room = Math.min(x.capMb * slack, m.needMb);
+    if (gb == null || g == null || !(g > 0) || !(room > 0)) return Infinity;
+    const v = (gb * 1000) / (m.needMb * g) + hopOf(x) / room;
+    return Number.isNaN(v) ? Infinity : v;
+  };
+  const cost = new Map(bySpeed.map((x) => [x, perMb(x)] as const));
+  const byLink = [...bySpeed].sort((a, b) => { const ca = cost.get(a)!, cb = cost.get(b)!; return ca < cb ? -1 : ca > cb ? 1 : 0; });
+  const orders = usable && byLink.some((x, i) => x !== bySpeed[i]) ? [bySpeed, byLink] : [bySpeed];
   let best: Place | null = null;
   let bestMs = Infinity;
-  for (let n = 1; n <= workers.length; n++) {
+  for (const [o, workers] of orders.entries()) for (let n = 1; n <= workers.length; n++) {
     const devs = [host, ...workers.slice(0, n)];
     if (devs.reduce((t, x) => t + x.capMb * slack, 0) < m.needMb) continue;
     let left = m.needMb;
@@ -304,12 +319,13 @@ export function split(f: Field, m: EyeModel, slack = 1, k?: number): Place | nul
     if (!used.length) continue;   // the host alone holds it: that is not a split
     const known = gb != null && shares.every((x) => x.mb === 0 || gbsOf(x.seat) != null);
     const computeMs = known ? shares.reduce((t, x) => t + (x.mb > 0 ? ((x.mb / m.needMb) * gb! * 1000) / gbsOf(x.seat)! : 0), 0) : 0;
-    const hop = used.reduce((t, x) => t + (usable && x.seat.link ? k! * x.seat.link.srtt : HOP_MS), 0);
+    const hop = used.reduce((t, x) => t + hopOf(x.seat), 0);
     const ms = known ? computeMs + hop : null;
     const place: Place = { mode: 'split', seats: [host, ...used.map((x) => x.seat)], tps: ms ? Math.round((1000 / ms) * 10) / 10 : null, shares, action: loadAction(m, 'split', used.map((x) => x.seat)) };
     if (known && usable && used.every((x) => x.seat.link)) place.chain = { computeMs, links: used.map((x) => x.seat.link!) };
-    if (ms == null) { if (!best) best = place; break; }   // speeds unknown: the fewest that fit
-    if (ms < bestMs) { best = place; bestMs = ms; }
+    // speeds unknown: the fewest that fit (the speed order); in the nearest-cost order it ends that order
+    if (ms == null) { if (o === 0 && !best) best = place; break; }
+    if (ms < bestMs) { best = place; bestMs = ms; }   // from the second order only strictly faster
   }
   return best;
 }
