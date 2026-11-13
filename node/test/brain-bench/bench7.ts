@@ -13,7 +13,15 @@
 // mean score (hi-lo) + 10 max(0, lo-rate) + 10 max(0, rate-hi) (bench2's weights). For drift also
 // the same from DRIFT_AT on, and lag: the scored outcomes from DRIFT_AT before the range first holds
 // 0.70 (null if never). No clock, no random and no network. Nothing here is shipped or wired.
-import { reachExperts, type ReachMix } from '../../src/godseye/branches/reach.ts';
+// L12 P64 adds four ranges centred on the blend's q (b = reachBlend(ex, m.w)), with
+// v[k] = p[k](1-p[k])/(c[k]+1), W = sum w v (the experts' noise), B = sum w (p - q)^2 (their
+// disagreement) and S = sum w sqrt(v) (the blend's noise when the experts err together):
+//  - x2:     wilson(q, 2 nu), today's range with its evidence doubled;
+//  - corr:   wilson(q, nuOf(q, S^2)), no disagreement term;
+//  - excess: wilson(q, nuOf(q, S^2 + max(0, B - W))), disagreement only beyond the noise;
+//  - calm:   B <= W ? wsum's evidence : today's, both centred on q.
+// The card's `off` is the largest |b.q - m.q| over the scored outcomes.
+import { reachExperts, reachBlend, type Experts, type ReachMix } from '../../src/godseye/branches/reach.ts';
 import { runBench2, fromSnapshots, type ReachSeen } from './bench2.ts';
 import { scenario2, drift, driftRate, DRIFT_AT } from './synth2.ts';
 
@@ -21,7 +29,7 @@ const Z80 = 1.2816;
 const NU_MAX = 1e6;
 const SLOW_C = 39;
 
-export const CANDIDATES7 = ['now', 'count', 'wsum', 'slow', 'heavy'] as const;
+export const CANDIDATES7 = ['now', 'count', 'wsum', 'slow', 'heavy', 'x2', 'corr', 'excess', 'calm'] as const;
 export type Cand7 = (typeof CANDIDATES7)[number];
 export const SCENARIOS7 = ['reach', 'far', 'drift'] as const;
 export type Scenario7Name = (typeof SCENARIOS7)[number];
@@ -51,9 +59,35 @@ export function wilson(q: number, nu: number): { lo: number; hi: number } {
   return { lo: clamp01(mid - half), hi: clamp01(mid + half) };
 }
 
+/** the evidence of a chance q whose variance is V, as reachBlend takes it (reach.ts:81) */
+export const nuOf = (q: number, V: number): number => (V > 0 ? clampNu(q * (1 - q) / V - 1) : NU_MAX);
+
+/** the blend's q, the experts' weighted noise W, their weighted disagreement B and the noise S
+ *  when they err together; reachBlend's V is W + B */
+export function terms7(ex: Experts, w: readonly number[]): { q: number; W: number; B: number; S: number } {
+  let q = 0;
+  for (let k = 0; k < ex.p.length; k++) q += w[k] * ex.p[k];
+  let W = 0;
+  let B = 0;
+  let S = 0;
+  for (let k = 0; k < ex.p.length; k++) {
+    const p = ex.p[k];
+    const v = p * (1 - p) / (ex.c[k] + 1);
+    W += w[k] * v;
+    B += w[k] * (p - q) ** 2;
+    S += w[k] * Math.sqrt(v);
+  }
+  return { q, W, B, S };
+}
+
 /** every candidate's range from the mix of the look before and learning's p and alpha */
 export function ranges7(m: ReachMix, p: number, alpha: number): Record<Cand7, { lo: number; hi: number }> {
-  const ex = reachExperts(m, p, alpha);
+  return rangesOf7(m, reachExperts(m, p, alpha));
+}
+
+function rangesOf7(m: ReachMix, ex: Experts): Record<Cand7, { lo: number; hi: number }> {
+  const b = reachBlend(ex, m.w);
+  const { W, B, S } = terms7(ex, m.w);
   let nuW = 0;
   let top = 0;
   for (let k = 0; k < m.w.length; k++) {
@@ -66,6 +100,10 @@ export function ranges7(m: ReachMix, p: number, alpha: number): Record<Cand7, { 
     wsum: wilson(m.q, clampNu(nuW)),
     slow: wilson(m.e, SLOW_C),
     heavy: wilson(m.q, clampNu(ex.c[top])),
+    x2: wilson(b.q, clampNu(2 * b.nu)),
+    corr: wilson(b.q, nuOf(b.q, S * S)),
+    excess: wilson(b.q, nuOf(b.q, S * S + Math.max(0, B - W))),
+    calm: B <= W ? wilson(b.q, clampNu(nuW)) : wilson(b.q, b.nu),
   };
 }
 
@@ -76,6 +114,7 @@ export interface Bench7Card {
   whole: Record<Cand7, Part7>;
   after: Record<Cand7, Part7> | null;       // drift only: the outcomes at looks >= DRIFT_AT
   lag: Record<Cand7, number | null> | null; // drift only
+  off: number;                              // the largest |b.q - m.q| over the scored outcomes
 }
 
 class Tally {
@@ -104,10 +143,13 @@ export function runBench7(name: Scenario7Name, seed: number): Bench7Card {
   const since = each(() => 0);
   const found = each(() => false);
   let bad = 0;
+  let off = 0;
   const look = (a: ReachSeen): void => {
     if (a.id !== dev || a.m === null) return;
     const rate = rate7(name, a.i);
-    const rs = ranges7(a.m, a.p, a.alpha);
+    const ex = reachExperts(a.m, a.p, a.alpha);
+    off = Math.max(off, Math.abs(reachBlend(ex, a.m.w).q - a.m.q));
+    const rs = rangesOf7(a.m, ex);
     for (const c of CANDIDATES7) {
       const { lo, hi } = rs[c];
       if (!(lo >= 0 && lo <= hi && hi <= 1)) bad++;
@@ -123,7 +165,7 @@ export function runBench7(name: Scenario7Name, seed: number): Bench7Card {
   const looks = name === 'drift' ? drift(seed) : scenario2(name, seed);
   runBench2(fromSnapshots(looks), { eachReach: look });
   const isDrift = name === 'drift';
-  return { name, seed, bad, whole: parts(whole), after: isDrift ? parts(after) : null, lag: isDrift ? lag : null };
+  return { name, seed, bad, whole: parts(whole), after: isDrift ? parts(after) : null, lag: isDrift ? lag : null, off };
 }
 
 // ---- the words

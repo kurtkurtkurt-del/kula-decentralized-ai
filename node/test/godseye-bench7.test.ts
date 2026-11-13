@@ -1,10 +1,11 @@
-// the brain bench v7 (L11 P62): reach's 80% range, today's and four candidates, on steady, far and a
-// drift (test/brain-bench/bench7.ts), seeds 1-5. Only the bench's soundness is asserted; the rows
-// and the lines I1-I3 are printed for L12 to read, never asserted. Their bounds are predictions.
+// the brain bench v7 (L11 P62, L12 P64): reach's 80% range, today's and eight candidates, on steady,
+// far and a drift (test/brain-bench/bench7.ts), seeds 1-5. Only the bench's soundness is asserted; the
+// rows, off, the lines I1-I3, J1-J3 and pick2 are printed to read, never asserted. Their bounds are
+// predictions.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { runBench7, wilson, part7Text, CANDIDATES7, SCENARIOS7, DEVICE7, type Bench7Card, type Cand7, type Part7, type Scenario7Name } from './brain-bench/bench7.ts';
+import { runBench7, wilson, nuOf, terms7, part7Text, CANDIDATES7, SCENARIOS7, DEVICE7, type Bench7Card, type Cand7, type Part7, type Scenario7Name } from './brain-bench/bench7.ts';
 import { runBench2, fromSnapshots } from './brain-bench/bench2.ts';
 import { scenario2, reachRate } from './brain-bench/synth2.ts';
 import { reachBlend, type Experts } from '../src/godseye/branches/reach.ts';
@@ -54,6 +55,20 @@ test('bench7: the copied wilson gives reachBlend\'s lo and hi on three inputs', 
   }
 });
 
+test('bench7: nuOf of terms7\'s W + B is reachBlend\'s nu on the three inputs', () => {
+  const inputs: [Experts, number[]][] = [
+    [{ p: [0.95, 0.9, 0.93, 0.96], c: [400, 9, 39, 380] }, [0.4, 0.1, 0.2, 0.3]],
+    [{ p: [0.5, 0.5, 0.5, 0.5], c: [1, 9, 39, 1] }, [0.25, 0.25, 0.25, 0.25]],
+    [{ p: [0.7, 0.2, 0.95, 0.4], c: [12, 3, 39, 5] }, [0.1, 0.6, 0.05, 0.25]],
+  ];
+  for (const [ex, w] of inputs) {
+    const b = reachBlend(ex, w);
+    const t = terms7(ex, w);
+    const nu = nuOf(t.q, t.W + t.B);
+    assert.ok(Math.abs(nu - b.nu) <= 1e-9 * Math.abs(b.nu), `nu ${nu} vs ${b.nu}`);
+  }
+});
+
 test('bench7: now on steady seed 1 is bench2\'s cover80 and width80', () => {
   const b2 = runBench2(fromSnapshots(scenario2('reach', 1)), { rate: (id: string) => reachRate('reach', id) }).reach.steady;
   const now = card('reach', 1).whole.now;
@@ -94,4 +109,21 @@ test('bench7: the rows and the lines I1-I3 (printed, never asserted)', () => {
   const ranked = [...both].sort((a, b) => score3(a) - score3(b));
   console.log(`I3 (mean score over steady, far and drift): ${CANDIDATES7.map((c) => `${c} ${score3(c).toFixed(4)}`).join(' \u{b7} ')}`);
   console.log(`I3: ${ranked.length ? `pick: ${ranked[0]}` : 'pick: none (now stays)'}`);
+
+  // L12 P64: off, J1-J3 and pick2
+  const off = (name: Scenario7Name): number => Math.max(...SEEDS.map((seed) => card(name, seed).off));
+  console.log(`off (the largest |b.q - m.q| over seeds): ${SCENARIOS7.map((n) => `${n} ${off(n).toExponential(3)}${off(n) > 1e-4 ? ' (over 1e-4)' : ''}`).join(' \u{b7} ')}`);
+  const j1 = (cand: Cand7): boolean => (steady(cand).cover as number) >= 0.75 && (far(cand).cover as number) >= 0.75;
+  const j2 = i2;
+  const j3 = (cand: Cand7): boolean => score3(cand) < score3('now') && (after(cand).score as number) <= 1.10 * (after('now').score as number);
+  console.log(`J1 (cover on steady >= 0.75 and on far >= 0.75): ${CANDIDATES7.map((c) => `${c} ${yes(j1(c))}`).join(' \u{b7} ')}`);
+  console.log(`J2 (after the shift cover >= 0.60 and every lag <= 100): ${CANDIDATES7.map((c) => `${c} ${yes(j2(c))}`).join(' \u{b7} ')}`);
+  console.log(`J3 (mean score under now's, after the shift score <= 1.10 now's): ${CANDIDATES7.map((c) => `${c} ${yes(j3(c))}`).join(' \u{b7} ')}`);
+  const pool: Cand7[] = ['wsum', 'heavy', 'x2', 'corr', 'excess', 'calm'];
+  let pick2: Cand7 | null = null;
+  for (const c of CANDIDATES7) {
+    if (!pool.includes(c) || !(j1(c) && j2(c) && j3(c))) continue;
+    if (pick2 === null || score3(c) < score3(pick2)) pick2 = c;
+  }
+  console.log(`pick2: ${pick2 ?? 'none (now stays)'}`);
 });
