@@ -61,6 +61,8 @@ test('reachability: guesses scored only on a new look, a miss is noted, the stat
   const look = (reachable: boolean, newLook = true) => { if (newLook) checked++; b.observe(snap([dev({ reachable, checkedAt: checked })], checked * 5000) as any, null); };
   look(true);                                   // first look: nothing to score
   for (let i = 0; i < 9; i++) look(true);       // 9 hits
+  // L8 P45: 9 outcomes in the mix: the line is today's, byte for byte, with no next-look bit
+  assert.equal(b.view().lines[0], 'pixel \u{b7} reach right 100% of 9 \u{b7} \u{3b1} 0.3');
   look(true, false);                            // the same look again: not scored
   look(false);                                  // 1 miss
   const v = b.view();
@@ -69,6 +71,68 @@ test('reachability: guesses scored only on a new look, a miss is noted, the stat
   assert.deepEqual(v.rows[0], ['guesses scored', '10']);
   assert.match(v.lines[0], /^pixel · reach right 90% of 10 · α 0\.\d+/);
   assert.match(v.note!, /learned last \(\d\d:\d\d\): guessed pixel would answer, it did not(; reachability changes, it adapts faster \(α 0\.3 → 0\.\d+\))?$/);
+  // L8 P45: 10 outcomes in the mix: today's line plus the blend's next look and its 80% interval,
+  // built here from the saved notes
+  f.tick(60_000);
+  look(false, false);                           // the same look again: scores nothing, saves
+  const r = (f.stored as any).devices.p1.reach;
+  assert.equal(r.m.n, 10);
+  assert.ok(r.m.lo <= r.m.q && r.m.q <= r.m.hi, JSON.stringify(r.m));
+  const pct = (x: number) => Math.round(x * 100);
+  const today = `pixel \u{b7} reach right 90% of 10 \u{b7} \u{3b1} ${Math.round(r.alpha * 100) / 100}`;
+  assert.equal(b.view().lines[0], `${today} \u{b7} next look ${pct(r.m.q)}% (${pct(r.m.lo)}\u{2013}${pct(r.m.hi)}%)`);
+  assert.doesNotMatch(JSON.stringify(b.view()), /NaN|undefined|\[object|e\+\d/);
+});
+
+/** hand-written notes for one device p1 'pixel': its reach loop, with a blend m when given */
+const reachNotes = (p: number, alpha: number, m?: unknown) => ({
+  v: 1, lastGood: 1000,
+  devices: { p1: { name: 'pixel', seen: 1000, reach: { alpha, fast: 0, slow: 0, n: 0, emittedAlpha: alpha, p, hits: '', at: 1, ...(m ? { m } : {}) } } },
+});
+/** a sane blend with chance q and 12 outcomes (reach.ts's saneMix accepts it) */
+const mixQ = (q: number) => ({ n: 12, s: 10, t: [1, 1, 1, 8], last: 1, e: 0.8, w: [0.25, 0.25, 0.25, 0.25], q, lo: Math.max(0, q - 0.2), hi: Math.min(1, q + 0.05) });
+
+test('L8 P45: the reach guess is the blend\'s chance when the notes keep one, learning\'s own p without', () => {
+  const one = (notes: unknown, reachable: boolean) => {
+    const f = fakeCtx(notes);
+    const b = create(f.ctx as any);
+    b.observe(snap([dev({ reachable, checkedAt: 2 })], 2000) as any, null);
+    f.tick(60_000);
+    b.observe(snap([dev({ reachable, checkedAt: 2 })], 2000) as any, null);   // the same look: saves
+    return { hits: (f.stored as any).devices.p1.reach.hits as string, note: b.view().note! };
+  };
+  // p 0.2 says silent, the blend's 0.9 says answer; it answers
+  let o = one(reachNotes(0.2, 0.8, mixQ(0.9)), true);
+  assert.equal(o.hits, '1');
+  assert.doesNotMatch(o.note, /guessed/, 'no miss noted');
+  // p 0.9 says answer, the blend's 0.3 says silent; it does not answer
+  o = one(reachNotes(0.9, 0.3, mixQ(0.3)), false);
+  assert.equal(o.hits, '1');
+  assert.doesNotMatch(o.note, /guessed/, 'no miss noted');
+  // the same two without m: today's guess from p, a miss with its text
+  o = one(reachNotes(0.2, 0.8), true);
+  assert.equal(o.hits, '0');
+  assert.match(o.note, /guessed pixel would stay silent, it answered/);
+  o = one(reachNotes(0.9, 0.3), false);
+  assert.equal(o.hits, '0');
+  assert.match(o.note, /guessed pixel would answer, it did not/);
+});
+
+test('L8 P45: notes without m, or with a bad m, show no next-look bit until a new mix has 10 outcomes', () => {
+  const bad = { ...mixQ(0.9), w: [1, 0, 0, 0.5] };                     // weights not summing to 1
+  for (const [what, m] of [['no m', undefined], ['a bad m', bad]] as const) {
+    const notes: any = reachNotes(0.9, 0.3, m);
+    notes.devices.p1.reach.hits = '1'.repeat(40);
+    notes.devices.p1.reach.n = 40;
+    const f = fakeCtx(notes);
+    const b = create(f.ctx as any);
+    for (let k = 1; k <= 10; k++) {
+      b.observe(snap([dev({ checkedAt: 1 + k })], 1000 + k * 1000) as any, null);
+      const line = b.view().lines[0];
+      if (k < 10) assert.ok(!line.includes('next look'), `${what}, ${k} outcomes: ${line}`);
+      else assert.match(line, / \u{b7} next look \d+% \(\d+\u{2013}\d+%\)$/u, `${what}, 10 outcomes`);
+    }
+  }
 });
 
 test('speed: scored only when an answer was done, percent off, the estimate follows', () => {
@@ -797,6 +861,15 @@ test('corrupt notes: a bad device is dropped, a bad file starts fresh, never a t
     assert.equal(b.view().built, true);
     assert.doesNotMatch(JSON.stringify(b.view()), /NaN|undefined|\[object|e\+\d/, JSON.stringify(bad));
   }
+  // L8 P45: the same check covers a line with the next-look bit (a sane mix of 12 outcomes)
+  {
+    const f = fakeCtx(reachNotes(0.9, 0.3, mixQ(0.9)));
+    const b = create(f.ctx as any);
+    b.observe(snap([dev({ checkedAt: 2 })], 2000) as any, null);
+    const v = b.view();
+    assert.match(v.lines[0], / \u{b7} next look \d+% \(\d+\u{2013}\d+%\)$/u);
+    assert.doesNotMatch(JSON.stringify(v), /NaN|undefined|\[object|e\+\d/, v.lines[0]);
+  }
 });
 
 test('a far-forward look without devices forgets nothing: guesses continue, live and after a restart', () => {
@@ -1181,9 +1254,13 @@ const verdictLines = (es: { at: number; text: string }[]) =>
 const alphaLines = (es: { at: number; text: string }[]) =>
   es.filter((e) => /'s (reachability|speed) (is changing, it adapts faster|has settled, it guesses steadier)/.test(e.text));
 
+// L8 P45: one 600-hour run of a device missing 1 hour in 40, shared by the verdict test and the α
+// test below (they ran the same hours twice, only the directory differed); made on first use
+let miss40Run: ReturnType<typeof hourRun> | null = null;
+const miss40 = () => (miss40Run ??= hourRun(path.join(HOME, 'eye-noise40'), 600, (h) => h > 0 && h % 40 !== 0));
+
 test('through the real eye: a device missing 1 hour in 40 and one missing 1 hour in 80 say no verdict in 600 hours', () => {
-  const miss40 = hourRun(path.join(HOME, 'eye-noise40'), 600, (h) => h > 0 && h % 40 !== 0);
-  assert.deepEqual(verdictLines(miss40.emitted), [], '1 missing hour in 40 is noise, not a skill');
+  assert.deepEqual(verdictLines(miss40().emitted), [], '1 missing hour in 40 is noise, not a skill');
   const miss80 = hourRun(path.join(HOME, 'eye-noise80'), 600, (h) => h > 0 && h % 80 !== 0);
   assert.deepEqual(verdictLines(miss80.emitted), [], '1 missing hour in 80 is noise, not a skill');
 });
@@ -1217,7 +1294,7 @@ test('through the real eye: the same habit flip with the default forecast says n
 });
 
 test('the α feed lines do not flood: a factor of two, at most one an hour per device, in 600 hours', () => {
-  const run = hourRun(path.join(HOME, 'eye-alpha'), 600, (h) => h > 0 && h % 40 !== 0);
+  const run = miss40();                                              // the verdict test's run (L8 P45)
   const alpha = alphaLines(run.emitted);
   assert.ok(alpha.length >= 1, `α must move here or the test proves nothing:\n${run.emitted.map((e) => e.text).join('\n')}`);
   assert.ok(alpha.length <= 100, `α lines over 600 hours: ${alpha.length} (was 136 before the pacing)`);

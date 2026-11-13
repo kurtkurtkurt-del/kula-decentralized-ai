@@ -209,14 +209,41 @@ const HEAD = {
   ],
 };
 
+// L8 P45: learning guesses with the blend's chance (m.q, else p), so on these 60 looks the hits are
+// built below look by look, and what reads them moved; derived from a run of P45's learning.ts and
+// checked against the hits the test builds. alpha, fast, slow, n, emittedAlpha, p, at, pa, rows,
+// last, good and events are HEAD's: the guess changes no number learning learns from.
+const P45 = {
+  stat: 'reachability right 68%',     // (48 + 32) of 118 hits
+  gauge: 68,
+  lines: [
+    'alpha \u{b7} reach right 81% of 59 \u{b7} \u{3b1} 0.75 \u{b7} next look 62% (22\u{2013}90%)',
+    'beta \u{b7} reach right 54% of 59 \u{b7} \u{3b1} 0.8 \u{b7} next look 54% (33\u{2013}73%)',
+  ],
+};
+const noHits = (r: any) => { const { hits: _h, ...rest } = r; return rest; };
+const pct = (x: number) => Math.round(x * 100);
+const rate = (h: string) => [...h].filter((c) => c === '1').length / h.length;
+
 test('through learning.ts: the notes gain reach.m, and everything learning says is what it said before', () => {
   const { s, b } = seat();
   const pa: number[] = [];
+  // the hits as the guess makes them: from the m.q (else p) saved at the look before
+  const want = { a: '', b: '' };
+  let prev: any = null;
   for (let i = 0; i < A.length; i++) {
     s.t = 60_000 * (i + 1);
     b.observe(look(s.t, i) as any, null);
     const st = s.stored as any;
     pa.push(st?.devices?.a?.reach?.p);
+    if (prev) {
+      for (const [id, seq] of [['a', A], ['b', B]] as const) {
+        const r = prev.devices[id].reach;
+        const guess = (r.m ? r.m.q : r.p) >= 0.5 ? '1' : '0';
+        want[id] += guess === seq[i] ? '1' : '0';
+      }
+    }
+    prev = st;
     if (i === 1) {
       for (const id of ['a', 'b']) {
         const m = st.devices[id].reach.m;
@@ -226,14 +253,25 @@ test('through learning.ts: the notes gain reach.m, and everything learning says 
     }
   }
   const st = s.stored as any;
-  assert.deepEqual(fields(st.devices.a.reach), HEAD.a);
-  assert.deepEqual(fields(st.devices.b.reach), HEAD.b);
+  assert.deepEqual(noHits(fields(st.devices.a.reach)), noHits(HEAD.a));
+  assert.deepEqual(noHits(fields(st.devices.b.reach)), noHits(HEAD.b));
+  assert.equal(st.devices.a.reach.hits, want.a);
+  assert.equal(st.devices.b.reach.hits, want.b);
   assert.equal(pa.join(','), HEAD.pa);
   const v = b.view();
-  assert.equal(v.stat, HEAD.stat);
-  assert.equal(v.gauge, HEAD.gauge);
+  // the stat, gauge and lines read from the built hits and the saved m
+  const both = want.a + want.b;
+  assert.equal(P45.stat, `reachability right ${pct(rate(both))}%`);
+  assert.equal(P45.gauge, pct(rate(both)));
+  const line = (name: string, id: 'a' | 'b') => {
+    const r = st.devices[id].reach;
+    return `${name} \u{b7} reach right ${pct(rate(want[id]))}% of ${want[id].length} \u{b7} \u{3b1} ${r.alpha} \u{b7} next look ${pct(r.m.q)}% (${pct(r.m.lo)}\u{2013}${pct(r.m.hi)}%)`;
+  };
+  assert.deepEqual(P45.lines, [line('alpha', 'a'), line('beta', 'b')]);
+  assert.equal(v.stat, P45.stat);
+  assert.equal(v.gauge, P45.gauge);
   assert.deepEqual(v.rows, HEAD.rows);
-  assert.deepEqual(v.lines, HEAD.lines);
+  assert.deepEqual(v.lines, P45.lines);
   assert.ok(v.note!.endsWith(`): ${HEAD.last.text}`), v.note!);
   assert.deepEqual(st.last, HEAD.last);
   assert.equal(st.good, HEAD.good);
@@ -270,8 +308,14 @@ test('through learning.ts: old notes without m get one at the next probe; a bad 
     assert.ok(m !== null, `${id} has a sane m again`);
     assert.equal(m!.n, 1, `${id}: a fresh mix, one probe`);
     assert.equal(st.devices[id].reach.n, before[id].n + 1);
-    assert.deepEqual(fields(st.devices[id].reach), fields((twin.s.stored as any).devices[id].reach));
+    // L8 P45: the guess reads m.q when there is one, so the twin's hits may differ: left out here
+    assert.deepEqual(noHits(fields(st.devices[id].reach)), noHits(fields((twin.s.stored as any).devices[id].reach)));
   }
-  assert.deepEqual(next.b.view(), twin.b.view());
+  // L8 P45: the twin's mix has 10 outcomes, so its lines carry the next-look bit; the fresh mixes
+  // have 1 and carry none. Without the bit, the view is the twin's (on look 10 both guesses agree).
+  const nv = next.b.view(), tv = twin.b.view();
+  for (const l of nv.lines) assert.ok(!l.includes('next look'), l);
+  for (const l of tv.lines) assert.match(l, / \u{b7} next look \d+% \(\d+\u{2013}\d+%\)$/u);
+  assert.deepEqual(nv, { ...tv, lines: tv.lines.map((l) => l.replace(/ \u{b7} next look \d+% \(\d+\u{2013}\d+%\)$/u, '')) });
   assert.equal(saneMix((twin.s.stored as any).devices.a.reach.m)!.n, 10);
 });

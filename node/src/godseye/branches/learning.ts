@@ -28,7 +28,9 @@
 // forgets until the next look is near it; a remembered seen later than the look is clamped.
 // Saves are paced on ctx.now() alone and re-anchor when it steps back.
 // Beside the reach guess each device keeps a blend of four experts (reach.ts, kept as reach.m),
-// stepped on the same probes; nothing shows it yet.
+// stepped on the same probes. The reach guess is the blend's chance q when the notes keep a mix
+// (learning's own p without one); from 10 outcomes in the mix the device line also says the next
+// look's chance and its 80% interval.
 // It only reads the snapshot; it never touches a device or the work. Notes: <dir>/learning.json.
 import type { Branch, BranchCtx, BranchView, Snapshot } from '../types.js';
 import { hhmm } from './util.js';
@@ -91,6 +93,7 @@ const fresh = (): LearningNotes => ({ v: 1, devices: Object.create(null), last: 
 const loop = (): Loop => ({ alpha: ALPHA_START, fast: 0, slow: 0, n: 0, emittedAlpha: ALPHA_START });
 const r2 = (x: number) => Math.round(x * 100) / 100;
 const r3 = (x: number) => Math.round(x * 1000) / 1000;
+const pct = (x: number) => Math.round(x * 100);
 const mean = (xs: number[]) => (xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : 0);
 const hitRate = (h: string) => (h.length ? [...h].filter((c) => c === '1').length / h.length : 0);
 const fmt2 = (x: number) => r2(x).toFixed(2);
@@ -398,7 +401,7 @@ export function create(ctx: BranchCtx): Branch {
     const mix = r.m ?? freshMix();                                 // the blend's experts before the outcome
     const ex = reachExperts(mix, r.p, r.alpha);
     r.at = checkedAt;
-    const guess = r.p >= 0.5 ? 1 : 0;
+    const guess = (r.m ? r.m.q : r.p) >= 0.5 ? 1 : 0;           // the blend's chance when the notes keep one
     r.hits = (r.hits + (guess === y ? '1' : '0')).slice(-HITS_MAX);
     const miss = guess !== y ? `guessed ${d.name} would ${guess ? 'answer' : 'stay silent'}, it ${y ? 'answered' : 'did not'}` : null;
     const old = tune(r, Math.abs(y - r.p));
@@ -560,7 +563,8 @@ export function create(ctx: BranchCtx): Branch {
         const r = d?.reach, s = d?.speed;
         return [
           name,
-          r ? (r.hits.length ? `reach right ${Math.round(hitRate(r.hits) * 100)}% of ${r.hits.length}` : 'reach: first look') + ` · α ${r2(r.alpha)}` : null,
+          r ? (r.hits.length ? `reach right ${Math.round(hitRate(r.hits) * 100)}% of ${r.hits.length}` : 'reach: first look') + ` · α ${r2(r.alpha)}`
+            + (r.m && r.m.n >= MIN_SCORED ? ` \u{b7} next look ${pct(r.m.q)}% (${pct(r.m.lo)}\u{2013}${pct(r.m.hi)}%)` : '') : null,
           s ? (s.errs.length ? `speed off ${Math.round(mean(s.errs) * 100)}%` : 'speed: first answer') + ` · guess ${r2(s.est)} tok/s · α ${r2(s.alpha)}` : null,
         ].filter(Boolean).join(' · ');
       });
