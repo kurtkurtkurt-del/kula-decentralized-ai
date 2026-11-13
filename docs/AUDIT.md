@@ -138,6 +138,8 @@ never green. This computer's own ledger is checked with `verifyChain` (again onl
 of its files changed). No prompts and no answers are in any of it: ledger lines hold who
 connected, on which channel, and whether they were let in.
 
+Across kula-node restarts `~/.kula-node/trust-heads.json` (`node/src/ui/trust-heads.ts`, mode 600) keeps one hash per device, the look before the last's `upTo`, and no ledger line, so the first look after a restart asks `?since=` it.
+
 Tests: `node/test/godseye-trust.test.ts` (real Ed25519 and P-256 keys, a real certificate,
 real signed lines: a changed line, a forged signature, a dropped line, a restart, too many
 wrong codes, a replay, the old protocol open, the engine's window).

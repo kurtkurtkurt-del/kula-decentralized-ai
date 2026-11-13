@@ -31,6 +31,7 @@ import { publicName } from '../devicenames.js';
 import { freeRamMB, measureBandwidth, sourceAddressTo, lanIPv4 } from '../sysinfo.js';
 import { serveModel } from '../modelserve.js';
 import { modelUrl, type UiModel } from './catalog.js';
+import { readHeads, writeHeads, startOf, nextHead } from './trust-heads.js';
 import { FULL_CATALOG, lineupView, type LineupView } from './lineup.js';
 import { Usage, type Use } from './usage.js';
 import { routePhotos, describePrompt, seenNote, partsOf, checkPhotos, DESCRIBE_CTX, DESCRIBE_TOKENS, type PhotoNote } from './vision.js';
@@ -47,6 +48,8 @@ export interface Reach { ok: boolean; ms?: number; reason?: string }
 // the window keeps the newest TRUST_WINDOW for god's eye's trust branch, which checks them. Every
 // line taken in after a since must link to the one before it (foldTrust); a look takes at most
 // TRUST_ROUNDS rounds of TRUST_LINES, so the window still holds the last line of the look before.
+// Across kula-node restarts only one hash per device is kept (trust-heads.ts): the upTo of the look
+// before the last, so the first look after a restart asks since it and needs no accept.
 export interface TrustLook {
   at: number; error: string | null;
   id: string | null; alg: string | null; pub: string | null; store: string | null; cert: string | null;
@@ -282,6 +285,7 @@ export interface EngineOptions {
   now?: () => number;                    // tests: the clock the qr's code expires by
   usage?: Usage;                         // where answers are counted; default: ~/.kula-node/usage.json
   pairedFile?: string;                   // this computer's own gate's paired list; default ~/.kula-node/paired (ledger and seen.json beside it)
+  trustHeadsFile?: string;               // one ledger hash per device kept across restarts (trust-heads.ts); default trust-heads.json beside pairedFile
 }
 
 // What a model takes in memory, run whole: the file, the kv cache for ctx, some slack.
@@ -342,6 +346,8 @@ export class Engine {
   private workers = new Map<string, WorkerLook>();
   // each device's security report (its GET /trust), by device (its first record's id)
   private trusts = new Map<string, TrustLook>();
+  // where each device's next look starts after a restart (trust-heads.ts), read at the first askTrust
+  private heads: { map: Map<string, string>; file: string; dirty: boolean; wroteAt: number } | null = null;
   // when the look last asked a device in use for its /trust (refreshInUse), by device
   private healthAskedAt = new Map<string, number>();
   private discovering: Promise<FoundRow[]> | null = null;
@@ -557,28 +563,42 @@ export class Engine {
   // GET /trust through a tunnel already open: only the ledger lines after the last one received,
   // at most TRUST_ROUNDS rounds, so the window keeps the line this look joined to (a device further
   // behind catches up over the next looks). A failed look keeps what was known; a worker without
-  // the route says so.
+  // the route says so. With nothing in memory (kula-node restarted, or the last look failed) the
+  // look starts from the hash kept on disk (trust-heads.ts); that seed never becomes trustOf.
   private async askTrust(p: Peer, apiPort: number, ms: number): Promise<void> {
     const id = this.groupId(p.id);
     let look = this.trusts.get(id) ?? null;
+    if (!this.heads) {
+      const file = this.opts.trustHeadsFile ?? path.join(path.dirname(this.opts.pairedFile ?? pairedFile()), 'trust-heads.json');
+      this.heads = { map: readHeads(file), file, dirty: false, wroteAt: 0 };
+    }
+    const heads = this.heads;
+    const start = startOf(look, heads.map.get(id) ?? null);
     // the first round of a look asks for the owner-blind proof too, when it is due; making it
     // costs the phone a keystore key, so not every look
     const challenge = attestDue(look, Date.now()) ? randomBytes(32).toString('hex') : null;
     try {
       for (let round = 0; round < TRUST_ROUNDS; round++) {
-        const q = [look && !look.error && look.upTo ? `since=${look.upTo}` : '', round === 0 && challenge ? `challenge=${challenge}` : ''].filter(Boolean).join('&');
+        const from = look && !look.error ? look : start;
+        const q = [from?.upTo ? `since=${from.upTo}` : '', round === 0 && challenge ? `challenge=${challenge}` : ''].filter(Boolean).join('&');
         const r = await fetch(`http://127.0.0.1:${apiPort}/trust${q ? `?${q}` : ''}`, { signal: AbortSignal.timeout(ms) });
         if (r.status === 404) { look = { ...(look ?? foldTrust(null, {}, Date.now())), at: Date.now(), error: OLD_WORKER }; break; }
         if (!r.ok) throw new Error(`it answered ${r.status}`);
         const b = await r.json();
-        look = foldTrust(look && !look.error ? look : null, b, Date.now(), p.fp ?? null);
+        look = foldTrust(from, b, Date.now(), p.fp ?? null);
         if (round === 0 && challenge) look.attest = foldAttest(b, challenge, Date.now());
         if (b?.ledger?.more !== true) break;
       }
     } catch (e) {
       if (!look) look = { ...foldTrust(null, {}, Date.now()), error: `no answer: ${(e as Error).message}` };
     }
-    if (look) this.trusts.set(id, look);
+    if (look) {
+      this.trusts.set(id, look);
+      const h = nextHead(start, look);
+      if (typeof h === 'string' && heads.map.get(id) !== h) { heads.map.set(id, h); heads.dirty = true; }
+      else if (h === null && heads.map.delete(id)) heads.dirty = true;
+      if (heads.dirty && Date.now() - heads.wroteAt >= 60_000 && writeHeads(heads.file, heads.map)) { heads.dirty = false; heads.wroteAt = Date.now(); }
+    }
   }
 
   /** What a device last said about its security (GET /trust), or null when never asked. */
@@ -737,7 +757,14 @@ export class Engine {
     for (const p of g) {
       this.reach.delete(p.id); this.held.delete(p.id); this.workers.delete(p.id); this.trusts.delete(p.id); this.heard.delete(p.id); this.heardAt.delete(p.id);
       if (p.cable) this.jobs.delete(p.cable.serial);
+      // the hash kept for it on disk goes too, read first when no look ran since kula-node started
+      if (!this.heads) {
+        const file = this.opts.trustHeadsFile ?? path.join(path.dirname(this.opts.pairedFile ?? pairedFile()), 'trust-heads.json');
+        this.heads = { map: readHeads(file), file, dirty: false, wroteAt: 0 };
+      }
+      if (this.heads.map.delete(p.id)) this.heads.dirty = true;
     }
+    if (this.heads?.dirty && writeHeads(this.heads.file, this.heads.map)) { this.heads.dirty = false; this.heads.wroteAt = Date.now(); }
     const ways = [row.ways.cable && 'cable', row.ways.wifi && 'wi-fi', row.ways.relay && 'relay'].filter(Boolean);
     this.note(`forgot ${row.name}${ways.length > 1 ? ` (${ways.join(' and ')})` : ''}`);
     return true;
@@ -1805,6 +1832,7 @@ export class Engine {
     this.watchTimer = null;
     await this.unload(true);
     await this.adbTool?.close().catch(() => {});
+    if (this.heads?.dirty && writeHeads(this.heads.file, this.heads.map)) this.heads.dirty = false;
   }
 }
 
