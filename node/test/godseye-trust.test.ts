@@ -597,3 +597,87 @@ test('G3: a split part that fails gets the card; a part holding no layers does n
   b.observe({ ...snap([eyeDev(d, trustOf(d, { attest: proof(false, DEBUG) }))]), work: split(0) } as any, null);
   assert.deepEqual(b.view().suggestions, []);
 });
+
+// ---- P60, G3 (13.11.2026): trust remembers a proof that held -----------------------------------
+
+test('G3: a device that proved and no longer does fails the check and says so once', () => {
+  const d = device();
+  d.add();
+  const GOOD = 'hardware key, locked, verified boot, official kula build: its owner cannot read jobs';
+  const said = (ev: string[]) => ev.filter((e) => /proved before \(1970-01-01\).*no longer does/.test(e));
+  // a phone: proved at 8_000, then the debug build twice
+  const p = branch();
+  const look = (b: any, attest: unknown, o: Record<string, unknown> = {}, work: unknown = undefined) => {
+    b.observe({ ...snap([eyeDev(d, attest === undefined ? trustOf(d) : trustOf(d, { attest }), o)]), ...(work ? { work } : {}) } as any, null);
+    const v = b.view();
+    assert.equal(v.report!.verdict, 'ok', 'owner-blind stays out of the verdict');
+    return v;
+  };
+  look(p.b, proof(true, GOOD));
+  assert.equal(p.notes().p1.proved, 8_000);
+  look(p.b, proof(false, DEBUG));
+  look(p.b, proof(false, DEBUG));
+  assert.equal(said(p.events).length, 1, p.events.join(' | '));
+  assert.equal(said(p.events)[0], `pixel: it proved before (1970-01-01) that its owner cannot read jobs, and no longer does: ${DEBUG}`);
+  assert.deepEqual([p.notes().p1.proved, p.notes().p1.provedDown], [8_000, true]);
+  look(p.b, proof(true, GOOD));
+  assert.equal(p.notes().p1.provedDown, false);
+  look(p.b, proof(false, DEBUG));
+  assert.equal(said(p.events).length, 2, 'a new fall after a proof that held says it again');
+
+  // a phone paired as a computer that proved once, then answers as a computer: it fails, once
+  const computer = { at: 8_000, ok: null, why: 'computer', text: 'a computer cannot prove this' };
+  const pc = branch();
+  look(pc.b, proof(true, GOOD), { kind: 'pc' });
+  const v = look(pc.b, computer, { kind: 'pc' }, running(['p1', 'mac']));
+  assert.deepEqual(check(v, 'owner-blind'), { k: 'owner-blind', ok: false, text: 'it sent no proof, though it has before: nothing shows its owner cannot read jobs' });
+  look(pc.b, computer, { kind: 'pc' }, running(['p1', 'mac']));
+  assert.equal(said(pc.events).length, 1);
+  assert.deepEqual(v.suggestions!.map((c: any) => [c.id, c.title]), [['trust:owner-blind:p1', 'pixel could read the jobs it runs']]);
+
+  // a computer that never proved: as today
+  const never = branch();
+  const nv = look(never.b, computer, { kind: 'pc' }, running(['p1', 'mac']));
+  assert.deepEqual(check(nv, 'owner-blind'), { k: 'owner-blind', ok: null, text: 'a computer cannot prove this' });
+  assert.deepEqual([never.events, nv.suggestions], [[], []]);
+
+  // proved, then what is not the device's fall: a stale proof, not asked yet, a proof that cannot be read
+  const quiet = (attest: unknown, text: RegExp) => {
+    const q = branch();
+    look(q.b, proof(true, GOOD));
+    const qv = look(q.b, attest);
+    assert.equal(check(qv, 'owner-blind').ok, null, String(attest));
+    assert.match(check(qv, 'owner-blind').text, text);
+    assert.deepEqual(q.events, [], String(attest));
+    assert.deepEqual([q.notes().p1.proved, q.notes().p1.provedDown], [8_000, false]);
+  };
+  quiet(proof(true, 'fine', 9_000 - 27 * 3_600_000), /not asked again since/);
+  quiet(null, /^not asked yet/);
+  quiet(undefined, /^not asked yet/);
+  quiet({ at: 'x', ok: true, text: 't' }, /could not be read/);
+
+  // created again from the saved notes: the memory survives, the same failing answer says nothing
+  const again = branchFrom(p.notes());
+  look(again.b, proof(false, DEBUG));
+  assert.deepEqual([again.notes().p1.proved, again.notes().p1.provedDown], [8_000, true]);
+  assert.deepEqual(again.events, []);
+});
+
+test('G3: notes without the proof memory, or with it out of shape, load as never proved', () => {
+  const d = device();
+  d.add();
+  for (const extra of [{}, { proved: 'x', provedDown: 'yes' }, { proved: -5 }]) {
+    const { b, notes, events } = branchFrom({ p1: { head: null, verified: 0, since: 0, at: 0, ...extra } });
+    b.observe(snap([eyeDev(d, trustOf(d, { attest: proof(false, DEBUG) }))]) as any, null);
+    assert.deepEqual([notes().p1.proved, notes().p1.provedDown], [0, false], JSON.stringify(extra));
+    assert.deepEqual(events, []);
+    assert.equal(b.view().report!.verdict, 'ok');
+  }
+});
+
+function branchFrom(saved: unknown) {
+  let notes: unknown = structuredClone(saved);
+  const events: string[] = [];
+  const b = create({ now: () => 9_000, load: <T>(f: T) => (structuredClone(notes) as T) ?? f, save: (x: unknown) => { notes = structuredClone(x); }, emit: (t: string) => events.push(t), peek: () => null, keys: nodeKeys });
+  return { b, events, notes: () => notes as any };
+}

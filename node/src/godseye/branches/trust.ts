@@ -27,6 +27,8 @@
 // device, informational for now: it never turns the verdict red or grey. A device in the running
 // cluster (or holding layers of a split) that fails it gets a warning card. A phone that sends no
 // proof fails it (a phone can make one); a friend's (circle) device that cannot say gets the card too.
+// It remembers the newest proof that held (P60, G3): a device that proved once counts as a phone, so
+// answering as a computer fails it, and a fall from a proof that held to a failure is said once.
 import type { Branch, BranchCtx, EyeDevice, EyeTrust, Snapshot, Suggestion, TrustCheck, TrustReport, Verdict } from '../types.js';
 import type { EyeKey, EyeKeys } from '../platform.js';
 import { fromBase64, sha256Hex } from '../hash.js';
@@ -133,9 +135,11 @@ interface Seen {
   lastUsual: number;            // that hour of day's usual rate when the last finished hour was a burst
   rising: boolean;              // the CUSUM said the rate went up over the last finished hours
   shorterRestart: boolean;      // the shorter fault was raised while a restart was still unconsumed
+  proved: number;               // the `at` of the newest owner-blind proof that held; 0: none
+  provedDown: boolean;          // it proved before and its check fails now (said once)
 }
 type Notes = Record<string, Seen>;
-const fresh = (): Seen => ({ head: null, verified: 0, since: 0, at: 0, restartSeen: null, fault: null, faultAt: null, faultLine: null, gap: false, held: null, seen: 0, count: 0, shrunkTo: null, rejAt: -1, rejTotal: 0, win: { start: 0, k: 0 }, burst: freshBurst(), lastBurst: 0, lastUsual: 0, rising: false, shorterRestart: false });
+const fresh = (): Seen => ({ head: null, verified: 0, since: 0, at: 0, restartSeen: null, fault: null, faultAt: null, faultLine: null, gap: false, held: null, seen: 0, count: 0, shrunkTo: null, rejAt: -1, rejTotal: 0, win: { start: 0, k: 0 }, burst: freshBurst(), lastBurst: 0, lastUsual: 0, rising: false, shorterRestart: false, proved: 0, provedDown: false });
 
 /** notes read back from disk, rebuilt as a null-prototype object so a device id like "__proto__"
  *  stays a key and never a prototype, or fresh notes when the file is not what this branch wrote:
@@ -176,6 +180,8 @@ function sane(x: unknown): Notes {
     v.lastUsual = Number.isFinite(v.lastUsual) ? Math.min(Math.max(0, v.lastUsual), LAMBDA_MAX) : 0;
     v.rising = v.rising === true;
     v.shorterRestart = v.shorterRestart === true;
+    v.proved = Math.min(Math.max(0, nnum(v.proved, 0)), ABSURD);
+    v.provedDown = v.provedDown === true;
     out[id] = v;
   }
   return out;
@@ -212,10 +218,12 @@ export function identityCheck(t: EyeTrust, keys: EyeKeys | null | undefined): Tr
 
 /** Owner-blind: what the device's last proof showed (attest.ts), as kula's engine kept it. The
  *  snapshot is not trusted: a field out of shape is no proof. */
-export function ownerBlindCheck(d: Pick<EyeDevice, 'kind'>, t: EyeTrust, now: number): TrustCheck {
+export function ownerBlindCheck(d: Pick<EyeDevice, 'kind'>, t: EyeTrust, now: number, proved = 0): TrustCheck {
   const k = 'owner-blind';
+  // a device that proved once (proved: the `at` of its newest proof that held) can make one: a phone
+  const phone = d.kind === 'phone' || proved > 0;
   const a = t.attest as unknown;
-  if (a == null || typeof a !== 'object') return { k, ok: null, text: d.kind === 'phone' ? 'not asked yet whether its owner can read jobs' : 'a computer cannot prove this' };
+  if (a == null || typeof a !== 'object') return { k, ok: null, text: phone ? 'not asked yet whether its owner can read jobs' : 'a computer cannot prove this' };
   const x = a as { at?: unknown; ok?: unknown; text?: unknown };
   if (typeof x.at !== 'number' || !Number.isFinite(x.at) || (x.ok !== true && x.ok !== false && x.ok !== null) || typeof x.text !== 'string' || !x.text || x.text.length > 300) {
     return { k, ok: null, text: 'its last proof could not be read' };
@@ -223,7 +231,9 @@ export function ownerBlindCheck(d: Pick<EyeDevice, 'kind'>, t: EyeTrust, now: nu
   const stale = now - x.at > ATTEST_STALE || x.at > now + HOUR;
   if (x.ok !== null && stale) return { k, ok: null, text: `its last proof is from ${day(x.at)}: not asked again since` };
   // a phone that answers as a computer would, or leaves the proof out, shows nothing (G3)
-  if (x.ok === null && !stale && d.kind === 'phone') return { k, ok: false, text: 'it sent no proof (a phone can make one): nothing shows its owner cannot read jobs' };
+  if (x.ok === null && !stale && phone) {
+    return { k, ok: false, text: d.kind === 'phone' ? 'it sent no proof (a phone can make one): nothing shows its owner cannot read jobs' : 'it sent no proof, though it has before: nothing shows its owner cannot read jobs' };
+  }
   return { k, ok: x.ok as boolean | null, text: x.text };
 }
 
@@ -404,6 +414,16 @@ export function create(ctx: BranchCtx): Branch {
       }
       s.win.k += nfresh;
     }
+    // owner-blind's memory: the newest proof that held, and a fall from it said once. ok null (a
+    // stale proof, one that cannot be read, not asked yet) is not the device's fall: nothing changes
+    const ob = ownerBlindCheck(d, t, ctx.now(), s.proved);
+    if (ob.ok === true) {
+      s.proved = Math.min((t.attest as { at: number }).at, ABSURD);
+      s.provedDown = false;
+    } else if (ob.ok === false && s.proved > 0 && !s.provedDown) {
+      s.provedDown = true;
+      ctx.emit(`${name}: it proved before (${day(s.proved)}) that its owner cannot read jobs, and no longer does: ${ob.text}`);
+    }
     return true;
   }
 
@@ -488,7 +508,7 @@ export function create(ctx: BranchCtx): Branch {
       checks.push(t!.store === 'keystore'
         ? { k: 'key', ok: true, text: 'its key is in the phone’s keystore and cannot be copied out' }
         : { k: 'key', ok: null, text: t!.store === 'file' ? 'its key is in a file on the device' : 'it did not say where its key is' });
-      checks.push(ownerBlindCheck(d, t!, ctx.now()));
+      checks.push(ownerBlindCheck(d, t!, ctx.now(), s.proved));
     }
     // the key's place is the device's word, not checked, and owner-blind is informational for now:
     // neither turns a device red or green
