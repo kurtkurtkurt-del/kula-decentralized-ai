@@ -117,8 +117,9 @@ Every worker answers `GET /trust` on its `api` channel, behind the gate (the con
 [GATE.md](GATE.md#get-trust)): its device id, its ledger key's public half and where that key
 lives, its gate certificate, whether it would still take a v1 hello, its ledger lines after
 the last one the computer has, and its refusals of the last day. kula's engine asks it through
-the same tunnel as `/status` at every probe (`askTrust` in `node/src/ui/engine.ts`) and keeps
-a window of the last 500 lines per device; god's eye's trust branch
+the same tunnel as `/status` at every probe (`askTrust` in `node/src/ui/engine.ts`), at most 2
+rounds of 200 lines a look, checks that each line links to the one before, and keeps a window of
+the last 500 lines per device (so the line the look joined to is still in it); god's eye's trust branch
 (`node/src/godseye/branches/trust.ts`) does the checking. It takes nothing on faith:
 
 | check | how | red when |

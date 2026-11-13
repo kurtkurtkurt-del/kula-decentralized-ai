@@ -9,7 +9,8 @@ const { nodeKeys, nodeKey } = await import('../src/godseye/node.ts');   // the c
 const { generate, fromPrivateKey, publicKeyDer } = await import('../src/audit/key.ts');
 const { makeLine, GENESIS, sha256Hex } = await import('../src/audit/ledger.ts');
 const { selfSigned, newP256, fingerprint } = await import('../src/tls.ts');
-const { foldTrust, TRUST_WINDOW } = await import('../src/ui/engine.ts');
+const { foldTrust, TRUST_WINDOW, TRUST_LINES, TRUST_ROUNDS } = await import('../src/ui/engine.ts');
+const { ownerBlind } = await import('../src/attest.ts');
 
 function device(key = generate()) {
   const certDer = selfSigned(newP256(), key.id);
@@ -193,21 +194,29 @@ test('the whole answer: an older pairing is red, a device not asked yet is "not 
 });
 
 test('the engine folds /trust answers: new lines join the window, a ledger that no longer holds the line asked for starts it again', () => {
+  // (P43: the lines were 'a', 'b', 'c', which name no prev. The engine now checks every link after
+  // a since, so they are real chained ledger lines; the meaning of each step is unchanged.)
+  const d = device();
+  for (let i = 0; i < 3; i++) d.add();
+  const [a, b, c] = d.lines;
+  const e = device();
+  for (let i = 0; i < 1 + 4 * 200; i++) e.add();
+  const x = e.lines[0];
   const body = (lines: string[], found: boolean | null, more = false) => ({ v: 1, id: 'a'.repeat(32), key: { alg: 'ed25519', pub: 'AA==', store: 'file' }, cert: null, gate: { v1: false, tls: true, paired: 1 }, ledger: { count: 9, head: 'c'.repeat(64), self: 'ok', found, more, lines }, rejects: { day: { 'not paired': 2, bad: 'x' }, last: [{ t: 1, why: 'not paired', peer: '1.2.3.4' }] } });
-  let t = foldTrust(null, body(['a', 'b'], null), 10);
-  assert.deepEqual(t.lines, ['a', 'b']);
+  let t = foldTrust(null, body([a, b], null), 10);
+  assert.deepEqual(t.lines, [a, b]);
   assert.deepEqual(t.rejectsDay, { 'not paired': 2 });
   assert.equal(t.restartedAt, null);
-  assert.equal(t.upTo, sha256Hex('b'), 'the next look starts after the last line received, not at the head');
-  t = foldTrust(t, body(['c'], true), 20);
-  assert.deepEqual(t.lines, ['a', 'b', 'c']);
-  assert.equal(foldTrust(t, body([], true), 21).upTo, sha256Hex('c'), 'nothing new: still after c');
-  t = foldTrust(t, body(['x'], false), 30);
-  assert.deepEqual(t.lines, ['x']);
+  assert.equal(t.upTo, sha256Hex(b), 'the next look starts after the last line received, not at the head');
+  t = foldTrust(t, body([c], true), 20);
+  assert.deepEqual(t.lines, [a, b, c]);
+  assert.equal(foldTrust(t, body([], true), 21).upTo, sha256Hex(c), 'nothing new: still after c');
+  t = foldTrust(t, body([x], false), 30);
+  assert.deepEqual(t.lines, [x]);
   assert.equal(t.restartedAt, 30);
-  const many = Array.from({ length: 200 }, (_, i) => `l${i}`);
-  for (let i = 0; i < 4; i++) t = foldTrust(t, body(many, true), 40 + i);
+  for (let i = 0; i < 4; i++) t = foldTrust(t, body(e.lines.slice(1 + i * 200, 201 + i * 200), true), 40 + i);
   assert.equal(t.lines.length, TRUST_WINDOW);
+  assert.equal(t.restartedAt, 30, 'every round linked: no new restart');
   assert.equal(foldTrust(null, { ledger: { head: 'not hex' } }, 1).head, null);
   // the pin stays in the engine: only whether the shown certificate matches it goes on
   const der = selfSigned(newP256(), 'a'.repeat(32));
@@ -219,24 +228,29 @@ test('the engine folds /trust answers: new lines join the window, a ledger that 
 });
 
 test('the engine folds /trust answers: an answer to a since that leaves out found (or sends null) is a ledger that started over, never a quiet gap', () => {
+  // (P43: 'a', 'b', 'c' became chained ledger lines, as above; found true now also needs the link)
+  const d = device();
+  for (let i = 0; i < 3; i++) d.add();
+  const [a, b, c] = d.lines;
+  const x = device().add();
   const body = (lines: string[], ledger: Record<string, unknown> = {}) => ({ v: 1, id: 'a'.repeat(32), key: { alg: 'ed25519', pub: 'AA==', store: 'file' }, cert: null, gate: { v1: false, tls: true, paired: 1 }, ledger: { count: 9, head: 'c'.repeat(64), self: 'ok', more: false, lines, ...ledger } });
   // the first answer: no since was asked (upTo null), so no found is no restart
-  const first = foldTrust(null, body(['a', 'b']), 10);
+  const first = foldTrust(null, body([a, b]), 10);
   assert.equal(first.restartedAt, null);
-  assert.equal(foldTrust(null, body(['a'], { found: null }), 10).restartedAt, null);
+  assert.equal(foldTrust(null, body([a], { found: null }), 10).restartedAt, null);
   assert.ok(first.upTo, 'the next look asks since the last line');
   // the next look asked since=upTo: an answer without found, or with found null, cannot say it holds the line
   for (const ledger of [{}, { found: null }, { found: 'yes' }, { found: 1 }]) {
-    const t = foldTrust(first, body(['x'], ledger), 20);
+    const t = foldTrust(first, body([x], ledger), 20);
     assert.equal(t.restartedAt, 20, JSON.stringify(ledger));
-    assert.deepEqual(t.lines, ['x'], 'the window starts again');
+    assert.deepEqual(t.lines, [x], 'the window starts again');
   }
-  assert.equal(foldTrust(first, body(['c'], { found: true }), 20).restartedAt, null, 'found true: the chain goes on');
-  assert.equal(foldTrust(first, body(['x'], { found: false }), 20).restartedAt, 20);
+  assert.equal(foldTrust(first, body([c], { found: true }), 20).restartedAt, null, 'found true: the chain goes on');
+  assert.equal(foldTrust(first, body([x], { found: false }), 20).restartedAt, 20);
   // a look that had nothing to ask since (no upTo: nothing received yet) sets no restart either
   const empty = foldTrust(null, body([]), 5);
   assert.equal(empty.upTo, null);
-  assert.equal(foldTrust(empty, body(['a']), 6).restartedAt, null);
+  assert.equal(foldTrust(empty, body([a]), 6).restartedAt, null);
 });
 
 // ---- owner-blind (11.11.2026): can the device's owner read the jobs it runs ---------------------
@@ -263,7 +277,11 @@ test('owner-blind: one line per device, shown and never counted in the verdict',
   assert.equal(check(look(undefined), 'owner-blind').text, 'not asked yet whether its owner can read jobs');
   assert.deepEqual(check(look(null, { kind: 'pc' }), 'owner-blind'), { k: 'owner-blind', ok: null, text: 'a computer cannot prove this' });
   assert.equal(check(look({ at: 8_000, ok: null, why: 'computer', text: 'a computer cannot prove this' }, { kind: 'pc' }), 'owner-blind').ok, null);
-  assert.equal(check(look({ at: 8_000, ok: null, why: 'old', text: 'an older kula: it cannot prove this yet' }), 'owner-blind').text, 'an older kula: it cannot prove this yet');
+  // (P43, G3: a phone that sends no proof was "an older kula: it cannot prove this yet", ok null; a
+  // phone can make one, so it now fails the check, still informational)
+  const old = look({ at: 8_000, ok: null, why: 'old', text: 'an older kula: it cannot prove this yet' });
+  assert.deepEqual(check(old, 'owner-blind'), { k: 'owner-blind', ok: false, text: 'it sent no proof (a phone can make one): nothing shows its owner cannot read jobs' });
+  assert.equal(old.report!.verdict, 'ok', 'still never in the verdict');
   const { b } = branch();
   b.observe(snap([eyeDev(d, trustOf(d, { attest: proof(true, 'fine', 9_000 - 27 * 3_600_000) }))]) as any, null);
   assert.deepEqual([check(b.view(), 'owner-blind').ok, /not asked again since/.test(check(b.view(), 'owner-blind').text)], [null, true]);
@@ -361,4 +379,221 @@ test('the engine asks for a proof once an hour, and keeps only what the check fo
   assert.equal(no.ok, false);
   assert.equal(no.why, 'cannot');
   assert.deepEqual(Object.keys(no), ['at', 'ok', 'why', 'text'], 'no chain kept');
+});
+
+// ---- G1 (13.11.2026): a rewritten ledger is never all clear --------------------------------------
+
+/** one /trust answer of device [d], as the worker sends it */
+const answer = (d: Dev, lines: string[], found: boolean | null, more = false) => ({
+  v: 1, id: d.key.id, key: { alg: d.key.alg, pub: publicKeyDer(d.key.publicKey).toString('base64'), store: 'keystore' }, cert: d.certDer.toString('base64'),
+  gate: { v1: false, tls: true, paired: 1 },
+  ledger: { count: d.lines.length, head: sha256Hex(d.lines.at(-1) ?? GENESIS), self: 'ok', found, more, lines },
+  rejects: { day: {}, last: [] },
+});
+/** the engine's look as the branch sees it (the snapshot leaves upTo out) */
+const eyeTrust = (look: any) => { const { upTo: _u, ...rest } = look; return rest; };
+/** one look of the engine at an honest worker: at most TRUST_ROUNDS rounds, each the next
+ *  TRUST_LINES after the line asked for (GATE.md: no since, or a since not found, gets the last 200) */
+function lookAt(d: Dev, was: any, at: number) {
+  let look = was;
+  for (let r = 0; r < TRUST_ROUNDS; r++) {
+    const since = look?.upTo ?? null;
+    const idx = since ? d.lines.findIndex((l) => sha256Hex(l) === since) : -1;
+    const start = since && idx >= 0 ? idx + 1 : Math.max(0, d.lines.length - TRUST_LINES);
+    const got = d.lines.slice(start, start + TRUST_LINES);
+    const more = start + got.length < d.lines.length;
+    look = foldTrust(look, answer(d, got, since ? idx >= 0 : null, more), at + r, d.fp);
+    if (!more) break;
+  }
+  return look;
+}
+const ledgerOf = (b: any) => check(b.view(), 'ledger');
+
+test('G1: a rewritten ledger pushed past the window is bad, with the started-over text', () => {
+  const d = device();
+  for (let i = 0; i < 3; i++) d.add();
+  const { b } = branch();
+  let look = foldTrust(null, answer(d, d.lines, null), 100, d.fp);
+  b.observe(snap([eyeDev(d, eyeTrust(look))]) as any, null);
+  assert.equal(b.view().report!.verdict, 'ok');
+  // since=<head>, found true, 600 lines of a new chain that does not link to the head
+  const forged = { ...device(d.key), certDer: d.certDer, fp: d.fp };   // the same key and certificate, a new chain
+  forged.add('pair', { fp: 'f'.repeat(8) });
+  for (let i = 0; i < 599; i++) forged.add();
+  for (let r = 0; r < 3; r++) look = foldTrust(look, answer(forged, forged.lines.slice(r * 200, r * 200 + 200), true, r < 2), 200 + r, d.fp);
+  assert.equal(look.restartedAt, 200, 'the engine saw the broken link');
+  b.observe(snap([eyeDev(d, eyeTrust(look))]) as any, null);
+  assert.equal(b.view().report!.verdict, 'bad');
+  assert.match(ledgerOf(b).text, /^its ledger started over at .* \(cleared on the device, or rewritten\)$/);
+});
+
+test('G1: a fork in the middle of a round, then two more rounds: bad', () => {
+  const d = device();
+  for (let i = 0; i < 3; i++) d.add();
+  const { b } = branch();
+  let look = foldTrust(null, answer(d, d.lines, null), 100, d.fp);
+  b.observe(snap([eyeDev(d, eyeTrust(look))]) as any, null);
+  const honest = d.lines.length;
+  for (let i = 0; i < 100; i++) d.add();
+  const fork = device(d.key);
+  fork.add('pair', { fp: 'ab' });
+  for (let i = 0; i < 499; i++) fork.add();
+  const sent = [...d.lines.slice(honest), ...fork.lines];   // 100 honest lines, then 500 of another chain
+  for (let r = 0; r < 3; r++) look = foldTrust(look, answer(d, sent.slice(r * 200, r * 200 + 200), true, r < 2), 200 + r, d.fp);
+  assert.equal(look.restartedAt, 200);
+  assert.equal(look.lines[0], fork.lines[0], 'the window starts again at the broken link');
+  b.observe(snap([eyeDev(d, eyeTrust(look))]) as any, null);
+  assert.equal(b.view().report!.verdict, 'bad');
+  assert.match(ledgerOf(b).text, /started over/);
+});
+
+test('G1: an honest catch-up of 1440 lines over 4 looks of 2 rounds is ok at every look, with no gap', () => {
+  assert.equal(TRUST_ROUNDS, 2);
+  const d = device();
+  for (let i = 0; i < 3; i++) d.add();
+  const { b, events, notes } = branch();
+  let look = lookAt(d, null, 100);
+  b.observe(snap([eyeDev(d, eyeTrust(look))]) as any, null);
+  for (let i = 0; i < 1440; i++) d.add();   // a day away: a line a minute
+  for (let n = 0; n < 4; n++) {
+    look = lookAt(d, look, 1_000 + n * 10);
+    assert.equal(look.restartedAt, null);
+    b.observe(snap([eyeDev(d, eyeTrust(look))]) as any, null);
+    assert.equal(b.view().report!.verdict, 'ok', `look ${n + 1}: ${ledgerOf(b).text}`);
+    assert.equal(notes().p1.gap, false);
+  }
+  assert.equal(notes().p1.verified, 3 + 1440);
+  assert.equal(notes().p1.head, sha256Hex(d.lines.at(-1)!));
+  assert.deepEqual(events, []);
+});
+
+test('G1: a look of 2 rounds keeps the line it joined to in the window (500 before, 400 new)', () => {
+  const d = device();
+  for (let i = 0; i < 900; i++) d.add();
+  const was = { ...foldTrust(null, {}, 1), lines: d.lines.slice(0, 500), upTo: sha256Hex(d.lines[499]) };
+  let look: any = was;
+  for (let r = 0; r < TRUST_ROUNDS; r++) look = foldTrust(look, answer(d, d.lines.slice(500 + r * 200, 700 + r * 200), true, true), 10 + r);
+  assert.equal(look.restartedAt, null);
+  assert.equal(look.lines.length, TRUST_WINDOW);
+  assert.equal(look.lines[0], d.lines[400]);
+  assert.ok(look.lines.includes(d.lines[499]), 'the line the look started after is still in the window');
+});
+
+test('G1: after the engine restarts, a window not joined to the head is not checked until the person accepts', () => {
+  const d = device();
+  for (let i = 0; i < 100; i++) d.add();
+  const { b, events, notes } = branch();
+  b.observe(snap([eyeDev(d, eyeTrust(lookAt(d, null, 100)))]) as any, null);
+  const head = notes().p1.head;
+  assert.equal(notes().p1.verified, 100);
+  for (let i = 0; i < 400; i++) d.add();
+  // kula-node restarted: no since to ask, the last 200 lines; the head is 300 lines back
+  let look = foldTrust(null, answer(d, d.lines.slice(-200), null), 1_000, d.fp);
+  b.observe(snap([eyeDev(d, eyeTrust(look))]) as any, null);
+  const gapText = 'its ledger could not be joined to the 100 lines checked before: lines came while this computer was not looking. accept to carry on from here';
+  assert.equal(b.view().report!.verdict, 'unknown');
+  assert.deepEqual(ledgerOf(b), { k: 'ledger', ok: null, text: gapText });
+  assert.equal(b.view().report!.devices[0].accept, true);
+  assert.deepEqual([notes().p1.head, notes().p1.verified], [head, 100]);
+  assert.deepEqual(events, ['pixel: its ledger could not be joined to the lines checked before']);
+  // the next look: the same, and no second feed line
+  d.add();
+  look = lookAt(d, look, 2_000);
+  b.observe(snap([eyeDev(d, eyeTrust(look))]) as any, null);
+  assert.equal(b.view().report!.verdict, 'unknown');
+  assert.equal(ledgerOf(b).text, gapText);
+  assert.deepEqual([notes().p1.head, notes().p1.verified], [head, 100]);
+  assert.equal(events.length, 1);
+  // only the person's tap carries on from here; the next answer is checked from its first line
+  assert.equal(b.act!('accept', 'p1'), 'noted');
+  assert.equal(notes().p1.count, 501, 'the count high-water mark stays');
+  d.add();
+  look = lookAt(d, look, 3_000);
+  b.observe(snap([eyeDev(d, eyeTrust(look))]) as any, null);
+  assert.equal(b.view().report!.verdict, 'ok', ledgerOf(b).text);
+  assert.equal(notes().p1.verified, look.lines.length, 'counted from the window');
+  assert.equal(b.view().report!.devices[0].accept, false);
+});
+
+test('G1: after the engine restarts, a forged last 200 is unknown and never ok without an accept', () => {
+  const d = device();
+  for (let i = 0; i < 100; i++) d.add();
+  const { b } = branch();
+  b.observe(snap([eyeDev(d, eyeTrust(lookAt(d, null, 100)))]) as any, null);
+  const forged = { ...device(d.key), certDer: d.certDer, fp: d.fp };   // the same key and certificate, a new chain
+  forged.add('pair', { fp: 'cd' });
+  for (let i = 0; i < 299; i++) forged.add();
+  let look = foldTrust(null, answer(forged, forged.lines.slice(-200), null), 1_000, d.fp);
+  for (let n = 0; n < 4; n++) {
+    b.observe(snap([eyeDev(d, eyeTrust(look))]) as any, null);
+    assert.equal(b.view().report!.verdict, 'unknown', `look ${n + 1}`);
+    assert.match(ledgerOf(b).text, /could not be joined/);
+    forged.add();
+    look = lookAt(forged, look, 2_000 + n * 10);
+  }
+});
+
+test('G1: a window whose first line follows the head is joined: verified grows by the window', () => {
+  const d = device();
+  for (let i = 0; i < 100; i++) d.add();
+  const { b, events, notes } = branch();
+  b.observe(snap([eyeDev(d, eyeTrust(lookAt(d, null, 100)))]) as any, null);
+  for (let i = 0; i < 200; i++) d.add();
+  const look = foldTrust(null, answer(d, d.lines.slice(-200), null), 1_000, d.fp);
+  b.observe(snap([eyeDev(d, eyeTrust(look))]) as any, null);
+  assert.equal(b.view().report!.verdict, 'ok', ledgerOf(b).text);
+  assert.equal(notes().p1.verified, 300);
+  assert.equal(notes().p1.gap, false);
+  assert.deepEqual(events, []);
+});
+
+// ---- G3 (13.11.2026): no proof is said ---------------------------------------------------------
+
+test('G3: a phone running jobs that sends no proof (a computer\'s word, or none) gets the card', () => {
+  for (const attest of [null, undefined]) {
+    const r = ownerBlind({ attest, challenge: 'c'.repeat(64), id: 'a'.repeat(32), alg: 'ed25519', pub: 'AA==' }, { now: 8_000, signers: [], pkg: 'x', status: null });
+    assert.equal(r.ok, null);
+    const d = device();
+    d.add();
+    const { b } = branch();
+    b.observe({ ...snap([eyeDev(d, trustOf(d, { attest: { at: 8_000, ok: r.ok, why: r.why, text: r.text } }))]), work: running(['p1', 'mac']) } as any, null);
+    const v = b.view();
+    assert.equal(check(v, 'owner-blind').ok, false, String(attest));
+    assert.equal(v.report!.verdict, 'ok', 'owner-blind stays out of the verdict');
+    assert.deepEqual(v.suggestions!.map((c: any) => [c.id, c.title]), [['trust:owner-blind:p1', 'pixel could read the jobs it runs']]);
+  }
+});
+
+test('G3: a home computer that cannot prove gets no card; a circle computer does; a circle phone that proved does not', () => {
+  const d = device();
+  d.add();
+  const computer = { at: 8_000, ok: null, why: 'computer', text: 'a computer cannot prove this' };
+  const cards = (attest: unknown, o: Record<string, unknown>) => {
+    const { b } = branch();
+    b.observe({ ...snap([eyeDev(d, trustOf(d, { attest }), o)]), work: running(['p1', 'mac']) } as any, null);
+    return b.view().suggestions!;
+  };
+  assert.deepEqual(cards(computer, { kind: 'pc' }), [], 'home (no ring)');
+  assert.deepEqual(cards(computer, { kind: 'pc', ring: 'home' }), []);
+  assert.deepEqual(cards(computer, { kind: 'pc', ring: 'circle' }), [{
+    id: 'trust:owner-blind:p1', kind: 'warn', weight: 1, title: 'pixel has not shown that its owner cannot read the jobs it runs',
+    why: 'a computer cannot prove this. Prompts reach it in plain text, so only give it work you would show its owner.',
+    action: { do: 'open', panel: 'branch', branch: 'trust' }, label: 'look',
+  }]);
+  assert.deepEqual(cards(proof(true, 'hardware key, locked, verified boot, official kula build: its owner cannot read jobs'), { ring: 'circle' }), []);
+  // a circle computer not running anything: no card
+  const { b } = branch();
+  b.observe({ ...snap([eyeDev(d, trustOf(d, { attest: computer }), { kind: 'pc', ring: 'circle' })]), work: running(['mac']) } as any, null);
+  assert.deepEqual(b.view().suggestions, []);
+});
+
+test('G3: a split part that fails gets the card; a part holding no layers does not', () => {
+  const d = device();
+  d.add();
+  const split = (mb: number) => ({ ...running([]), loaded: { ...running([]).loaded, mode: 'split', devices: [], parts: [{ id: 'mac', name: 'mac', local: true, mb: 900, layers: 10 }, { id: 'p1', name: 'pixel', local: false, mb, layers: mb ? 12 : 0 }] } });
+  const { b } = branch();
+  b.observe({ ...snap([eyeDev(d, trustOf(d, { attest: proof(false, DEBUG) }))]), work: split(1200) } as any, null);
+  assert.deepEqual(b.view().suggestions!.map((c: any) => c.id), ['trust:owner-blind:p1']);
+  b.observe({ ...snap([eyeDev(d, trustOf(d, { attest: proof(false, DEBUG) }))]), work: split(0) } as any, null);
+  assert.deepEqual(b.view().suggestions, []);
 });

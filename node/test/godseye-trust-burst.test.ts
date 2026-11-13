@@ -84,16 +84,17 @@ test('a ledger that got shorter: red with the shorter text, one feed line, kept 
   b.observe(snap([eyeDev(d, trustOf(d, { at: 1_000_000 }))]) as any, null);
   assert.equal(b.view().report!.verdict, 'ok');
   assert.equal(notes().p1.count, 40);
-  // the same key with a shorter chain: lines were removed on the device
-  const short = device(d.key);
-  for (let i = 0; i < 35; i++) short.add();
-  b.observe(snap([eyeDev(short, trustOf(short, { at: 2_000_000 }))]) as any, null);
+  // the same chain reported 35 lines long: lines were removed on the device. (P43: this used a new
+  // 35-line chain with no restart flag; its first line no longer joins the head, so it is now a gap,
+  // "could not be joined", not checked. The count alone carries the shorter fault, as before.)
+  const shortOf = (at: number) => trustOf(d, { at, count: 35 });
+  b.observe(snap([eyeDev(d, shortOf(2_000_000))]) as any, null);
   assert.equal(b.view().report!.verdict, 'bad');
   assert.equal(check(b.view(), 'ledger').text, 'its ledger got shorter: 40 lines before, 35 now (lines were removed)');
   assert.equal(events.filter((e) => /got shorter/.test(e)).length, 1, 'one feed line, not one per look');
   assert.equal(events[0], 'pixel: its ledger got shorter: 40 lines before, 35 now (lines were removed)');
   // it stays red on the next look, without another line
-  b.observe(snap([eyeDev(short, trustOf(short, { at: 3_000_000 }))]) as any, null);
+  b.observe(snap([eyeDev(d, shortOf(3_000_000))]) as any, null);
   assert.equal(b.view().report!.verdict, 'bad');
   assert.equal(events.filter((e) => /got shorter/.test(e)).length, 1);
   assert.equal(b.act!('accept', 'p1'), 'noted');
@@ -175,11 +176,15 @@ test('an unaccepted line fault is kept: the shorter fault waits until it is acce
   for (let i = 0; i < 40; i++) d.add();
   const { b, events } = branch();
   b.observe(snap([eyeDev(d, trustOf(d, { at: 1_000_000 }))]) as any, null);
-  // a dropped line and a smaller count arrive together: the line fault wins and is kept
-  b.observe(snap([eyeDev(d, trustOf(d, { at: 2_000_000, count: 35, lines: [d.lines[0], d.lines[2]] }))]) as any, null);
+  // a dropped line and a smaller count arrive together: the line fault wins and is kept. (P43: the
+  // dropped line was the second of a window without the head, now a gap that checks nothing; it is
+  // the line after the head here, so the window still joins and the dropped line is caught.)
+  d.add(); d.add();
+  const dropped = [...d.lines.slice(0, 40), d.lines[41]];
+  b.observe(snap([eyeDev(d, trustOf(d, { at: 2_000_000, count: 35, lines: dropped }))]) as any, null);
   assert.match(check(b.view(), 'ledger').text, /chain is broken/);
   assert.ok(!events.some((e) => /got shorter/.test(e)));
-  b.observe(snap([eyeDev(d, trustOf(d, { at: 3_000_000, count: 35, lines: [d.lines[0], d.lines[2]] }))]) as any, null);
+  b.observe(snap([eyeDev(d, trustOf(d, { at: 3_000_000, count: 35, lines: dropped }))]) as any, null);
   assert.match(check(b.view(), 'ledger').text, /chain is broken/);
   // after the person accepts the line fault, the next smaller count raises the shorter fault
   assert.equal(b.act!('accept', 'p1'), 'noted');
@@ -601,7 +606,7 @@ test('a notes file of the wrong shape gives fresh notes, never a throw', () => {
   }
 });
 
-test('the notes are bounded: 168 finished hours per device, 40 devices', () => {
+test('the notes are bounded: 168 finished hours per device, 40 devices beyond those in the snapshot', () => {
   const d = device();
   d.add();
   const { b, notes } = branch();
@@ -616,14 +621,14 @@ test('the notes are bounded: 168 finished hours per device, 40 devices', () => {
   assert.equal(notes().p1.hist[0], 2, 'the two oldest finished hours were dropped');
   assert.equal(notes().p1.hist[167], 1);
 
-  // devices: at most 40 kept; the vanished one goes first, then the least recent of the live ones
+  // devices: past 40, the vanished one goes; the live ones all stay. (P43, G10: this said "with 42
+  // live devices the least recent live ones go"; a live device now never loses its notes.)
   const devs = [eyeDev(d, trustOf(d, { at: t0 + 171 * H }), { id: 'real' }), ...Array.from({ length: 41 }, (_, i) => mkDev(`q${i}`))];
   b.observe(snap(devs) as any, null);
   const ids = Object.keys(notes());
-  assert.equal(ids.length, 40);
+  assert.equal(ids.length, 42);
   assert.ok(!ids.includes('p1'), 'a vanished device goes before any live one');
-  assert.ok(!ids.includes('real'), 'with 42 live devices the least recent live ones go');
-  assert.ok(ids.includes('q40'));
+  assert.ok(ids.includes('real') && ids.includes('q0') && ids.includes('q40'), 'every live device stays');
 });
 
 test('the 40-device cap never drops a device that is in the snapshot, whatever a vanished one says', () => {
@@ -635,9 +640,71 @@ test('the 40-device cap never drops a device that is in the snapshot, whatever a
   const { b, notes } = branch(initial);
   b.observe(snap([...Array.from({ length: 40 }, (_, i) => mkDev(`a${i}`)), eyeDev(d, trustOf(d, { at: 1_000_000 }), { id: 'new' })]) as any, null);
   const ids = Object.keys(notes());
-  assert.equal(ids.length, 40);
+  // (P43, G10: this was 40, one live device dropped; now all 41 live devices stay)
+  assert.equal(ids.length, 41);
   assert.ok(!ids.includes('gone'), 'the vanished device goes first despite its far-forward seen');
-  assert.ok(ids.includes('new'));
+  assert.ok(ids.includes('new') && ids.includes('a0'));
+});
+
+// ---- G10 (13.11.2026): no device in the snapshot is forgotten -----------------------------------
+
+// a trust answer for device [i] of a large group, each with its own key and chain
+function many(n: number) {
+  return Array.from({ length: n }, () => { const d = device(); for (let i = 0; i < 3; i++) d.add(); return d; });
+}
+const devOf = (d: Dev, i: number, o: Record<string, unknown> = {}) => eyeDev(d, trustOf(d, o), { id: `p${i}`, name: `phone ${i}` });
+
+test('G10: 60 paired devices whose ledgers all start over in one look are all flagged', () => {
+  const ds = many(60);
+  const { b, notes } = branch();
+  for (let look = 0; look < 5; look++) b.observe(snap(ds.map((d, i) => devOf(d, i, { at: 1_000 + look }))) as any, null);
+  assert.equal(Object.keys(notes()).length, 60, 'every device in the snapshot keeps its notes');
+  // a new chain with the same key (its lines differ from the old ones: another kind)
+  const fresh = ds.map((d) => { const f = device(d.key); for (let i = 0; i < 3; i++) f.add('pair'); return f; });
+  b.observe(snap(fresh.map((d, i) => devOf(d, i, { at: 2_000, restartedAt: 2_000 }))) as any, null);
+  const flagged = b.view().report!.devices.filter((x: any) => x.verdict === 'bad').length;
+  assert.equal(flagged, 60);
+});
+
+test('G10: 45 in the snapshot and 10 absent: the 10 go and the 45 keep their heads; 30 and 20: the 10 longest unseen go', () => {
+  const ds = many(55);
+  const { b, notes } = branch();
+  b.observe(snap(ds.map((d, i) => devOf(d, i, { at: 1_000 }))) as any, null);
+  const heads = Object.fromEntries(ds.map((_, i) => [`p${i}`, notes()[`p${i}`].head]));
+  b.observe(snap(ds.slice(0, 45).map((d, i) => devOf(d, i, { at: 2_000 }))) as any, null);
+  let ids = Object.keys(notes());
+  assert.equal(ids.length, 45);
+  for (let i = 0; i < 45; i++) assert.equal(notes()[`p${i}`].head, heads[`p${i}`], `p${i} keeps its head`);
+  for (let i = 45; i < 55; i++) assert.ok(!ids.includes(`p${i}`));
+
+  // 50 known, last seen at different times; 30 are in the snapshot and 20 are not: the 10 of
+  // those 20 unseen the longest go
+  const known: any = Object.create(null);
+  for (let i = 0; i < 50; i++) known[`p${i}`] = { head: null, verified: 0, seen: i < 30 ? 9_000 : i < 40 ? 8_000 : 7_000 };
+  const r = branch(known);
+  r.b.observe(snap(ds.slice(0, 30).map((d, i) => devOf(d, i, { at: 3_000 }))) as any, null);
+  ids = Object.keys(r.notes());
+  assert.equal(ids.length, 40, '30 present and the 10 absent seen most recently');
+  for (let i = 0; i < 40; i++) assert.ok(ids.includes(`p${i}`), `p${i} stays`);
+});
+
+test('G10: the verdicts said do not grow with ids that come and go; a device back after being forgotten says no "all clear again"', () => {
+  const d = device();
+  d.add();
+  const { b, events, notes } = branch();
+  // p1 turns red (a replay), then leaves
+  b.observe(snap([eyeDev(d, trustOf(d, { at: 1_000, rejectsDay: { replay: 1 } }))]) as any, null);
+  assert.equal(b.view().report!.verdict, 'bad');
+  // 100 looks of new ids that each come once and leave again
+  const other = device();
+  other.add();
+  for (let i = 0; i < 100; i++) b.observe(snap([eyeDev(other, trustOf(other, { at: 2_000 + i }), { id: `x${i}`, name: `x${i}` })]) as any, null);
+  assert.ok(!('p1' in notes()), 'p1 was forgotten past the cap');
+  assert.ok(Object.keys(notes()).length <= 41);
+  // it comes back fine: it was forgotten, so nothing was said about it any more, and no "all clear again"
+  b.observe(snap([eyeDev(d, trustOf(d, { at: 9_000 }))]) as any, null);
+  assert.equal(b.view().report!.verdict, 'ok');
+  assert.ok(!events.some((e) => /all clear again/.test(e)), events.join('\n'));
 });
 
 test('a device appearing, vanishing and coming back keeps its place; an empty look is fine', () => {

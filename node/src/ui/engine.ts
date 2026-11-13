@@ -44,7 +44,9 @@ export interface Reach { ok: boolean; ms?: number; reason?: string }
 
 // What a device said about its own security (its GET /trust, docs/GATE.md), kept per device. The
 // ledger lines are a window: each look asks only for the lines after the last one received, and
-// the window keeps the newest TRUST_WINDOW for god's eye's trust branch, which checks them.
+// the window keeps the newest TRUST_WINDOW for god's eye's trust branch, which checks them. Every
+// line taken in after a since must link to the one before it (foldTrust); a look takes at most
+// TRUST_ROUNDS rounds of TRUST_LINES, so the window still holds the last line of the look before.
 export interface TrustLook {
   at: number; error: string | null;
   id: string | null; alg: string | null; pub: string | null; store: string | null; cert: string | null;
@@ -57,6 +59,9 @@ export interface TrustLook {
   attest: AttestLook | null;          // owner-blind: the last proof asked for (attest.ts); null: never asked
 }
 export const TRUST_WINDOW = 500;
+export const TRUST_LINES = 200;      // lines one /trust answer carries at most (GATE.md)
+// rounds a look asks at most: 2 x 200 new lines leave the line before them in the window of 500
+export const TRUST_ROUNDS = Math.floor((TRUST_WINDOW - 1) / TRUST_LINES);
 
 // Owner-blind (11.11.2026, attest.ts): once an hour a look asks the device to prove that its owner
 // cannot see the work (GET /trust?challenge=, a fresh random question each time); the proof is
@@ -82,13 +87,27 @@ const HEX64 = /^[0-9a-f]{64}$/;
  *  this computer pinned for the device; only whether the shown certificate matches it goes on. */
 export function foldTrust(was: TrustLook | null, b: any, at: number, pin: string | null = null): TrustLook {
   const lg = b?.ledger ?? {};
-  const got: string[] = Array.isArray(lg.lines) ? lg.lines.filter((l: unknown) => typeof l === 'string' && l.length <= 64 * 1024).slice(0, 200) : [];
+  const got: string[] = Array.isArray(lg.lines) ? lg.lines.filter((l: unknown) => typeof l === 'string' && l.length <= 64 * 1024).slice(0, TRUST_LINES) : [];
   let lines: string[];
   let restartedAt = was?.restartedAt ?? null;
   // askTrust sends since=was.upTo whenever there is one: an answer to it that does not say found
   // true (left out, null, anything else) cannot show the chain goes on, so it started over
-  if (lg.found === true && was) lines = [...was.lines, ...got].slice(-TRUST_WINDOW);
-  else { lines = got; if (lg.found === false || was?.upTo) restartedAt = at; }
+  if (lg.found === true && was) {
+    // found true is the device's word: the lines must show it. the first one links to the line
+    // asked for, each next one to the line before it; the first broken link is a ledger that
+    // started over (cleared or rewritten), and the window starts again from that line. `prev` is
+    // read as the trust branch's lineProblem reads it; a line that cannot be read is a broken link.
+    // no upTo (nothing received, so nothing was asked since): the first line is joined to nothing
+    let j = -1;
+    for (let i = 0; i < got.length && j < 0; i++) {
+      let prev: unknown;
+      try { const o = JSON.parse(got[i]); prev = o && typeof o === 'object' ? (o as { prev?: unknown }).prev : undefined; } catch { prev = undefined; }
+      const want = i === 0 ? was.upTo : sha256Hex(got[i - 1]);
+      if (typeof prev !== 'string' || (want !== null && prev !== want)) j = i;
+    }
+    if (j < 0) lines = [...was.lines, ...got].slice(-TRUST_WINDOW);
+    else { lines = got.slice(j); restartedAt = at; }
+  } else { lines = got; if (lg.found === false || was?.upTo) restartedAt = at; }
   const day: Record<string, number> = {};
   if (b?.rejects?.day && typeof b.rejects.day === 'object') for (const [w, n] of Object.entries(b.rejects.day)) if (typeof n === 'number' && Number.isFinite(n)) day[String(w).slice(0, 40)] = n;
   const last = Array.isArray(b?.rejects?.last) ? b.rejects.last.slice(0, 5).map((r: any) => ({ t: Number(r?.t) || 0, why: String(r?.why ?? '').slice(0, 40), peer: String(r?.peer ?? '').slice(0, 80) })) : [];
@@ -535,8 +554,10 @@ export class Engine {
     } catch { return mine; } finally { await dev?.close().catch(() => {}); }
   }
 
-  // GET /trust through a tunnel already open: only the ledger lines after the last one received.
-  // A failed look keeps what was known; a worker without the route says so.
+  // GET /trust through a tunnel already open: only the ledger lines after the last one received,
+  // at most TRUST_ROUNDS rounds, so the window keeps the line this look joined to (a device further
+  // behind catches up over the next looks). A failed look keeps what was known; a worker without
+  // the route says so.
   private async askTrust(p: Peer, apiPort: number, ms: number): Promise<void> {
     const id = this.groupId(p.id);
     let look = this.trusts.get(id) ?? null;
@@ -544,7 +565,7 @@ export class Engine {
     // costs the phone a keystore key, so not every look
     const challenge = attestDue(look, Date.now()) ? randomBytes(32).toString('hex') : null;
     try {
-      for (let round = 0; round < 5; round++) {
+      for (let round = 0; round < TRUST_ROUNDS; round++) {
         const q = [look && !look.error && look.upTo ? `since=${look.upTo}` : '', round === 0 && challenge ? `challenge=${challenge}` : ''].filter(Boolean).join('&');
         const r = await fetch(`http://127.0.0.1:${apiPort}/trust${q ? `?${q}` : ''}`, { signal: AbortSignal.timeout(ms) });
         if (r.status === 404) { look = { ...(look ?? foldTrust(null, {}, Date.now())), at: Date.now(), error: OLD_WORKER }; break; }

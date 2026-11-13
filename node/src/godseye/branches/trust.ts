@@ -9,6 +9,12 @@
 // about itself without proof (its own "my ledger is ok", where its key lives, its refusal counts)
 // is shown as the device's word. No prompts, no answers: only who connected and whether it was let in.
 //
+// Joining (13.11.2026, G1): the engine checks every link as the lines pass and calls a broken one a
+// ledger that started over. Here, new lines whose first one does not follow the last line verified,
+// with that line gone from the window, are a gap: nothing in them is checked and the ledger is never
+// ok ("could not be joined") until the person accepts carrying on from there. Every device in the
+// snapshot keeps its notes; only devices that left are dropped past the cap (G10).
+//
 // Two newer checks: a ledger that reports fewer lines than the largest count seen (lines removed on
 // the device; kept red until the person accepts it), and a burst of refusals against the device's
 // own usual rate (a Poisson tail over its finished hours; a replay and many wrong codes still come
@@ -18,7 +24,8 @@
 // with its keystore's attestation (attest.ts checked it when it came: a hardware key, a locked
 // bootloader, green verified boot, the official kula app); a computer cannot prove it. One line per
 // device, informational for now: it never turns the verdict red or grey. A device in the running
-// cluster that fails it gets a warning card.
+// cluster (or holding layers of a split) that fails it gets a warning card. A phone that sends no
+// proof fails it (a phone can make one); a friend's (circle) device that cannot say gets the card too.
 import type { Branch, BranchCtx, EyeDevice, EyeTrust, Snapshot, Suggestion, TrustCheck, TrustReport, Verdict } from '../types.js';
 import type { EyeKey, EyeKeys } from '../platform.js';
 import { fromBase64, sha256Hex } from '../hash.js';
@@ -36,7 +43,7 @@ const HOUR = 3_600_000;        // a burst window: one hour of the answer's own c
 const HIST_NEED = 24;          // finished hours before a burst can be told from the usual
 const HIST_MAX = 168;          // finished hours kept per device (a week)
 const BURST_P = 0.001;         // a running hour this unlikely is a burst
-const MAX_DEVICES = 40;        // devices kept in the notes
+const MAX_DEVICES = 40;        // devices kept in the notes beyond those in the snapshot (never dropped)
 const ABSURD = 8.64e15;        // ms: a time past this is absurd, nothing is taken in
 const COUNT_MAX = 1e9;         // ledger lines: a count past this is absurd, ignored
 const DAY_CAP = 10_000;        // a day's refusals per reason: past this a reason is capped
@@ -206,7 +213,10 @@ export function ownerBlindCheck(d: Pick<EyeDevice, 'kind'>, t: EyeTrust, now: nu
   if (typeof x.at !== 'number' || !Number.isFinite(x.at) || (x.ok !== true && x.ok !== false && x.ok !== null) || typeof x.text !== 'string' || !x.text || x.text.length > 300) {
     return { k, ok: null, text: 'its last proof could not be read' };
   }
-  if (x.ok !== null && (now - x.at > ATTEST_STALE || x.at > now + HOUR)) return { k, ok: null, text: `its last proof is from ${day(x.at)}: not asked again since` };
+  const stale = now - x.at > ATTEST_STALE || x.at > now + HOUR;
+  if (x.ok !== null && stale) return { k, ok: null, text: `its last proof is from ${day(x.at)}: not asked again since` };
+  // a phone that answers as a computer would, or leaves the proof out, shows nothing (G3)
+  if (x.ok === null && !stale && d.kind === 'phone') return { k, ok: false, text: 'it sent no proof (a phone can make one): nothing shows its owner cannot read jobs' };
   return { k, ok: x.ok as boolean | null, text: x.text };
 }
 
@@ -279,10 +289,22 @@ export function create(ctx: BranchCtx): Branch {
           s.faultAt = restartedAt; s.faultLine = null; s.shrunkTo = null; s.held = null;
           s.count = countIn ?? 0;
           s.verified = 0; s.since = ctx.now();
+          s.gap = false;          // the new chain is followed from here: nothing left to join
           // the verdict-change line tells the feed when the device only turns red now; a started-over
           // that replaces a shorter fault for the same unconsumed restart was already said once
           if (!replacingShorter && (said.get(d.id) === 'bad' || !said.has(d.id))) ctx.emit(`${name}: ${s.fault}`);
-        } else if (lines.length) s.gap = true;
+        } else if (lines.length && lineProblem(lines[0], key, s.head) === null) {
+          // the window's first line follows the head: joined, checked from there
+          expect = s.head; s.gap = false;
+        } else if (lines.length) {
+          // the head left the window and nothing joins the new lines to it (the engine checks every
+          // link as lines pass, but after its own restart it keeps only the last answer). nothing is
+          // checked: the head and the count verified stay, and the ledger is never ok until the
+          // person accepts carrying on from here
+          if (!s.gap) ctx.emit(`${name}: its ledger could not be joined to the lines checked before`);
+          s.gap = true;
+          start = lines.length;
+        }
       }
       if (restartedAt != null) s.restartSeen = restartedAt;
       for (let i = start; i < lines.length; i++) {
@@ -427,18 +449,21 @@ export function create(ctx: BranchCtx): Branch {
       // a device that says (or once said) it has lines but never handed one over that held here is
       // not checked, and must not pass as "every ledger holds". a device with no lines at all (count
       // 0 or none) stays exempt, and so does one whose chain holds here but that stopped saying its length
-      unchecked = !s.head && (reported > 0 || (!hasCount && s.count > 0));
+      // a gap is not checked either: lines came that nothing joins to the ones verified before
+      unchecked = s.gap || (!s.head && (reported > 0 || (!hasCount && s.count > 0)));
       checks.push(s.fault
         ? { k: 'ledger', ok: false, text: s.fault }
         : t!.self === 'broken'
           ? { k: 'ledger', ok: false, text: 'the device says its own ledger is broken' }
-          : !hasCount && s.count > 0
-            ? { k: 'ledger', ok: null, text: `it stopped reporting its ledger length (${fmt(s.count)} lines before)` }
-            : s.head
-              ? { k: 'ledger', ok: true, text: `${plural(s.verified, 'line')} checked here since ${day(s.since)}: the chain and every signature hold${s.gap ? ' (one stretch between two looks was too long to join)' : ''}` }
-              : reported > 0
-                ? { k: 'ledger', ok: null, text: `it reports ${plural(reported, 'line')}, none checked here yet` }
-                : { k: 'ledger', ok: null, text: 'no ledger lines yet' });
+          : s.gap
+            ? { k: 'ledger', ok: null, text: `its ledger could not be joined to the ${plural(s.verified, 'line')} checked before: lines came while this computer was not looking. accept to carry on from here` }
+            : !hasCount && s.count > 0
+              ? { k: 'ledger', ok: null, text: `it stopped reporting its ledger length (${fmt(s.count)} lines before)` }
+              : s.head
+                ? { k: 'ledger', ok: true, text: `${plural(s.verified, 'line')} checked here since ${day(s.since)}: the chain and every signature hold` }
+                : reported > 0
+                  ? { k: 'ledger', ok: null, text: `it reports ${plural(reported, 'line')}, none checked here yet` }
+                  : { k: 'ledger', ok: null, text: 'no ledger lines yet' });
       checks.push(t!.store === 'keystore'
         ? { k: 'key', ok: true, text: 'its key is in the phone’s keystore and cannot be copied out' }
         : { k: 'key', ok: null, text: t!.store === 'file' ? 'its key is in a file on the device' : 'it did not say where its key is' });
@@ -449,7 +474,7 @@ export function create(ctx: BranchCtx): Branch {
     const counted = checks.filter((c) => !INFO.has(c.k));
     const verdict: Verdict = counted.some((c) => c.ok === false) ? 'bad' : !answered || counted.some((c) => c.ok === null && (c.k !== 'ledger' || unchecked)) ? 'unknown' : 'ok';
     const rd = answered ? dayTotal(rejects) : 0;
-    return { id: d.id, name, verdict, checks, refused: rd ? `${rd} refused today` : '', accept: !!s.fault };
+    return { id: d.id, name, verdict, checks, refused: rd ? `${rd} refused today` : '', accept: !!s.fault || (answered && s.gap) };
   }
 
   function build(now: Snapshot): TrustReport {
@@ -495,38 +520,41 @@ export function create(ctx: BranchCtx): Branch {
     return { verdict, headline, at: now.at, host: { name: typeof h.name === 'string' && h.name ? h.name : 'this computer', checks: host }, devices };
   }
 
-  // the notes stay bounded: at most MAX_DEVICES devices; a device in this snapshot is never dropped
-  // in favour of one that is not, whatever its clock says
+  // the notes stay bounded: past MAX_DEVICES, devices that are not in this snapshot go, the longest
+  // unseen first. a device in this snapshot is never dropped (G10): wiped notes would let it start its
+  // ledger over unseen. the guard bounds the snapshot's list, so the notes stay bounded too
   function trim(current: Set<string>) {
     const ids = Object.keys(notes);
-    if (ids.length <= MAX_DEVICES) return;
-    const gone = ids.filter((id) => !current.has(id)).sort((a, b) => notes[a].seen - notes[b].seen);
-    const drop = Math.min(gone.length, ids.length - MAX_DEVICES);
-    for (const id of gone.slice(0, drop)) delete notes[id];
-    // still over the cap: every device left is in this snapshot; the least recent go anyway
-    const left = Object.keys(notes);
-    if (left.length > MAX_DEVICES) {
-      left.sort((a, b) => notes[a].seen - notes[b].seen);
-      for (const id of left.slice(0, left.length - MAX_DEVICES)) delete notes[id];
+    if (ids.length > MAX_DEVICES) {
+      const gone = ids.filter((id) => !current.has(id)).sort((a, b) => notes[a].seen - notes[b].seen);
+      for (const id of gone.slice(0, Math.min(gone.length, ids.length - MAX_DEVICES))) delete notes[id];
     }
+    // the last verdict said is kept only for devices the notes keep or the snapshot shows
+    for (const id of [...said.keys()]) if (!(id in notes) && !current.has(id)) said.delete(id);
   }
   // a device the notes no longer keep keeps no hashes either
   function trimHashes() {
     for (const id of hashed.keys()) if (!(id in notes)) hashed.delete(id);
   }
 
-  // a warning card for each device running the loaded model whose owner could read its jobs
+  // a warning card for each device running the loaded model (or holding layers of a split) whose
+  // owner could read its jobs, or that cannot show otherwise and is a friend's (the circle ring)
   function ownerBlindCards(): Suggestion[] {
     const loaded = snap?.work && typeof snap.work === 'object' ? snap.work.loaded : null;
     const running = new Set((Array.isArray(loaded?.devices) ? loaded!.devices : []).filter((x) => x && !x.local && okId(x.id)).map((x) => x.id));
+    for (const p of Array.isArray(loaded?.parts) ? loaded!.parts : []) {
+      if (p && typeof p === 'object' && !p.local && okId(p.id) && typeof p.mb === 'number' && p.mb > 0) running.add(p.id);
+    }
+    const rings = new Map<string, unknown>();
+    for (const x of Array.isArray(snap?.devices) ? snap!.devices : []) if (x && typeof x === 'object' && okId(x.id)) rings.set(x.id, x.ring);
     const out: Suggestion[] = [];
     for (const d of report?.devices ?? []) {
       if (!running.has(d.id)) continue;
       const c = d.checks.find((x) => x.k === 'owner-blind');
-      if (!c || c.ok !== false) continue;
+      if (!c || !(c.ok === false || (c.ok === null && rings.get(d.id) === 'circle'))) continue;
       out.push({
         id: cardId('trust', 'owner-blind', d.id), kind: 'warn', weight: 1,
-        title: `${d.name} could read the jobs it runs`,
+        title: c.ok === false ? `${d.name} could read the jobs it runs` : `${d.name} has not shown that its owner cannot read the jobs it runs`,
         why: `${c.text}. Prompts reach it in plain text, so only give it work you would show its owner.`,
         action: { do: 'open', panel: 'branch', branch: 'trust' }, label: 'look',
       });
@@ -553,6 +581,14 @@ export function create(ctx: BranchCtx): Branch {
     act(action, arg) {
       if (action !== 'accept') return null;
       const s = notes[arg];
+      if (s && !s.fault && s.gap) {
+        // the person carries on from here (only their tap): the next answer is checked from its
+        // first line. the count high-water mark stays, so a shorter ledger is still caught
+        s.gap = false; s.head = null; s.verified = 0; s.since = 0;
+        ctx.save(notes);
+        if (snap) report = build(snap);
+        return 'noted';
+      }
       if (!s?.fault) return null;
       // the person knows (they cleared the ledger on the phone, say): carry on from here
       if (s.held) {
