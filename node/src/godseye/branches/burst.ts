@@ -15,8 +15,8 @@
 // most RHO times its usual as its count (L10 P54), so one loud hour cannot blind that hour of day.
 // The CUSUM is held at most CUSUM_HOLD above its alarm line, so one quiet hour clears it.
 //
-// Nothing reads this file yet: no branch, hint, card or note imports it (L9). The bench
-// (test/brain-bench/bench4.ts) measures it first; wiring it into trust.ts is L10.
+// trust.ts reads it (L10 P55): its 'refused' check holds each finished hour against the same
+// hour of day. The bench (test/brain-bench/bench4.ts) measures every change first.
 // Pure: no clock, no ctx, no import.
 
 /** 24 alphas and 24 betas (one Gamma per hour of day), the hours taken in, the CUSUM */

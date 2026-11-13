@@ -17,8 +17,9 @@
 //
 // Two newer checks: a ledger that reports fewer lines than the largest count seen (lines removed on
 // the device; kept red until the person accepts it), and a burst of refusals against the device's
-// own usual rate (a Poisson tail over its finished hours; a replay and many wrong codes still come
-// first). Both only watch and report, as always.
+// own usual rate at the same hour of day (burst.ts: a Gamma-Poisson belief per hour of day and a
+// CUSUM for a rate that stays raised, L10 P55); a replay and many wrong codes still come first.
+// Both only watch and report, as always.
 //
 // Owner-blind (11.11.2026): can this device's owner read the jobs it runs? A phone proves it cannot
 // with its keystore's attestation (attest.ts checked it when it came: a hardware key, a locked
@@ -31,6 +32,7 @@ import type { EyeKey, EyeKeys } from '../platform.js';
 import { fromBase64, sha256Hex } from '../hash.js';
 import { hhmm, pct } from './util.js';
 import { cardId } from './decide.js';
+import { burstStep, freshBurst, saneBurst, nbTail, NEED, STRATUM_NEED, B0, MIN_K, TAIL_P, type BurstFit } from './burst.js';
 
 // the signatures and the certificate's subject come from the platform (ctx.keys: node:crypto on a
 // computer, platform.ts); the hashes are plain TypeScript and the same everywhere
@@ -40,9 +42,6 @@ const SIG_TAIL = /,"sig":"([A-Za-z0-9+/=]*)"\}$/;
 const GUESSES = new Set(['wrong pin', 'wrong secret', 'bad proof']);
 export const GUESS_LIMIT = 5;
 const HOUR = 3_600_000;        // a burst window: one hour of the answer's own clock
-const HIST_NEED = 24;          // finished hours before a burst can be told from the usual
-const HIST_MAX = 168;          // finished hours kept per device (a week)
-const BURST_P = 0.001;         // a running hour this unlikely is a burst
 const MAX_DEVICES = 40;        // devices kept in the notes beyond those in the snapshot (never dropped)
 const ABSURD = 8.64e15;        // ms: a time past this is absurd, nothing is taken in
 const COUNT_MAX = 1e9;         // ledger lines: a count past this is absurd, ignored
@@ -54,6 +53,8 @@ const ATTEST_STALE = 26 * HOUR; // an owner-blind proof older than this is not t
 /** checks shown but never counted in a verdict: the device's word (its key's place), and owner-blind for now */
 const INFO = new Set(['key', 'owner-blind']);
 const firstBad = (cs: TrustCheck[]) => cs.find((c) => c.ok === false && !INFO.has(c.k))!;
+/** the hour of day (UTC) a window starting at `start` stands for: the one holding its middle */
+const hourOf = (start: number) => Math.floor((start + HOUR / 2) / HOUR) % 24;
 
 /** a device id the notes can take as a key: a non-empty string of at most 200 chars */
 const okId = (id: unknown): id is string => typeof id === 'string' && id.length > 0 && id.length <= 200;
@@ -127,12 +128,14 @@ interface Seen {
   rejAt: number;                // the newest refusal time taken in (the answer's clock); -1: none yet
   rejTotal: number;             // the last rejectsDay total taken in
   win: { start: number; k: number };  // the running hour: refusals since `start` (the answer that opened it)
-  hist: number[];               // the last finished hours' refusals, at most HIST_MAX
+  burst: BurstFit;              // what each hour of the day usually holds, and the CUSUM (burst.ts)
   lastBurst: number;            // the last finished hour's refusals when it was a burst; 0: it was not
+  lastUsual: number;            // that hour of day's usual rate when the last finished hour was a burst
+  rising: boolean;              // the CUSUM said the rate went up over the last finished hours
   shorterRestart: boolean;      // the shorter fault was raised while a restart was still unconsumed
 }
 type Notes = Record<string, Seen>;
-const fresh = (): Seen => ({ head: null, verified: 0, since: 0, at: 0, restartSeen: null, fault: null, faultAt: null, faultLine: null, gap: false, held: null, seen: 0, count: 0, shrunkTo: null, rejAt: -1, rejTotal: 0, win: { start: 0, k: 0 }, hist: [], lastBurst: 0, shorterRestart: false });
+const fresh = (): Seen => ({ head: null, verified: 0, since: 0, at: 0, restartSeen: null, fault: null, faultAt: null, faultLine: null, gap: false, held: null, seen: 0, count: 0, shrunkTo: null, rejAt: -1, rejTotal: 0, win: { start: 0, k: 0 }, burst: freshBurst(), lastBurst: 0, lastUsual: 0, rising: false, shorterRestart: false });
 
 /** notes read back from disk, rebuilt as a null-prototype object so a device id like "__proto__"
  *  stays a key and never a prototype, or fresh notes when the file is not what this branch wrote:
@@ -166,8 +169,12 @@ function sane(x: unknown): Notes {
     const w = v.win;
     v.win = w && typeof w === 'object' && !Array.isArray(w) && Number.isFinite(w.start) && Number.isFinite(w.k)
       ? { start: Math.min(Math.max(0, w.start), ABSURD), k: Math.floor(Math.max(0, w.k)) } : { start: 0, k: 0 };
-    v.hist = Array.isArray(v.hist) ? v.hist.filter((n) => typeof n === 'number' && Number.isFinite(n) && n >= 0).map(Math.floor).slice(-HIST_MAX) : [];
+    // an older notes file kept its finished hours without their hour of day: it learns again
+    v.burst = saneBurst(v.burst) ?? freshBurst();
+    delete (v as { hist?: unknown }).hist;
     v.lastBurst = Math.floor(Math.min(Math.max(0, nnum(v.lastBurst, 0)), COUNT_MAX));
+    v.lastUsual = Number.isFinite(v.lastUsual) ? Math.min(Math.max(0, v.lastUsual), LAMBDA_MAX) : 0;
+    v.rising = v.rising === true;
     v.shorterRestart = v.shorterRestart === true;
     out[id] = v;
   }
@@ -363,12 +370,16 @@ export function create(ctx: BranchCtx): Branch {
     } else if (t.at - prevAt > HOUR || prevAt - t.at > HOUR) {
       // a gap in the looks (the computer was away, the phone asleep, or the clock jumped either
       // way): the refusals in between cannot be placed into any hour; re-anchor only and count
-      // nothing, push nothing to the history. the finished hour before the gap is too old to call
-      // the rate still raised: the burst ends here, and a quiet look after the gap must not be red
+      // nothing, learn nothing. the finished hour before the gap is too old to call the rate still
+      // raised: the burst and the rise end here (the hours in between were not seen, so the CUSUM
+      // starts again), and a quiet look after the gap must not be red
       s.rejAt = newest >= 0 ? newest : s.rejAt;
       s.rejTotal = total;
       s.win = { start: t.at, k: 0 };
       s.lastBurst = 0;
+      s.lastUsual = 0;
+      s.rising = false;
+      s.burst = { ...s.burst, s: 0 };
     } else {
       const rolledBack = newest >= 0 && s.rejAt - newest > HOUR;   // the device's clock went back: re-anchor
       // count only entries proven to lie in the running hour: newer than the watermark and not older
@@ -380,17 +391,15 @@ export function create(ctx: BranchCtx): Branch {
       s.rejAt = newest >= 0 ? (rolledBack ? newest : Math.max(s.rejAt, newest)) : s.rejAt;
       s.rejTotal = total;
       if (t.at - s.win.start >= HOUR || s.win.start - t.at > HOUR) {
-        // the hour closed, or the answer's clock went back past its start: re-anchor the window
-        const lambda = Math.min(Math.max(0.5, s.hist.length ? medianOf(s.hist) : 0), LAMBDA_MAX);
-        // a finished hour that was itself a burst is not learned: it must not teach the baseline.
-        // only once the baseline exists; while it is still learning, a busy hour is real learning.
-        // the burst is remembered instead, so the check stays red until a finished hour is quiet
-        const burst = s.hist.length >= HIST_NEED && s.win.k >= 3 && poissonTail(s.win.k, lambda) < BURST_P;
-        s.lastBurst = burst ? s.win.k : 0;
-        if (!burst) {
-          s.hist.push(s.win.k);
-          if (s.hist.length > HIST_MAX) s.hist.shift();
-        }
+        // the hour closed, or the answer's clock went back past its start: the finished hour is
+        // held against its own hour of day and learned (burst.ts; a flagged hour teaches little).
+        // a burst is remembered with that hour's usual, so the check stays red until a finished
+        // hour is quiet. then the window re-anchors
+        const r = burstStep(s.burst, hourOf(s.win.start), Math.min(s.win.k, PER_ANSWER));
+        s.burst = r.fit;
+        s.lastBurst = r.tail ? s.win.k : 0;
+        s.lastUsual = r.tail ? Math.min(r.usual, LAMBDA_MAX) : 0;
+        s.rising = r.rise;
         s.win = { start: t.at, k: 0 };
       }
       s.win.k += nfresh;
@@ -429,21 +438,33 @@ export function create(ctx: BranchCtx): Branch {
       const guesses = refused.filter(([w]) => GUESSES.has(w)).reduce((a, [, n]) => a + n, 0);
       const replays = rejects.replay ?? 0;
       const words = refused.map(([w, n]) => `${w} ×${n}`).join(', ');
-      const known = s.hist.length >= HIST_NEED;
-      const lambda = Math.min(Math.max(0.5, known ? medianOf(s.hist) : 0), LAMBDA_MAX);
-      // the running hour is a burst when it is far into the Poisson tail of the device's own usual
-      const burst = known && s.win.k >= 3 && poissonTail(s.win.k, lambda) < BURST_P;
+      // the running hour is held against what this hour of the day usually holds (burst.ts), once
+      // enough hours were taken in and this hour of day was seen often enough
+      const f = s.burst;
+      const h = hourOf(s.win.start);
+      const kIn = Math.min(s.win.k, PER_ANSWER);
+      const usual = Math.min(f.a[h] / f.b[h], LAMBDA_MAX);
+      const known = f.n >= NEED && f.b[h] - B0 >= STRATUM_NEED;
+      // the running hour is a burst when it is far into the negative binomial tail of its usual
+      const burst = known && kIn >= MIN_K && nbTail(kIn, f.a[h], f.b[h]) < TAIL_P;
       // a burst hour just finished: the rate has not been shown to come back down, so stay red
-      const stillBurst = known && !burst && s.lastBurst > 0;
+      const stillBurst = !burst && s.lastBurst > 0;
+      // several finished hours each a little high: the CUSUM says the rate went up
+      const rising = !burst && !stillBurst && s.rising;
+      const learning = f.n < NEED
+        ? ` (still learning what is usual: ${fmt(f.n)} of ${NEED} hours)`
+        : known ? '' : ' (still learning what is usual at this hour of day)';
       checks.push(replays > 0
         ? { k: 'refused', ok: false, text: `someone replayed a recorded handshake (${plural(replays, 'time')} today); it was refused` }
         : guesses >= GUESS_LIMIT
           ? { k: 'refused', ok: false, text: `${guesses} wrong codes today: someone may be guessing. all were refused` }
           : burst
-            ? { k: 'refused', ok: false, text: `${fmt(Math.min(s.win.k, K_MAX))} refusals in the last hour, it usually sees about ${lambda.toFixed(1)}: unusual. all were refused` }
+            ? { k: 'refused', ok: false, text: `${fmt(Math.min(s.win.k, K_MAX))} refusals in the last hour, at this hour of day it usually sees about ${usual.toFixed(1)}: unusual. all were refused` }
             : stillBurst
-              ? { k: 'refused', ok: false, text: `refusals still above its usual: ${fmt(Math.min(s.lastBurst, K_MAX))} in the last finished hour, usually about ${lambda.toFixed(1)}` }
-              : { k: 'refused', ok: true, text: (refused.length ? `refused today: ${words}` : 'nothing refused today') + (known ? '' : ` (still learning what is usual: ${fmt(s.hist.length)} of ${fmt(HIST_NEED)} hours; a device that already refuses often takes longer to judge)`) });
+              ? { k: 'refused', ok: false, text: `refusals still above its usual: ${fmt(Math.min(s.lastBurst, K_MAX))} in the last finished hour, at that hour of day usually about ${s.lastUsual.toFixed(1)}` }
+              : rising
+                ? { k: 'refused', ok: false, text: 'refusals have been running above its usual for the last hours. all were refused' }
+                : { k: 'refused', ok: true, text: (refused.length ? `refused today: ${words}` : 'nothing refused today') + learning });
       const hasCount = typeof t!.count === 'number' && Number.isFinite(t!.count) && t!.count >= 0 && t!.count <= COUNT_MAX;
       const reported = hasCount ? Math.floor(t!.count as number) : 0;
       // a device that says (or once said) it has lines but never handed one over that held here is

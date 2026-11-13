@@ -12,8 +12,12 @@ const { hhmm } = await import('../src/godseye/branches/util.ts');
 const { generate, publicKeyDer } = await import('../src/audit/key.ts');
 const { makeLine, GENESIS, sha256Hex } = await import('../src/audit/ledger.ts');
 const { selfSigned, newP256, fingerprint } = await import('../src/tls.ts');
+const { burstStep, freshBurst } = await import('../src/godseye/branches/burst.ts');
 
 const H = 3_600_000;
+// L10 P55: an hour is held against the same hour of day (burst.ts). t0 = 1e9 is hour of day 14, and
+// 72 quiet hours (not 24) hit every hour of day three times, so the usual is known everywhere
+const hod = (start: number) => Math.floor((start + H / 2) / H) % 24;
 
 function device(key = generate()) {
   const certDer = selfSigned(newP256(), key.id);
@@ -206,25 +210,27 @@ test('an absurd count is ignored rather than remembered: the remembered count st
   assert.ok(!events.some((e) => /got shorter/.test(e)));
 });
 
-test('24 quiet hours then 6 refusals in one hour: a burst, told against the device\'s own usual', () => {
+test('72 quiet hours (three of each hour of day) then 6 refusals in one hour: a burst, told against the device\'s own usual', () => {
   const d = device();
   d.add();
   const { b, events, notes } = branch();
   const t0 = 1_000_000_000;
   b.observe(snap([eyeDev(d, trustOf(d, { at: t0 }))]) as any, null);   // the first answer only remembers
-  hourByHour(b, d, t0, 24);
+  hourByHour(b, d, t0, 72);
   assert.equal(b.view().report!.verdict, 'ok');
-  assert.equal(notes().p1.hist.length, 24);
+  assert.equal(notes().p1.burst.n, 72);
   // six refusals land in the next hour; the list keeps only the last three, the day's total says six
   const last3 = [1, 2, 3].map((t) => ({ t, why: 'not paired', peer: '192.168.1.77' }));
-  b.observe(snap([eyeDev(d, trustOf(d, { at: t0 + 24 * H + 1000, rejectsDay: { 'not paired': 6 }, rejectsLast: last3 }))]) as any, null);
+  b.observe(snap([eyeDev(d, trustOf(d, { at: t0 + 72 * H + 1000, rejectsDay: { 'not paired': 6 }, rejectsLast: last3 }))]) as any, null);
   assert.equal(b.view().report!.verdict, 'bad');
-  assert.equal(check(b.view(), 'refused').text, '6 refusals in the last hour, it usually sees about 0.5: unusual. all were refused');
+  assert.equal(check(b.view(), 'refused').text, '6 refusals in the last hour, at this hour of day it usually sees about 0.1: unusual. all were refused');
   assert.equal(events.filter((e) => /6 refusals in the last hour/.test(e)).length, 1, 'one feed line when the burst starts');
-  assert.equal(events[0], 'pixel: 6 refusals in the last hour, it usually sees about 0.5: unusual. all were refused');
-  // the next answer closes the burst hour: it is not learned, the baseline stays the 24 quiet hours
-  b.observe(snap([eyeDev(d, trustOf(d, { at: t0 + 25 * H + 1000 }))]) as any, null);
-  assert.deepEqual(notes().p1.hist, Array.from({ length: 24 }, () => 0));
+  assert.equal(events[0], 'pixel: 6 refusals in the last hour, at this hour of day it usually sees about 0.1: unusual. all were refused');
+  // the next answer closes the burst hour: it is learned only as burst.ts learns a flagged hour, the
+  // fit after it is the step from the 72 quiet hours, nothing more
+  const before = structuredClone(notes().p1.burst);
+  b.observe(snap([eyeDev(d, trustOf(d, { at: t0 + 73 * H + 1000 }))]) as any, null);
+  assert.deepEqual(notes().p1.burst, burstStep(before, hod(t0 + 72 * H), 6).fit);
   assert.equal(notes().p1.win.k, 0);
 });
 
@@ -238,7 +244,21 @@ test('the same six refusals with only 10 finished hours: no burst, still learnin
   b.observe(snap([eyeDev(d, trustOf(d, { at: t0 + 10 * H + 1000, rejectsDay: { 'not paired': 6 }, rejectsLast: [{ t: 1, why: 'not paired', peer: '192.168.1.77' }] }))]) as any, null);
   assert.equal(b.view().report!.verdict, 'ok');
   assert.equal(check(b.view(), 'refused').ok, true);
-  assert.equal(check(b.view(), 'refused').text, 'refused today: not paired ×6 (still learning what is usual: 10 of 24 hours; a device that already refuses often takes longer to judge)');
+  assert.equal(check(b.view(), 'refused').text, 'refused today: not paired \u{00D7}6 (still learning what is usual: 10 of 24 hours)');
+});
+
+test('the same six refusals after 30 finished hours: not red, this hour of day is still being learned', () => {
+  const d = device();
+  d.add();
+  const { b } = branch();
+  const t0 = 1_000_000_000;
+  b.observe(snap([eyeDev(d, trustOf(d, { at: t0 }))]) as any, null);
+  hourByHour(b, d, t0, 30);
+  // 30 hours are past the 24 needed, but this hour of day (20) was seen once: it is not judged yet
+  b.observe(snap([eyeDev(d, trustOf(d, { at: t0 + 30 * H + 1000, rejectsDay: { 'not paired': 6 }, rejectsLast: [{ t: 1, why: 'not paired', peer: '192.168.1.77' }] }))]) as any, null);
+  assert.equal(b.view().report!.verdict, 'ok');
+  assert.equal(check(b.view(), 'refused').ok, true);
+  assert.equal(check(b.view(), 'refused').text, 'refused today: not paired \u{00D7}6 (still learning what is usual at this hour of day)');
 });
 
 test('two refusals in an hour are never a burst', () => {
@@ -247,8 +267,8 @@ test('two refusals in an hour are never a burst', () => {
   const { b } = branch();
   const t0 = 1_000_000_000;
   b.observe(snap([eyeDev(d, trustOf(d, { at: t0 }))]) as any, null);
-  hourByHour(b, d, t0, 24);
-  b.observe(snap([eyeDev(d, trustOf(d, { at: t0 + 24 * H + 1000, rejectsDay: { 'not paired': 2 }, rejectsLast: [{ t: 1, why: 'not paired', peer: 'x' }] }))]) as any, null);
+  hourByHour(b, d, t0, 72);
+  b.observe(snap([eyeDev(d, trustOf(d, { at: t0 + 72 * H + 1000, rejectsDay: { 'not paired': 2 }, rejectsLast: [{ t: 1, why: 'not paired', peer: 'x' }] }))]) as any, null);
   assert.equal(b.view().report!.verdict, 'ok');
   assert.match(check(b.view(), 'refused').text, /not paired ×2/);
 });
@@ -284,10 +304,10 @@ test('a busy reason ageing past the cap raises no burst: it was capped, not drop
   const t0 = 1_000_000_000;
   // the device's usual is huge: the first answer only remembers it (capped)
   b.observe(snap([eyeDev(d, trustOf(d, { at: t0, rejectsDay: { 'not paired': 10400 } }))]) as any, null);
-  for (let i = 1; i <= 24; i++) b.observe(snap([eyeDev(d, trustOf(d, { at: t0 + i * H, rejectsDay: { 'not paired': 10400 } }))]) as any, null);
+  for (let i = 1; i <= 72; i++) b.observe(snap([eyeDev(d, trustOf(d, { at: t0 + i * H, rejectsDay: { 'not paired': 10400 } }))]) as any, null);
   // the day ages 10 400 -> 9 990 -> 9 900: none of that is new refusals
   for (const [i, n] of [[1, 9990], [2, 9900]] as const) {
-    b.observe(snap([eyeDev(d, trustOf(d, { at: t0 + 24 * H + i * 1000, rejectsDay: { 'not paired': n } }))]) as any, null);
+    b.observe(snap([eyeDev(d, trustOf(d, { at: t0 + 72 * H + i * 1000, rejectsDay: { 'not paired': n } }))]) as any, null);
     assert.equal(b.view().report!.verdict, 'ok', String(n));
   }
   assert.equal(notes().p1.win.k, 0);
@@ -300,17 +320,20 @@ test('a busy device is learned while learning: 15 an hour builds the baseline, 6
   const { b, notes } = branch();
   const t0 = 1_000_000_000;
   b.observe(snap([eyeDev(d, trustOf(d, { at: t0 }))]) as any, null);
-  for (let i = 1; i <= 25; i++) {
+  for (let i = 1; i <= 73; i++) {
     b.observe(snap([eyeDev(d, trustOf(d, { at: t0 + i * H, rejectsDay: { 'not paired': 15 * i } }))]) as any, null);
     assert.equal(b.view().report!.verdict, 'ok');
   }
   // the first finished hour counts the first answer, which only remembered: a zero, then 15s
-  assert.equal(notes().p1.hist[0], 0);
-  assert.deepEqual(notes().p1.hist.slice(1), Array.from({ length: 24 }, () => 15));
-  // one heavy hour: a burst against the learned 15 an hour
-  b.observe(snap([eyeDev(d, trustOf(d, { at: t0 + 26 * H, rejectsDay: { 'not paired': 15 * 25 + 60 } }))]) as any, null);
+  let fold = freshBurst();
+  for (let i = 0; i < 73; i++) fold = burstStep(fold, hod(t0 + i * H), i === 0 ? 0 : 15).fit;
+  assert.deepEqual(notes().p1.burst, fold);
+  // one heavy hour: a burst against the learned 15 an hour at that hour of day
+  b.observe(snap([eyeDev(d, trustOf(d, { at: t0 + 74 * H, rejectsDay: { 'not paired': 15 * 73 + 60 } }))]) as any, null);
   assert.equal(b.view().report!.verdict, 'bad');
-  assert.equal(check(b.view(), 'refused').text, '60 refusals in the last hour, it usually sees about 15.0: unusual. all were refused');
+  const f = notes().p1.burst;
+  const h = hod(t0 + 74 * H);
+  assert.equal(check(b.view(), 'refused').text, `60 refusals in the last hour, at this hour of day it usually sees about ${(f.a[h] / f.b[h]).toFixed(1)}: unusual. all were refused`);
 });
 
 test('a burst and a shorter ledger in the same look: both reach the feed', () => {
@@ -319,14 +342,14 @@ test('a burst and a shorter ledger in the same look: both reach the feed', () =>
   const { b, events } = branch();
   const t0 = 1_000_000_000;
   b.observe(snap([eyeDev(d, trustOf(d, { at: t0 }))]) as any, null);
-  hourByHour(b, d, t0, 24);
+  hourByHour(b, d, t0, 72);
   // one answer: the count shrank AND six refusals burst into the hour
-  b.observe(snap([eyeDev(d, trustOf(d, { at: t0 + 24 * H + 1000, count: 35, rejectsDay: { 'not paired': 6 } }))]) as any, null);
+  b.observe(snap([eyeDev(d, trustOf(d, { at: t0 + 72 * H + 1000, count: 35, rejectsDay: { 'not paired': 6 } }))]) as any, null);
   assert.equal(b.view().report!.verdict, 'bad');
   assert.equal(check(b.view(), 'ledger').text, 'its ledger got shorter: 40 lines before, 35 now (lines were removed)');
-  assert.equal(check(b.view(), 'refused').text, '6 refusals in the last hour, it usually sees about 0.5: unusual. all were refused');
+  assert.equal(check(b.view(), 'refused').text, '6 refusals in the last hour, at this hour of day it usually sees about 0.1: unusual. all were refused');
   assert.ok(events.includes('pixel: its ledger got shorter: 40 lines before, 35 now (lines were removed)'));
-  assert.ok(events.includes('pixel: 6 refusals in the last hour, it usually sees about 0.5: unusual. all were refused'));
+  assert.ok(events.includes('pixel: 6 refusals in the last hour, at this hour of day it usually sees about 0.1: unusual. all were refused'));
 });
 
 test('a restart whose new chain also faults: the started-over fault is kept until accepted, then the line fault', () => {
@@ -376,11 +399,11 @@ test('the numbers shown are capped: K at 9999, one answer counts at most 10000',
   const { b } = branch();
   const t0 = 1_000_000_000;
   b.observe(snap([eyeDev(d, trustOf(d, { at: t0 }))]) as any, null);
-  hourByHour(b, d, t0, 24);
+  hourByHour(b, d, t0, 72);
   // two reasons at the day's cap each: 20000 refusals in one answer, 10000 counted into the hour
-  b.observe(snap([eyeDev(d, trustOf(d, { at: t0 + 24 * H + 1000, rejectsDay: { 'not paired': 10000, odd: 10000 } }))]) as any, null);
+  b.observe(snap([eyeDev(d, trustOf(d, { at: t0 + 72 * H + 1000, rejectsDay: { 'not paired': 10000, odd: 10000 } }))]) as any, null);
   assert.equal(b.view().report!.verdict, 'bad');
-  assert.equal(check(b.view(), 'refused').text, '9999 refusals in the last hour, it usually sees about 0.5: unusual. all were refused');
+  assert.equal(check(b.view(), 'refused').text, '9999 refusals in the last hour, at this hour of day it usually sees about 0.1: unusual. all were refused');
   assert.doesNotMatch(JSON.stringify(b.view()), /e\+\d/, 'no exponent notation in the view');
 });
 
@@ -393,15 +416,16 @@ test('the answer clock jumping backwards or far forward: no throw, no invented h
   b.observe(snap([eyeDev(d, trustOf(d, { at: t0 + 1000, rejectsDay: { 'not paired': 1 } }))]) as any, null);
   assert.doesNotThrow(() => b.observe(snap([eyeDev(d, trustOf(d, { at: t0 - 5000, rejectsDay: { 'not paired': 2 } }))]) as any, null));
   assert.equal(notes().p1.win.k, 2, 'a backwards answer still lands in the running hour');
-  assert.deepEqual(notes().p1.hist, []);
+  assert.deepEqual(notes().p1.burst, freshBurst());
   // ten hours forward: a gap in the looks re-anchors the window, nothing is counted or invented
   b.observe(snap([eyeDev(d, trustOf(d, { at: t0 + 10 * H, rejectsDay: { 'not paired': 2 } }))]) as any, null);
-  assert.deepEqual(notes().p1.hist, []);
+  assert.deepEqual(notes().p1.burst, freshBurst());
   assert.equal(notes().p1.win.start, t0 + 10 * H);
   assert.equal(notes().p1.win.k, 0);
-  // the hour after the jump closes normally again
+  // the hour after the jump closes normally again: one quiet hour learned
   b.observe(snap([eyeDev(d, trustOf(d, { at: t0 + 11 * H, rejectsDay: { 'not paired': 3 } }))]) as any, null);
-  assert.deepEqual(notes().p1.hist, [0]);
+  assert.deepEqual(notes().p1.burst, burstStep(freshBurst(), hod(t0 + 10 * H), 0).fit);
+  assert.equal(notes().p1.burst.n, 1);
   assert.equal(notes().p1.win.k, 1);
 });
 
@@ -411,22 +435,22 @@ test('a far-forward answer clock then normal answers: the window re-anchors, bur
   const { b, notes } = branch();
   const t0 = 1_000_000_000;
   b.observe(snap([eyeDev(d, trustOf(d, { at: t0 }))]) as any, null);
-  hourByHour(b, d, t0, 24);
-  const far = t0 + 24 * H + 5 * 365 * 24 * H + 1000;   // five years ahead, still a sane time
+  hourByHour(b, d, t0, 72);
+  const far = t0 + 72 * H + 5 * 365 * 24 * H + 1000;   // five years ahead, still a sane time
   b.observe(snap([eyeDev(d, trustOf(d, { at: far, rejectsDay: { 'not paired': 1 } }))]) as any, null);
   // back on the normal clock: the running hour re-anchors
-  b.observe(snap([eyeDev(d, trustOf(d, { at: t0 + 24 * H + 2000, rejectsDay: { 'not paired': 1 } }))]) as any, null);
-  assert.equal(notes().p1.win.start, t0 + 24 * H + 2000);
+  b.observe(snap([eyeDev(d, trustOf(d, { at: t0 + 72 * H + 2000, rejectsDay: { 'not paired': 1 } }))]) as any, null);
+  assert.equal(notes().p1.win.start, t0 + 72 * H + 2000);
   // six refusals in the re-anchored hour: judged as a burst on the learned quiet hours
-  b.observe(snap([eyeDev(d, trustOf(d, { at: t0 + 24 * H + 3000, rejectsDay: { 'not paired': 7 }, rejectsLast: [{ t: 1, why: 'odd', peer: 'x' }] }))]) as any, null);
-  assert.equal(check(b.view(), 'refused').text, '6 refusals in the last hour, it usually sees about 0.5: unusual. all were refused');
+  b.observe(snap([eyeDev(d, trustOf(d, { at: t0 + 72 * H + 3000, rejectsDay: { 'not paired': 7 }, rejectsLast: [{ t: 1, why: 'odd', peer: 'x' }] }))]) as any, null);
+  assert.equal(check(b.view(), 'refused').text, '6 refusals in the last hour, at this hour of day it usually sees about 0.1: unusual. all were refused');
   // and after a restart: the same re-anchor works from the saved notes
   const r2 = branch(notes());
-  const far2 = t0 + 24 * H + 10 * 365 * 24 * H + 1000;
+  const far2 = t0 + 72 * H + 10 * 365 * 24 * H + 1000;
   r2.b.observe(snap([eyeDev(d, trustOf(d, { at: far2, rejectsDay: { 'not paired': 8 } }))]) as any, null);
-  r2.b.observe(snap([eyeDev(d, trustOf(d, { at: t0 + 24 * H + 4000, rejectsDay: { 'not paired': 9 } }))]) as any, null);
-  r2.b.observe(snap([eyeDev(d, trustOf(d, { at: t0 + 24 * H + 5000, rejectsDay: { 'not paired': 15 } }))]) as any, null);
-  assert.equal(check(r2.b.view(), 'refused').text, '6 refusals in the last hour, it usually sees about 0.5: unusual. all were refused');
+  r2.b.observe(snap([eyeDev(d, trustOf(d, { at: t0 + 72 * H + 4000, rejectsDay: { 'not paired': 9 } }))]) as any, null);
+  r2.b.observe(snap([eyeDev(d, trustOf(d, { at: t0 + 72 * H + 5000, rejectsDay: { 'not paired': 15 } }))]) as any, null);
+  assert.equal(check(r2.b.view(), 'refused').text, '6 refusals in the last hour, at this hour of day it usually sees about 0.1: unusual. all were refused');
 });
 
 test('refusals spread over a night away are not a burst: the gap re-anchors and counts nothing', () => {
@@ -435,16 +459,16 @@ test('refusals spread over a night away are not a burst: the gap re-anchors and 
   const { b, events, notes } = branch();
   const t0 = 1_000_000_000;
   b.observe(snap([eyeDev(d, trustOf(d, { at: t0 }))]) as any, null);
-  hourByHour(b, d, t0, 25);
+  hourByHour(b, d, t0, 73);
   // the computer slept for 10 hours; five refusals spread over those hours arrive with the next answer
-  const after = t0 + 25 * H + 10 * H;
-  b.observe(snap([eyeDev(d, trustOf(d, { at: after, rejectsDay: { 'not paired': 5 }, rejectsLast: [1, 2, 3, 4, 5].map((n) => ({ t: t0 + 25 * H + n * H, why: 'not paired', peer: 'x' })) }))]) as any, null);
+  const after = t0 + 73 * H + 10 * H;
+  b.observe(snap([eyeDev(d, trustOf(d, { at: after, rejectsDay: { 'not paired': 5 }, rejectsLast: [1, 2, 3, 4, 5].map((n) => ({ t: t0 + 73 * H + n * H, why: 'not paired', peer: 'x' })) }))]) as any, null);
   assert.equal(b.view().report!.verdict, 'ok');
   assert.equal(events.filter((e) => /refusals in the last hour/.test(e)).length, 0, 'no feed line');
   assert.equal(notes().p1.win.k, 0, 'nothing counted into any hour');
   // a real burst in the hour right after is still caught
   b.observe(snap([eyeDev(d, trustOf(d, { at: after + 1000, rejectsDay: { 'not paired': 11 } }))]) as any, null);
-  assert.equal(check(b.view(), 'refused').text, '6 refusals in the last hour, it usually sees about 0.5: unusual. all were refused');
+  assert.equal(check(b.view(), 'refused').text, '6 refusals in the last hour, at this hour of day it usually sees about 0.1: unusual. all were refused');
 });
 
 test('a one-week absence with refusals spread over it is not a burst either', () => {
@@ -453,15 +477,15 @@ test('a one-week absence with refusals spread over it is not a burst either', ()
   const { b, events, notes } = branch();
   const t0 = 1_000_000_000;
   b.observe(snap([eyeDev(d, trustOf(d, { at: t0 }))]) as any, null);
-  hourByHour(b, d, t0, 24);
-  const after = t0 + 24 * H + 7 * 24 * H;
-  const spread = [1, 2, 3, 4, 5, 6, 7].map((n) => ({ t: t0 + 24 * H + n * 24 * H, why: 'not paired', peer: 'x' }));
+  hourByHour(b, d, t0, 72);
+  const after = t0 + 72 * H + 7 * 24 * H;
+  const spread = [1, 2, 3, 4, 5, 6, 7].map((n) => ({ t: t0 + 72 * H + n * 24 * H, why: 'not paired', peer: 'x' }));
   b.observe(snap([eyeDev(d, trustOf(d, { at: after, rejectsDay: { 'not paired': 9 }, rejectsLast: spread }))]) as any, null);
   assert.equal(b.view().report!.verdict, 'ok');
   assert.equal(events.filter((e) => /refusals in the last hour/.test(e)).length, 0);
   assert.equal(notes().p1.win.k, 0);
   b.observe(snap([eyeDev(d, trustOf(d, { at: after + 1000, rejectsDay: { 'not paired': 15 } }))]) as any, null);
-  assert.equal(check(b.view(), 'refused').text, '6 refusals in the last hour, it usually sees about 0.5: unusual. all were refused');
+  assert.equal(check(b.view(), 'refused').text, '6 refusals in the last hour, at this hour of day it usually sees about 0.1: unusual. all were refused');
 });
 
 test('a device that stops reporting its ledger length: a note, the remembered count stays', () => {
@@ -529,10 +553,10 @@ test('a hostile snapshot is coerced or ignored: the saved notes stay loadable an
   const { b, notes } = branch();
   const t0 = 1_000_000_000;
   b.observe(snap([eyeDev(d, trustOf(d, { at: t0 }))]) as any, null);
-  hourByHour(b, d, t0, 24);
+  hourByHour(b, d, t0, 72);
   // a sane clock but junk fields: coerced, never stored as junk
   b.observe(snap([eyeDev(d, trustOf(d, {
-    at: t0 + 24 * H + 1000,
+    at: t0 + 72 * H + 1000,
     count: '40' as any,
     rejectsDay: { 'bad proof': -5, x: NaN, y: '7', odd: 1e300 } as any,
     rejectsLast: [null, { t: NaN, why: 'odd', peer: 'x' }, { t: -1, why: 'odd', peer: 'x' }, { t: 1e300, why: 'odd', peer: 'x' }] as any,
@@ -541,12 +565,12 @@ test('a hostile snapshot is coerced or ignored: the saved notes stay loadable an
   assert.doesNotThrow(() => b.observe(snap([eyeDev(d, trustOf(d, { at: 9e15 }))]) as any, null));
   assert.doesNotMatch(JSON.stringify(b.view()), /NaN|undefined|\[object|e\+\d/);
   const r2 = branch(notes());
-  assert.equal(r2.notes().p1.hist.length, 24, 'the learned hours survived');
+  assert.equal(r2.notes().p1.burst.n, 72, 'the learned hours survived');
   assert.equal(r2.notes().p1.count, 1, 'the absurd count was not remembered');
   // the capped junk day filled the hour at once: the burst is already red, and it stays judged
-  r2.b.observe(snap([eyeDev(d, trustOf(d, { at: t0 + 24 * H + 2000, rejectsDay: { 'not paired': 6 }, rejectsLast: [1, 2, 3, 4, 5, 6].map((n) => ({ t: t0 + 24 * H + 1500 + n, why: 'not paired', peer: 'x' })) }))]) as any, null);
+  r2.b.observe(snap([eyeDev(d, trustOf(d, { at: t0 + 72 * H + 2000, rejectsDay: { 'not paired': 6 }, rejectsLast: [1, 2, 3, 4, 5, 6].map((n) => ({ t: t0 + 72 * H + 1500 + n, why: 'not paired', peer: 'x' })) }))]) as any, null);
   assert.equal(r2.b.view().report!.verdict, 'bad');
-  assert.equal(check(r2.b.view(), 'refused').text, '9999 refusals in the last hour, it usually sees about 0.5: unusual. all were refused');
+  assert.equal(check(r2.b.view(), 'refused').text, '9999 refusals in the last hour, at this hour of day it usually sees about 0.1: unusual. all were refused');
 });
 
 test('null containers and null entries are skipped without a throw, nothing odd reaches the view', () => {
@@ -593,7 +617,8 @@ test('notes written before the new checks load unchanged, and the first answer a
   assert.equal(s.count, 2);
   assert.equal(s.rejTotal, 6);
   assert.equal(s.win.k, 0);
-  assert.deepEqual(s.hist, []);
+  assert.equal(s.hist, undefined);
+  assert.deepEqual(s.burst, freshBurst());
 });
 
 test('a notes file of the wrong shape gives fresh notes, never a throw', () => {
@@ -617,9 +642,11 @@ test('the notes are bounded: 168 finished hours per device, 40 devices beyond th
     total += i % 3;
     b.observe(snap([eyeDev(d, trustOf(d, { at: t0 + i * H, rejectsDay: { 'not paired': total } }))]) as any, null);
   }
-  assert.equal(notes().p1.hist.length, 168);
-  assert.equal(notes().p1.hist[0], 2, 'the two oldest finished hours were dropped');
-  assert.equal(notes().p1.hist[167], 1);
+  // the hours are folded into 24 numbers and 24 numbers per device, however many were taken in
+  assert.equal(notes().p1.burst.a.length, 24);
+  assert.equal(notes().p1.burst.b.length, 24);
+  assert.equal(notes().p1.burst.n, 170, 'every finished hour was taken in, none kept one by one');
+  assert.ok(!('hist' in notes().p1), 'no list of hours is kept');
 
   // devices: past 40, the vanished one goes; the live ones all stay. (P43, G10: this said "with 42
   // live devices the least recent live ones go"; a live device now never loses its notes.)
@@ -728,13 +755,13 @@ test('the learned hours survive a restart: save, load, and the burst still fires
   const t0 = 1_000_000_000;
   const r1 = branch();
   r1.b.observe(snap([eyeDev(d, trustOf(d, { at: t0 }))]) as any, null);
-  hourByHour(r1.b, d, t0, 24);
+  hourByHour(r1.b, d, t0, 72);
   const r2 = branch(r1.notes());   // a new branch reads the notes r1 wrote
-  assert.equal(r2.notes().p1.hist.length, 24);
+  assert.equal(r2.notes().p1.burst.n, 72);
   assert.equal(r2.notes().p1.count, 1);
-  r2.b.observe(snap([eyeDev(d, trustOf(d, { at: t0 + 24 * H + 1000, rejectsDay: { 'not paired': 6 }, rejectsLast: [{ t: 1, why: 'not paired', peer: 'x' }] }))]) as any, null);
+  r2.b.observe(snap([eyeDev(d, trustOf(d, { at: t0 + 72 * H + 1000, rejectsDay: { 'not paired': 6 }, rejectsLast: [{ t: 1, why: 'not paired', peer: 'x' }] }))]) as any, null);
   assert.equal(r2.b.view().report!.verdict, 'bad');
-  assert.equal(check(r2.b.view(), 'refused').text, '6 refusals in the last hour, it usually sees about 0.5: unusual. all were refused');
+  assert.equal(check(r2.b.view(), 'refused').text, '6 refusals in the last hour, at this hour of day it usually sees about 0.1: unusual. all were refused');
 });
 
 test('a restart whose new chain faults: accepting both faults never raises a third, shorter-ledger alarm', () => {
@@ -794,9 +821,9 @@ test('a rate that stays raised past an hour edge stays red until a finished hour
   const { b, events } = branch();
   const t0 = 1_000_000_000;
   b.observe(snap([eyeDev(d, trustOf(d, { at: t0 }))]) as any, null);
-  hourByHour(b, d, t0, 24);
+  hourByHour(b, d, t0, 72);
   // one refusal every ten minutes, six each hour, for three hours; the day total carries the count
-  const start = t0 + 24 * H;
+  const start = t0 + 72 * H;
   const hourOf = (hourStart: number, total: number) => trustOf(d, {
     at: hourStart + H,
     rejectsDay: { 'not paired': total },
@@ -804,8 +831,8 @@ test('a rate that stays raised past an hour edge stays red until a finished hour
   });
   b.observe(snap([eyeDev(d, hourOf(start, 6))]) as any, null);
   assert.equal(b.view().report!.verdict, 'bad');
-  assert.equal(check(b.view(), 'refused').text, '6 refusals in the last hour, it usually sees about 0.5: unusual. all were refused');
-  assert.deepEqual(events, ['pixel: 6 refusals in the last hour, it usually sees about 0.5: unusual. all were refused']);
+  assert.equal(check(b.view(), 'refused').text, '6 refusals in the last hour, at this hour of day it usually sees about 0.1: unusual. all were refused');
+  assert.deepEqual(events, ['pixel: 6 refusals in the last hour, at this hour of day it usually sees about 0.1: unusual. all were refused']);
   // the next two hours keep the same rate: each finished hour is a burst too, so the check never clears
   b.observe(snap([eyeDev(d, hourOf(start + H, 12))]) as any, null);
   b.observe(snap([eyeDev(d, hourOf(start + 2 * H, 18))]) as any, null);
@@ -815,7 +842,7 @@ test('a rate that stays raised past an hour edge stays red until a finished hour
   // the first quiet hour: its previous finished hour was still a burst, so the check stays red
   b.observe(snap([eyeDev(d, trustOf(d, { at: start + 4 * H, rejectsDay: { 'not paired': 18 } }))]) as any, null);
   assert.equal(b.view().report!.verdict, 'bad');
-  assert.equal(check(b.view(), 'refused').text, 'refusals still above its usual: 6 in the last finished hour, usually about 0.5');
+  assert.equal(check(b.view(), 'refused').text, 'refusals still above its usual: 6 in the last finished hour, at that hour of day usually about 0.1');
   assert.equal(events.length, 1, 'no new line while it stays red');
   // a finished quiet hour clears it, once
   b.observe(snap([eyeDev(d, trustOf(d, { at: start + 5 * H, rejectsDay: { 'not paired': 18 } }))]) as any, null);
@@ -830,17 +857,17 @@ test('a finished burst hour is remembered across a restart and clears on a finis
   const t0 = 1_000_000_000;
   const r1 = branch();
   r1.b.observe(snap([eyeDev(d, trustOf(d, { at: t0 }))]) as any, null);
-  hourByHour(r1.b, d, t0, 24);
-  const start = t0 + 24 * H;
+  hourByHour(r1.b, d, t0, 72);
+  const start = t0 + 72 * H;
   // one raised hour, then the answer that finishes it: red, and the burst is remembered
   r1.b.observe(snap([eyeDev(d, trustOf(d, { at: start + H, rejectsDay: { 'not paired': 6 } }))]) as any, null);
   r1.b.observe(snap([eyeDev(d, trustOf(d, { at: start + 2 * H, rejectsDay: { 'not paired': 6 } }))]) as any, null);
-  assert.equal(check(r1.b.view(), 'refused').text, 'refusals still above its usual: 6 in the last finished hour, usually about 0.5');
+  assert.equal(check(r1.b.view(), 'refused').text, 'refusals still above its usual: 6 in the last finished hour, at that hour of day usually about 0.1');
   const r2 = branch(r1.notes());
   // a look inside the next hour: still red from the finished hour the notes remember
   r2.b.observe(snap([eyeDev(d, trustOf(d, { at: start + 2 * H + 1000, rejectsDay: { 'not paired': 6 } }))]) as any, null);
   assert.equal(r2.b.view().report!.verdict, 'bad');
-  assert.equal(check(r2.b.view(), 'refused').text, 'refusals still above its usual: 6 in the last finished hour, usually about 0.5');
+  assert.equal(check(r2.b.view(), 'refused').text, 'refusals still above its usual: 6 in the last finished hour, at that hour of day usually about 0.1');
   // a finished quiet hour clears it
   r2.b.observe(snap([eyeDev(d, trustOf(d, { at: start + 3 * H + 1000, rejectsDay: { 'not paired': 6 } }))]) as any, null);
   assert.equal(r2.b.view().report!.verdict, 'ok');
@@ -900,10 +927,10 @@ test('two reasons each at the day cap: one answer counts 10000 into the hour, ne
   const { b, notes } = branch();
   const t0 = 1_000_000_000;
   b.observe(snap([eyeDev(d, trustOf(d, { at: t0 }))]) as any, null);
-  hourByHour(b, d, t0, 24);
-  b.observe(snap([eyeDev(d, trustOf(d, { at: t0 + 24 * H + 1000, rejectsDay: { 'not paired': 10000, odd: 10000 } }))]) as any, null);
+  hourByHour(b, d, t0, 72);
+  b.observe(snap([eyeDev(d, trustOf(d, { at: t0 + 72 * H + 1000, rejectsDay: { 'not paired': 10000, odd: 10000 } }))]) as any, null);
   assert.equal(notes().p1.win.k, 10000, 'one answer adds at most 10000 to the hour');
-  assert.equal(check(b.view(), 'refused').text, '9999 refusals in the last hour, it usually sees about 0.5: unusual. all were refused');
+  assert.equal(check(b.view(), 'refused').text, '9999 refusals in the last hour, at this hour of day it usually sees about 0.1: unusual. all were refused');
   assert.doesNotMatch(JSON.stringify(b.view()), /e\+\d/);
 });
 
@@ -913,13 +940,13 @@ test('a gap in the looks clears a finished burst: one night away is not "still a
   const { b, events } = branch();
   const t0 = 1_000_000_000;
   b.observe(snap([eyeDev(d, trustOf(d, { at: t0 }))]) as any, null);
-  hourByHour(b, d, t0, 24);
-  const start = t0 + 24 * H;
+  hourByHour(b, d, t0, 72);
+  const start = t0 + 72 * H;
   // a burst hour, then the answer that finishes it: red, and the burst is remembered
   b.observe(snap([eyeDev(d, trustOf(d, { at: start + 1000, rejectsDay: { 'not paired': 6 } }))]) as any, null);
   b.observe(snap([eyeDev(d, trustOf(d, { at: start + H + 1000, rejectsDay: { 'not paired': 6 } }))]) as any, null);
   assert.equal(b.view().report!.verdict, 'bad');
-  assert.equal(check(b.view(), 'refused').text, 'refusals still above its usual: 6 in the last finished hour, usually about 0.5');
+  assert.equal(check(b.view(), 'refused').text, 'refusals still above its usual: 6 in the last finished hour, at that hour of day usually about 0.1');
   assert.equal(events.filter((e) => /refusals in the last hour/.test(e)).length, 1);
   // the computer slept ten hours: the finished hour is far too old to say the rate is still raised
   b.observe(snap([eyeDev(d, trustOf(d, { at: start + H + 10 * H + 1000, rejectsDay: { 'not paired': 6 } }))]) as any, null);
@@ -935,8 +962,8 @@ test('a device that answers every two hours after a burst is not red at every lo
   const { b } = branch();
   const t0 = 1_000_000_000;
   b.observe(snap([eyeDev(d, trustOf(d, { at: t0 }))]) as any, null);
-  hourByHour(b, d, t0, 24);
-  const start = t0 + 24 * H;
+  hourByHour(b, d, t0, 72);
+  const start = t0 + 72 * H;
   b.observe(snap([eyeDev(d, trustOf(d, { at: start + 1000, rejectsDay: { 'not paired': 6 } }))]) as any, null);
   b.observe(snap([eyeDev(d, trustOf(d, { at: start + H + 1000, rejectsDay: { 'not paired': 6 } }))]) as any, null);
   assert.equal(b.view().report!.verdict, 'bad');
