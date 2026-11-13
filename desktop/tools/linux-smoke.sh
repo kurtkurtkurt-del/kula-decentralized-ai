@@ -5,42 +5,95 @@
 #   2 facts: the userns sysctl, libfuse2t64, os.freemem() against MemAvailable
 #   3 the deb as shipped, first launch (setup downloads llama.cpp), the chat page checks
 #   4 llama.cpp: the picked asset, sha256, --version, the rpc server on 127.0.0.1, ldd in a clean ubuntu
-#   5 quit: SIGTERM, then the port is free and nothing is left
+#   4b a model, here: the running app loads Qwen3 0.6B Q8_0 through its own page api (download,
+#      sha256, llama-server on 127.0.0.1) and answers one question; tok/s is a FACT, no threshold
+#   5 quit with the model still loaded: SIGTERM, then the port is free and nothing is left
+#   5b nvidia: `kula-node setup` in a home of its own with a fake nvidia-smi (the real detection,
+#      not KULA_NVIDIA=1): the cuda build and its cudart are picked, sha-checked, unpacked, and ldd
+#      in a clean ubuntu finds everything but the driver's libcuda.so.1. The gpu itself is not used.
 #   6 the AppImage as shipped, then APPIMAGE_EXTRACT_AND_RUN=1 and/or userns=0 only as needed
 # Only xvfb is installed beforehand. The Chromium sandbox stays on: nothing here passes --no-sandbox.
 # usage: linux-smoke.sh <x64|arm64> <dir with the four files and sha256sums-linux.txt>
+#        linux-smoke.sh --model-only <OPEN_URL> <KULA_NODE_HOME> <OUTDIR>
+#          step 4b alone against any running kula page (a Mac too): OPEN_URL is the page's address
+#          (http://127.0.0.1:<port>/<prefix>/), KULA_NODE_HOME that app's home; never quits the app.
+#          There a model already here or loaded is reported, not failed, and the loopback check
+#          is skipped without ss.
 # prints CHECK <name> PASS|FAIL <detail>, FACT ..., APPIMAGE ...; exits 1 when any CHECK failed
 # (step 6's AppImage checks are printed but not counted: the AppImage is not shipped).
 set -euo pipefail
 
-ARCH="${1:?arch: x64 or arm64}"
-DIR="$(cd "${2:?dir with the files}" && pwd)"
+# the model of step 4b, as node/src/ui/catalog.ts has it (UI_CATALOG's first entry); the app fetches
+# it itself from huggingface (catalog.ts modelUrl) and checks the sha256 (ui/engine.ts fetchChecked)
+MODEL_ID='qwen3-0.6b-q8'
+MODEL_FILE='Qwen3-0.6B-Q8_0.gguf'
+MODEL_SIZE=639446688
+MODEL_SHA='9465e63a22add5354d9bb4b99e90117043c7124007664907259bd16d043bb031'
+export MODEL_ID MODEL_FILE MODEL_SIZE MODEL_SHA
+
 REPO="$(cd "$(dirname "$0")/../.." && pwd)"
-OUT="${SMOKE_OUT:-${RUNNER_TEMP:-/tmp}/smoke}"
-H="${RUNNER_TEMP:-/tmp}/h"                     # KULA_NODE_HOME (node/src/paths.ts:10)
+if [ "${1:-}" = --model-only ]; then
+  MODE=model-only
+  OPEN_URL="${2:?usage: linux-smoke.sh --model-only <OPEN_URL> <KULA_NODE_HOME> <OUTDIR>}"
+  H="${3:?usage: linux-smoke.sh --model-only <OPEN_URL> <KULA_NODE_HOME> <OUTDIR>}"
+  OUT="${4:?usage: linux-smoke.sh --model-only <OPEN_URL> <KULA_NODE_HOME> <OUTDIR>}"
+  case "$OPEN_URL" in */) ;; *) OPEN_URL="$OPEN_URL/" ;; esac
+  mkdir -p "$OUT"
+else
+  MODE=full
+  ARCH="${1:?arch: x64 or arm64}"
+  DIR="$(cd "${2:?dir with the files}" && pwd)"
+  OUT="${SMOKE_OUT:-${RUNNER_TEMP:-/tmp}/smoke}"
+  H="${RUNNER_TEMP:-/tmp}/h"                   # KULA_NODE_HOME (node/src/paths.ts:10)
+  mkdir -p "$OUT" "$H"
+fi
 REL="$OUT/rel.json"                            # KULA_RELEASE_JSON (node/src/llama.ts:251), absolute: kula-node runs with cwd = its own folder
 PORT=50590                                     # the app's default (desktop/src/main.js:17)
 EMAIL='noreply@users.noreply.github.com'
 MAINTAINER="kula <$EMAIL>"
-mkdir -p "$OUT" "$H"
 
-case "$ARCH" in
-  x64) DEB_ARCH=amd64; UNAME=x86_64 ;;
-  arm64) DEB_ARCH=arm64; UNAME=aarch64 ;;
-  *) echo "unknown arch $ARCH"; exit 2 ;;
-esac
+if [ "$MODE" = full ]; then
+  case "$ARCH" in
+    x64) DEB_ARCH=amd64; UNAME=x86_64 ;;
+    arm64) DEB_ARCH=arm64; UNAME=aarch64 ;;
+    *) echo "unknown arch $ARCH"; exit 2 ;;
+  esac
+fi
 TAG="$(grep -oE "export const TAG = '[^']+'" "$REPO/node/src/llama.ts" | grep -oE "b[0-9]+")"
 TAGNUM="${TAG#b}"
 VERSION="$(node -p "require('$REPO/desktop/package.json').version")"
-DEB="$DIR/kula-linux-$ARCH.deb"
-APPIMG="$DIR/kula-linux-$ARCH.AppImage"
+DEB="${DIR:-}/kula-linux-${ARCH:-}.deb"
+APPIMG="${DIR:-}/kula-linux-${ARCH:-}.AppImage"
 
 FAILS=0
 DONE=0
 pass() { echo "CHECK $1 PASS ${*:2}"; }
 fail() { echo "CHECK $1 FAIL ${*:2}"; FAILS=$((FAILS + 1)); }
 fact() { echo "FACT $*"; }
-oneline() { tr '\n' ' ' | sed 's/[[:space:]]\+/ /g; s/ $//'; }
+oneline() { tr '\n' ' ' | sed -E 's/[[:space:]]+/ /g; s/ $//'; }
+
+# jsf FILE 'body': runs body as a function of x (FILE parsed as JSON; null when it is not) and
+# prints what it returns. Never fails: a missing file or a throw comes back as text.
+jsf() {
+  node -e 'let x = null; try { x = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")); } catch {}
+    let r; try { r = new Function("x", process.argv[2])(x); } catch (err) { r = "FAIL js: " + err.message; }
+    console.log(r == null ? "" : String(r));' "$1" "$2" || true
+}
+# ssef FILE 'body': FILE is a saved SSE answer (lines "data: {json}"); body runs with evs (every
+# event that parsed) and e (the last data: line parsed; {unparsed} when it is cut off, null when
+# there is none) and prints what it returns. Never fails.
+ssef() {
+  node -e 'let t = ""; try { t = require("fs").readFileSync(process.argv[1], "utf8"); } catch {}
+    const evs = []; let last = null;
+    for (const l of t.split(/\r?\n/)) { if (!l.startsWith("data:")) continue; last = l.slice(5).trim(); try { evs.push(JSON.parse(last)); } catch {} }
+    let e = null; if (last !== null) { try { e = JSON.parse(last); } catch { e = { unparsed: last.slice(0, 200) }; } }
+    let r; try { r = new Function("evs", "e", process.argv[2])(evs, e); } catch (err) { r = "FAIL js: " + err.message; }
+    console.log(r == null ? "" : String(r));' "$1" "$2" || true
+}
+# verdict NAME "PASS detail" | "FAIL detail"
+verdict() { case "$2" in "PASS "*) pass "$1" "${2#PASS }" ;; *) fail "$1" "${2#FAIL }" ;; esac; }
+sha256_of() { if command -v sha256sum > /dev/null; then sha256sum "$1" | awk '{print $1}'; else shasum -a 256 "$1" | awk '{print $1}'; fi; }
+size_of() { node -p 'require("fs").statSync(process.argv[1]).size' "$1" 2>/dev/null || echo 0; }
 
 # the app's processes: the main one and its children all have comm "kula" (children carry --type=)
 kula_pids() { pgrep -x kula || true; }
@@ -80,7 +133,9 @@ on_exit() {
   if [ "$DONE" != 1 ]; then echo "CHECK script-finished FAIL stopped early (exit $rc)"; exit 1; fi
   exit "$rc"
 }
-trap on_exit EXIT
+# --model-only never stops anything: the app there is someone's own
+if [ "$MODE" = full ]; then trap on_exit EXIT
+else trap 'rc=$?; if [ "$DONE" != 1 ]; then echo "CHECK script-finished FAIL stopped early (exit $rc)"; exit 1; fi' EXIT; fi
 trap 'echo "ERROR line $LINENO: $BASH_COMMAND"' ERR
 
 # launches the app under xvfb in the background; extra NAME=value pairs after the program
@@ -155,6 +210,128 @@ quit_checks() {
   fail "$t-quit" "after 10 s: port ${listen:-free}, left: ${left:-none}"
   stop_all
 }
+
+# step 4b: a model, here, through the page's own api (node/src/ui/server.ts): GET status and models;
+# POST load and chat answer as SSE (data: {...} lines; the last is {done:true,...} or {error}).
+# A POST needs Origin == http://<the Host header> (server.ts sameOrigin), so the page's own host:port.
+# Every answer is kept as $OUT/model-*.txt (the artifact takes txt and log only).
+model_steps() {
+  local api origin code rc t0 secs v f had nc
+  local strict=1
+  [ "$MODE" = model-only ] && strict=0
+  export STRICT=$strict
+  api="${OPEN_URL}api"
+  origin="$(printf '%s' "$OPEN_URL" | sed -E 's#^(https?://[^/]+).*#\1#')"
+  fact "model: $MODEL_ID ($MODEL_FILE, $MODEL_SIZE bytes) at $api, Origin $origin, home $H"
+
+  # model-known: kula's catalog has it, llama.cpp is here, nothing loaded, the row has the size
+  code="$(curl -sS --max-time 10 -o "$OUT/model-status-before.txt" -w '%{http_code}' "$api/status" 2>> "$OUT/model-curl.log" || true)"
+  code="$code/$(curl -sS --max-time 10 -o "$OUT/model-models.txt" -w '%{http_code}' "$api/models" 2>> "$OUT/model-curl.log" || true)"
+  v="$(jsf "$OUT/model-status-before.txt" 'if (!x) return "FAIL status is not json";
+    const why = [];
+    if (x.llama !== true) why.push("llama " + JSON.stringify(x.llama));
+    if (x.loaded !== null && process.env.STRICT === "1") why.push("loaded " + JSON.stringify(x.loaded && x.loaded.model));
+    return (why.length ? "FAIL " + why.join(", ") : "PASS llama true, loaded " + (x.loaded ? x.loaded.mode + " " + x.loaded.model.id + " (model-only: not required)" : "null"));')"
+  had="$(jsf "$OUT/model-models.txt" 'const r = Array.isArray(x) ? x.find((m) => m && m.id === process.env.MODEL_ID) : null; return r ? String(r.here === true) : "";')"
+  if ! grep -q "$MODEL_SHA" "$REPO/node/src/ui/catalog.ts"; then fail model-known "sha $MODEL_SHA not in node/src/ui/catalog.ts"
+  else
+    case "$v" in
+      "PASS "*)
+        v="$(jsf "$OUT/model-models.txt" 'if (!Array.isArray(x)) return "FAIL models is not a list";
+          const r = x.find((m) => m && m.id === process.env.MODEL_ID);
+          if (!r) return "FAIL no row " + process.env.MODEL_ID + " in " + x.length + " rows";
+          if (r.size !== Number(process.env.MODEL_SIZE)) return "FAIL size " + r.size + ", want " + process.env.MODEL_SIZE;
+          if (r.here !== false && process.env.STRICT === "1") return "FAIL here " + JSON.stringify(r.here) + ", want false";
+          return "PASS row " + r.id + " size " + r.size + " here " + r.here + (r.here ? " (model-only: not required)" : "");')"
+        verdict model-known "$v (http $code)" ;;
+      *) fail model-known "${v#FAIL } (http $code)" ;;
+    esac
+  fi
+
+  # model-load: the page's own body (node/src/ui/static/app.js, the load button)
+  t0="$(date +%s)"
+  rc=0
+  code="$(curl -sS -N --max-time 600 -o "$OUT/model-load.txt" -w '%{http_code}' -H 'content-type: application/json' -H "Origin: $origin" \
+    --data-binary "{\"model\":\"$MODEL_ID\",\"mode\":\"here\",\"peers\":[],\"ctx\":4096}" "$api/load" 2>> "$OUT/model-curl.log")" || rc=$?
+  secs=$(( $(date +%s) - t0 ))
+  v="$(ssef "$OUT/model-load.txt" 'if (!e) return "FAIL";
+    if (e.done === true) { const l = e.status && e.status.loaded; return "PASS done: " + (l ? l.model.name + " " + l.mode + ", ctx " + l.ctx : "no loaded in status"); }
+    if (typeof e.error === "string") return "FAIL " + e.error;
+    return "FAIL";')"
+  if [ "$v" = FAIL ]; then v="FAIL http ${code:-none}, curl exit $rc: $(head -c 200 "$OUT/model-load.txt" 2>/dev/null | oneline || true)"; fi
+  verdict model-load "$v"
+  if [ "$had" = true ]; then fact "model load: $secs s (the file was already here: load only)"
+  else fact "model load: $secs s ($((MODEL_SIZE / 1000000)) MB download + load)"; fi
+
+  # model-loaded: status says it runs here, this model, nothing loading
+  curl -sS --max-time 10 -o "$OUT/model-status-after.txt" "$api/status" 2>> "$OUT/model-curl.log" || true
+  verdict model-loaded "$(jsf "$OUT/model-status-after.txt" 'if (!x) return "FAIL status is not json";
+    const l = x.loaded;
+    const d = "loaded " + (l ? l.mode + " " + (l.model && l.model.id) + " ctx " + l.ctx : "null") + ", loading " + JSON.stringify(x.loading);
+    return (l && l.mode === "here" && l.model && l.model.id === process.env.MODEL_ID && x.loading == null ? "PASS " : "FAIL ") + d;')"
+
+  # model-file-sha256: the file the app fetched (the first model dir, ui/engine.ts defaultModelDirs)
+  f="$H/models/$MODEL_FILE"
+  if [ "$MODE" = model-only ] && [ ! -f "$f" ] && [ -f "$REPO/.llama/models/$MODEL_FILE" ]; then f="$REPO/.llama/models/$MODEL_FILE"; fi
+  if [ -f "$f" ]; then
+    local size sum
+    size="$(size_of "$f")"
+    sum="$(sha256_of "$f")"
+    if [ "$size" = "$MODEL_SIZE" ] && [ "$sum" = "$MODEL_SHA" ]; then pass model-file-sha256 "$f $size bytes sha256 $sum"
+    else fail model-file-sha256 "$f: size $size (want $MODEL_SIZE), sha256 $sum (want $MODEL_SHA)"; fi
+  else fail model-file-sha256 "no $f"; fi
+
+  # model-llama-loopback: llama-server listens on 127.0.0.1 only (node/src/api.ts: --host 127.0.0.1)
+  if command -v ss > /dev/null; then
+    local rows bad p
+    ss -ltnpH > "$OUT/model-listeners.txt" 2>&1 || true
+    rows="$(grep -F '"llama-server"' "$OUT/model-listeners.txt" | awk '{print $4}' | sort -u || true)"
+    nc="$(printf '%s\n' "$rows" | grep -c . || true)"
+    bad="$(printf '%s\n' "$rows" | grep -v '^127\.0\.0\.1:' | grep . | oneline || true)"
+    if [ "$nc" -ge 1 ] && [ -z "$bad" ]; then pass model-llama-loopback "llama-server on $(oneline <<< "$rows")"
+    else fail model-llama-loopback "llama-server listening on: $(oneline <<< "${rows:-nothing}")"; fi
+    for p in $(pgrep -x llama-server || true); do fact "llama-server $p: $(tr '\0' ' ' < "/proc/$p/cmdline" 2>/dev/null || true)"; done
+    fact "listeners of kula and llama: $(grep -E '"(kula|llama-server|ggml-rpc-server|rpc-server)"' "$OUT/model-listeners.txt" | awk '{print $4, $6}' | oneline || true)"
+  else
+    echo "CHECK model-llama-loopback SKIP no ss"
+  fi
+
+  # model-answer: one question, temperature 0; thinking arrives inline as <think>...</think> (node/src/api.ts)
+  rc=0
+  code="$(curl -sS -N --max-time 180 -o "$OUT/model-chat.txt" -w '%{http_code}' -H 'content-type: application/json' -H "Origin: $origin" \
+    --data-binary '{"messages":[{"role":"user","content":"What is the capital of France? Answer in one short sentence."}],"maxTokens":512,"temperature":0}' \
+    "$api/chat" 2>> "$OUT/model-curl.log")" || rc=$?
+  local answer='const raw = evs.filter((x) => x && typeof x.t === "string").map((x) => x.t).join("");
+    const ans = raw.replace(/<think>[\s\S]*?<\/think>/g, "").replace(/<think>[\s\S]*$/, "").trim();
+    const think = raw.includes("<think>");'
+  v="$(ssef "$OUT/model-chat.txt" "$answer"'
+    if (!e) return "FAIL";
+    const why = [];
+    if (e.done !== true) why.push("last event " + JSON.stringify(e).slice(0, 160));
+    if (e.error !== undefined) why.push("error " + e.error);
+    if (e.stopped === true) why.push("stopped");
+    if (!(e.tokens >= 1)) why.push("tokens " + e.tokens);
+    if (!(e.tps > 0)) why.push("tps " + e.tps);
+    if (!ans) why.push(think ? "only thinking (" + raw.length + " chars)" : "empty answer");
+    const said = ans.replace(/\s+/g, " ").slice(0, 120);
+    return (why.length ? "FAIL " + why.join(", ") + (said ? ": " + said : "") : "PASS " + said);')"
+  if [ "$v" = FAIL ]; then v="FAIL http ${code:-none}, curl exit $rc: $(head -c 200 "$OUT/model-chat.txt" 2>/dev/null | oneline || true)"; fi
+  verdict model-answer "$v"
+  SMOKE_CORES="$(node -p 'require("os").cpus().length' 2>/dev/null || echo '?')"
+  export SMOKE_CORES
+  fact "$(ssef "$OUT/model-chat.txt" "$answer"'
+    const d = e || {};
+    return "model: Qwen3 0.6B Q8_0 here, " + process.env.SMOKE_CORES + " cores: " + d.tokens + " tokens, " + d.tps + " tok/s, first token " + d.firstMs + " ms, "
+      + d.ms + " ms, device " + d.device + ", thinking " + (think ? "yes" : "no") + ", says Paris " + (/paris/i.test(ans) ? "yes" : "no");')"
+}
+
+if [ "$MODE" = model-only ]; then
+  echo "== kula model-only: $OPEN_URL, home $H, out $OUT"
+  model_steps
+  DONE=1
+  echo "== $FAILS failed check(s)"
+  if [ "$FAILS" = 0 ]; then exit 0; else exit 1; fi
+fi
 
 echo "== kula linux smoke: arch $ARCH, version $VERSION, llama.cpp $TAG, files in $DIR"
 
@@ -300,8 +477,74 @@ if [ -n "$LS" ] && [ -n "$RPC" ]; then
   else fail llama-ldd "docker run failed: $(tail -n 3 "$OUT/ldd-docker.txt" | oneline)"; fi
 else fail llama-ldd "programs missing"; fi
 
-# ---------- step 5: quit ----------
+# ---------- step 4b: a model, here (the deb app still running) ----------
+if [ -z "${OPEN_URL:-}" ] || [ -z "$LS" ]; then fail model-load "app not up (page ${OPEN_URL:-none}, llama-server ${LS:-none})"
+else model_steps; fi
+
+# ---------- step 5: quit, the model still loaded ----------
+fact "before quit: llama-server pids $(pgrep -x llama-server | oneline || true)"
 quit_checks deb
+
+# ---------- step 5b: nvidia, a fake nvidia-smi, a home of its own ----------
+# node/src/llama.ts hasNvidia: `nvidia-smi -L` exiting 0 (KULA_NVIDIA unset); assets.ts pickAsset then
+# takes llama-<tag>-bin-ubuntu-cuda-<v>-<arch>.tar.gz and its cudart-...-same-suffix companion
+NVH="${RUNNER_TEMP:-/tmp}/h-nvidia"
+NVBIN="$NVH/llama-$TAG/bin"                    # llama.ts cacheDir()/bin: both archives unpack here
+NVLOG="$OUT/nvidia-setup.log"
+KN=/opt/kula/resources/kula-node
+mkdir -p "$OUT/fakebin" "$NVH"
+printf '%s\n' '#!/bin/sh' 'echo "GPU 0: NVIDIA Fake GPU for the kula smoke test (UUID: GPU-00000000-0000-0000-0000-000000000000)"' 'exit 0' > "$OUT/fakebin/nvidia-smi"
+chmod +x "$OUT/fakebin/nvidia-smi"
+fact "nvidia-smi -L with the fake: $(PATH="$OUT/fakebin:$PATH" nvidia-smi -L 2>&1 | oneline || true)"
+if [ -f "$KN/dist/bin/kula-node.js" ] && [ -f "$REL" ]; then
+  nrc=0
+  ( cd "$KN" && env -u KULA_NVIDIA KULA_NODE_HOME="$NVH" KULA_RELEASE_JSON="$REL" PATH="$OUT/fakebin:$PATH" \
+      timeout 900 node dist/bin/kula-node.js setup ) > "$NVLOG" 2>&1 || nrc=$?
+  pick_main="$(grep -oE "(^|[[:space:]/])llama-$TAG-bin-ubuntu-cuda-[0-9.]+-$ARCH\.tar\.gz" "$NVLOG" | grep -oE "llama-$TAG-.*" | sort -u | head -1 || true)"
+  pick_rt="$(grep -oE "cudart-llama-$TAG-bin-ubuntu-cuda-[0-9.]+-$ARCH\.tar\.gz" "$NVLOG" | sort -u | head -1 || true)"
+  if [ -n "$pick_main" ] && [ -n "$pick_rt" ]; then pass nvidia-pick "$pick_main + $pick_rt"
+  else fail nvidia-pick "build ${pick_main:-not named}, runtime ${pick_rt:-not named}; $(grep -m3 -E 'for linux|cuda|cpu build' "$NVLOG" | oneline || true)"; fi
+  nok="$(grep -c 'sha256 ok' "$NVLOG" || true)"
+  if [ "$nrc" = 0 ] && [ "$nok" -ge 2 ] && grep -q '^ready: ' "$NVLOG"; then pass nvidia-setup "exit 0, sha256 ok x$nok, $(grep -m1 '^ready: ' "$NVLOG")"
+  else fail nvidia-setup "exit $nrc, sha256 ok x$nok, ready: $(grep -c '^ready: ' "$NVLOG" || true)x; last: $(tail -n 3 "$NVLOG" | oneline)"; fi
+  fact "nvidia first start downloads: $(grep -m1 -E 'will download [0-9]+ files?, ' "$NVLOG" | sed -E 's/^[[:space:]]+//' || echo 'no "will download" line')"
+else
+  fail nvidia-pick "no $KN/dist/bin/kula-node.js or no $REL"
+  fail nvidia-setup "not run"
+  : > "$NVLOG"
+fi
+NLS="$(find "$NVBIN" -type f -name llama-server 2>/dev/null | head -1 || true)"
+if [ -n "$NLS" ]; then
+  NBD="$(dirname "$NLS")"
+  NLSREL="${NLS#"$NVBIN"/}"
+  NRPC="$(find "$NBD" -maxdepth 1 -type f \( -name ggml-rpc-server -o -name rpc-server -o -name llama-rpc-server \) | head -1 || true)"
+  cud="$(find "$NVBIN" \( -name 'libcudart.so*' -o -name 'libcublas.so*' -o -name 'libcublasLt.so*' \) 2>/dev/null | sort | while read -r f; do
+           if [ "$(dirname "$f")" = "$NBD" ]; then echo "$(basename "$f") (beside it)"; else echo "${f#"$NVBIN"/} (elsewhere)"; fi
+         done | oneline || true)"
+  fact "nvidia cuda libraries, llama-server at $NLSREL: ${cud:-no libcudart/libcublas at all}"
+  # ldd the programs and the llama.cpp libraries beside them, not the cudart ones (alone they can miss each other)
+  list="$NLSREL"
+  [ -n "$NRPC" ] && list="$list ${NRPC#"$NVBIN"/}"
+  for f in $(find "$NBD" -maxdepth 1 \( -name 'libggml*.so*' -o -name 'libllama*.so*' -o -name 'libmtmd*.so*' \) | sort); do list="$list ${f#"$NVBIN"/}"; done
+  if docker run --rm -v "$NVBIN:/n:ro" -v "$DIR:/d:ro" ubuntu:24.04 sh -c "
+      export DEBIAN_FRONTEND=noninteractive
+      if apt-get update > /dev/null && apt-get install -y --no-install-recommends \$(dpkg-deb -f /d/kula-linux-$ARCH.deb Depends | tr ',' ' ') > /dev/null
+      then echo 'kula: depends installed'; else echo 'kula: depends install failed'; exit 0; fi
+      for f in $list; do echo \"== \$f\"; ldd \"/n/\$f\" 2>&1 || true; done
+      /n/$NLSREL --version > /tmp/v.txt 2>&1; echo \"kula: version exit \$?\"; cat /tmp/v.txt
+      exit 0" > "$OUT/nvidia-ldd-docker.txt" 2>&1; then
+    missing="$(sed -n '/^kula: version exit/q; p' "$OUT/nvidia-ldd-docker.txt" | awk '/=> not found/ {print $1}' | sort -u | oneline || true)"
+    others="$(tr ' ' '\n' <<< "$missing" | grep -vx 'libcuda.so.1' | grep . | oneline || true)"
+    if ! grep -q 'kula: depends installed' "$OUT/nvidia-ldd-docker.txt"; then fail nvidia-ldd "installing the deb's Depends failed: $(tail -n 3 "$OUT/nvidia-ldd-docker.txt" | oneline)"
+    elif [ -n "$others" ]; then fail nvidia-ldd "not found: $others ($(wc -w <<< "$list" | tr -d ' ') files looked at)"
+    else pass nvidia-ldd "ubuntu:24.04 with the deb's Depends: $(wc -w <<< "$list" | tr -d ' ') files, nothing missing but the driver's"; fi
+    if tr ' ' '\n' <<< "$missing" | grep -qx 'libcuda.so.1'; then fact "nvidia expected missing without a driver: libcuda.so.1"
+    else fact "nvidia expected missing without a driver: none"; fi
+    fact "nvidia llama-server --version in the container: $(grep -m1 '^kula: version exit' "$OUT/nvidia-ldd-docker.txt" | sed 's/^kula: version //' || echo 'exit ?'), $(sed -n '/^kula: version exit/,$p' "$OUT/nvidia-ldd-docker.txt" | sed -n '2,$p' | grep -m1 . || echo 'no output')"
+  else fail nvidia-ldd "docker run failed: $(tail -n 3 "$OUT/nvidia-ldd-docker.txt" | oneline)"; fi
+else
+  fail nvidia-ldd "no llama-server under $NVBIN"
+fi
 
 # ---------- step 6: the AppImage, home already seeded ----------
 # measured only: the AppImage is not shipped (D2), so its checks do not count toward the exit code

@@ -1,6 +1,8 @@
 # kula for the desktop on Linux: the four files (deb and AppImage, x64 and arm64) built once on x64,
 # then each arch smoke-tested on its own runner (desktop/tools/linux-smoke.sh: the deb as shipped,
-# first launch with llama.cpp, the chat page, quit, then the AppImage). Pushes to kula-main do not
+# first launch with llama.cpp, the chat page, a small model (Qwen3 0.6B, 639 MB from huggingface)
+# loaded here and answering on the cpu, quit, llama.cpp's cuda pick with a fake nvidia-smi (about
+# 0.7 GB more), then the AppImage; hence the smoke job's 45 minutes). Pushes to kula-main do not
 # run it; by hand (workflow_dispatch) or a push on any other branch that touches the desktop app or
 # kula-node. Never on tags and never publishes: the files stay an artifact of the run.
 name: desktop-linux
@@ -72,7 +74,7 @@ jobs:
     name: smoke (${{ matrix.arch }})
     needs: build
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 30
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
