@@ -10,7 +10,7 @@ import path from 'node:path';
 const HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'kula-eye-decide-'));
 after(() => fs.rmSync(HOME, { recursive: true, force: true }));
 
-const { GodsEye, cleanCard } = await import('../src/godseye/index.ts');
+const { GodsEye, cleanCard, dark } = await import('../src/godseye/index.ts');
 const planner = await import('../src/godseye/branches/planner.ts');
 const executor = await import('../src/godseye/branches/executor.ts');
 const models = await import('../src/godseye/branches/models.ts');
@@ -416,4 +416,51 @@ test('the eye with the real branches: cards from planner, executor and models re
   assert.ok(eye.view().branches.every((b) => !('hints' in b)));
   // the advisor points at the one to do first, under its own id
   assert.ok(got.some((x) => x.startsWith('advisor:first:')), got.join());
+});
+
+// ---- E4 (13 Nov): a card id keeps odd topics apart. A char outside [\w.:@/-] becomes '_' plus a
+// short hash of the part, and a topic over 100 chars is cut with a hash of the whole, so two devices
+// whose ids differ only there no longer share a card (and one's dismissal no longer hides the other's).
+
+test('cardId: odd topics stay apart, clean topics are as before, every id is one the eye accepts', () => {
+  const { cardId } = decide;
+  assert.notEqual(cardId('executor', 'rest', 'tab 2'), cardId('executor', 'rest', 'tab_2'));
+  const a = 'x'.repeat(100) + 'a', b = 'x'.repeat(100) + 'b';
+  assert.notEqual(cardId('executor', 'rest', a), cardId('executor', 'rest', b));
+  assert.notEqual(cardId('models', 'pick', 'y'.repeat(98), 'p'), cardId('models', 'pick', 'y'.repeat(98), 'q'));
+  const shape = /^[a-z]*:[\w.:@/-]{1,100}$/;
+  for (const id of [cardId('executor', 'rest', 'tab 2'), cardId('executor', 'rest', a), cardId('planner', 'split', 'my model.gguf'),
+    cardId('executor', 'rest', 'ü'.repeat(200)), cardId('advisor', 'night', 'é é'), cardId('models', 'bigger', 'qwen2.5-7b')]) assert.match(id, shape, id);
+  assert.equal(cardId('models', 'bigger', 'qwen2.5-7b'), 'models:bigger:qwen2.5-7b');
+  assert.equal(cardId('advisor', 'tonight'), 'advisor:tonight');
+  assert.equal(cardId('executor', 'rest', 'tab_2'), 'executor:rest:tab_2');
+  assert.equal(cardId('planner', 'split', 'a@b/c:d'), 'planner:split:a@b/c:d');
+  // models.ts finds the planner's card of a model by its tail
+  assert.ok(cardId('planner', 'split', 'my model.gguf').endsWith(cardId('', 'my model.gguf')));
+});
+
+test('the eye: "tab 2" and "tab_2" both should rest: two cards, and dismissing one leaves the other showing', () => {
+  let t = AT;
+  const hints = { list: [] as { id: string; no: string }[] };
+  const work = { loaded: loaded(GEMMA, 'apart', [here(20, 5), on('tab 2', 'my tab', 20, 5), on('tab_2', 'friend tab', 20, 5)]) };
+  const eye = new GodsEye({
+    now: () => t,
+    snapshot: () => snap({ at: t, devices: [dev({ id: 'tab 2', name: 'my tab' }), dev({ id: 'tab_2', name: 'friend tab' })], work }),
+    dir: path.join(HOME, 'e4'),
+    makers: { limits: () => ({ id: 'limits', observe() {}, view: () => ({ ...dark(), built: true, stat: 'x', hints: hints.list }) }) },
+  } as any);
+  const tick = (n: number) => { for (let i = 0; i < n; i++) { t += 5000; eye.tick(); } };
+  const rest = () => eye.view().cards.filter((c: any) => c.id.startsWith('executor:rest:'));
+  hints.list = [{ id: 'tab 2', no: 'should rest: it is hot' }, { id: 'tab_2', no: 'should rest: battery 9%' }];
+  tick(4);
+  assert.equal(rest().length, 2, JSON.stringify(rest().map((c: any) => c.id)));
+  hints.list = [{ id: 'tab 2', no: 'should rest: it is hot' }];
+  tick(6);
+  const mine = rest();
+  assert.equal(mine.length, 1);
+  eye.dismiss(mine[0].id);
+  hints.list = [{ id: 'tab_2', no: 'should rest: battery 9%' }];
+  tick(6);
+  assert.equal(rest().length, 1, "the friend tab's own rest warning shows");
+  assert.equal(rest()[0].id, 'executor:rest:tab_2');
 });

@@ -11,6 +11,7 @@
 // A split runs its layers one device after the other, so its token is the sum of each device's
 // part plus a hop per worker; the bytes go to the fastest device first, as sim.ts does.
 import type { BranchCtx, DeviceHint, EyeDevice, EyeModel, Snapshot, SuggestAction, Suggestion } from '../types.js';
+import { sha256Hex } from '../hash.js';
 import { active } from './util.js';
 
 export const LOCAL_SHARE = 0.7;    // sim.ts: of this computer's free memory a model may take
@@ -215,8 +216,18 @@ export const names = (xs: { name: string }[]) => {
 /** "the Mac" for this computer when it has a name, else the device's own name */
 export const seatName = (s: Snapshot, x: { local: boolean; name: string }) => (x.local ? s.host.name || 'this computer' : x.name);
 
-/** a card id: "<branch>:<topic>", the topic cut to the chars the eye accepts */
-export const cardId = (branch: string, ...topic: string[]) => `${branch}:${topic.join(':').replace(/[^\w.:@/-]/g, '_').slice(0, 100)}`;
+/** a card id: "<branch>:<topic>", the topic in the chars the eye accepts. A part with other chars
+ *  gets them as '_' plus 8 hex of its sha256, and a topic over 100 chars is cut to 87 plus 12 hex of
+ *  the whole, so two odd ids never share a card; a clean topic is kept as it is, and each part's
+ *  form does not depend on the others (models.ts finds the planner's card by its ":<model id>" tail) */
+export const cardId = (branch: string, ...topic: string[]) => {
+  const parts = topic.map((t) => {
+    const c = t.replace(/[^\w.:@/-]/g, '_');
+    return c === t ? t : `${c}-${sha256Hex(t).slice(0, 8)}`;
+  });
+  const joined = parts.join(':');
+  return `${branch}:${joined.length > 100 ? `${joined.slice(0, 87)}-${sha256Hex(topic.join(':')).slice(0, 12)}` : joined}`;
+};
 
 // ---- hysteresis: a card shows once its reason held SHOW looks running and goes once it was gone
 // HIDE looks running. Each branch says its reasons twice: strict (to show) and with SLACK (to stay),
