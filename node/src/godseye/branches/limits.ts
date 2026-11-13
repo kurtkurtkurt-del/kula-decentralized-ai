@@ -1,9 +1,15 @@
 // 9 limits: keep the devices within what they can bear. It only watches and warns, it never stops,
 // slows or unloads anything, and its cards only open its page. Its rules:
-//   memory   the loaded model's need against each device's memory: ok, tight (over 80%), over
+//   memory   the loaded model's need against each device's memory: ok, tight (over 80%), over. Judged
+//            and shown per device id (F5): two phones of one name each keep their own row and warning
 //   rest     a device answering without a break for longer than 20 minutes should rest; answers per hour
 //   night    a night project still running past its end time, and its devices still working then
 //   energy   a guess: busy minutes × watts by kind (phone 3 W, pc 15 W), kept per day in its notes
+//   split    kula's engine opens a split with no peers (ui/engine.ts), so its workers are only in
+//            loaded.parts. rest, energy and the night window walk the loaded devices and these parts
+//            (executor.ts partsOf): every token runs through every part, so the host's busy is each
+//            part's busy. A part's row says "in the split" and has no answers bit (its answers are the
+//            host's). The slow rule stays on the loaded devices: a part's tok/s is the whole chain's
 //   power    the host's own battery and heat, when it is a phone (host.power)
 //   health   each phone's own heat, battery and throttling (12.11.2026): the newest reading of the
 //            health lines its worker writes to its ledger every minute or when its warnings
@@ -52,6 +58,7 @@ import type { Branch, BranchCtx, Snapshot, Suggestion } from '../types.js';
 import { gb, hhmm } from './util.js';
 import { cardId } from './decide.js';
 import { masked } from './review.js';   // a project's title may hold personal data: shown masked, as review does
+import { partsOf } from './executor.js';
 
 export const TIGHT = 0.8;                       // memory use above this share is tight
 export const TIGHT_PERCENT = 80;                // the same threshold in whole percent, as it is shown
@@ -87,7 +94,7 @@ const PERCENT_MAX = 100_000;                    // a share past this is shown as
 type Day = { wh: number; busyMin: number; by: Record<string, number> };   // by: device name → Wh
 export type Notes = { v: number; days: Record<string, Day> };
 type Warn = { text: string; ended: string };
-type Mem = { name: string; needMb: number; ramMb: number | null; share: number | null; percent: number; level: 'ok' | 'tight' | 'over' | 'unknown' };
+type Mem = { id: string; name: string; needMb: number; ramMb: number | null; share: number | null; percent: number; level: 'ok' | 'tight' | 'over' | 'unknown' };
 
 /** a time this branch may keep: finite, not negative, date-sized */
 export const isTime = (x: unknown): x is number => typeof x === 'number' && Number.isFinite(x) && x >= 0 && x <= TIME_MAX;
@@ -262,6 +269,18 @@ function loadedOf(s: Snapshot | null): Record<string, unknown> | null {
   return work && isObject(work.loaded) ? work.loaded : null;
 }
 
+/** the loaded devices and, in a split, its parts on other devices (executor.ts partsOf) as entries of
+ *  their own: every token runs through every part, so the host's busy (the local entry, else the
+ *  first) is theirs; a part's answers are the host's, so it has no counter of its own */
+function workingOf(l: Record<string, unknown> | null): unknown[] {
+  const loaded = l && Array.isArray(l.devices) ? (l.devices as unknown[]) : [];
+  const parts = partsOf(l);
+  if (!parts.length) return loaded;
+  const host = loaded.find((d) => isObject(d) && d.local === true) ?? loaded[0];
+  const busy = isObject(host) && host.busy === true;
+  return [...loaded, ...parts.map((p) => ({ id: p.id, name: p.name, local: false, busy, done: null, part: true }))];
+}
+
 /** a null prototype: a day key or a device name from the snapshot must not reach Object.prototype */
 const fresh = (): Notes => ({ v: NOTES_V, days: Object.create(null) as Record<string, Day> });
 
@@ -351,19 +370,19 @@ export function create(ctx: BranchCtx): Branch {
     const byId = new Map<string, Record<string, unknown>>();
     for (const d of rawDevices) if (usableNamed(d) && !byId.has(d.id)) byId.set(d.id, d);
     const out: Mem[] = [];
-    const judge = (name: string, needMb: unknown, ramMb: unknown): Mem => {
+    const judge = (id: string, name: string, needMb: unknown, ramMb: unknown): Mem => {
       const need = isNumber(needMb) && needMb > 0 ? needMb : 0;
       const ram = isNumber(ramMb) && ramMb > 0 ? ramMb : null;
-      if (need <= 0 || ram == null) return { name, needMb: need, ramMb: ram, share: null, percent: 0, level: 'unknown' };
+      if (need <= 0 || ram == null) return { id, name, needMb: need, ramMb: ram, share: null, percent: 0, level: 'unknown' };
       const share = need / ram;
       const percent = Math.round(share * 100);
-      return { name, needMb: need, ramMb: ram, share, percent, level: levelOf(share) };
+      return { id, name, needMb: need, ramMb: ram, share, percent, level: levelOf(share) };
     };
     const loaded = Array.isArray(l.devices) ? (l.devices as unknown[]) : [];
     if (l.mode === 'split' && Array.isArray(l.parts) && l.parts.length > 0) {
       for (const p of l.parts as unknown[]) {
         if (!usableNamed(p) || p.local === true) continue;
-        out.push(judge(shownName(p), p.mb, byId.get(p.id)?.ramMb ?? null));
+        out.push(judge(p.id, shownName(p), p.mb, byId.get(p.id)?.ramMb ?? null));
       }
     } else {
       const modelId = isObject(l.model) && typeof l.model.id === 'string' ? l.model.id : null;
@@ -373,7 +392,7 @@ export function create(ctx: BranchCtx): Branch {
         const m = models.find((x) => isObject(x) && x.id === modelId);
         if (isObject(m)) need = m.needMb;
       }
-      for (const d of loaded) if (usableNamed(d) && d.local !== true) out.push(judge(shownName(d), need, byId.get(d.id)?.ramMb ?? null));
+      for (const d of loaded) if (usableNamed(d) && d.local !== true) out.push(judge(d.id, shownName(d), need, byId.get(d.id)?.ramMb ?? null));
     }
     return out;
   }
@@ -391,6 +410,7 @@ export function create(ctx: BranchCtx): Branch {
       const devices = arrayOf(raw, 'devices');
       const l = loadedOf(s);
       const loaded = l && Array.isArray(l.devices) ? (l.devices as unknown[]) : [];
+      const working = workingOf(l);           // the loaded devices and a split's parts on other devices
 
       // the step since the last look; a look behind it is a clock that stepped back, and the
       // watermark moves back with it so the next look is measured from where the clock is now
@@ -413,7 +433,7 @@ export function create(ctx: BranchCtx): Branch {
         if (m.share == null) continue;
         heads.push((1 - m.share) * 200);         // 50% used or less: full headroom; 100%: none
         if (m.level !== 'ok') {
-          next.set(`mem:${m.name}:${m.level}`, {
+          next.set(`mem:${m.id}:${m.level}`, {
             text: `${m.name}: the model needs ${gbShown(m.needMb)} of its ${gbShown(m.ramMb!)} (${percentWord(m.percent)}%), ${m.level === 'over' ? 'more than it has' : 'tight'}`,
             ended: `${m.name}: memory ${m.level === 'over' ? 'no longer over' : 'no longer tight'}`,
           });
@@ -471,7 +491,7 @@ export function create(ctx: BranchCtx): Branch {
         byCount = Object.keys(day.by).length;
         return day;
       };
-      for (const d of loaded) {
+      for (const d of working) {
         if (!usableNamed(d)) continue;
         seen.add(d.id);
         const name = shownName(d);
@@ -535,10 +555,15 @@ export function create(ctx: BranchCtx): Branch {
         if (rs2 != null) {
           const run = (lastBusy.get(d.id) ?? rs2) - rs2;   // lastBusy is set at or after the run start
           heads.push(100 - (run / REST_AFTER_MS) * 100);
-          if (run > REST_AFTER_MS) next.set(`rest:${d.id}`, { text: `${name} should rest: answering for ${minutesWord(run)} without a break`, ended: `${name} had its break` });
+          const doing = d.part === true ? 'working in the split' : 'answering';
+          if (run > REST_AFTER_MS) next.set(`rest:${d.id}`, { text: `${name} should rest: ${doing} for ${minutesWord(run)} without a break`, ended: `${name} had its break` });
         }
       }
-      for (const id of [...lastDone.keys()]) if (!seen.has(id)) { lastDone.delete(id); runStart.delete(id); lastBusy.delete(id); answers.delete(id); }
+      // a device or part that left the load: its run and its hour go (a part keeps no counter, so
+      // every map is walked, not only the counters)
+      for (const id of new Set([...lastDone.keys(), ...runStart.keys(), ...lastBusy.keys(), ...answers.keys()])) {
+        if (!seen.has(id)) { lastDone.delete(id); runStart.delete(id); lastBusy.delete(id); answers.delete(id); }
+      }
 
       // night window
       const projects = arrayOf(raw, 'projects');
@@ -553,7 +578,7 @@ export function create(ctx: BranchCtx): Branch {
         for (const id of Array.isArray(p.peers) ? (p.peers as unknown[]) : []) {
           if (typeof id === 'string' && id.length > 0 && id.length <= DEVICE_MAX) peersHere.add(id);
         }
-        for (const d of loaded) {
+        for (const d of working) {
           if (!usableNamed(d) || d.busy !== true || !peersHere.has(d.id)) continue;
           next.set(`window:${d.id}:${p.id}`, { text: `${shownName(d)} still working after the night window of "${title}" (ended ${hhmm(p.end)})`, ended: `${shownName(d)} stopped working outside the night window` });
         }
@@ -693,27 +718,28 @@ export function create(ctx: BranchCtx): Branch {
       const yesterday = notes.days[dayKey(at - 24 * HOUR)];
       const l = loadedOf(s);
       const pw = powerOf(s);
-      const all = l && Array.isArray(l.devices) ? (l.devices as unknown[]) : [];
-      const devs = all.filter(usableNamed);
-      const memByName = new Map<string, Mem>();
-      for (const m of mems) if (!memByName.has(m.name)) memByName.set(m.name, m);
+      const devs = workingOf(l).filter(usableNamed);
+      const memById = new Map<string, Mem>();
+      for (const m of mems) if (!memById.has(m.id)) memById.set(m.id, m);
       // the snapshot's own device entries, for each row's health (a loaded row carries none)
       const seenById = new Map<string, Record<string, unknown>>();
       for (const x of arrayOf(rawOf(s), 'devices')) if (usableNamed(x) && !seenById.has(x.id)) seenById.set(x.id, x);
       const n = warns.size;
       const lines: string[] = [...warns.values()].map((w) => `warning: ${w.text}`);
-      const devNames = new Set<string>();
+      const devIds = new Set<string>();
       for (const d of devs) {
         const name = shownName(d);
-        devNames.add(name);
+        devIds.add(d.id);
+        const part = d.part === true;
         const bits: string[] = [d.local === true ? `${name} (this computer)` : name];
-        const m = memByName.get(name);
+        const m = memById.get(d.id);
         if (m?.share != null) bits.push(`memory ${gbShown(m.needMb)} of ${gbShown(m.ramMb!)} (${percentWord(m.percent)}%) ${m.level}`);
         else if (m) bits.push('memory unknown');
         const rs = runStart.get(d.id);
         // a duration is never negative, even if the snapshot is behind a time this branch remembers
-        bits.push(d.busy === true && rs != null ? `answering ${minutesWord(at - rs)}, rest at ${REST_AFTER_MS / 60_000}` : 'free');
-        bits.push(`${plural(answers.get(d.id)?.length ?? 0, 'answer')} in the last hour`);
+        bits.push(d.busy === true && rs != null ? `${part ? 'in the split' : 'answering'} ${minutesWord(at - rs)}, rest at ${REST_AFTER_MS / 60_000}` : 'free');
+        // a part's answers are the host's: it says none of its own
+        if (!part) bits.push(`${plural(answers.get(d.id)?.length ?? 0, 'answer')} in the last hour`);
         const wh = day.by[name];
         if (typeof wh === 'number' && wh > 0) bits.push(`${round1(wh)} Wh today`);
         // a snapshot from before 12.11.2026 has no health at all: nothing is said about it
@@ -721,7 +747,7 @@ export function create(ctx: BranchCtx): Branch {
         if (d.local !== true && seen && 'health' in seen) bits.push(healthWords(freshHealth(seen.health, at), verified.has(d.id)));
         lines.push(bits.join(' · '));
       }
-      for (const m of mems) if (!devNames.has(m.name) && m.share != null) lines.push(`${m.name} · memory ${gbShown(m.needMb)} of ${gbShown(m.ramMb!)} (${percentWord(m.percent)}%) ${m.level}`);
+      for (const m of mems) if (!devIds.has(m.id) && m.share != null) lines.push(`${m.name} · memory ${gbShown(m.needMb)} of ${gbShown(m.ramMb!)} (${percentWord(m.percent)}%) ${m.level}`);
       return {
         built: true,
         stat: n ? plural(n, 'warning') : 'all within limits',

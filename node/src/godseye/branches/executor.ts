@@ -7,7 +7,12 @@
 //            both with 2 answers or more): leave it out
 //   rest     a device limits says should rest: leave it out (apart), or look at limits
 //   failing  a device of the loaded model found unreachable in 3 or more of its last checks, counting
-//            only checks of the last ten minutes, and none from before it answered again: look again
+//            only checks of the last ten minutes, and none from before it answered again: look again.
+//            In a split this also covers the parts on other devices (partsOf): kula's engine opens a
+//            split with no peers (ui/engine.ts), so its workers are only in loaded.parts. Every token
+//            crosses a part, so the host's answer count growing is the part answering again: its
+//            failed checks are forgotten then. A part gets a line only while it has failed checks.
+//            A part gets no rest card here: the planner's barred card already says "split without it".
 //   idle     apart: a device that took no prompt for the whole window while another answered in
 //            three quarters of it: look again (it may have dropped quietly)
 // Each card holds SHOW looks before it shows and goes HIDE looks after its reason went, with a
@@ -34,6 +39,32 @@ export const CHECK_MS = 10 * 60_000;   // only checks this young count (finding 
 /** the checks within CHECK_MS of the look */
 const recent = (c: Checks | undefined | null, at: number) => (c ? c.seen.filter((x) => x.at >= at - CHECK_MS) : []);
 
+/** the parts of a split held on another device: in split mode, the parts not on this computer, with
+ *  memory on them, a usable id (a string of 1..200 chars, not "local") and not already a non-local
+ *  entry of the load's devices (then they are counted there, never twice). Read with care, since
+ *  limits hands it its raw look too: a wrong-typed field is no part. */
+export function partsOf(L: unknown): { id: string; name: string; mb: number; layers: number }[] {
+  if (!L || typeof L !== 'object') return [];
+  const l = L as Record<string, unknown>;
+  if (l.mode !== 'split' || !Array.isArray(l.parts)) return [];
+  const listed = new Set<string>();
+  for (const d of Array.isArray(l.devices) ? (l.devices as unknown[]) : []) {
+    if (d && typeof d === 'object' && (d as Record<string, unknown>).local !== true && typeof (d as Record<string, unknown>).id === 'string') listed.add((d as Record<string, string>).id);
+  }
+  const out: { id: string; name: string; mb: number; layers: number }[] = [];
+  for (const x of l.parts as unknown[]) {
+    if (!x || typeof x !== 'object') continue;
+    const p = x as Record<string, unknown>;
+    if (p.local === true || !(typeof p.mb === 'number' && Number.isFinite(p.mb) && p.mb > 0)) continue;
+    if (typeof p.id !== 'string' || p.id.length === 0 || p.id.length > 200 || p.id === 'local') continue;
+    if (listed.has(p.id) || out.some((o) => o.id === p.id)) continue;
+    const name = typeof p.name === 'string' && p.name.length <= 200 ? p.name : '';
+    const layers = typeof p.layers === 'number' && Number.isFinite(p.layers) && p.layers >= 0 ? p.layers : 0;
+    out.push({ id: p.id, name, mb: p.mb, layers });
+  }
+  return out;
+}
+
 /** the load that leaves these devices out, the same model and mode; null when nothing would be left */
 function without(s: Snapshot, out: Set<string>): SuggestAction | null {
   const L = s.work.loaded;
@@ -53,6 +84,7 @@ export function create(ctx: BranchCtx): Branch {
   const checks = new Map<string, Checks>();
   const answers = new Map<string, number>();   // per peer of this load, its answer count at the last look
   let loadedKey: string | null = null;
+  let hostDone: number | null = null;          // in a split, the host's answer count at the last look
   let shown: Suggestion[] = [];
   const steady = new Steady();
 
@@ -92,9 +124,12 @@ export function create(ctx: BranchCtx): Branch {
       });
     }
 
-    // failing: unreachable in several of its checks of the last ten minutes
-    for (const d of devs) {
-      if (d.local) continue;
+    // failing: unreachable in several of its checks of the last ten minutes; a split's parts too
+    const failing = [
+      ...devs.filter((d) => !d.local).map((d) => ({ id: d.id, name: d.name, part: false })),
+      ...partsOf(L).map((p) => ({ id: p.id, name: p.name || p.id, part: true })),
+    ];
+    for (const d of failing) {
       const c = checks.get(d.id);
       const r = recent(c, s.at);
       const fails = r.filter((x) => !x.ok).length;
@@ -102,7 +137,8 @@ export function create(ctx: BranchCtx): Branch {
       out.push({
         id: cardId('executor', 'failing', d.id), kind: 'warn', weight: 2, action: { do: 'probe', devices: [d.id] }, label: 'look again',
         title: `${d.name} keeps dropping out`,
-        why: `${fails} of its last ${r.length} checks found it unreachable${c.reason ? ` (last: ${c.reason})` : ''}; a prompt sent to it may wait or fail.`,
+        why: `${fails} of its last ${r.length} checks found it unreachable${c.reason ? ` (last: ${c.reason})` : ''}; `
+          + (d.part ? `it holds part of ${L.model.name} and every token crosses it: an answer may stall or fail.` : 'a prompt sent to it may wait or fail.'),
       });
     }
 
@@ -130,7 +166,7 @@ export function create(ctx: BranchCtx): Branch {
       snap = now;
       const L = now.work.loaded;
       const key = L ? `${L.model.file}|${L.mode}|${L.since}` : null;
-      if (key !== loadedKey) { track.clear(); answers.clear(); loadedKey = key; }
+      if (key !== loadedKey) { track.clear(); answers.clear(); hostDone = null; loadedKey = key; }
       if (L) {
         for (const d of L.devices) {
           const k = d.local ? 'local' : d.id;
@@ -165,6 +201,15 @@ export function create(ctx: BranchCtx): Branch {
           answers.set(d.id, d.done);
         }
       }
+      // in a split every token crosses every part: the host answering again is each part answering
+      // again, so their misses are over too (C4 for parts)
+      const host = L && L.mode === 'split' ? L.devices.find((d) => d.local) ?? L.devices[0] ?? null : null;
+      if (host && typeof host.done === 'number' && Number.isFinite(host.done)) {
+        if (hostDone != null && host.done > hostDone) {
+          for (const p of partsOf(L)) { const c = checks.get(p.id); if (c) { c.seen = c.seen.filter((x) => x.ok); c.reason = null; } }
+        }
+        hostDone = host.done;
+      } else hostDone = null;
       shown = steady.step(cards(now, true), cards(now, false));
     },
     view(): BranchView {
@@ -181,6 +226,12 @@ export function create(ctx: BranchCtx): Branch {
           + (t && t.busy.length >= 2 ? ` · busy in ${Math.round(share(t) * 100)}% of the last ${t.busy.length} looks` : '')
           + (fails ? ` · ${fails} of its last ${r.length} checks failed` : '');
       });
+      // a split's part on another device: a line only while it has failed checks in the window
+      for (const p of snap ? partsOf(L) : []) {
+        const r = recent(checks.get(p.id), snap!.at);
+        const fails = r.filter((x) => !x.ok).length;
+        if (fails) lines.push(`${p.name || p.id} \u{b7} holds ${p.layers} layers of the split \u{b7} ${fails} of its last ${r.length} checks failed`);
+      }
       return {
         built: true,
         stat: devs.length ? `${busy} answering · ${done} answers${shown.length ? ` · ${shown.length} to look at` : ''}` : 'idle',

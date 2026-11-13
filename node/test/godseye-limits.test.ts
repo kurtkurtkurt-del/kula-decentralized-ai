@@ -1579,3 +1579,122 @@ test('a device id with a space still gets its hot card and its slow card (E2)', 
   assert.equal(slow.length, 1);
   assert.ok(cleanCard(slow[0]), 'the eye keeps the slow card');
 });
+
+// ---- a split's parts on other devices (F4, 13.11.2026): kula's engine opens a split with no peers,
+// so the phones holding layers are only in loaded.parts. Every token runs through every part: the
+// host's busy is each part's busy for rest, energy and the night window; slow stays host-only.
+const HOST = (o: Record<string, unknown> = {}) => ({ id: 'local', name: 'mac', local: true, busy: true, tps: 6, done: 3, ...o });
+const PARTS = [{ id: 'local', name: 'this computer', local: true, mb: 4000, layers: 16 }, { id: 'p1', name: 'pixel', local: false, mb: 3000, layers: 16 }];
+const splitOf = (o: Record<string, unknown> = {}, parts: any[] = PARTS) => loaded([HOST(o)], { mode: 'split', parts });
+
+/** 10 s looks for 25 busy minutes; p1 says a fresh health line on every look */
+function busySplit(b: any, extra: (at: number) => Record<string, unknown> = () => ({})) {
+  let at = T0;
+  for (let i = 0; i <= 25 * 6; i++, at += 10_000) {
+    b.observe(snap(at, { devices: [dev({ health: H({ at }) })], loaded: splitOf(), ...extra(at) }) as any, null);
+  }
+  return at - 10_000;
+}
+
+test('split: a phone holding layers for 25 busy minutes should rest like the host; one feed line for it', () => {
+  const { ctx, out } = fakeCtx();
+  const b = create(ctx as any);
+  busySplit(b);
+  const v = b.view();
+  const hints = (v.hints ?? []).map((h: any) => h.id).sort();
+  assert.deepEqual(hints, ['local', 'p1']);
+  assert.ok(v.lines.includes('warning: pixel should rest: working in the split for 25 min without a break'), v.lines.join('\n'));
+  assert.ok(v.lines.includes('warning: mac should rest: answering for 25 min without a break'), 'the host as today');
+  assert.equal(out.events.filter((e) => /^limits: pixel should rest/u.test(e)).length, 1);
+});
+
+test('split: energy counts the host at 15 W and the phone part at 3 W; the part gets its own row', () => {
+  const { ctx } = fakeCtx();
+  const b = create(ctx as any);
+  busySplit(b);
+  const v = b.view();
+  // by hand: 150 counted steps of 10 s = 1500 s busy each. host 15 W x 1500 s / 3600 = 6.25 Wh,
+  // the phone 3 W x 1500 s / 3600 = 1.25 Wh, the day 7.5 Wh
+  const hostWh = (15 * 1500) / 3600;
+  const phoneWh = (3 * 1500) / 3600;
+  assert.equal(hostWh, 6.25);
+  assert.equal(phoneWh, 1.25);
+  const row = (k: string) => v.rows.find((r: any) => r[0] === k)?.[1];
+  assert.equal(row('energy today'), `${hostWh + phoneWh} Wh (a guess)`);
+  const p1 = v.lines.find((l: string) => /^pixel \u{b7} memory/u.test(l));
+  assert.ok(p1, v.lines.join('\n'));
+  const [name, mem, run, wh, health] = p1!.split(' \u{b7} ');
+  assert.equal(name, 'pixel');
+  assert.equal(mem, 'memory 2.9 GB of 3.9 GB (75%) ok');
+  assert.equal(run, 'in the split 25 min, rest at 20');
+  assert.ok(Math.abs(Number(/^([\d.]+) Wh today$/u.exec(wh)![1]) - phoneWh) <= 0.051, wh);
+  assert.match(health, /^health 36\.5 \u{b0}C, battery 72%, not throttled, not verified \(see trust\)$/u);
+  assert.ok(!/answer/u.test(p1!), 'a part says no answers of its own');
+  const mac = v.lines.find((l: string) => /^mac \(this computer\)/u.test(l))!;
+  assert.ok(Math.abs(Number(/ ([\d.]+) Wh today/u.exec(mac)![1]) - hostWh) <= 0.051, mac);
+});
+
+test('split: the night window catches a part still working past the end', () => {
+  const { ctx, out } = fakeCtx();
+  const b = create(ctx as any);
+  const proj = { id: 'n1', title: 'summaries', request: 'x', start: T0 - 60 * MIN, end: T0, state: 'running', mode: 'split', model: 'm1', peers: ['p1'] };
+  b.observe(snap(T0 + 10 * MIN, { loaded: splitOf(), projects: [proj] }) as any, null);
+  const v = b.view();
+  assert.ok(v.lines.some((x: string) => /^warning: pixel still working after the night window of "summaries"/u.test(x)), v.lines.join('\n'));
+  assert.ok(out.events.some((e) => /^limits: pixel still working after the night window/u.test(e)));
+  // an idle split: no window warning for the part
+  const q = fakeCtx();
+  const qb = create(q.ctx as any);
+  qb.observe(snap(T0 + 10 * MIN, { loaded: splitOf({ busy: false }), projects: [proj] }) as any, null);
+  assert.ok(!qb.view().lines.some((x: string) => /still working/u.test(x)));
+});
+
+test('split: slow is host-only, a part never gets a slow warning', () => {
+  const { ctx } = fakeCtx();
+  const b = create(ctx as any);
+  let at = T0, done = 0;
+  for (const tps of [64, 64, 63, 40, 37, 37]) {
+    at += 15_000;
+    done++;
+    const parts = [PARTS[0], { ...PARTS[1], tps }];
+    b.observe(snap(at, { loaded: loaded([HOST({ tps: 6, done })], { mode: 'split', parts }) }) as any, null);
+  }
+  const v = b.view();
+  assert.ok(!v.lines.some((l: string) => /slowed down/u.test(l)), v.lines.join('\n'));
+  assert.ok(!(v.suggestions ?? []).some((c: any) => c.id.startsWith('limits:slow:')));
+});
+
+test('split: parts that are also devices of the load are counted once', () => {
+  const { ctx } = fakeCtx();
+  const b = create(ctx as any);
+  const parts = [{ id: 'p1', name: 'pixel', local: false, mb: 3000, layers: 10 }, { id: 'here', name: 'mac', local: true, mb: 9000, layers: 14 }];
+  const l = loaded([ld({ busy: true }), ld({ id: 'here', name: 'mac', local: true, busy: true })], { mode: 'split', parts });
+  for (let i = 0; i <= 12; i++) b.observe(snap(T0 + i * 10_000, { loaded: l }) as any, null);
+  const v = b.view();
+  // 12 counted steps of 10 s: (3 W + 15 W) x 120 s / 3600 = 0.6 Wh; busy 2 x 2 min
+  assert.equal(v.rows.find((r: any) => r[0] === 'energy today')![1], '0.6 Wh (a guess)');
+  assert.equal(v.rows.find((r: any) => r[0] === 'busy today')![1], '4 min');
+  assert.equal(v.lines.filter((x: string) => /^pixel \u{b7}/u.test(x)).length, 1, 'one row for pixel');
+});
+
+test('F5: two phones of one name each show their own memory; two tight ones give two warnings and two feed lines', () => {
+  const two = (ram1: number, ram2: number) => snap(T0, {
+    devices: [dev({ id: 'p1', name: 'Galaxy S25', ramMb: ram1 }), dev({ id: 'p2', name: 'Galaxy S25', ramMb: ram2 })],
+    loaded: loaded([ld({ id: 'p1', name: 'Galaxy S25' }), ld({ id: 'p2', name: 'Galaxy S25' })], { mode: 'apart' }),
+    needMb: 1500,
+  });
+  const a = fakeCtx();
+  const b = create(a.ctx as any);
+  b.observe(two(8000, 1600) as any, null);
+  const rows = b.view().lines.filter((l: string) => l.startsWith('Galaxy S25 \u{b7} memory'));
+  assert.equal(rows.length, 2);
+  assert.match(rows[0], /\(19%\) ok/u);
+  assert.match(rows[1], /\(94%\) tight/u, 'p2 (1500 of 1600 MB) reads tight in its own row');
+
+  const c = fakeCtx();
+  const cb = create(c.ctx as any);
+  cb.observe(two(1700, 1600) as any, null);
+  const warns = cb.view().lines.filter((l: string) => l.startsWith('warning: Galaxy S25'));
+  assert.equal(warns.length, 2, warns.join('\n'));
+  assert.equal(c.out.events.filter((e) => /^limits: Galaxy S25: .* tight$/u.test(e)).length, 2);
+});
