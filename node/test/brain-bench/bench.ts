@@ -7,7 +7,9 @@
 //    t) as brier against its own prior, against 0.5, a ten-bin calibration, ece and the 80% cover;
 //    with opts.rate (the scenario's true chance of each scored hour, synth.ts rateOf) also how
 //    often the 80% interval holds that chance (rateCover80), and its mean width (width80);
-//    opts.forecast benches another forecast branch (createFixed(V1): the L5 forecast);
+//    opts.forecast benches another forecast branch (createFixed(V1): the L5 forecast, createV2: the
+//    L6 one); opts.pairsEvery reads the pairs more often (the 12-looks-an-hour flip and control
+//    runs); skillOf and flipScore cut the pairs into the habit flip's windows (L7 P37);
 //  - learning and forecast speed: the tok/s guess in the notes saved the look before, against the
 //    tok/s the device then answered with, beside a naive guess (the last tok/s seen);
 //  - senses: its feed lines, its flapping lines, its stale row, and the share of new readings that
@@ -20,6 +22,7 @@ import { create as makeForecast } from '../../src/godseye/branches/forecast.ts';
 import { create as makeLearning } from '../../src/godseye/branches/learning.ts';
 import { create as makeSenses } from '../../src/godseye/branches/senses.ts';
 import type { Branch, BranchCtx, BranchView, EyeDevice, Snapshot } from '../../src/godseye/types.ts';
+import { START, FLIP_AT } from './synth.ts';
 
 export interface BenchLook { at: number; facts: Facts }
 
@@ -155,6 +158,43 @@ export function forecastScore(pairs: Pair[], rates?: (number | null)[]): Forecas
   };
 }
 
+// ---- L7 P37: the habit flip's windows (as the scan's f7 proof)
+
+const DAY_MS = 86_400_000;
+
+/** skill against the device's own rate over the pairs with from < t <= to:
+ *  1 - sum (p - x)^2 / sum (p0 - x)^2; null with no pair or a zero baseline */
+export function skillOf(pairs: Pair[], from: number, to: number): number | null {
+  let a = 0, b = 0, n = 0;
+  for (const [t, p, , , p0, x] of pairs) {
+    if (!(t > from && t <= to)) continue;
+    n++;
+    a += (p - x) ** 2;
+    b += (p0 - x) ** 2;
+  }
+  return n === 0 || b === 0 ? null : 1 - a / b;
+}
+
+export interface FlipScore { week1: number | null; d3to10: number | null; before: number | null; whole: number | null; lag: number }
+
+/** the flip's windows: week1 (FLIP, FLIP+7 d], d3to10 (FLIP+3 d, FLIP+10 d], before (START+7 d,
+ *  FLIP], whole (FLIP, FLIP+28 d]; lag = the first day after the flip from which every 3-day
+ *  window's skill is > 0, Infinity when the last one is not */
+export function flipScore(pairs: Pair[], start = START, flipAt = FLIP_AT, daysAfter = 28): FlipScore {
+  let last = 0;
+  for (let d = 0; d + 3 <= daysAfter; d++) {
+    const s = skillOf(pairs, flipAt + d * DAY_MS, flipAt + (d + 3) * DAY_MS);
+    if (s === null || s <= 0) last = d + 1;
+  }
+  return {
+    week1: skillOf(pairs, flipAt, flipAt + 7 * DAY_MS),
+    d3to10: skillOf(pairs, flipAt + 3 * DAY_MS, flipAt + 10 * DAY_MS),
+    before: skillOf(pairs, start + 7 * DAY_MS, flipAt),
+    whole: skillOf(pairs, flipAt, flipAt + daysAfter * DAY_MS),
+    lag: last > daysAfter - 3 ? Infinity : last,
+  };
+}
+
 class SpeedTally {
   n = 0; skipped = 0; off = 0; abs = 0; naiveOff = 0; naiveAbs = 0;
   add(tps: number, g: number, naive: number): void {
@@ -216,6 +256,10 @@ export interface BenchOpts {
   forecast?: BranchMaker;
   /** the true chance that device id was there in the hour a pair at t scored, or null */
   rate?: (id: string, t: number) => number | null;
+  /** looks between two reads of the forecast's pairs (default PAIRS_EVERY). The flip and control
+   *  runs pass 1200: at 12 looks an hour the default is 500 hours, more than the 200 pairs a device
+   *  keeps */
+  pairsEvery?: number;
 }
 export type BranchMaker = (ctx: BranchCtx) => Branch;
 
@@ -232,6 +276,7 @@ export function runBench(looks: Iterable<BenchLook>, keep?: { pairs?: Pair[]; id
   const fSpeed = new SpeedTally();
   let staleLooks = 0, staleChecks = 0, bandIn = 0, bandN = 0;
   let before: Snapshot | null = null;
+  const pairsEvery = opts?.pairsEvery ?? PAIRS_EVERY;
   let i = 0;
   for (const look of looks) {
     clock.at = look.at;
@@ -280,7 +325,7 @@ export function runBench(looks: Iterable<BenchLook>, keep?: { pairs?: Pair[]; id
       const row = seats.senses.branch.view().rows.find(([k]) => k === 'stale');
       if (row !== undefined && row[1] !== 'none') staleLooks++;
     }
-    if ((i + 1) % PAIRS_EVERY === 0) gather(seats.forecast.branch.view());
+    if ((i + 1) % pairsEvery === 0) gather(seats.forecast.branch.view());
     before = now;
     i++;
   }

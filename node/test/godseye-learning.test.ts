@@ -671,10 +671,10 @@ test('a habit flip: the skill goes negative, said once, and comes back once the 
   assert.match(r.skillRow(), /^\+0\.\d\d against/);
 });
 
-// measured, not assumed: right after the flip the learned forecast is surer of the old habit and
-// pays more (its skill over the whole flip is below the L5 one), but it adapts faster: over the
-// flip's last week it beats the device's own average while the L5 forecast does not. Its strong
-// skill before the flip keeps learning's whole-window skill above the worse line
+// measured, not assumed: the learned forecast adapts faster: over the flip's last week it beats the
+// device's own average while the L5 forecast does not. Its strong skill before the flip keeps
+// learning's whole-window skill above the worse line. (L6: over the whole flip it paid more than
+// the L5 one; L7 P37, with the fast experts, it is above it there too: 0.489 against -0.347)
 test('a habit flip with the learned forecast (L6 P31): no worse line, and over the flip\'s last week it adapts past the L5 one', () => {
   const v1 = habitRun(createFixed(V1));
   const v2 = habitRun(forecastCreate);
@@ -1147,8 +1147,9 @@ test('an always-there device through the real eye: the skill stays hidden and no
 
 /** twelve 5 s looks an hour for `hours` hours through the real eye; `there(h)` says whether the
  *  device answered in hour h. every line the learning branch emits is kept with its look's time,
- *  so the eye's 60-event cap cannot hide one. */
-function hourRun(dir: string, hours: number, there: (h: number) => boolean) {
+ *  so the eye's 60-event cap cannot hide one. `extra` adds makers for other branches (L7 P37: the
+ *  forecast). */
+function hourRun(dir: string, hours: number, there: (h: number) => boolean, extra: Record<string, (ctx: any) => any> = {}) {
   const hour0 = new Date(2026, 10, 8, 22, 0, 0).getTime();
   const HOUR = 3600_000;
   const emitted: { at: number; text: string }[] = [];
@@ -1163,6 +1164,7 @@ function hourRun(dir: string, hours: number, there: (h: number) => boolean) {
     dir,
     now: atNow,
     makers: {
+      ...extra,
       learning: (ctx) => create({
         ...ctx,
         emit: (s: string) => { emitted.push({ at: ctx.now(), text: s }); ctx.emit(s); },
@@ -1186,11 +1188,15 @@ test('through the real eye: a device missing 1 hour in 40 and one missing 1 hour
   assert.deepEqual(verdictLines(miss80.emitted), [], '1 missing hour in 80 is noise, not a skill');
 });
 
+const nightHour = (h: number) => { const hod = (22 + h) % 24; return hod >= 22 || hod < 7; };
+/** sixteen days of nights, sixteen of days, then nights again */
+const flipThere = (h: number) => (h < 400 || h >= 800 ? nightHour(h) : !nightHour(h));
+
+// L7 P37: this test is about learning's detector, which needs a forecast that gets worse: it runs
+// the L5 forecast (createFixed(V1)) in the eye; the default forecast's own case follows
 test('through the real eye: a habit flip says worse once and better once', () => {
-  const night = (h: number) => { const hod = (22 + h) % 24; return hod >= 22 || hod < 7; };
-  // sixteen days of nights, sixteen of days, then nights again: the forecast is right, then wrong,
-  // then right again
-  const run = hourRun(path.join(HOME, 'eye-habit'), 1300, (h) => (h < 400 || h >= 800 ? night(h) : !night(h)));
+  // the forecast is right, then wrong, then right again
+  const run = hourRun(path.join(HOME, 'eye-habit'), 1300, flipThere, { forecast: createFixed(V1) });
   const all = run.emitted.map((e) => `${e.at}: ${e.text}`).join('\n');
   const verdicts = verdictLines(run.emitted);
   const worse = verdicts.filter((e) => /is doing worse/.test(e.text));
@@ -1200,6 +1206,14 @@ test('through the real eye: a habit flip says worse once and better once', () =>
   assert.ok(worse[0].at < better[0].at, `worse at ${worse[0].at}, better at ${better[0].at}`);
   assert.match(worse[0].text, /^learning: the forecast is doing worse than each device's own average \(skill -0\.\d\d over 200 hours\)$/);
   assert.match(better[0].text, /^learning: the forecast is doing better than each device's own average again \(skill \+0\.\d\d over 200 hours\)$/);
+});
+
+// L7 P37 (prediction): with the two fast experts the default forecast learns the new habit within
+// days, so its skill over learning's 200 hours stays positive and no worse line is said
+test('through the real eye: the same habit flip with the default forecast says no worse line', () => {
+  const run = hourRun(path.join(HOME, 'eye-habit-v3'), 1300, flipThere);
+  const worse = verdictLines(run.emitted).filter((e) => /is doing worse/.test(e.text));
+  assert.deepEqual(worse.map((e) => `${e.at}: ${e.text}`), [], run.emitted.map((e) => `${e.at}: ${e.text}`).join('\n'));
 });
 
 test('the α feed lines do not flood: a factor of two, at most one an hour per device, in 600 hours', () => {

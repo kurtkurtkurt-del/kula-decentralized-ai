@@ -8,10 +8,10 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-const { runBench, fromSnapshots, boxLooks, scorecardText } = await import('./brain-bench/bench.ts');
-const { scenario, speed, rateOf, SCENARIOS, START } = await import('./brain-bench/synth.ts');
+const { runBench, fromSnapshots, boxLooks, scorecardText, flipScore } = await import('./brain-bench/bench.ts');
+const { scenario, speed, rateOf, SCENARIOS, START, flip, control, flipRate } = await import('./brain-bench/synth.ts');
 const { brier } = await import('../src/godseye/branches/learning.ts');
-const { createFixed, V1 } = await import('../src/godseye/branches/forecast.ts');
+const { createFixed, createV2, V1 } = await import('../src/godseye/branches/forecast.ts');
 const { NodeGodsEye } = await import('../src/godseye/node.ts');
 const { memoryNotes } = await import('../src/godseye/platform.ts');
 
@@ -170,14 +170,170 @@ test('P31 B (acceptance): the learned forecast beats the L5 one on weekly and is
   assert.ok((c2.ece as number) <= (c1.ece as number), `coin ece v2 ${c2.ece} vs v1 ${c1.ece}`);
 });
 
-test('P31 printed: v1 against v2 for weekly and coin, seeds 1 and 2', () => {
-  const r = (x: number | null): string => (x === null ? '-' : x.toFixed(6));
+// ---- L7 P37: the habit flip (F7), two fast hour-of-day experts, against the L6 forecast
+
+type Maker = NonNullable<Parameters<typeof runBench>[2]>['forecast'];
+type Flip = ReturnType<typeof flipScore>;
+
+/** L7 P37 step 0: the L6 forecast as HEAD (808a50e) printed it, copied at full precision before
+ *  forecast.ts was touched. The seed-1 cards round to node-test6.log:201-208 (weekly brier .086261,
+ *  ece .050963, rateCover80 .906873; coin brier .255214, ece .052106). bins: [n, said, was] */
+const V2_CARD = {
+  weekly: {
+    n: 2008, brier: 0.08626096716617346, brier0: 0.2204958646300744, ece: 0.05096293521621127, rateCover80: 0.9068725099601593, width80: 0.44286802841726114,
+    bins: [
+      [798, 0.0428903180403841, 0.07017543859649122],
+      [314, 0.14071894167209528, 0.08917197452229299],
+      [177, 0.24455762091168767, 0.11864406779661017],
+      [60, 0.34641832443320403, 0.11666666666666667],
+      [36, 0.44974682450701764, 0.3888888888888889],
+      [26, 0.5536730877309766, 0.6153846153846154],
+      [32, 0.6605133154144223, 0.6875],
+      [62, 0.755025904810574, 0.9838709677419355],
+      [133, 0.8651458126859887, 0.8345864661654135],
+      [370, 0.9313763368621264, 0.9459459459459459],
+    ],
+  },
+  coin: {
+    n: 668, brier: 0.2552136207727337, brier0: 0.2513611574909116, ece: 0.05210573731880469, rateCover80: 1, width80: 0.436223457065187,
+    bins: [
+      [0, null, null],
+      [0, null, null],
+      [1, 0.2774342120600573, 1],
+      [33, 0.3587333631272393, 0.5151515151515151],
+      [377, 0.4629366949403789, 0.48010610079575594],
+      [245, 0.5380960180173423, 0.46530612244897956],
+      [12, 0.6346564418745403, 0.25],
+      [0, null, null],
+      [0, null, null],
+      [0, null, null],
+    ],
+  },
+} as const;
+
+/** the same HEAD on the flip, mean of seeds 1-5 (week1, d3to10, before, whole), and the mean
+ *  Brier of coin and of office on control. They round to SCAN-F's -0.264, -0.006, 0.607, 0.003. */
+const V2_FLIP = {
+  week1: -0.2635404486613856, d3to10: -0.006415947317857685, before: 0.6073648118318363, whole: 0.0028907373042268425,
+  coin: 0.2535167307207637, office: 0.08802719083950938,
+} as const;
+
+const SEEDS = [1, 2, 3, 4, 5];
+const mean = (xs: number[]): number => xs.reduce((a, b) => a + b, 0) / xs.length;
+const brierOf = (ps: Pair[]): number => ps.reduce((a, q) => a + (q[1] - q[5]) ** 2, 0) / ps.length;
+
+const flips = new Map<string, Flip>();
+/** one forecast on the flip, 12 looks an hour, its windows */
+const flipOf = (which: string, mk: Maker, seed: number): Flip => {
+  const key = `${which}|${seed}`;
+  let s = flips.get(key);
+  if (s === undefined) {
+    const keep: { pairs?: Pair[] } = {};
+    runBench(fromSnapshots(flip(seed)), keep, { forecast: mk, rate: flipRate, pairsEvery: 1200 });
+    s = flipScore(keep.pairs as Pair[]);
+    flips.set(key, s);
+  }
+  return s;
+};
+const controls = new Map<string, { coin: number; office: number }>();
+/** one forecast on control: the Brier of coin and of office */
+const controlOf = (which: string, mk: Maker, seed: number): { coin: number; office: number } => {
+  const key = `${which}|${seed}`;
+  let c = controls.get(key);
+  if (c === undefined) {
+    const keep: { pairs?: Pair[]; ids?: string[] } = {};
+    runBench(fromSnapshots(control(seed)), keep, { forecast: mk, pairsEvery: 1200 });
+    const of = (id: string): number => brierOf((keep.pairs as Pair[]).filter((_, i) => (keep.ids as string[])[i] === id));
+    c = { coin: of('coin'), office: of('office') };
+    controls.set(key, c);
+  }
+  return c;
+};
+/** the mean over seeds 1-5 of the flip's windows and the control's two Briers */
+const flipMean = (which: string, mk: Maker) => {
+  const fs5 = SEEDS.map((sd) => flipOf(which, mk, sd));
+  const cs5 = SEEDS.map((sd) => controlOf(which, mk, sd));
+  const m = (k: 'week1' | 'd3to10' | 'before' | 'whole'): number => mean(fs5.map((s) => s[k] as number));
+  return {
+    week1: m('week1'), d3to10: m('d3to10'), before: m('before'), whole: m('whole'),
+    lag: [...fs5.map((s) => s.lag)].sort((a, b) => a - b)[2],
+    coin: mean(cs5.map((c) => c.coin)), office: mean(cs5.map((c) => c.office)),
+  };
+};
+
+const v2Cards = new Map<string, Card>();
+const v2Card = (name: Name, seed: number): Card => {
+  const key = `${name}|${seed}`;
+  let c = v2Cards.get(key);
+  if (c === undefined) { c = runBench(fromSnapshots(scenario(name, seed)), undefined, { forecast: createV2, rate: rateOf(name) }); v2Cards.set(key, c); }
+  return c;
+};
+const v3Cards = new Map<string, Card>();
+const v3Card = (name: Name, seed: number): Card => {
+  if (seed === 1) return card(name);
+  const key = `${name}|${seed}`;
+  let c = v3Cards.get(key);
+  if (c === undefined) { c = run(name, seed); v3Cards.set(key, c); }
+  return c;
+};
+
+test('P37 A: createV2 is the L6 forecast exactly (V2_CARD and V2_FLIP, recorded at HEAD before the change)', () => {
+  for (const name of ['weekly', 'coin'] as const) {
+    const f = v2Card(name, 1).forecast;
+    const want = V2_CARD[name];
+    assert.equal(f.n, want.n, `${name} n`);
+    near(f.brier, want.brier, `${name} brier`);
+    near(f.brier0, want.brier0, `${name} brier0`);
+    near(f.ece, want.ece, `${name} ece`);
+    near(f.rateCover80, want.rateCover80, `${name} rateCover80`);
+    near(f.width80, want.width80, `${name} width80`);
+    assert.equal(f.bins.length, 10);
+    f.bins.forEach((b, k) => {
+      const [n, said, was] = want.bins[k];
+      assert.equal(b.n, n, `${name} bin ${k} n`);
+      near(b.said, said, `${name} bin ${k} said`);
+      near(b.was, was, `${name} bin ${k} was`);
+    });
+  }
+  const v2 = flipMean('v2', createV2);
+  for (const k of ['week1', 'd3to10', 'before', 'whole', 'coin', 'office'] as const) near(v2[k], V2_FLIP[k], `flip v2 ${k}`);
+});
+
+test('P37 acceptance (A1-A3, mean of seeds 1-5): the forecast learns a habit flip in days and loses nothing elsewhere', () => {
+  const v2 = flipMean('v2', createV2), v3 = flipMean('v3', undefined);
+  assert.ok(v3.week1 >= 0, `A1: the flip's first week is not worse than the device's own rate (skill ${v3.week1})`);
+  assert.ok(v3.d3to10 >= 0.2, `A2: days 3-10 after the flip are learned (skill ${v3.d3to10})`);
+  assert.ok(v3.before >= v2.before - 0.02, `A3: the weeks before the flip (v3 ${v3.before} vs v2 ${v2.before})`);
+  assert.ok(v3.coin <= v2.coin + 0.005, `A3: control coin Brier (v3 ${v3.coin} vs v2 ${v2.coin})`);
+  assert.ok(v3.office <= v2.office + 0.005, `A3: control office Brier (v3 ${v3.office} vs v2 ${v2.office})`);
   for (const name of ['weekly', 'coin'] as const) for (const seed of [1, 2]) {
-    const rows: [string, Card][] = [['v1', seed === 1 ? v1Card(name, 1) : runV1(name, seed)], ['v2', seed === 1 ? card(name) : run(name, seed)]];
+    const a = v3Card(name, seed).forecast.brier as number, b = v2Card(name, seed).forecast.brier as number;
+    assert.ok(a <= b + 0.005, `A3: ${name} seed ${seed} Brier (v3 ${a} vs v2 ${b})`);
+  }
+});
+
+test('P37 A3b (prediction): calibration and the rate\'s 80% cover hold on weekly and coin, seeds 1 and 2', () => {
+  for (const name of ['weekly', 'coin'] as const) for (const seed of [1, 2]) {
+    const a = v3Card(name, seed).forecast, b = v2Card(name, seed).forecast;
+    assert.ok((a.ece as number) <= (b.ece as number) + 0.02, `${name} seed ${seed} ece (v3 ${a.ece} vs v2 ${b.ece})`);
+    if (name === 'weekly') assert.ok((a.rateCover80 as number) >= 0.8, `weekly seed ${seed} rateCover80 ${a.rateCover80}`);
+  }
+});
+
+test('P37 printed: v1, v2, v3 and createFixed(8) on the flip; v1, v2, v3 on weekly and coin, seeds 1 and 2', () => {
+  const r = (x: number | null): string => (x === null ? '-' : x.toFixed(6));
+  const s1 = flipOf('v1', createFixed(V1), 1);
+  console.log(`flip v1 (seed 1 only): week1 ${r(s1.week1)} \u{b7} d3to10 ${r(s1.d3to10)} \u{b7} whole ${r(s1.whole)} \u{b7} before ${r(s1.before)} \u{b7} lag ${s1.lag} d`);
+  for (const [which, mk] of [['v2', createV2], ['v3', undefined], ['fixed8', createFixed(8)]] as [string, Maker][]) {
+    const m = flipMean(which, mk);
+    console.log(`flip ${which} (mean of seeds 1-5): week1 ${r(m.week1)} \u{b7} d3to10 ${r(m.d3to10)} \u{b7} whole ${r(m.whole)} \u{b7} before ${r(m.before)} \u{b7} median lag ${m.lag} d \u{b7} control coin brier ${r(m.coin)} \u{b7} office brier ${r(m.office)}`);
+  }
+  for (const name of ['weekly', 'coin'] as const) for (const seed of [1, 2]) {
+    const rows: [string, Card][] = [['v1', seed === 1 ? v1Card(name, 1) : runV1(name, seed)], ['v2', v2Card(name, seed)], ['v3', v3Card(name, seed)]];
     for (const [which, c] of rows) {
       const f = c.forecast;
       const d0 = f.brier === null || f.brier0 === null ? null : f.brier - f.brier0;
-      console.log(`${name} seed ${seed} ${which}: n ${f.n} · brier ${r(f.brier)} · brier - brier0 ${r(d0)} · ece ${r(f.ece)} · rateCover80 ${r(f.rateCover80)} (n ${f.rateN}) · width80 ${r(f.width80)}`);
+      console.log(`${name} seed ${seed} ${which}: n ${f.n} \u{b7} brier ${r(f.brier)} \u{b7} brier - brier0 ${r(d0)} \u{b7} ece ${r(f.ece)} \u{b7} rateCover80 ${r(f.rateCover80)} (n ${f.rateN}) \u{b7} width80 ${r(f.width80)}`);
     }
   }
 });

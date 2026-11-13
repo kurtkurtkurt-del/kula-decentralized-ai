@@ -9,6 +9,7 @@ import path from 'node:path';
 
 const { create, slotOf, fold, decay, prior, estimate, wilson, tonightSlots, dayOf } = await import('../src/godseye/branches/forecast.ts');
 const { createFixed, V1, EXPERTS, levels, experts, blend, learn } = await import('../src/godseye/branches/forecast.ts');
+const { createV2, foldFast, decayFast, fastExperts, HALF_LIFE_FAST_DAYS, FAST_K } = await import('../src/godseye/branches/forecast.ts');
 const { mulberry32 } = await import('./brain-bench/synth.ts');
 const { GodsEye } = await import('../src/godseye/index.ts');
 
@@ -201,15 +202,100 @@ test('regret: over 500 seeded rounds the blend is within ln(8)/eta + share (5.2)
   assert.ok(mine <= best + 5.2, `blend ${mine} vs best ${best}`);
 });
 
+// ---- L7 P37: the habit flip, two fast hour-of-day experts (half-life 1 day)
+
+test('fast by hand: foldFast, decayFast and fastExperts', () => {
+  assert.equal(HALF_LIFE_FAST_DAYS, 1);
+  assert.deepEqual(FAST_K, [1, 0.25]);
+  const H = 3_600_000;
+  // one day later d = 0.5: n = 1 * 0.5 + 1, s = 1 * 0.5 + 0
+  const a = foldFast({ n: 1, s: 1, t: 0 }, 0, 24 * H);
+  assert.ok(Math.abs(a.n - 1.5) < 1e-12 && Math.abs(a.s - 0.5) < 1e-12, `${a.n} ${a.s}`);
+  assert.equal(a.t, 24 * H);
+  // half a day later d = 0.5 ** 0.5 = 0.707107: n = 1.707107, s = 0.707107
+  const b = foldFast({ n: 1, s: 1, t: 0 }, 0, 12 * H);
+  assert.ok(Math.abs(b.n - 1.707107) < 1e-6 && Math.abs(b.s - 0.707107) < 1e-6, `${b.n} ${b.s}`);
+  // two days later d = 0.25, not written back (t stays)
+  const c = decayFast({ n: 2, s: 1, t: 0 }, 48 * H);
+  assert.ok(Math.abs(c.n - 0.5) < 1e-12 && Math.abs(c.s - 0.25) < 1e-12, `${c.n} ${c.s}`);
+  assert.equal(c.t, 0);
+  // a time before t: d = 1
+  assert.deepEqual(decayFast({ n: 2, s: 1, t: 10 }, 0), { n: 2, s: 1, t: 10 });
+  // K 1: (0.5 + 1.5) / 2.5 = 0.8, c 2.5; K 0.25: (0.125 + 1.5) / 1.75 = 0.928571, c 1.75
+  const e = fastExperts(0.5, 1.5, 1.5);
+  assert.equal(e.length, 2);
+  assert.ok(Math.abs(e[0].p - 0.8) < 1e-12 && Math.abs(e[0].c - 2.5) < 1e-12, `${e[0].p} ${e[0].c}`);
+  assert.ok(Math.abs(e[1].p - 0.928571) < 1e-6 && Math.abs(e[1].c - 1.75) < 1e-12, `${e[1].p} ${e[1].c}`);
+  // no fast memory: both say p0, with strength K
+  assert.deepEqual(fastExperts(0.5, 0, 0), [{ p: 0.5, c: 1 }, { p: 0.5, c: 0.25 }]);
+});
+
+test('learn with ten experts: the weights sum to 1, none falls under 0.001/10', () => {
+  const ex = experts(L22(), 22, 2, 2).concat(fastExperts(0.5, 1.5, 1.5));
+  const w0 = new Array(10).fill(1 / 10);
+  for (const x of [0, 1]) assert.ok(Math.abs(learn(w0, ex, x).reduce((a, b) => a + b, 0) - 1) < 1e-12, `x ${x}`);
+  const rng = mulberry32(7);
+  let w = w0;
+  for (let i = 0; i < 2000; i++) {
+    const x = rng() < 0.5 ? 1 : 0;
+    w = learn(w, Array.from({ length: 10 }, (_, k) => ({ p: k === 9 ? x : rng(), c: 1 })), x);
+  }
+  assert.equal(w.length, 10);
+  for (const v of w) assert.ok(v >= 0.001 / 10, `w ${v}`);
+  assert.ok(Math.abs(w.reduce((a, b) => a + b, 0) - 1) < 1e-12);
+  assert.ok(w[9] > 0.99, `the exact expert leads: ${w[9]}`);
+  // a sum that is not > 0: uniform over the ten again
+  assert.deepEqual(learn(new Array(10).fill(0), ex, 1), new Array(10).fill(1 / 10));
+});
+
+test('regret with ten experts: over 500 seeded rounds the blend is within ln(10)/eta + share (5.7) of the best expert', () => {
+  // ln(10)/0.5 = 4.605, plus 500 * ln(1/0.999)/0.5 = 1.0005: 5.606
+  const rng = mulberry32(31);
+  let w = new Array(10).fill(1 / 10);
+  let mine = 0;
+  const each = new Array(10).fill(0);
+  for (let i = 0; i < 500; i++) {
+    const ex = Array.from({ length: 10 }, () => ({ p: rng(), c: 1 }));
+    const x = rng() < 0.3 ? 1 : 0;
+    const p = blend(ex, w).mean;
+    mine += (p - x) ** 2;
+    ex.forEach((e, k) => { each[k] += (e.p - x) ** 2; });
+    w = learn(w, ex, x);
+  }
+  const best = Math.min(...each);
+  assert.ok(mine <= best + 5.7, `blend ${mine} vs best ${best}`);
+});
+
+test('flip, the real branch: three weeks there 22-07, then five days there 09-17: tonight falls well under the L6 forecast\'s (prediction)', () => {
+  const v3 = create(fakeCtx().ctx), v2 = createV2(fakeCtx().ctx);
+  const away = dev({ reachable: false, reason: 'off' });
+  const look = (at: number, there: boolean) => { for (const b of [v3, v2]) b.observe(snap([there ? dev() : away], at), null); };
+  for (let day = 0; day < 26; day++) {
+    for (let h = 0; h < 24; h++) {
+      if (day === 25 && h === 22) break;
+      const there = day < 21 ? h >= 22 || h < 7 : h >= 9 && h < 17;
+      for (let j = 0; j < 12; j++) look(hourAt(day, h) + j * 300_000, there);   // 12 looks an hour, 5 min apart
+    }
+  }
+  look(hourAt(25, 22), false);                     // folds 21:00; tonight is the night that starts now
+  const p = (b: any): number => b.view().hints[0].tonight.p;
+  console.log(`flip, the real branch: tonight v3 ${p(v3)}, v2 (createV2) ${p(v2)}`);
+  assert.ok(p(v3) < 0.35, `v3 tonight ${p(v3)} < 0.35`);
+  assert.ok(p(v3) <= p(v2) - 0.1, `v3 ${p(v3)} at least 0.1 under v2 ${p(v2)}`);
+});
+
 /** a one-device mirror of the branch built only from the exported maths (slotOf, fold, decay,
  *  levels, experts, blend, learn, tonightSlots): the line, feed and pair numbers that moved with
- *  L6 P31 are derived from it, so each test says where its number comes from. */
+ *  L6 P31 are derived from it, so each test says where its number comes from. L7 P37: it also keeps
+ *  the fast memory per hour of the day (foldFast, decayFast, fastExperts) and ten weights, so the
+ *  numbers that moved again with the two fast experts are derived the same way. */
 function mirror(o: { slots?: Record<string, number[]>; w?: number[]; fixed?: number } = {}) {
   type St = { n: number; s: number; t: number };
   const slots = new Map<number, St>();
   for (const [k, [n, s, t]] of Object.entries(o.slots ?? {})) slots.set(Number(k), { n, s, t });
-  let w: number[] = o.w ?? new Array(8).fill(1 / 8);
-  const fixedW = o.fixed === undefined ? null : EXPERTS.map((_, i) => (i === o.fixed ? 1 : 0));
+  const fast: St[] = Array.from({ length: 24 }, () => ({ n: 0, s: 0, t: 0 }));
+  let w: number[] = o.w ?? new Array(10).fill(1 / 10);
+  const fixedW = o.fixed === undefined ? null : Array.from({ length: 10 }, (_, i) => (i === o.fixed ? 1 : 0));
   let cur: { slot: number; looks: number; there: number; t: number } | null = null;
   let last: string | undefined;
   const pairs: { t: number; p: number; lo: number; hi: number; p0: number; x: number }[] = [];
@@ -218,7 +304,8 @@ function mirror(o: { slots?: Record<string, number[]>; w?: number[]; fixed?: num
   const exOf = (L: ReturnType<typeof levels>, sl: number, at: number) => {
     const st = slots.get(sl);
     const de = st && st.n > 0 ? decay(st, at) : { n: 0, s: 0 };
-    return experts(L, sl % 24, de.n, de.s);
+    const f = decayFast(fast[sl % 24], at);
+    return experts(L, sl % 24, de.n, de.s).concat(fastExperts(L.p0, f.n, f.s));
   };
   const tonight = (at: number) => {
     const L = lv(at);
@@ -251,6 +338,7 @@ function mirror(o: { slots?: Record<string, number[]>; w?: number[]; fixed?: num
             if (fixedW === null) w = learn(w, ex, x);
           }
           slots.set(cur.slot, fold(st, x, at));
+          fast[cur.slot % 24] = foldFast(fast[cur.slot % 24], x, at);
         }
         cur = null;
       }
@@ -279,7 +367,9 @@ function mirror(o: { slots?: Record<string, number[]>; w?: number[]; fixed?: num
 /** the last of hourLooks' 12 looks in that hour */
 const lastLook = (day: number, hour: number) => hourAt(day, hour) + 55_000;
 /** an assertion whose number moved with L6 P31: the line equals the mirror's derivation and the
- *  literal written down from it */
+ *  literal written down from it. L7 P37 moved most of them again by a few points (the two fast
+ *  experts join the uniform start, so the interval is a little wider or narrower); each literal
+ *  is the mirror's new derivation */
 function moved(actual: string, derived: string, literal: string) {
   assert.equal(derived, literal, 'the mirror derives the literal');
   assert.equal(actual, literal);
@@ -314,7 +404,9 @@ test('pinned: createFixed(V1) gives the L5 strings and pair', () => {
     assert.ok(Math.abs(q.hi - 0.97502) < 1e-4, `hi ${q.hi}`);
     assert.equal(saved.dev.p1.w, undefined, 'the fixed branch never writes w');
   }
-  assert.throws(() => createFixed(8), RangeError);
+  // L7 P37: ten experts, so createFixed(8) and (9) are the fast ones; 10 is no expert
+  assert.throws(() => createFixed(10), RangeError);
+  assert.throws(() => createFixed(-1), RangeError);
 });
 
 test('migration: L5 notes (no w) load unchanged; the first scored fold writes w; a bad w is dropped, the device stays', () => {
@@ -332,6 +424,7 @@ test('migration: L5 notes (no w) load unchanged; the first scored fold writes w;
     assert.equal(saved.v, 2);
     for (const k of ['slots', 'cur', 'tps', 'pairs', 'last'] as const) assert.deepEqual(saved.dev.p1[k], (p1 as any)[k], k);
     assert.equal('w' in saved.dev.p1, false, 'no w until a scored fold');
+    assert.equal('fast' in saved.dev.p1, false, 'L7 P37: no fast memory until a fold');
   }
   {
     const F = hourAt(0, 22);
@@ -346,23 +439,34 @@ test('migration: L5 notes (no w) load unchanged; the first scored fold writes w;
     const saved = c.stored as any;
     assert.equal(saved.v, 2);
     const w = saved.dev.p1.w;
-    assert.equal(w.length, 8);
+    assert.equal(w.length, 10);                    // L7 P37: ten experts (was 8)
     assert.ok(Math.abs(w.reduce((a: number, b: number) => a + b, 0) - 1) < 1e-12);
-    // slot 49 (hour 1) was never seen and no slot holds hour 1: every expert says p0 = 0.875, so
-    // the pair's p is 0.875 under any weights; the uniform interval is wilson on the mixture's nu
+    // slot 49 (hour 1) was never seen and no slot holds hour 1: every expert says p0 = 0.875 (the
+    // fast pair too, its hour having no fast memory yet), so the pair's p is 0.875 under any
+    // weights; the uniform interval is wilson on the mixture's nu
     const L = levels([[46, { n: 1, s: 1, t: F }], [47, { n: 1, s: 1, t: F }], [48, { n: 1, s: 1, t: F }]]);
-    const ex = experts(L, 1, 0, 0);
-    const want = blend(ex, new Array(8).fill(1 / 8));
+    const ex = experts(L, 1, 0, 0).concat(fastExperts(L.p0, 0, 0));
+    const want = blend(ex, new Array(10).fill(1 / 10));
     const q = saved.dev.p1.pairs[0];
-    assert.equal(q.p, 0.875);
-    assert.ok(Math.abs(q.lo - want.lo) < 1e-12 && Math.abs(q.hi - want.hi) < 1e-12, `${q.lo}–${q.hi}`);
-    assert.deepEqual(w, learn(new Array(8).fill(1 / 8), ex, 0.75));
+    // L7 P37: ten tenths of 0.875 sum to 0.8750000000000001 in floating point (8 eighths did not)
+    assert.equal(q.p, want.mean);
+    assert.ok(Math.abs(q.p - 0.875) < 1e-12, `p ${q.p}`);
+    assert.ok(Math.abs(q.lo - want.lo) < 1e-12 && Math.abs(q.hi - want.hi) < 1e-12, `${q.lo}\u{2013}${q.hi}`);
+    assert.deepEqual(w, learn(new Array(10).fill(1 / 10), ex, 0.75));
+    // the first fold writes the fast memory: 24 triples, hour 1 folded with x = 9/12 at F
+    const fast = saved.dev.p1.fast;
+    assert.equal(fast.length, 24);
+    fast.forEach((st: number[], h: number) => assert.deepEqual(st, h === 1 ? [1, 0.75, F] : [0, 0, 0], `fast ${h}`));
   }
   const bad: [string, unknown][] = [
     ['wrong length', [0.5, 0.5]],
+    ['nine', [0.2, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1]],
     ['NaN', [NaN, 0, 0, 0, 0, 0, 0, 1]],
+    ['NaN in ten', [NaN, 0, 0, 0, 0, 0, 0, 0, 0, 1]],
     ['negative', [-0.1, 0.1, 0, 0, 0, 0, 0, 1]],
+    ['negative in ten', [-0.1, 0.1, 0, 0, 0, 0, 0, 0, 0, 1]],
     ['not summing to 1', [0.1, 0, 0, 0, 0, 0, 0, 0.5]],
+    ['ten not summing to 1', [0.1, 0, 0, 0, 0, 0, 0, 0, 0, 0.5]],
     ['not an array', 'w'],
   ];
   for (const [what, w] of bad) {
@@ -375,12 +479,46 @@ test('migration: L5 notes (no w) load unchanged; the first scored fold writes w;
     assert.deepEqual(saved.dev.p1.slots, p1.slots, `${what}: its slots stay`);
     assert.equal('w' in saved.dev.p1, false, `${what}: the w is dropped`);
   }
+  const load = (extra: Record<string, unknown>) => {
+    const { c, ctx } = fakeCtx({ v: 2, looks: 5, since: t, lastGood: t, dev: { p1: { ...structuredClone(p1), ...extra } } });
+    const b = create(ctx);
+    c.t += 61_000;
+    b.observe(snap([], t + 5000), null);
+    return c.stored as any;
+  };
+  // L7 P37: an 8-number w (an L6 notes file) is read as [0.9 w, 0.05, 0.05]
   const good = [0.3, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1 + 5e-7];
-  const { c, ctx } = fakeCtx({ v: 2, looks: 5, since: t, lastGood: t, dev: { p1: { ...structuredClone(p1), w: good } } });
-  const b = create(ctx);
-  c.t += 61_000;
-  b.observe(snap([], t + 5000), null);
-  assert.deepEqual((c.stored as any).dev.p1.w, good, 'a w summing to 1 within 1e-6 is kept');
+  assert.deepEqual(load({ w: good }).dev.p1.w, [...good.map((v) => 0.9 * v), 0.05, 0.05], 'an 8-number w summing to 1 within 1e-6 is padded');
+  const exact = [0.25, 0.25, 0.125, 0.125, 0.0625, 0.0625, 0.0625, 0.0625];
+  const padded = load({ w: exact });
+  assert.equal(padded.v, 2);
+  assert.deepEqual(padded.dev.p1.w, [...exact.map((v) => 0.9 * v), 0.05, 0.05]);
+  assert.ok(Math.abs(padded.dev.p1.w.reduce((a: number, b: number) => a + b, 0) - 1) < 1e-12, 'the padded w sums to 1');
+  const ten = [0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1 + 5e-7];
+  assert.deepEqual(load({ w: ten }).dev.p1.w, ten, 'a 10-number w summing to 1 within 1e-6 is kept');
+  // the fast memory: 24 sane triples are kept; anything else is dropped and the device stays
+  const okFast = Array.from({ length: 24 }, (_, h) => (h === 3 ? [2, 1, t] : [0, 0, 0]));
+  assert.deepEqual(load({ fast: okFast }).dev.p1.fast, okFast, 'a sane fast is kept');
+  const row = (st: unknown) => okFast.map((x, h) => (h === 3 ? st : x));
+  const badFast: [string, unknown][] = [
+    ['23 triples', okFast.slice(1)],
+    ['a pair', row([1, 1])],
+    ['s over n', row([1, 2, t])],
+    ['negative s', row([1, -0.1, t])],
+    ['n over 1e4', row([1e4 + 1, 1, t])],
+    ['negative t', row([1, 1, -1])],
+    ['t past 8.64e15', row([1, 1, 8.64e15 + 1])],
+    ['NaN', row([NaN, 0, t])],
+    ['a string', row(['1', 0, t])],
+    ['not an array', 'fast'],
+  ];
+  for (const [what, fast] of badFast) {
+    const saved = load({ fast });
+    assert.equal(saved.v, 2);
+    assert.ok(saved.dev.p1, `${what}: the device stays`);
+    assert.deepEqual(saved.dev.p1.slots, p1.slots, `${what}: its slots stay`);
+    assert.equal('fast' in saved.dev.p1, false, `${what}: the fast is dropped`);
+  }
 });
 
 test('new behaviour: there on weeknights, seen absent on three weekends: saturday night is unlikely, monday night likely', () => {
@@ -442,18 +580,18 @@ test('up all evening for three nights: likely, and the interval narrows as night
     for (let h = from; h <= to; h++) { hourLooks(b, [dev(), newOne], day, 22 + h); m.hour(day, 22 + h, true); }
   };
   night(0, 0, 5);                                   // sunday 22:00 .. monday 02:55
-  moved(b.view().lines[0], 'pixel · tonight 22–07: ' + m.line(lastLook(0, 27)), 'pixel · tonight 22–07: likely 94% (49–100%)');
+  moved(b.view().lines[0], 'pixel · tonight 22–07: ' + m.line(lastLook(0, 27)), 'pixel · tonight 22–07: likely 94% (46–100%)');
   assert.equal(b.view().gauge, Math.round((5 / 168) * 100));   // slots 22..26 of the week seen
   assert.equal(b.view().stat, '1 device · tonight 1 likely');
   night(0, 6, 8);                                   // monday 04:00 .. 06:55
   night(1, 0, 5);                                   // monday 22:00 .. tuesday 02:55
-  moved(b.view().lines[0], 'pixel · tonight 22–07: ' + m.line(lastLook(1, 27)), 'pixel · tonight 22–07: likely 98% (57–100%)');
+  moved(b.view().lines[0], 'pixel · tonight 22–07: ' + m.line(lastLook(1, 27)), 'pixel · tonight 22–07: likely 98% (56–100%)');
   night(1, 6, 8);
   for (let h = 0; h <= 4; h++) { hourLooks(b, [dev(), newOne], 2, 22 + h); m.hour(2, 22 + h, true); }   // tuesday 22:00 .. wednesday 01:55
   hourLooks(b, [dev(), late, newOne], 2, 27);                                    // late joins: wednesday 03:00
   m.hour(2, 27, true);
   const v = b.view();
-  moved(v.lines[0], 'pixel · tonight 22–07: ' + m.line(lastLook(2, 27)), 'pixel · tonight 22–07: likely 99% (60–100%)');   // the interval narrows as nights are added
+  moved(v.lines[0], 'pixel · tonight 22–07: ' + m.line(lastLook(2, 27)), 'pixel · tonight 22–07: likely 99% (59–100%)');   // the interval narrows as nights are added
   assert.equal(v.lines[1], 'late · tonight 22–07: not enough recent hours yet (0 of 3)');
   assert.ok(!v.lines.some((l) => l.startsWith('new one')), 'a device not looked at yet says nothing');
   assert.equal(v.stat, '2 devices · tonight 1 likely');
@@ -471,7 +609,7 @@ test('a device never there is unlikely, and a cable phone that is not plugged in
   const v = b.view();
   // both fold 5 hours of x = 0: p0 = 0.5 / 6 = 0.0833. L6 P31: the blend (uniform weights, two
   // scored hours) leans on the hours too, and the experts' spread widens the interval (L5: 7%, 1–36%)
-  moved(v.lines[0], 'cable phone · tonight 22–07: ' + m.line(lastLook(0, 27)), 'cable phone · tonight 22–07: unlikely 6% (0–51%)');   // same guess: sorted by name
+  moved(v.lines[0], 'cable phone · tonight 22–07: ' + m.line(lastLook(0, 27)), 'cable phone · tonight 22–07: unlikely 6% (0–54%)');   // same guess: sorted by name
   assert.equal(v.lines[1], 'galaxy · tonight 22–07: ' + m.line(lastLook(0, 27)));
   assert.equal(c.feed.length, 0, 'the first guess is not news');
 });
@@ -495,12 +633,12 @@ test('a weekday-only device: likely on a monday, and a saturday never seen borro
   m.look(mon, true);
   // the folds are ~6 days old by now, so tonight is read with n and s decayed to the look's time;
   // the learned weights trust the slot's own nights (L5: likely 61%, 36–81%)
-  moved(b.view().lines[0], 'pixel · tonight 22–07: ' + m.line(mon), 'pixel · tonight 22–07: likely 97% (69–100%)');
+  moved(b.view().lines[0], 'pixel · tonight 22–07: ' + m.line(mon), 'pixel · tonight 22–07: likely 97% (52–100%)');
   for (const d of [22, 23, 24, 25, 26]) driveWeekday(d);          // a fourth week
   const sat = hourAt(27, 7) + 55 * 60_000;
   b.observe(snap([dev()], sat), null);                            // saturday 5 dec, 07:55: the night slots were never seen
   m.look(sat, true);
-  moved(b.view().lines[0], 'pixel · tonight 22–07: ' + m.line(sat), 'pixel · tonight 22–07: likely 94% (33–100%), from other nights');
+  moved(b.view().lines[0], 'pixel · tonight 22–07: ' + m.line(sat), 'pixel · tonight 22–07: likely 94% (34–100%), from other nights');
   assert.match(b.view().lines[0], /, from other nights$/);
 });
 
@@ -593,8 +731,8 @@ test('a feed line when the firm guess flips, with the interval, not on every loo
   assert.equal(c.feed.length, 1);
   // L5: N = 8, S = 3: p0 = 3.5/9, mean = 0.3864, lo = 0.1722, hi = 0.6579 (39%, 17–66%). L6 P31:
   // the blend of the learned weights, and the experts' spread widens the interval (the mirror)
-  assert.deepEqual(m.feed, ['forecast: pixel is now unlikely tonight 22–07 (38%, 12–74%)'], 'the mirror derives the literal');
-  assert.equal(c.feed[0], 'forecast: pixel is now unlikely tonight 22–07 (38%, 12–74%)');
+  assert.deepEqual(m.feed, ['forecast: pixel is now unlikely tonight 22–07 (38%, 12–75%)'], 'the mirror derives the literal');
+  assert.equal(c.feed[0], 'forecast: pixel is now unlikely tonight 22–07 (38%, 12–75%)');
 });
 
 test('a re-folded slot: the decayed N is shown with one decimal, whole numbers plain', () => {
@@ -627,8 +765,8 @@ test('the feed line uses the checked name: a non-string name falls back to the i
   hourLooks(b, [gone2, gone3], 0, 30);                   // the fifth fold of x = 0 flips both
   assert.equal(c.feed.length, 2);
   // L6 P31: the same flip as the test above, so the same numbers (L5: 39%, 17–66%)
-  assert.equal(c.feed[0], 'forecast: p2 is now unlikely tonight 22–07 (38%, 12–74%)');
-  assert.equal(c.feed[1], 'forecast: ' + 'n'.repeat(80) + ' is now unlikely tonight 22–07 (38%, 12–74%)');
+  assert.equal(c.feed[0], 'forecast: p2 is now unlikely tonight 22–07 (38%, 12–75%)');
+  assert.equal(c.feed[1], 'forecast: ' + 'n'.repeat(80) + ' is now unlikely tonight 22–07 (38%, 12–75%)');
 });
 
 test('a device absent from the snapshot for nine weeks: the estimate decays when read, the interval widens', () => {
@@ -641,14 +779,14 @@ test('a device absent from the snapshot for nine weeks: the estimate decays when
   b.observe(snap([dev()], t0 + 5000), null);
   m.look(t0 + 5000, true);
   // L6 P31: no w in the notes, so uniform weights (the mirror); L5: likely 98% (73–100%), N = 20, m = 5
-  moved(b.view().lines[0], 'pixel · tonight 22–07: ' + m.line(t0 + 5000), 'pixel · tonight 22–07: likely 99% (67–100%)');
+  moved(b.view().lines[0], 'pixel · tonight 22–07: ' + m.line(t0 + 5000), 'pixel · tonight 22–07: likely 99% (50–100%)');
   for (let w = 1; w <= 8; w++) b.observe(snap([], hourAt(7 * w, 23)), null);        // the eye keeps looking, the device is gone
   b.observe(snap([dev()], hourAt(63, 23)), null);                                   // nine weeks later, back
   m.look(hourAt(63, 23), true);
   // every slot: d = 0.5 ** (9/4) = 0.2102241; N = 20 * d = 4.2045. L5 said 91% (60–98%), its
   // interval widened from 27 points to 38; the blend's interval widens too
   const back = m.line(hourAt(63, 23));
-  moved(b.view().lines[0], 'pixel · tonight 22–07: ' + back, 'pixel · tonight 22–07: likely 93% (44–100%)');
+  moved(b.view().lines[0], 'pixel · tonight 22–07: ' + back, 'pixel · tonight 22–07: likely 92% (37–100%)');
   const width = (l: string) => { const [, lo, hi] = l.match(/\((\d+)–(\d+)%\)/)!; return Number(hi) - Number(lo); };
   assert.ok(width(back) > width(m.line(t0 + 5000)), 'the interval widened');
 });
@@ -666,7 +804,7 @@ test('daytime hours only: the guess stands, but the line says it is from daytime
   const m = mirror();
   for (const h of [10, 11, 12]) m.hour(1, h, true);
   m.look(hourAt(1, 13), true);
-  moved(b.view().lines[0], 'pixel · tonight 22–07: ' + m.line(hourAt(1, 13)), 'pixel · tonight 22–07: likely 87% (32–99%), from daytime only');
+  moved(b.view().lines[0], 'pixel · tonight 22–07: ' + m.line(hourAt(1, 13)), 'pixel · tonight 22–07: likely 87% (29–99%), from daytime only');
 });
 
 test('a value just under the threshold: "(2.9 of 3)", not enough', () => {
@@ -720,10 +858,10 @@ test('a device gone from the snapshot: not counted in the stat, listed after wit
   const v = b.view();
   assert.equal(v.stat, '1 device · tonight 0 likely');             // only galaxy counts
   // L6 P31 (the mirror; L5: unlikely 7% (1–36%))
-  moved(v.lines[0], 'galaxy · tonight 22–07: ' + gm.line(lastLook(1, 27)), 'galaxy · tonight 22–07: unlikely 6% (0–51%)');
+  moved(v.lines[0], 'galaxy · tonight 22–07: ' + gm.line(lastLook(1, 27)), 'galaxy · tonight 22–07: unlikely 6% (0–54%)');
   // pixel's data is a day old. L6 P31: monday night's hours 22..02 were seen on sunday night, so it
   // borrows them, "from other nights" (L5: likely 91% (60–99%), from daytime only, on p0 alone)
-  moved(v.lines[1], 'pixel · tonight 22–07: ' + pm.line(lastLook(1, 27)) + ' · last seen yesterday', 'pixel · tonight 22–07: likely 93% (37–100%), from other nights · last seen yesterday');
+  moved(v.lines[1], 'pixel · tonight 22–07: ' + pm.line(lastLook(1, 27)) + ' · last seen yesterday', 'pixel · tonight 22–07: likely 93% (36–100%), from other nights · last seen yesterday');
 });
 
 /** notes of a device that is not in the snapshot any more: three folded hours, N = 3, a firm guess.
@@ -732,7 +870,9 @@ test('a device gone from the snapshot: not counted in the stat, listed after wit
  *  night's hours too, so those three slots borrow them (uniform weights, no w in the notes), and
  *  the line says "from other nights"; the mirror derives it at t0. */
 const goneNotes = (t: number) => ({ v: 2, looks: 9, since: t, lastGood: t, dev: { p1: { name: 'pixel', seen: t, slots: { '46': [1, 1, t], '47': [1, 1, t], '48': [1, 1, t] }, cur: null, tps: {} } } });
-const GONE_LINE = 'pixel · tonight 22–07: likely 89% (33–99%), from other nights';
+// L7 P37: 89% (33-99%) before; the notes hold no fast memory, so the two fast experts say the
+// device's rate with little strength, which pulls the mean and widens the interval (the mirror derives it)
+const GONE_LINE = 'pixel · tonight 22–07: likely 88% (30–99%), from other nights';
 test('the gone device\'s line, derived (L6 P31)', () => {
   const t0 = hourAt(0, 23);
   assert.equal('pixel · tonight 22–07: ' + mirror({ slots: goneNotes(t0).dev.p1.slots }).line(t0), GONE_LINE);
@@ -1003,8 +1143,8 @@ test('prototype keys: __proto__ and friends neither pollute nor throw (null-prot
   // L6 P31: six hours there, as in 'up all evening' (the mirror; L5: likely 93% (64–99%))
   const m = mirror();
   for (let h = 0; h < 6; h++) m.hour(0, 22 + h, true);
-  moved(v.lines[0], 'tricky 0 · tonight 22–07: ' + m.line(lastLook(0, 27)) + ' · ~7.4 tok/s on Fancy', 'tricky 0 · tonight 22–07: likely 94% (49–100%) · ~7.4 tok/s on Fancy');
-  assert.ok(v.lines.every((l) => /^tricky \d · tonight 22–07: likely 94% \(49–100%\) · ~7\.4 tok\/s on Fancy$/.test(l)));
+  moved(v.lines[0], 'tricky 0 · tonight 22–07: ' + m.line(lastLook(0, 27)) + ' · ~7.4 tok/s on Fancy', 'tricky 0 · tonight 22–07: likely 94% (46–100%) · ~7.4 tok/s on Fancy');
+  assert.ok(v.lines.every((l) => /^tricky \d · tonight 22–07: likely 94% \(46–100%\) · ~7\.4 tok\/s on Fancy$/.test(l)));
   c.t += 61_000;
   b.observe(snap(tricky, hourAt(0, 28) + 55_000), null);
   const saved = c.stored as any;
@@ -1099,7 +1239,7 @@ test('a far-forward look is not trusted until the next one agrees; tonight is un
   const m = mirror();
   for (let h = 0; h < 6; h++) { hourLooks(b, [dev()], 0, 22 + h); m.hour(0, 22 + h, true); }   // sunday 22:00 .. monday 02:55: N = 5
   const before = 'pixel · tonight 22–07: ' + m.line(lastLook(0, 27));
-  moved(b.view().lines[0], before, 'pixel · tonight 22–07: likely 94% (49–100%)');
+  moved(b.view().lines[0], before, 'pixel · tonight 22–07: likely 94% (46–100%)');
   const far1 = hourAt(365, 12);                                   // a year ahead
   b.observe(snap([dev()], far1), null);
   assert.equal(b.view().lines[0], before, 'one far look changes nothing');
@@ -1109,7 +1249,7 @@ test('a far-forward look is not trusted until the next one agrees; tonight is un
   hourLooks(b, [dev()], 0, 29);                                   // the next hour folds normally too
   m.hour(0, 28, true);
   m.hour(0, 29, true);
-  moved(b.view().lines[0], 'pixel · tonight 22–07: ' + m.line(lastLook(0, 29)), 'pixel · tonight 22–07: likely 96% (57–100%)');
+  moved(b.view().lines[0], 'pixel · tonight 22–07: ' + m.line(lastLook(0, 29)), 'pixel · tonight 22–07: likely 96% (54–100%)');
   c.t += 61_000;
   b.observe(snap([dev()], hourAt(0, 29) + 55_000), null);         // saves
   const saved = c.stored as any;
@@ -1188,7 +1328,7 @@ test('a known device with a speed: the whole line, guess and interval first', ()
   // L6 P31: six hours there, as in 'up all evening' (the mirror; L5: likely 93% (64–99%))
   const m = mirror();
   for (let h = 0; h < 6; h++) m.hour(0, 22 + h, true);
-  moved(b.view().lines[0], 'pixel · tonight 22–07: ' + m.line(lastLook(0, 27)) + ' · ~7.4 tok/s on Qwen3 0.6B', 'pixel · tonight 22–07: likely 94% (49–100%) · ~7.4 tok/s on Qwen3 0.6B');
+  moved(b.view().lines[0], 'pixel · tonight 22–07: ' + m.line(lastLook(0, 27)) + ' · ~7.4 tok/s on Qwen3 0.6B', 'pixel · tonight 22–07: likely 94% (46–100%) · ~7.4 tok/s on Qwen3 0.6B');
 });
 
 test('restart keeps the folded slots', () => {
@@ -1208,7 +1348,7 @@ test('restart keeps the folded slots', () => {
   for (let h = 0; h < 9; h++) m.hour(0, 22 + h, true);
   m.look(hourAt(1, 7), true);
   m.look(hourAt(1, 8), true);
-  moved(v.lines[0], 'pixel · tonight 22–07: ' + m.line(hourAt(1, 8)), 'pixel · tonight 22–07: likely 96% (42–100%), from other nights');
+  moved(v.lines[0], 'pixel · tonight 22–07: ' + m.line(hourAt(1, 8)), 'pixel · tonight 22–07: likely 97% (43–100%), from other nights');
   assert.equal(v.rows[0][1], String((c.stored as any).looks + 1));
 });
 

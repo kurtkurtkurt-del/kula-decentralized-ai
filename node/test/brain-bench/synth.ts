@@ -178,6 +178,86 @@ export function rateOf(name: ScenarioName): (id: string, t: number) => number | 
   };
 }
 
+// ---- L7 P37: the habit flip (F7), and its no-flip controls. Not in SCENARIOS: the flip and
+// control benches run them on their own, 12 looks an hour so every hour folds. The hourly truth is
+// ported verbatim from the scan's f7 proof (its own mulberry32 seeds), so SCAN-F's numbers carry
+// over.
+
+const LOOK5 = 300_000;                                // 300 s between two looks
+const FLIP_BEFORE = 28;                               // days of the old habit
+const FLIP_AFTER = 28;                                // days of the new one
+const CONTROL_DAYS = 42;
+
+/** the day the habit flips: START + 28 days */
+export const FLIP_AT = START + FLIP_BEFORE * DAY;
+
+/** the flip's hourly presence: there 22-07 on nights drawn at 0.9 (else each hour at 0.1) for 28
+ *  days, then 09-17 on days drawn at 0.9 (else each hour at 0.1) for 28 days */
+export function flipHours(seed: number): boolean[] {
+  const rng = mulberry32(seed * 7919 + 17);
+  const days = FLIP_BEFORE + FLIP_AFTER;
+  const on: boolean[] = [];
+  for (let k = 0; k <= days; k++) on.push(rng() < 0.9);
+  const out: boolean[] = [];
+  for (let k = 0; k < days * 24; k++) {
+    const t = START + k * HOUR;
+    const h = new Date(t).getHours();
+    const day = Math.floor(k / 24);
+    let there: boolean;
+    if (t < FLIP_AT) { const nightOf = h >= 22 ? day + 1 : h < 7 ? day : -1; there = nightOf >= 0 && on[nightOf] ? true : rng() < 0.1; }
+    else there = h >= 9 && h < 17 && on[day] ? true : rng() < 0.1;
+    out.push(there);
+  }
+  return out;
+}
+
+/** the controls with no flip, 42 days: a coin (each hour 0.5) and an office phone (mon-fri 09-17
+ *  on days drawn at 0.9, else each hour 0.05) */
+export function controlHours(kind: 'coin' | 'office', seed: number): boolean[] {
+  const rng = mulberry32(seed * 104729 + (kind === 'coin' ? 3 : 5));
+  const on: boolean[] = [];
+  for (let k = 0; k < CONTROL_DAYS; k++) on.push(rng() < 0.9);
+  const out: boolean[] = [];
+  for (let k = 0; k < CONTROL_DAYS * 24; k++) {
+    const d = new Date(START + k * HOUR); const h = d.getHours(), dow = d.getDay();
+    out.push(kind === 'coin' ? rng() < 0.5 : dow >= 1 && dow <= 5 && h >= 9 && h < 17 && on[Math.floor(k / 24)] ? true : rng() < 0.05);
+  }
+  return out;
+}
+
+/** hourly presence as 300 s looks (12 an hour), every device probed at each look, plus one last
+ *  look at the end (nobody there) so the last hour folds */
+function* hourly(devs: [string, boolean[]][], hours: number): Generator<Snapshot> {
+  for (let k = 0; k <= hours; k++) {
+    for (let j = 0; j < 12; j++) {
+      const t = START + k * HOUR + j * LOOK5;
+      yield snapshot(t, devs.map(([id, h]) => probed(id, k < hours ? h[k] : false, t, 20)));
+      if (k === hours) return;
+    }
+  }
+}
+
+/** flip: one device 'flip', 300 s looks for 56 days (flipHours), plus the last look */
+export function* flip(seed: number): Generator<Snapshot> {
+  yield* hourly([['flip', flipHours(seed)]], (FLIP_BEFORE + FLIP_AFTER) * 24);
+}
+
+/** control: devices 'coin' and 'office', 300 s looks for 42 days (controlHours), plus the last look */
+export function* control(seed: number): Generator<Snapshot> {
+  yield* hourly([['coin', controlHours('coin', seed)], ['office', controlHours('office', seed)]], CONTROL_DAYS * 24);
+}
+
+/** the true chance that the flip device was there in the hour a pair at t scored (the hour of
+ *  t - 1 h): 0.9 + 0.1 * 0.1 = 0.91 at 22-07 before FLIP_AT and at 09-17 after, else 0.10; another
+ *  device: null */
+export function flipRate(id: string, t: number): number | null {
+  if (id !== 'flip') return null;
+  const hs = t - HOUR;
+  const h = new Date(hs).getHours();
+  const usual = hs < FLIP_AT ? h >= 22 || h < 7 : h >= 9 && h < 17;
+  return usual ? 0.91 : 0.1;
+}
+
 /** a scenario's stream by name */
 export function scenario(name: ScenarioName, seed: number): Iterable<Snapshot> {
   switch (name) {
