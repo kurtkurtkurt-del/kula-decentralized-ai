@@ -50,7 +50,7 @@ h1 { font-size: clamp(40px, 9vw, 76px); line-height: 1.02; letter-spacing: -0.03
 .downloads + .dl-group { margin-top: 28px; }
 .downloads { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: 1fr; gap: 14px 12px; text-align: left; }
 @media (min-width: 520px) { .downloads { grid-template-columns: 1fr 1fr; } }
-@media (min-width: 880px) { .downloads.computers { grid-template-columns: repeat(3, 1fr); gap: 16px; } .downloads.phones { gap: 16px; } }
+@media (min-width: 880px) { .downloads.computers { grid-template-columns: repeat(3, 1fr); gap: 16px; } .downloads.phones { grid-template-columns: repeat(3, 1fr); gap: 16px; } }
 .dl { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
 .dl-row { position: relative; display: flex; gap: 6px; }
 .dl-btn { position: relative; flex: 1; min-width: 0; display: grid; grid-template-columns: auto 1fr; grid-template-rows: auto auto; column-gap: 12px; align-items: center;
@@ -63,15 +63,20 @@ a.dl-btn:hover { border-color: var(--accent); transform: translateY(-1px); }
 a.dl-btn:active { transform: translateY(0); }
 .dl-btn[aria-disabled="true"] { opacity: .55; box-shadow: none; background: var(--sunk); cursor: default; }
 .dl-btn[aria-disabled="true"] svg { color: var(--meta); }
-/* the short steps under each button, and the Mac box under the rows: small bullets */
-.dl-how, .closed-test ul, .brain-points { list-style: none; margin: 0; padding: 0; display: grid; gap: 3px; }
+/* the short steps under each button, and the Mac's fold-out under its steps: small bullets */
+.dl-how, .dl-needs ul, .brain-points { list-style: none; margin: 0; padding: 0; display: grid; gap: 3px; }
 .dl-how { margin: 0 4px; font-size: 13px; line-height: 1.45; color: var(--mute); }
-.dl-how li, .closed-test li, .brain-points li { position: relative; padding-left: 13px; }
-.dl-how li::before, .closed-test li::before, .brain-points li::before { content: ""; position: absolute; left: 1px; top: .6em; width: 4px; height: 4px; border-radius: 50%; background: var(--meta); }
+.dl-how li, .dl-needs li, .brain-points li { position: relative; padding-left: 13px; }
+.dl-how li::before, .dl-needs li::before, .brain-points li::before { content: ""; position: absolute; left: 1px; top: .6em; width: 4px; height: 4px; border-radius: 50%; background: var(--meta); }
 .dl.is-later .dl-how { color: var(--meta); }
-.dl-how code, .closed-test code { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 12px; overflow-wrap: anywhere; }
-.closed-test { max-width: 620px; margin: 28px auto 0; padding: 12px 16px; border-radius: 14px; border: 1px solid var(--line, rgba(255, 255, 255, 0.12)); font-size: 13.5px; line-height: 1.5; color: var(--mute); text-align: left; }
-.closed-test > b { display: block; margin-bottom: 4px; color: var(--words); font-weight: 600; }
+.dl-how code, .dl-needs code { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 12px; overflow-wrap: anywhere; }
+.dl-needs { margin: 0 4px; font-size: 13px; line-height: 1.45; color: var(--mute); }
+.dl-needs summary { list-style: none; display: inline-flex; align-items: center; gap: 4px; cursor: pointer; color: var(--words); font-weight: 600; }
+.dl-needs summary::-webkit-details-marker { display: none; }
+.dl-needs summary svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; transition: transform .15s; }
+.dl-needs summary:hover { color: var(--accent); }
+.dl-needs[open] summary svg { transform: rotate(180deg); }
+.dl-needs ul { margin-top: 4px; }
 
 /* the arrow on each button's right, and its menu */
 .more { flex: none; display: flex; }
@@ -95,6 +100,7 @@ a.dl-btn:active { transform: translateY(0); }
 /* ---------- what's new: the release's short list, between the downloads and the picture */
 .news { margin-top: 44px; }
 .news h2 { font-size: 22px; }
+.news-date { margin-left: 8px; font-size: 14px; font-weight: 400; color: var(--meta); white-space: nowrap; }
 .news-list { list-style: none; margin: 14px 0 0; padding: 0; display: grid; gap: 10px 28px; grid-template-columns: 1fr; font-size: 15px; color: var(--mute); }
 @media (min-width: 820px) { .news-list { grid-template-columns: 1fr 1fr; } }
 .news-list li { position: relative; padding-left: 18px; }

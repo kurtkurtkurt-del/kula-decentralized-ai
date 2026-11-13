@@ -26,7 +26,7 @@ and says when a device alone would be faster. Rule of thumb: jobs are split, mod
 iOS is out of scope for now: the app opens on iOS but runs no models (a Swift module is written
 on a branch, never built).
 
-## what's new in 0.4.0
+## what's new in 0.4.0 · 13 November 2026
 
 - **Linux app.** kula installs on Ubuntu and Debian computers as a normal app (`.deb`, for Intel/AMD
   and ARM). So far it is tested only on GitHub's Ubuntu 24.04 test machines: it starts, and a small
@@ -52,7 +52,7 @@ on a branch, never built).
   is used, devices paired with an older version are repaired, the phone's check of a friend's
   history works, and the brain tab's names and words are fixed. It installs over 0.3.0.
 
-## what's new in 0.3.0
+## what's new in 0.3.0 · 11 November 2026
 
 - **Suggestions you approve.** kula can now suggest or warn with a card on the brain panel
   (computer and phone). Nothing happens until you press it; then kula loads, unloads, downloads or
@@ -74,7 +74,7 @@ on a branch, never built).
   [docs/BEYIN-NET.md](docs/BEYIN-NET.md), with a 20-home simulation. No network code yet.
 - **MIT licence** for kula's own code.
 
-## what's new in 0.2.0
+## what's new in 0.2.0 · 10 November 2026
 
 - **The brain.** kula-node on the computer watches all your devices every 5 seconds. The chat page
   shows its twelve parts as a map around this computer.
