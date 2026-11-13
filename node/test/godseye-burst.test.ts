@@ -3,7 +3,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
-  A0, B0, CUSUM_CAP, DECAY, W_FLAG, burstStep, freshBurst, nbTail, saneBurst, type BurstFit,
+  A0, B0, CUSUM_CAP, CUSUM_H, DECAY, RATE_FLOOR, RHO, W_FLAG, burstStep, freshBurst, nbTail, saneBurst,
+  type BurstFit,
 } from '../src/godseye/branches/burst.ts';
 
 const near = (x: number, want: number, tol: number, what: string): void =>
@@ -69,12 +70,65 @@ test('the CUSUM never passes its cap, and a flagged hour is learned at W_FLAG', 
     if (r.tail || r.rise) {
       flagged++;
       near(r.fit.b[h], B0 + (before.b[h] - B0) * DECAY + W_FLAG, 1e-12, 'b[h] of a flagged hour');
-      near(r.fit.a[h], A0 + (before.a[h] - A0) * DECAY + W_FLAG * 200, 1e-9, 'a[h] of a flagged hour');
+      // L10 P54: a flagged hour teaches at most RHO times its usual, not its whole 200 (moved from
+      // W_FLAG * 200; the usual here is below RATE_FLOOR, so it teaches ceil(3 * 0.5) = 2)
+      const learn = Math.min(200, Math.ceil(RHO * Math.max(RATE_FLOOR, before.a[h] / before.b[h])));
+      assert.equal(learn, 2);
+      near(r.fit.a[h], A0 + (before.a[h] - A0) * DECAY + W_FLAG * learn, 1e-9, 'a[h] of a flagged hour');
     }
     f = r.fit;
   }
   assert.ok(flagged > 0, 'a 200 an hour flood is flagged');
   assert.equal(f.s, CUSUM_CAP);
+});
+
+// L10 P54: a flagged hour teaches a bounded count, and the CUSUM clears on one quiet hour
+const known = (h: number, a: number, b: number, s = 0): BurstFit => {
+  const f = freshBurst();
+  f.n = 30;
+  f.a[h] = a;
+  f.b[h] = b;
+  f.s = s;
+  return f;
+};
+
+test('the cap is the alarm line plus a hold of 0.5', () => {
+  near(CUSUM_CAP, CUSUM_H + 0.5, 1e-12, 'CUSUM_CAP');
+});
+
+test('a flagged hour of 5000 teaches ceil(3 * 3.125) = 10, not 5000', () => {
+  const r = burstStep(known(10, 12.5, 4), 10, 5000);
+  assert.equal(r.tail, true);
+  // 0.5 + 12 * 0.98 + 0.25 * 10 = 14.76; 1 + 3 * 0.98 + 0.25 = 4.19
+  near(r.fit.a[10], 14.76, 1e-9, 'a[10]');
+  near(r.fit.b[10], 4.19, 1e-9, 'b[10]');
+});
+
+test('a flagged hour below the floor teaches ceil(3 * 0.5) = 2', () => {
+  const r = burstStep(known(3, 0.5, 4), 3, 50);
+  assert.ok(r.tail || r.rise);
+  // 0.5 + 0 * 0.98 + 0.25 * 2 = 1.0
+  near(r.fit.a[3], 1.0, 1e-9, 'a[3]');
+});
+
+test('an unflagged hour is learned whole', () => {
+  const r = burstStep(known(10, 12.5, 4), 10, 5);
+  assert.equal(r.tail, false);
+  assert.equal(r.rise, false);
+  // 0.5 + 12 * 0.98 + 5 = 17.26; 1 + 3 * 0.98 + 1 = 4.94
+  near(r.fit.a[10], 17.26, 1e-9, 'a[10]');
+  near(r.fit.b[10], 4.94, 1e-9, 'b[10]');
+});
+
+test('held at the cap, one quiet hour clears the CUSUM and one refusal keeps it', () => {
+  // k 0: CUSUM_CAP - 2 * max(0.5, 0.125) = CUSUM_H + 0.5 - 1
+  const quiet = burstStep(known(3, 0.5, 4, CUSUM_CAP), 3, 0);
+  near(quiet.fit.s, CUSUM_H - 0.5, 1e-9, 's after a quiet hour');
+  assert.equal(quiet.rise, false);
+  // k 1: CUSUM_CAP + ln 3 - 1 is held at the cap, above the line
+  const one = burstStep(known(3, 0.5, 4, CUSUM_CAP), 3, 1);
+  assert.equal(one.fit.s, CUSUM_CAP);
+  assert.equal(one.rise, true);
 });
 
 test('bad input returns the same fit object', () => {

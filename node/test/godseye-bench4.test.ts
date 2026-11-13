@@ -73,3 +73,36 @@ test('B5 night: the new rule flags the first attack hour on at least 4 of 5 seed
   const n = seedsWhere('night', (c) => c.fresh.delay === 0);
   assert.ok(n >= 4, `night delays: ${delays('night', 'fresh')}`);
 });
+
+// L10 P54: a flagged hour teaches at most RHO times its usual, and the CUSUM clears on one quiet hour
+test('B6 flood: after + 5000 in a 10:00 hour, 40 more in the next 10:00 hour is still red on 5 of 5 seeds', () => {
+  const n = seedsWhere('flood', (c) => c.fresh.red.includes(250));
+  const rows = SEEDS.map((seed) => `${seed}:${card('flood', seed).counts[250]}${card('flood', seed).fresh.red.includes(250) ? ' red' : ''}`);
+  console.log(`B6 flood hour 250 (count, red): ${rows.join(', ')}`);
+  assert.equal(n, 5, `flood: hour 250 red on ${n} of 5 seeds`);
+});
+
+test('B7 (prediction): the mean red hours in the 24 h after an attack, new <= today on step10, step3 and night', () => {
+  for (const name of ['step10', 'step3', 'night'] as const) {
+    const today = mean(name, (c) => c.today.after);
+    const fresh = mean(name, (c) => c.fresh.after);
+    console.log(`B7 ${name} red in the 24 h after: today ${today.toFixed(2)} new ${fresh.toFixed(2)}`);
+    assert.ok(fresh <= today, `${name}: new ${fresh} > today ${today}`);
+  }
+});
+
+test('B8 (prediction): no new delay is longer than L9\u{2019}s, per seed', () => {
+  const l9: Record<'step10' | 'step3' | 'night' | 'ramp', number[]> = {
+    step10: [0, 0, 0, 0, 0],
+    step3: [1, 2, 1, 0, 1],
+    night: [1, 0, 0, 0, 0],
+    ramp: [36, 37, 40, 34, 39],
+  };
+  for (const name of ['step10', 'step3', 'night', 'ramp'] as const) {
+    console.log(`B8 ${name} new delays ${delays(name, 'fresh')} (L9 ${l9[name].join(',')})`);
+    SEEDS.forEach((seed, i) => {
+      const d = card(name, seed).fresh.delay;
+      assert.ok(d !== null && d <= l9[name][i], `${name} seed ${seed}: delay ${d} > L9 ${l9[name][i]}`);
+    });
+  }
+});

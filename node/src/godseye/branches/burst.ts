@@ -11,7 +11,9 @@
 // gathers several hours that are each only a little high: `rise` when it passes CUSUM_H. Both wait
 // until NEED hours were taken in and that hour of the day has STRATUM_NEED hours of weight. After
 // the test the hour is learned with a decay, a flagged hour at the weight W_FLAG only (so a burst
-// teaches little, and an honest new level is learned in the end).
+// teaches little, and an honest new level is learned in the end), and a flagged hour teaches at
+// most RHO times its usual as its count (L10 P54), so one loud hour cannot blind that hour of day.
+// The CUSUM is held at most CUSUM_HOLD above its alarm line, so one quiet hour clears it.
 //
 // Nothing reads this file yet: no branch, hint, card or note imports it (L9). The bench
 // (test/brain-bench/bench4.ts) measures it first; wiring it into trust.ts is L10.
@@ -39,8 +41,11 @@ export const NEED = 24;                      // hours taken in before anything i
 export const STRATUM_NEED = 2.5;             // that hour of day's weight above the prior
 export const RHO = 3;                        // the CUSUM looks for a rate this many times the usual
 export const CUSUM_H = Math.log(1000);       // the CUSUM's alarm line
-export const CUSUM_CAP = 2 * CUSUM_H;        // the CUSUM is held at most here
 export const RATE_FLOOR = 0.5;               // the usual rate the CUSUM charges at least
+// one finished hour with no refusals takes off (RHO - 1) * max(RATE_FLOOR, usual) >= twice the hold,
+// so held at the cap the CUSUM always clears the alarm line on one quiet hour (L10 P54)
+export const CUSUM_HOLD = 0.5 * (RHO - 1) * RATE_FLOOR;   // 0.5
+export const CUSUM_CAP = CUSUM_H + CUSUM_HOLD;            // the CUSUM is held at most here
 
 const HOURS = 24;
 
@@ -90,9 +95,12 @@ export function burstStep(f: BurstFit, hour: number, k: number): BurstStep {
     : 0;
   const rise = known && s > CUSUM_H;
   const w = tail || rise ? W_FLAG : 1;
+  // a flagged hour teaches at most RHO times its usual (L10 P54): one loud hour cannot blind that
+  // hour of the day. An unflagged hour is learned whole.
+  const learn = tail || rise ? Math.min(c, Math.ceil(RHO * Math.max(RATE_FLOOR, usual))) : c;
   const a = [...f.a];
   const b = [...f.b];
-  a[h] = A0 + (a[h] - A0) * DECAY + w * c;
+  a[h] = A0 + (a[h] - A0) * DECAY + w * learn;
   b[h] = B0 + (b[h] - B0) * DECAY + w;
   return { fit: { a, b, n: f.n + 1, s }, tail, rise, p, usual };
 }

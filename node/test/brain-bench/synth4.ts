@@ -10,10 +10,13 @@
 //  - step3: diurnal + 8 for hours 226..231.
 //  - night: diurnal + 6 for hours 218..220 (day 9, 02:00-04:59).
 //  - ramp: the diurnal rate times 1.02^(i - 240) from hour 240 to the end.
+//  - flood (L10 P54): diurnal, hour 226 (day 9, 10:00) gets + 5000 after the draw (Knuth's product
+//    cannot draw a rate that large), and hour 250 (day 10, 10:00) the rate + 40: one loud hour must
+//    not blind that hour of day the next day.
 import { mulberry32 } from './synth.ts';
 
 export const HOURS4 = 336;
-export const SCENARIOS4 = ['flat', 'diurnal', 'over', 'step10', 'step3', 'night', 'ramp'] as const;
+export const SCENARIOS4 = ['flat', 'diurnal', 'over', 'step10', 'step3', 'night', 'ramp', 'flood'] as const;
 export type Scenario4 = (typeof SCENARIOS4)[number];
 
 /** a scenario's own stream: the seed mixed with the scenario's name (copied from synth2.ts) */
@@ -40,6 +43,7 @@ export function attackOf(name: Scenario4): { from: number; to: number } | null {
     case 'step10': case 'step3': return { from: 226, to: 231 };
     case 'night': return { from: 218, to: 220 };
     case 'ramp': return { from: 240, to: HOURS4 - 1 };
+    case 'flood': return { from: 226, to: 250 };
     default: return null;
   }
 }
@@ -60,7 +64,8 @@ export function trace(name: Scenario4, seed: number): number[] {
     else if (name === 'step3' && i >= 226 && i <= 231) rate += 8;
     else if (name === 'night' && i >= 218 && i <= 220) rate += 6;
     else if (name === 'ramp' && i >= 240) rate *= 1.02 ** (i - 240);
-    out.push(poisson(rng, rate));
+    else if (name === 'flood' && i === 250) rate += 40;
+    out.push(poisson(rng, rate) + (name === 'flood' && i === 226 ? 5000 : 0));
   }
   return out;
 }
