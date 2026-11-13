@@ -104,6 +104,7 @@ export function launcherScript(o: { start: string[]; port: number; kulaHome: str
 # kula.app: open kula's chat page, starting it in the background first when it is not up.
 # Made by \`kula-node ui --install-mac\`; run that again to change it. Log: ${o.log}
 umask 077
+KULA_LAUNCHER=2
 PORT=${o.port}
 KULA_HOME=${sq(o.kulaHome)}
 LOG=${sq(o.log)}
@@ -111,13 +112,15 @@ AGENT=${sq(o.agent)}
 export KULA_NODE_HOME="$KULA_HOME"
 export PATH=${sq(pathFor(o.start))}
 
-# the page answers on 127.0.0.1: / redirects to the page, <page>health says {"kula":"ui"}
+# the page answers on 127.0.0.1 at the prefix kept in $KULA_HOME/ui-prefix (600; / hands out
+# nothing), <page>health says {"kula":"ui"}; curl reads the url on stdin, so the prefix is not in argv
 find_url() {
-  local loc
-  loc=$(/usr/bin/curl -s --noproxy '*' -m 2 -o /dev/null -w '%{redirect_url}' "http://127.0.0.1:$PORT/") || return 1
-  [[ "$loc" =~ ^http://127\\.0\\.0\\.1:$PORT/[0-9a-f]+/$ ]] || return 1
-  /usr/bin/curl -s --noproxy '*' -m 2 "\${loc}health" | /usr/bin/grep -q '"kula":"ui"' || return 1
-  printf '%s\\n' "$loc"
+  local p u
+  p=$(/usr/bin/tr -d '[:space:]' <"$KULA_HOME/ui-prefix" 2>/dev/null) || return 1
+  [[ "$p" =~ ^[0-9a-f]{24}$ ]] || return 1
+  u="http://127.0.0.1:$PORT/$p/"
+  printf 'url = "%s"\\n' "\${u}health" | /usr/bin/curl -s --noproxy '*' -m 2 -K - | /usr/bin/grep -q '"kula":"ui"' || return 1
+  printf '%s\\n' "$u"
 }
 show() {
   if [ -n "$KULA_UI_NO_BROWSER" ]; then printf '%s\\n' "$1"; else /usr/bin/open "$1"; fi

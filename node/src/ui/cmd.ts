@@ -12,7 +12,7 @@ import qrcode from 'qrcode-terminal';
 import { Engine } from './engine.js';
 import { ChatStore } from './store.js';
 import { ProjectRunner } from './projects.js';
-import { startUi, loadOrCreateToken, loadOrCreatePrefix, UI_PORT, PREFIX_RE } from './server.js';
+import { startUi, loadOrCreateToken, loadOrCreatePrefix, readPrefix, UI_PORT, PREFIX_RE } from './server.js';
 import { installMac, uninstallMac, macPaths, type Run } from './macapp.js';
 import { home, packageRoot } from '../paths.js';
 import { isPacked, version } from '../build.js';
@@ -54,15 +54,19 @@ function get(port: number, p: string, timeoutMs: number): Promise<{ code: number
   });
 }
 
-// Is kula's chat page answering on this port? `/` redirects to the page; `<page>health` says
-// {"kula":"ui"}. Returns the page's url (with whatever prefix that one runs with) or null.
-export async function findRunningUi(port: number, timeoutMs = 1500): Promise<string | null> {
-  const root = await get(port, '/', timeoutMs);
-  const m = root && root.code === 302 ? /^\/([0-9a-f]+)\/$/.exec(root.location ?? '') : null;
-  if (!m || !PREFIX_RE.test(m[1])) return null;
-  const h = await get(port, `/${m[1]}/health`, timeoutMs);
-  try { if (h?.code === 200 && JSON.parse(h.body)?.kula === 'ui') return `http://127.0.0.1:${port}/${m[1]}/`; } catch {}
+// Is kula's chat page answering on this port? The prefix comes from ~/.kula-node/ui-prefix (600),
+// never from `/` (finding E3); `<page>health` says {"kula":"ui"}. Returns the page's url or null.
+export async function findRunningUi(port: number, timeoutMs = 1500, prefix: string | null = readPrefix()): Promise<string | null> {
+  if (!prefix || !PREFIX_RE.test(prefix)) return null;
+  const h = await get(port, `/${prefix}/health`, timeoutMs);
+  try { if (h?.code === 200 && JSON.parse(h.body)?.kula === 'ui') return `http://127.0.0.1:${port}/${prefix}/`; } catch {}
   return null;
+}
+
+// a kula.app installed before KULA_LAUNCHER=2 finds the page through `/`: while it is there, the
+// page keeps the old 302 (finding E3) until `kula-node ui --install-mac` is run once
+function legacyLauncher(userHome: string): boolean {
+  try { return !fs.readFileSync(path.join(userHome, 'Applications', 'kula.app', 'Contents', 'MacOS', 'kula'), 'utf8').includes('KULA_LAUNCHER=2'); } catch { return false; }
 }
 
 const pidFile = () => path.join(home(), 'ui.pid');
@@ -148,18 +152,21 @@ export async function uiCommand(flags: Flags, deps: UiDeps = {}): Promise<number
   if (flags.stop === true) return stopUi(port);
 
   const rotate = flags['new-prefix'] === true;
-  const prefix = loadOrCreatePrefix(rotate);
 
-  // one is already up: open that one (port 0 means "any free port", never a running page)
+  // one is already up: open that one (port 0 means "any free port", never a running page). Asked
+  // before the prefix is made or rotated: --new-prefix while a page runs does nothing.
   const already = async () => {
     const url = port ? await findRunningUi(port) : null;
     if (!url) return false;
     console.log(`the chat page already runs: ${url}`);
-    if (!url.includes(`/${prefix}/`)) console.log('(at its old address: stop it with `kula-node ui --stop` and start again for the new one)');
+    if (rotate) console.log('--new-prefix did nothing while it runs: stop it with `kula-node ui --stop` first');
     if (flags['no-open'] !== true) open(url);
     return true;
   };
   if (await already()) return 0;
+  const prefix = loadOrCreatePrefix(rotate);
+  const userHome = deps.userHome ?? os.homedir();
+  const legacy = legacyLauncher(userHome);
 
   const engine = new Engine({ peersFile: typeof flags.file === 'string' ? flags.file : undefined, log, watch: true });
   const token = loadOrCreateToken(flags['new-token'] === true);
@@ -167,7 +174,7 @@ export async function uiCommand(flags: Flags, deps: UiDeps = {}): Promise<number
   try {
     const store = new ChatStore();
     const projects = new ProjectRunner(engine, store, undefined, { log });
-    ui = await startUi({ port, engine, store, token, prefix, log, onInvite: printInvite, projects });
+    ui = await startUi({ port, engine, store, token, prefix, log, onInvite: printInvite, projects, rootRedirect: legacy });
     projects.start();
   } catch (e) {
     await engine.close();
@@ -184,6 +191,7 @@ export async function uiCommand(flags: Flags, deps: UiDeps = {}): Promise<number
   // the token goes to a terminal, never to a log file (the mac app and the login item log stdout)
   console.log(`openai endpoint: ${ui.openaiBase}  token: ${process.stdout.isTTY ? ui.token : `in ${path.join(home(), 'ui-token')}`}`);
   console.log('on the phone: kula → share this phone; then "connect" on the page. ctrl-c stops.');
+  if (legacy) console.log(`the kula app in ~/Applications is an older one (it finds the page through /): run \`kula-node ui --install-mac --port ${port}\` once`);
   if (flags.lan === true) {
     const info = await ui.invite.set(true);
     if (info.error) console.error(`invite mode did not start: ${info.error}`);

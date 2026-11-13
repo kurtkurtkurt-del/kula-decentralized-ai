@@ -52,6 +52,7 @@ export interface UiOptions {
   onInvite?: (url: string | null) => void; // told every new invite url (null: invites off)
   projects?: ProjectRunner;    // night projects; kula-node ui starts one that watches the clock
   eye?: GodsEye | false;       // god's eye (src/godseye), the brain; default: one that looks every 5 s, false: none
+  rootRedirect?: boolean;      // GET / answers 302 to the page (only for a kula.app installed before KULA_LAUNCHER=2); default false
 }
 
 export interface InviteInfo { on: boolean; url: string | null; host: string | null; expiresAt: number | null; guests: number; error?: string }
@@ -110,6 +111,11 @@ export function loadOrCreateToken(rotate = false): string {
 // The page's path prefix: kept in ~/.kula-node/ui-prefix (600) so the address stays the same
 // across restarts and can be bookmarked; --new-prefix makes a new one.
 export const PREFIX_RE = /^[0-9a-f]{24}$/;
+// the kept prefix, or null when there is none (yet) or it is not one; never writes (finding E3:
+// `/` no longer hands the prefix out, the cli and the mac launcher read it from this 600 file)
+export function readPrefix(): string | null {
+  try { const t = fs.readFileSync(path.join(home(), 'ui-prefix'), 'utf8').trim(); return PREFIX_RE.test(t) ? t : null; } catch { return null; }
+}
 export function loadOrCreatePrefix(rotate = false): string {
   const file = path.join(home(), 'ui-prefix');
   if (!rotate) {
@@ -120,6 +126,8 @@ export function loadOrCreatePrefix(rotate = false): string {
   try { fs.chmodSync(file, 0o600); } catch {}
   return t;
 }
+
+const ROOT_404 = "kula's page has its own address on this computer: run kula-node ui";
 
 const sameSecret = (a: string, b: string) => { const x = Buffer.from(a), y = Buffer.from(b); return x.length === y.length && timingSafeEqual(x, y); };
 
@@ -402,9 +410,11 @@ export async function startUi(opts: UiOptions): Promise<UiServer> {
           if (engine.status().loading) throw new Error('already loading: wait, or stop it');
           // in the background like the person's own load; the page follows it in status
           // here:false (apart only, finding C1): the card leaves this computer out, as it says
+          // finding E1: a card's device list is exact, as the page's picked devices are (all: true);
+          // [] is "this computer alone", never "every paired device"
           // finding D2: the card is hidden below before the load has run; a load that fails shows it
           // again at the next view (only the person's next tap loads, nothing here retries)
-          engine.load({ model: a.model, mode: a.mode, peers: a.devices, ctx: a.ctx, all: a.devices.length > 0, here: a.here }, () => {})
+          engine.load({ model: a.model, mode: a.mode, peers: a.devices, ctx: a.ctx, all: true, here: a.here }, () => {})
             .catch((e) => {
               log(`brain card ${card.id}: ${(e as Error)?.message ?? String(e)}`);
               eye.unhide(card.id, `the load failed: ${(e as Error)?.message ?? String(e)}`, a);
@@ -539,7 +549,12 @@ export async function startUi(opts: UiOptions): Promise<UiServer> {
       who = { role: 'guest', guest: g, store: new ChatStore(path.join(store.dir, 'guests', g.id)) };
     }
     if (p === '/v1' || p.startsWith('/v1/')) return openai(req, res, p);
-    if (p === '/' && req.method === 'GET') return send(res, 302, '', 'text/plain', { location: `/${prefix}/` });
+    // finding E3: the prefix is the page's only secret against a local process, so `/` never puts it
+    // in a Location; only a kula.app installed before KULA_LAUNCHER=2 gets the old 302 (rootRedirect)
+    if (p === '/' && req.method === 'GET') {
+      if (opts.rootRedirect === true) return send(res, 302, '', 'text/plain', { location: `/${prefix}/` });
+      return send(res, 404, ROOT_404);
+    }
     if (!p.startsWith(`/${prefix}/`)) return send(res, 404, 'not found');
     const route = p.slice(prefix.length + 2) || 'index.html';
     // "is kula's page here?": for a second kula-node ui and the mac launcher; nothing secret

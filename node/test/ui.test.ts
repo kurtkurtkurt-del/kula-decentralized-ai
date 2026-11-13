@@ -200,9 +200,11 @@ test('ui server: 127.0.0.1 only, random prefix, host check, same-origin posts, n
       });
       assert.equal(refused, true, `the chat page answered on ${lan}`);
     }
+    // finding E3: `/` hands out nothing; the prefix is the page's only secret against a local process
     const root = await fetch(`http://127.0.0.1:${ui.port}/`, { redirect: 'manual' });
-    assert.equal(root.status, 302);
-    assert.equal(root.headers.get('location'), `/${ui.prefix}/`);
+    assert.equal(root.status, 404);
+    assert.equal(root.headers.get('location'), null);
+    assert.ok(!(await root.text()).includes(ui.prefix), 'the body does not carry the prefix');
     assert.equal((await fetch(`http://127.0.0.1:${ui.port}/api/peers`)).status, 404);
     assert.equal((await fetch(`http://127.0.0.1:${ui.port}/${'0'.repeat(24)}/api/peers`)).status, 404);
     assert.equal(await rawGet(ui.port, `/${ui.prefix}/api/status`, `evil.example:${ui.port}`), 400);
@@ -595,4 +597,75 @@ test('brain/apply: a look between the tap and the rejection still records apply-
     await new Promise((r) => setTimeout(r, 50));
     assert.equal(loads, 1, 'nothing retried the load');
   } finally { await ui.close(); eye.stop(); await engine.close(); }
+});
+
+// finding E1 (13.11.2026): models' bigger card on an apart load that runs on this computer alone
+// carries devices: []. brain/apply sent all: false, and the engine reads an empty, non-exact list as
+// every paired device: the tap loaded on a friend's tab too. A card's list is exact, as the page's is.
+test('brain/apply: a card with devices [] loads on this computer alone, not on every paired device (E1)', async () => {
+  const models = await import('../src/godseye/branches/models.ts');
+  const { GodsEye, dark, cleanAction } = await import('../src/godseye/index.ts');
+  const dev = (o: Record<string, unknown>): any => ({ id: 'p1', name: 'pixel', kind: 'phone', via: 'wifi', where: '192.168.1.33:50551', reachedBy: 'lan',
+    reachable: true, reachMs: 12, reason: null, checkedAt: 1_000_000, lastOk: null, ramMb: 6000, bwGBs: null, gpu: null, tls: true, waitingPair: false, plugged: null, holds: null, trust: null, ...o });
+  const model = (o: Record<string, unknown>): any => ({ id: 'm', name: 'M', file: 'm.gguf', size: 1e9, quant: 'Q4_K_M', params_b: 1, catalog: true, here: true, needMb: 1000, ...o });
+  const snap = (o: Record<string, any> = {}): any => ({ at: 1_000_000, host: { name: 'mac', freeMb: 8000 }, devices: [], models: [], projects: [], ...o,
+    work: { loaded: null, loading: null, chatting: 0, plan: [], decisions: [], llama: true, ...(o.work ?? {}) } });
+  // the branch: loaded apart with only this computer in it
+  const small = model({ id: 'small', name: 'Small', file: 's.gguf', needMb: 2000 });
+  const big = model({ id: 'big', name: 'Big', file: 'b.gguf', needMb: 3000 });
+  let t = 1_000_000;
+  const b = models.create({ now: () => t, load: (f: any) => f, save: () => {}, emit: () => {}, peek: () => null } as any);
+  const work = { loaded: { mode: 'apart', model: { id: 'small', name: 'Small', file: 's.gguf', size: 1e9 }, ctx: 4096, since: 1, devices: [{ id: 'local', name: 'mac', local: true, busy: false, tps: null, done: 0 }] } };
+  for (let i = 0; i < 4; i++) { t += 5000; b.observe(snap({ at: t, devices: [dev({ id: 'p1', name: 'pixel' }), dev({ id: 'p2', name: 'friend tab', ring: 'circle' })], models: [small, big], work }), null); }
+  const card = (b.view() as any).suggestions.find((x: any) => x.id === 'models:bigger:big');
+  assert.ok(card, 'no bigger card');
+  assert.deepEqual(cleanAction(card.action), { do: 'load', model: 'big', mode: 'apart', devices: [] });
+  // the tap, through the real brain/apply, into a real engine whose load only records
+  const { engine, peersFile } = newEngine();
+  const rec = (o: Record<string, unknown>): any => ({ name: 'pixel', host: '192.168.1.20', port: 50551, secret: '', fp: 'a1'.repeat(32), pin: null, relay: null, kind: 'phone', ram: null, bw: null, added_at: 't', ...o });
+  writePeers([rec({ id: 'p1', name: 'pixel' }), rec({ id: 'p2', name: 'friend tab', fp: 'b2'.repeat(32), host: '192.168.1.21', ring: 'circle' })], peersFile);
+  const reqs: any[] = [];
+  (engine as any).load = async (req: any) => { reqs.push(req); return engine.status(); };
+  const eye = new GodsEye({ snapshot: () => snap(), dir: path.join(HOME, 'eye-e1'), makers: { models: () => ({ id: 'models', observe() {}, view: () => ({ ...dark(), built: true, stat: 'x', suggestions: [card] as any }) }) } });
+  eye.tick();
+  const ui = await startUi({ port: 0, engine, eye, store: new ChatStore(path.join(HOME, 'chats-e1')), token: 'kula-' + 'cd'.repeat(20) } as any);
+  try {
+    const r = await post(`${ui.url}api/brain/apply`, ui.port, { id: card.id, action: card.action });
+    assert.equal(r.status, 200);
+    assert.equal(reqs.length, 1);
+    assert.equal(reqs[0].all, true, "a card's device list is exact");
+    assert.deepEqual((engine as any).groupsFor(reqs[0].peers, reqs[0].all === true), [], 'only this computer, as the card says');
+  } finally { await ui.close(); eye.stop(); await engine.close(); }
+});
+
+// finding E3/E6 (13.11.2026): GET / no longer hands out the prefix, so a local process with no secret
+// cannot reach the brain's buttons; a forged Origin alone gets a 404. rootRedirect keeps the old 302
+// for a kula.app installed before (its launcher asks / for the page).
+test('without the prefix a local client reaches nothing: / is a 404, a forged-Origin dismiss is a 404 (E3, E6)', async () => {
+  const { GodsEye, dark } = await import('../src/godseye/index.ts');
+  const { engine } = newEngine();
+  const warn = { id: 'trust:owner-blind:p1', kind: 'warn', weight: 1, title: 'pixel could read the jobs it runs', why: 'w', action: { do: 'open', panel: 'branch', branch: 'trust' }, label: 'look' };
+  const eye = new GodsEye({ snapshot: () => ({ at: 1000, host: { name: 'mac', freeMb: 4000 }, devices: [], work: { loaded: null, loading: null, chatting: 0, plan: [], decisions: [], llama: true }, models: [], projects: [] }) as any,
+    dir: path.join(HOME, 'eye-e6'), makers: { trust: () => ({ id: 'trust', observe() {}, view: () => ({ ...dark(), built: true, stat: 'x', suggestions: [warn] as any }) }) } as any });
+  eye.tick();
+  const ui = await startUi({ port: 0, engine, eye, store: new ChatStore(path.join(HOME, 'chats-e6')), token: 'kula-' + 'cd'.repeat(20) } as any);
+  const legacy = await startUi({ port: 0, engine, eye: false, store: new ChatStore(path.join(HOME, 'chats-e6l')), token: 'kula-' + 'cd'.repeat(20), rootRedirect: true } as any);
+  try {
+    const base = `http://127.0.0.1:${ui.port}`;
+    const r0 = await fetch(`${base}/`, { redirect: 'manual' });
+    assert.equal(r0.status, 404);
+    assert.equal(r0.headers.get('location'), null);
+    const body = await r0.text();
+    assert.ok(!body.includes(ui.prefix));
+    assert.match(body, /kula-node ui/);
+    for (const p of ['/api/brain/dismiss', `/${'0'.repeat(24)}/api/brain/dismiss`]) {
+      const r = await fetch(`${base}${p}`, { method: 'POST', headers: { 'content-type': 'application/json', origin: base }, body: JSON.stringify({ id: warn.id }) });
+      assert.equal(r.status, 404, p);
+    }
+    assert.ok(eye.view().cards.some((c: any) => c.id === warn.id), 'the warning is still there');
+    // an old kula.app: the server started with rootRedirect still points / at the page
+    const old = await fetch(`http://127.0.0.1:${legacy.port}/`, { redirect: 'manual' });
+    assert.equal(old.status, 302);
+    assert.equal(old.headers.get('location'), `/${legacy.prefix}/`);
+  } finally { await legacy.close(); await ui.close(); eye.stop(); await engine.close(); }
 });

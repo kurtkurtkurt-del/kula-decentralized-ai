@@ -477,8 +477,8 @@ cd node && npm ci && npm run dev -- ui --install-mac --login   # kula.app, and t
 - `kula-node ui --stop` stops the running page; `kula-node ui --uninstall-mac` removes the app
   and the LaunchAgent (`launchctl bootout`).
 
-How the app tells the page is up: `GET http://127.0.0.1:50590/` redirects to the page, and
-`<page>/health` answers `{"kula":"ui"}`, nothing else. The page still answers on 127.0.0.1
+How the app tells the page is up: it reads the prefix from `~/.kula-node/ui-prefix` and asks
+`<page>/health`, which answers `{"kula":"ui"}`, nothing else. The page still answers on 127.0.0.1
 only, with every check above.
 
 **Linux** (not built in yet): a `~/.local/share/applications/kula.desktop` with
@@ -548,8 +548,10 @@ phone, tablet or laptop on that network scans it and is in the chat, nothing ins
 
 - Bound to 127.0.0.1 (plus the lan address only in invite mode); a foreign `Host` header is
   refused (dns rebinding), every page route is under a random prefix (kept across restarts in
-  `~/.kula-node/ui-prefix`; `/` redirects to it for anyone on this computer, so it guards against
-  other web pages, not against programs here), a POST needs the page's
+  `~/.kula-node/ui-prefix`, 600). `/` no longer points to the page: it answers 404, so the prefix
+  is a secret against other programs and other users on this computer too; only while a kula.app
+  installed before this change is in `~/Applications` does `/` keep its old redirect, until
+  `kula-node ui --install-mac` is run once. A POST needs the page's
   own `Origin`. The page has a strict content security policy and loads nothing from anywhere.
 - Peer secrets and pairing codes never reach the page: devices go out without them.
 - The `/v1` token is the one secret the owner's page is given (to show it in settings).

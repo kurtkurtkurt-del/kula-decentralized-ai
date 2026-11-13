@@ -78,22 +78,84 @@ test('findRunningUi does not mistake another server for the page', async () => {
   s.close();
 });
 
+// finding E3 (13.11.2026): `/` no longer hands out the prefix; the cli reads it from ui-prefix (600)
+test('findRunningUi finds the page from the ui-prefix file, without any request to /', async () => {
+  const prefix = loadOrCreatePrefix();
+  let roots = 0;
+  const s = http.createServer((req, res) => {
+    if (req.url === '/') { roots++; res.writeHead(404); res.end(); return; }
+    if (req.url === `/${prefix}/health`) { res.writeHead(200, { 'content-type': 'application/json' }); res.end('{"kula":"ui"}'); return; }
+    res.writeHead(404); res.end();
+  });
+  await new Promise<void>((r) => s.listen(0, '127.0.0.1', r));
+  const port = (s.address() as any).port;
+  assert.equal(await findRunningUi(port), `http://127.0.0.1:${port}/${prefix}/`);
+  assert.equal(await findRunningUi(port, 1500, null), null, 'no prefix: nothing to ask');
+  assert.equal(roots, 0, 'nothing asked /');
+  s.close();
+});
+
+test('--new-prefix while a page runs does nothing: the ui-prefix file stays', async () => {
+  const prefix = loadOrCreatePrefix();
+  const running = await startUi({ port: 0, engine: new Engine(), store: new ChatStore(path.join(HOME, 'chats-t')), token: 'kula-' + 'b'.repeat(40), prefix });
+  const opened: string[] = [];
+  const code = await quiet(() => uiCommand({ port: String(running.port), 'new-prefix': true }, { open: (u) => opened.push(u), userHome: USER_HOME }));
+  await running.close();
+  assert.equal(code, 0);
+  assert.equal(fs.readFileSync(path.join(HOME, 'ui-prefix'), 'utf8').trim(), prefix);
+  assert.deepEqual(opened, [running.url]);
+});
+
+test('an old kula.app (no KULA_LAUNCHER=2) keeps / pointing at the page; a new one does not', async () => {
+  const prefix = loadOrCreatePrefix();
+  const oldHome = fs.mkdtempSync(path.join(USER_HOME, 'old-'));
+  const bin = path.join(oldHome, 'Applications', 'kula.app', 'Contents', 'MacOS');
+  fs.mkdirSync(bin, { recursive: true });
+  for (const [launcher, want] of [['#!/bin/bash\n# redirect_url\n', 302], ['#!/bin/bash\nKULA_LAUNCHER=2\n', 404]] as const) {
+    fs.writeFileSync(path.join(bin, 'kula'), launcher);
+    let stop!: () => void;
+    const until = new Promise<void>((r) => { stop = r; });
+    const probe = http.createServer();
+    await new Promise<void>((r) => probe.listen(0, '127.0.0.1', r));
+    const port = (probe.address() as any).port;
+    await new Promise<void>((r) => probe.close(() => r()));
+    const said: string[] = [];
+    const l = console.log, e = console.error;
+    console.log = (...a: unknown[]) => { said.push(a.join(' ')); }; console.error = () => {};
+    let done: Promise<number> | null = null;
+    try {
+      done = uiCommand({ port: String(port), 'no-open': true }, { until, userHome: oldHome });
+      let url: string | null = null;
+      for (let i = 0; i < 100 && !url; i++) { url = await findRunningUi(port, 300); if (!url) await new Promise((r) => setTimeout(r, 50)); }
+      assert.equal(url, `http://127.0.0.1:${port}/${prefix}/`);
+      const root = await new Promise<{ code: number; location?: string }>((resolve, reject) => {
+        http.get(`http://127.0.0.1:${port}/`, (res) => { res.resume(); resolve({ code: res.statusCode ?? 0, location: res.headers.location }); }).on('error', reject);
+      });
+      assert.equal(root.code, want);
+      assert.equal(root.location, want === 302 ? `/${prefix}/` : undefined);
+      assert.equal(said.some((x) => x.includes('--install-mac')), want === 302, 'the legacy case says to reinstall once');
+      stop();
+      assert.equal(await done, 0);
+    } finally { stop(); await (done as Promise<number> | null)?.catch(() => 0); console.log = l; console.error = e; }
+  }
+});
+
 test('a second `kula-node ui` while one runs opens that one and exits 0; something else on the port fails', async () => {
   const prefix = loadOrCreatePrefix();
   const running = await startUi({ port: 0, engine: new Engine(), store: new ChatStore(path.join(HOME, 'chats-t')), token: 'kula-' + 'b'.repeat(40), prefix });
   const opened: string[] = [];
-  const code = await quiet(() => uiCommand({ port: String(running.port) }, { open: (u) => opened.push(u) }));
+  const code = await quiet(() => uiCommand({ port: String(running.port) }, { open: (u) => opened.push(u), userHome: USER_HOME }));
   assert.equal(code, 0);
   assert.deepEqual(opened, [running.url]);
   // --no-open: says where it is, opens nothing
-  assert.equal(await quiet(() => uiCommand({ port: String(running.port), 'no-open': true }, { open: (u) => opened.push(u) })), 0);
+  assert.equal(await quiet(() => uiCommand({ port: String(running.port), 'no-open': true }, { open: (u) => opened.push(u), userHome: USER_HOME })), 0);
   assert.equal(opened.length, 1);
   await running.close();
 
   const other = http.createServer((_q, res) => res.end('hi'));
   await new Promise<void>((r) => other.listen(0, '127.0.0.1', r));
   const port = (other.address() as any).port;
-  assert.equal(await quiet(() => uiCommand({ port: String(port) }, { open: (u) => opened.push(u) })), 1);
+  assert.equal(await quiet(() => uiCommand({ port: String(port) }, { open: (u) => opened.push(u), userHome: USER_HOME })), 1);
   assert.equal(opened.length, 1);
   other.close();
 });
@@ -109,7 +171,7 @@ test('uiCommand serves at the kept prefix across restarts and writes/removes its
     await new Promise<void>((r) => probe.listen(0, '127.0.0.1', r));
     const port = (probe.address() as any).port;
     await new Promise<void>((r) => probe.close(() => r()));
-    const done = quiet(() => uiCommand({ port: String(port) }, { open: (u) => opened.push(u), until }));
+    const done = quiet(() => uiCommand({ port: String(port) }, { open: (u) => opened.push(u), until, userHome: USER_HOME }));
     let url: string | null = null;
     for (let i = 0; i < 100 && !url; i++) { url = await findRunningUi(port, 300); if (!url) await new Promise((r) => setTimeout(r, 50)); }
     assert.equal(url, `http://127.0.0.1:${port}/${prefix}/`);
@@ -153,6 +215,10 @@ test('--install-mac writes kula.app (valid plist, executable launcher, icon); --
   const sh = fs.readFileSync(launcher, 'utf8');
   assert.match(sh, /'\/repo with '\\''quote'\\''\/node\/dist\/bin\/kula-node\.js' 'ui' '--no-open' '--port' '50590'/);
   assert.ok(!/0\.0\.0\.0/.test(sh));
+  // finding E3: the launcher reads the prefix from ui-prefix and asks only <prefix>/health
+  assert.match(sh, /^KULA_LAUNCHER=2$/m);
+  assert.ok(sh.includes('ui-prefix'));
+  assert.ok(!sh.includes('redirect_url'), 'the launcher no longer asks / for the page');
   if (has('/usr/bin/sips') && has('/usr/bin/iconutil')) {
     assert.ok(r.icon && fs.statSync(r.icon).size > 1000, 'kula.icns made');
   }
