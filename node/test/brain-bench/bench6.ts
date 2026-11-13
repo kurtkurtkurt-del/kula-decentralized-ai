@@ -4,7 +4,10 @@
 //  - own: an hour of day that is not yet known teaches at most RHO times its usual, at weight 1;
 //  - med3: learned as base, and each hour of day's first three counts are kept; when the third comes
 //    that hour's alpha is set to A0 + their median * (b - B0), with the b just updated;
-//  - need1: STRATUM_NEED 1 instead of 2.5, learned whole.
+//  - need1: STRATUM_NEED 1 instead of 2.5, learned whole;
+//  - med3g (L12 P63a): med3 guarded: the first three counts are kept as med3 does, and alpha is set
+//    to A0 + median * (b - B0) only when the largest of the three is over ceil(RHO * max(RATE_FLOOR,
+//    median)), burst.ts's own cap with the median as the usual; else the hour stays as base learned it.
 // `base` is pinned to bench4's newReds (burst.ts itself): when the pin fails the copy is wrong.
 // Scored with bench4's `score`. No clock, no random and no network. Nothing here is shipped
 // (tsconfig includes src only) and nothing is wired.
@@ -16,7 +19,7 @@ import { score, type RuleScore } from './bench4.ts';
 import { SCENARIOS4, attackOf, trace, type Scenario4 } from './synth4.ts';
 import { SCENARIOS6, attack6, trace6, type Scenario6 } from './synth6.ts';
 
-export type Start6 = 'whole' | 'own' | 'med3';
+export type Start6 = 'whole' | 'own' | 'med3' | 'med3g';
 export interface Variant6 { name: string; need: number; start: Start6 }
 
 export const VARIANTS6: readonly Variant6[] = [
@@ -24,6 +27,7 @@ export const VARIANTS6: readonly Variant6[] = [
   { name: 'own', need: STRATUM_NEED, start: 'own' },
   { name: 'med3', need: STRATUM_NEED, start: 'med3' },
   { name: 'need1', need: 1, start: 'whole' },
+  { name: 'med3g', need: STRATUM_NEED, start: 'med3g' },
 ];
 export const BASE6 = VARIANTS6[0];
 
@@ -36,12 +40,10 @@ export const traceAny6 = (name: Scenario6Any, seed: number): number[] =>
 export const attackAny6 = (name: Scenario6Any): { from: number; to: number } | null =>
   isS6(name) ? attack6(name) : attackOf(name);
 
-/** burst.ts's fit plus each hour of day's first counts (kept by med3 only, up to three) */
+/** burst.ts's fit plus each hour of day's first counts (kept by med3 and med3g only, up to three) */
 export interface State6 { fit: BurstFit; first: number[][] }
 
 export const freshState6 = (): State6 => ({ fit: freshBurst(), first: Array.from({ length: 24 }, () => []) });
-
-const median3 = (xs: number[]): number => [...xs].sort((x, y) => x - y)[1];
 
 /** burst.ts:87-105 copied, with the variant's STRATUM_NEED and start */
 export function stepV(state: State6, hour: number, k: number, v: Variant6): { state: State6; tail: boolean; rise: boolean } {
@@ -64,9 +66,12 @@ export function stepV(state: State6, hour: number, k: number, v: Variant6): { st
   a[h] = A0 + (a[h] - A0) * DECAY + w * learn;
   b[h] = B0 + (b[h] - B0) * DECAY + w;
   let first = state.first;
-  if (v.start === 'med3' && first[h].length < 3) {
+  if ((v.start === 'med3' || v.start === 'med3g') && first[h].length < 3) {
     first = first.map((xs, j) => (j === h ? [...xs, c] : xs));
-    if (first[h].length === 3) a[h] = A0 + median3(first[h]) * (b[h] - B0);
+    if (first[h].length === 3) {
+      const [, med, top] = [...first[h]].sort((x, y) => x - y);
+      if (v.start === 'med3' || top > Math.ceil(RHO * Math.max(RATE_FLOOR, med))) a[h] = A0 + med * (b[h] - B0);
+    }
   }
   return { state: { fit: { a, b, n: f.n + 1, s }, first }, tail, rise };
 }

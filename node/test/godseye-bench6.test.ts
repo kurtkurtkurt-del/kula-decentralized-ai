@@ -1,8 +1,9 @@
 // the brain bench v6 (L11 P61): burst's start measured. Every scenario of synth4.ts and synth6.ts,
-// seeds 1-5, scored by test/brain-bench/bench6.ts under four starts (base, own, med3, need1). Only
+// seeds 1-5, scored by test/brain-bench/bench6.ts under five starts (base, own, med3, need1, and
+// L12 P63a's med3g). Only
 // the bench's soundness is asserted: determinism, the traces' shape, base pinned to bench4's newReds
 // (burst.ts itself) and its fit to the fold of burstStep. The rows and the verdict lines W1-W5 are
-// printed for L12 to read, never asserted. Nothing is wired.
+// printed for L12 to read, never asserted; so are P63a's lines A1-A3 and A. Nothing is wired.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
@@ -71,6 +72,20 @@ test('bench6 rows: per scenario and start, the mean false red per device-week, d
   }
 });
 
+// W3's rule: per seed no delay longer than base on the attacked scenarios; a missing detection counts as longer
+const attacked: Scenario6Any[] = ['step10', 'step3', 'night', 'flood', 'ramp'];
+const longerThanBase = (v: string): string[] => {
+  const longer: string[] = [];
+  for (const name of attacked) {
+    for (const seed of SEEDS) {
+      const dv = delayOf(name, seed, v);
+      const db = delayOf(name, seed, 'base');
+      if (dv === null || (db !== null && dv > db)) longer.push(`${name} seed ${seed} (${dv ?? 'none'} against ${db ?? 'none'})`);
+    }
+  }
+  return longer;
+};
+
 test('bench6 verdicts W1-W5 (printed, never asserted)', () => {
   // W1: floodStart, hour 106 red
   const w1 = VARIANTS6.map((v) => `${v.name} ${SEEDS.filter((seed) => card('floodStart', seed).scores[v.name].red.includes(106)).length}`);
@@ -78,7 +93,7 @@ test('bench6 verdicts W1-W5 (printed, never asserted)', () => {
 
   // W2 (prediction): honest scenarios, the mean false red per device-week <= base + 0.5
   const honest: Scenario6Any[] = ['flat', 'diurnal', 'over', 'busy', 'loud'];
-  for (const v of ['own', 'med3', 'need1']) {
+  for (const v of ['own', 'med3', 'need1', 'med3g']) {
     let worst = honest[0];
     let worstGap = -Infinity;
     for (const name of honest) {
@@ -91,16 +106,8 @@ test('bench6 verdicts W1-W5 (printed, never asserted)', () => {
   }
 
   // W3: per seed no delay longer than base; a missing detection counts as longer
-  const attacked: Scenario6Any[] = ['step10', 'step3', 'night', 'flood', 'ramp'];
-  for (const v of ['own', 'med3']) {
-    const longer: string[] = [];
-    for (const name of attacked) {
-      for (const seed of SEEDS) {
-        const dv = delayOf(name, seed, v);
-        const db = delayOf(name, seed, 'base');
-        if (dv === null || (db !== null && dv > db)) longer.push(`${name} seed ${seed} (${dv ?? 'none'} against ${db ?? 'none'})`);
-      }
-    }
+  for (const v of ['own', 'med3', 'med3g']) {
+    const longer = longerThanBase(v);
     console.log(`W3 ${v}: ${longer.length === 0 ? 'yes' : `no: ${longer.join('; ')}`}`);
   }
 
@@ -113,4 +120,30 @@ test('bench6 verdicts W1-W5 (printed, never asserted)', () => {
   const local = mean('dst', (c) => c.dst?.local ?? 0);
   const rows = SEEDS.map((seed) => `${card('dst', seed).dst?.utc}/${card('dst', seed).dst?.local}`).join(', ');
   console.log(`W5 dst base, mean red hours in 168..335: UTC ${utc.toFixed(2)}, local ${local.toFixed(2)} (per seed utc/local ${rows})`);
+});
+
+test('bench6 L12 P63a lines A1-A3 and A for med3g (printed, never asserted)', () => {
+  // A1: floodStart red at hour 106 under med3g, k of 5
+  const a1 = SEEDS.filter((seed) => card('floodStart', seed).scores.med3g.red.includes(106)).length;
+  console.log(`A1 floodStart red at hour 106 under med3g: ${a1} of 5`);
+
+  // A2: the honest scenarios and dst, the mean false red per device-week <= base + 0.5
+  const honest: Scenario6Any[] = ['flat', 'diurnal', 'over', 'busy', 'loud', 'dst'];
+  let worst = honest[0];
+  let worstGap = -Infinity;
+  for (const name of honest) {
+    const gap = perWeek(name, 'med3g') - perWeek(name, 'base');
+    if (gap > worstGap) { worstGap = gap; worst = name; }
+  }
+  const a2 = worstGap <= 0.5;
+  console.log(
+    `A2 med3g: ${a2 ? 'yes' : 'no'} (worst ${worst}: ${perWeek(worst, 'med3g').toFixed(2)} against base ${perWeek(worst, 'base').toFixed(2)})`,
+  );
+
+  // A3: W3's rule for med3g
+  const longer = longerThanBase('med3g');
+  const a3 = longer.length === 0;
+  console.log(`A3 med3g: ${a3 ? 'yes' : `no: ${longer.join('; ')}`}`);
+
+  console.log(`A: wire med3g: ${a1 === 5 && a2 && a3 ? 'yes' : 'no'}`);
 });
