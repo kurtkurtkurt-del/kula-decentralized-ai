@@ -507,7 +507,7 @@ ul.wiz-steps li::before { content: "› "; color: var(--meta); }
 .bfeed-pulse.on { background: var(--gold); animation: pulse 1.2s ease-in-out infinite; }
 .bfeed { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 5px; font-size: 12.5px; }
 .bfeed li.none { color: var(--mute); }
-.bf { display: grid; grid-template-columns: 56px auto 1fr; gap: 7px; align-items: baseline; color: var(--mute); }
+.bf { display: grid; grid-template-columns: 56px auto minmax(0, 1fr); gap: 7px; align-items: baseline; color: var(--mute); }
 .bf time { font-family: var(--mono); font-size: 10.5px; color: var(--meta); }
 .bf-b { --c: var(--meta); font-size: 10.5px; padding: 0 6px; border-radius: 999px; color: var(--c); background: color-mix(in srgb, var(--c) 12%, transparent); white-space: nowrap; }
 .bf.active .bf-t { color: var(--words); }
@@ -533,6 +533,8 @@ ul.wiz-steps li::before { content: "› "; color: var(--meta); }
 .bd-row { display: flex; justify-content: space-between; gap: 10px; font-size: 13px; padding: 5px 0; border-bottom: 1px solid var(--line); }
 .bd-row .k { color: var(--mute); }
 .bd-row.busy .v { color: var(--gold); }
+/* peer-chosen words (a name, a model file) wrap inside the panel instead of running past it */
+.bf-t, .bd-row .v, .bd-list li { overflow-wrap: anywhere; min-width: 0; }
 .bd-note { font-size: 12.5px; color: var(--mute); margin-top: 12px; }
 
 @media (min-width: 861px) { #brain-close { display: none; } }
@@ -958,7 +960,7 @@ ul.wiz-steps li::before { content: "› "; color: var(--meta); }
 .bm-also button:last-child { border-bottom: 0; }
 .bm-also button:hover { color: var(--words); }
 .bm-also b { font-weight: 500; color: var(--words); }
-.bm-also span:not(.go) { flex: 1; min-width: 0; }
+.bm-also span:not(.go) { flex: 1; min-width: 0; overflow-wrap: anywhere; }
 .bm-also .go { color: var(--meta); }
 
 /* the brain's cards (11.11.2026): suggestions and warnings on top of the panel, like the branch card */
