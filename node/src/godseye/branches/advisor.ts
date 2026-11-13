@@ -26,6 +26,13 @@ const MODE_WORD: Record<string, string> = { phone: 'on one device', apart: 'apar
 
 type Card = Suggestion & { branch: BranchId };
 
+/** the night an ms belongs to, as a local day number: the day it starts on, so before 07:00 it is
+ *  the night that started the day before (as tonightSlots reads it) */
+export const nightOf = (ms: number): number => {
+  const d = new Date(ms);
+  return Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()) / 86_400_000 - (d.getHours() < 7 ? 1 : 0);
+};
+
 /** a waiting night project's problems: gone devices, a model that is missing or does not fit; `expected`
  *  are devices away now that the forecast has back by the start: counted with their memory, not gone */
 export function nightProblems(s: Snapshot, p: Snapshot['projects'][number], expected: Set<string> = new Set<string>()): { problems: string[]; gone: string[]; fit: Fit } {
@@ -80,12 +87,14 @@ export function create(ctx: BranchCtx): Branch {
     const running = s.projects.find((p) => p.state === 'running');
     if (waiting) {
       // a device away now that the forecast has likely there at the start hour is no warning yet (C8):
-      // a phone at work at noon and home at night is the normal case. Unknown (no forecast, a start
-      // hour outside the night's hours) or under an hour to the start: checked against now, as before
+      // a phone at work at noon and home at night is the normal case. The forecast's hours are
+      // tonight's (tonightSlots), so only a project on tonight's night reads them (P52). Unknown (no
+      // forecast, a start hour outside the night's hours, another night) or under an hour to the
+      // start: checked against now, as before
       const hour = new Date(waiting.start).getHours();
       const slot = NIGHT_HOURS.indexOf(hour);
       const later = new Set<string>();
-      if (slot >= 0 && waiting.start - s.at >= 3_600_000) {
+      if (slot >= 0 && waiting.start - s.at >= 3_600_000 && nightOf(waiting.start) === nightOf(s.at)) {
         const hints = hintsOf(ctx);
         for (const id of waiting.peers) {
           const d = s.devices.find((x) => x.id === id);

@@ -7,7 +7,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-const { create, slotOf, fold, decay, prior, estimate, wilson, tonightSlots, dayOf } = await import('../src/godseye/branches/forecast.ts');
+const { create, slotOf, fold, decay, prior, estimate, wilson, tonightSlots, dayOf, keepLoad } = await import('../src/godseye/branches/forecast.ts');
 const { createFixed, V1, EXPERTS, levels, experts, blend, learn } = await import('../src/godseye/branches/forecast.ts');
 const { createV2, foldFast, decayFast, fastExperts, HALF_LIFE_FAST_DAYS, FAST_K } = await import('../src/godseye/branches/forecast.ts');
 const { mulberry32 } = await import('./brain-bench/synth.ts');
@@ -1017,6 +1017,32 @@ test('tok/s: a split load records no speed (its chain speed is not one device\'s
   const saved = c.stored as any;
   assert.deepEqual(Object.keys(saved.dev.p1.tps), [], 'no speed booked to the phone');
   assert.equal(saved.dev.local, undefined, 'no speed booked to this computer');
+});
+
+test('keepLoad: only the current load\'s keys stay; an id with "|" stays; an empty map is fine (P52)', () => {
+  const done = new Map<string, number>([
+    ['p1|a.gguf|100', 3], ['p2|a.gguf|100', 1],          // an older load
+    ['p1|b.gguf|200', 4], ['we|ird|b.gguf|200', 2],      // the current one, an id holding '|'
+    ['p1|b.gguf|', 9],                                   // the same file with no since
+  ]);
+  keepLoad(done, '|b.gguf|200');
+  assert.deepEqual([...done.keys()].sort(), ['p1|b.gguf|200', 'we|ird|b.gguf|200']);
+  assert.equal(done.get('p1|b.gguf|200'), 4);
+  const empty = new Map<string, number>();
+  keepLoad(empty, '|b.gguf|200');
+  assert.equal(empty.size, 0);
+});
+
+test('tok/s: a reload (new since) books its first answer again, and the old load\'s counts do not hold it back (P52)', () => {
+  const { ctx } = fakeCtx();
+  const b = create(ctx);
+  const s = (i: number, since: number, tps: number, done: number) => snap([dev({ holds: 'qwen3-0.6b.gguf' })], at23(i),
+    { ...loadedWith([{ id: 'p1', name: 'pixel', local: false, busy: false, tps, done }]), since });
+  b.observe(s(0, 1, 8, 5), null);          // first load: 8
+  b.observe(s(1, 2, 6, 1), null);          // reloaded, done back at 1: booked, 8 + 0.3 * (6 - 8) = 7.4
+  assert.match(b.view().lines[0], / · ~7\.4 tok\/s on Qwen3 0\.6B$/);
+  b.observe(s(2, 1, 20, 5), null);         // the first load's since again: its count was dropped, so booked
+  assert.match(b.view().lines[0], / · ~11 tok\/s on Qwen3 0\.6B$/);   // 7.4 + 0.3 * (20 - 7.4) = 11.18, shown whole past 10
 });
 
 test('saves at most once a minute, and a new branch reads its notes back', () => {

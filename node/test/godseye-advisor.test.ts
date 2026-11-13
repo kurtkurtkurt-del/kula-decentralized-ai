@@ -11,7 +11,7 @@ const HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'kula-eye-advisor-'));
 after(() => fs.rmSync(HOME, { recursive: true, force: true }));
 
 const { GodsEye, cleanCard } = await import('../src/godseye/index.ts');
-const { create, bestHour, nightProblems } = await import('../src/godseye/branches/advisor.ts');
+const { create, bestHour, nightProblems, nightOf } = await import('../src/godseye/branches/advisor.ts');
 
 const dev = (o: Record<string, unknown> = {}) => ({
   id: 'p1', name: 'pixel', kind: 'phone', via: 'wifi', where: '192.168.1.33:50551', reachable: true, reachMs: 12, reason: null,
@@ -161,6 +161,38 @@ test('night: a device away now but likely there by the start hour is a line, not
   assert.deepEqual(nightCard(v).action, { do: 'probe', devices: ['p2'] });
   assert.ok(v.lines.some((l: string) => /: pixel not here now, likely by 22:00\.$/.test(l)));
   accepted(v);
+});
+
+test('nightOf: before 07:00 is the night that started the day before; 23:00 and the next 06:00 are one night (P52)', () => {
+  const at = (d: number, h: number, m = 0) => new Date(2026, 10, d, h, m).getTime();
+  assert.equal(nightOf(at(9, 6, 59)), nightOf(at(8, 12)));
+  assert.equal(nightOf(at(9, 7, 0)), nightOf(at(8, 12)) + 1);
+  assert.equal(nightOf(at(8, 23)), nightOf(at(9, 6)));
+  assert.equal(nightOf(at(8, 23)) + 1, nightOf(at(9, 23)));
+});
+
+test('night: tonight\'s hours are read only for a project tonight; another night is checked against now (P52)', () => {
+  const at = (d: number, h: number) => new Date(2026, 10, d, h, 0).getTime();
+  const away = [dev({ reachable: false, reason: 'timeout' }), dev({ id: 'p2', name: 'galaxy' })];
+  const fc = { forecast: { built: true, stat: 'x', hints: [night('p1', [0.9, 0.9, 0.9, 0.9, 0.9, 0.9, 0.9, 0.9, 0.9])] } };
+  const nightCard = (v: any) => v.suggestions.find((x: any) => x.id === 'advisor:night:n1');
+  const likelyLine = (v: any) => v.lines.find((l: string) => / likely by \d\d:00\.$/.test(l));
+  const look = (now: number, start: number) => branch(fc).look(snap({ at: now, devices: away,
+    projects: [proj({ title: 'summaries', start, end: start + 3_600_000, mode: 'phone', peers: ['p1'] })] }));
+  // 14:00, a project at 23:00 the next day: tonight's 0.9 at 23:00 is not that night's
+  let v = look(at(8, 14), at(9, 23));
+  assert.ok(nightCard(v), JSON.stringify(v.suggestions));
+  assert.equal(nightCard(v).weight, 3);
+  assert.equal(likelyLine(v), undefined, v.lines.join(' | '));
+  accepted(v);
+  // 01:00 (the night that started yesterday), a project at 23:00 the same calendar day: the next night
+  v = look(at(9, 1), at(9, 23));
+  assert.ok(nightCard(v), JSON.stringify(v.suggestions));
+  assert.equal(likelyLine(v), undefined, v.lines.join(' | '));
+  // 01:00, a project at 03:00 the same day: this night, the forecast's hour stands
+  v = look(at(9, 1), at(9, 3));
+  assert.equal(nightCard(v), undefined, JSON.stringify(v.suggestions));
+  assert.ok(v.lines.includes('night project summaries at 03:00: pixel not here now, likely by 03:00.'), v.lines.join(' | '));
 });
 
 test('night: a model that fits once the model loaded here goes is no problem (C2: heldHere counted back)', () => {

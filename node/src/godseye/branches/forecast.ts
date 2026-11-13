@@ -538,6 +538,12 @@ export function createFixed(k: number): (ctx: BranchCtx) => Branch {
   return (ctx) => make(ctx, { fixed: k, fast: true });
 }
 
+/** drops every `device|file|since` answer count that is not the current load's (`suffix` is
+ *  `|file|since`): a device id may hold '|', so the key is matched by its end. */
+export function keepLoad(done: Map<string, number>, suffix: string): void {
+  for (const key of [...done.keys()]) if (!key.endsWith(suffix)) done.delete(key);
+}
+
 function make(ctx: BranchCtx, o: { fixed: number | null; fast: boolean }): Branch {
   const fixedW = o.fixed === null ? null : unit(o.fixed);
   const withFast = o.fast;
@@ -549,7 +555,9 @@ function make(ctx: BranchCtx, o: { fixed: number | null; fast: boolean }): Branc
   let snap: Snapshot | null = null;
   let pendingAt: number | null = null;             // a far-forward look waiting for the next one to agree
   let lastSave = ctx.now();
-  const lastDone = new Map<string, number>();      // device|file|since -> answers, this run only
+  // device|file|since -> answers, this run only; only the current load's keys are kept (keepLoad),
+  // so a reload does not leave a key per device behind for the life of the process
+  const lastDone = new Map<string, number>();
 
   /** at most MAX_DEVICES devices; one in the current snapshot is never evicted in favour of one
    *  that is not, however far its seen is. */
@@ -671,6 +679,7 @@ function make(ctx: BranchCtx, o: { fixed: number | null; fast: boolean }): Branc
           }
           lastDone.set(key, ld.done);
         }
+        keepLoad(lastDone, `|${L.model.file}|${typeof L.since === 'number' ? L.since : ''}`);
       }
       trim(now);
       const t = ctx.now();
