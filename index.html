@@ -10,7 +10,7 @@
 <link rel="stylesheet" href="site.css">
 </head>
 <body>
-<!-- kula's download page (v0.3.0, 11.11.2026). Plain html + site.css, no build step, nothing
+<!-- kula's download page (v0.4.0, 13.11.2026). Plain html + site.css, no build step, nothing
      fetched from anywhere else.
 
      Downloads use the newest GitHub release by stable asset names, so the release must carry
@@ -31,7 +31,7 @@
 
 <main>
   <section class="hero wrap">
-    <p class="kicker"><span class="dot" aria-hidden="true"></span> open models · on your own devices · v0.3.0</p>
+    <p class="kicker"><span class="dot" aria-hidden="true"></span> open models · on your own devices · v0.4.0</p>
     <h1>Your devices,<br>one local AI.</h1>
     <p class="lede">kula joins your phones, tablets and computers into one AI cluster that runs open
       models. They talk to each other directly — nothing goes to a cloud.</p>
@@ -116,6 +116,21 @@
       Apple's command line tools and cmake for it: <code>xcode-select --install</code>, then
       <code>brew install cmake ninja</code> (<a href="https://brew.sh">Homebrew</a>). If macOS still refuses to open
       the app: <code>xattr -cr /Applications/kula.app</code> in Terminal.</p>
+  </section>
+
+  <section class="news wrap" aria-labelledby="news-h0">
+    <h2 id="news-h0">what's new in 0.4.0</h2>
+    <ul class="news-list">
+      <li><b>the brain measures itself.</b> Every branch's guesses are scored on replay benches; a
+        new method stays only when it wins. Device forecasts are twice as accurate and follow a
+        changed habit within days.</li>
+      <li><b>split across the internet, priced honestly.</b> kula learns what each link costs a
+        split and says the speed it expects as a range.</li>
+      <li><b>safer between friends.</b> A rewritten ledger is never "all clear", a card loads only
+        where it says, and peer names cannot hide characters.</li>
+      <li><b>still your call.</b> The brain watches, warns and suggests; you press. The phone app
+        stays 0.3.0 this time.</li>
+    </ul>
   </section>
 
   <section class="news wrap" aria-labelledby="news-h">
@@ -207,7 +222,7 @@
     <a href="https://huggingface.co/bartowski/mistralai_Mistral-Small-3.2-24B-Instruct-2506-GGUF">Mistral Small</a>
     <a href="https://huggingface.co/unsloth/GLM-4.7-Flash-GGUF">GLM 4.7</a>
   </nav>
-  <p class="small">kula v0.3.0 · runs on <a href="https://github.com/ggml-org/llama.cpp">llama.cpp</a> · type: Inter Tight (SIL OFL)</p>
+  <p class="small">kula v0.4.0 · runs on <a href="https://github.com/ggml-org/llama.cpp">llama.cpp</a> · type: Inter Tight (SIL OFL)</p>
 </footer>
 
 <script>
