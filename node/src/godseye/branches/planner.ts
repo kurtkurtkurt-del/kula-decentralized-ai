@@ -12,7 +12,9 @@
 // the tok/s is the whole chain's), else its measured bandwidth; this computer has none until a model
 // ran here, and then a card quotes no number for it. Each card holds SHOW looks before it shows and
 // goes HIDE looks after its reason went, with SLACK on every threshold, so it does not flap.
-// Notes: the last model, the speeds (at most 40 devices × 8 files), saved at most once a minute.
+// Notes: the last model, the speeds (at most 40 devices × 8 files, each with `at`, when it was last
+// folded), saved at most once a minute. A 9th file pushes out the device's file with the oldest `at`, a
+// 41st device the device whose newest `at` is oldest (never this computer, never the one just written).
 import type { Branch, BranchCtx, BranchView, EyeModel, Snapshot, Suggestion } from '../types.js';
 import { hhmm } from './util.js';
 import { GAIN, SLACK, Steady, alone, apart, cardId, field, gb1, modelOf, names, seatName, split, tpsOn, tpsWord, type Field, type Measured, type Place, type Seat } from './decide.js';
@@ -21,12 +23,16 @@ const MODE_WORD: Record<string, string> = { phone: 'on the phone', apart: 'apart
 const DEVICES_KEPT = 40;
 const FILES_KEPT = 8;
 const TPS_MAX = 100_000;
+const AT_MAX = 8.64e15;            // the last ms a Date can hold
 const EWMA = 0.3;                  // a new answer's weight in a device's average speed
 const SAVE_EVERY_MS = 60_000;
 
-interface Notes { v: 1; last: string | null; speeds: Record<string, Record<string, { tps: number; n: number }>> }
+interface Notes { v: 1; last: string | null; speeds: Record<string, Record<string, { tps: number; n: number; at: number }>> }
 
-function sane(x: unknown): Notes {
+const okAt = (t: unknown): t is number => typeof t === 'number' && Number.isFinite(t) && t >= 0 && t <= AT_MAX;
+
+/** the notes as loaded; an entry without a usable `at` gets `now`, the time they were loaded */
+function sane(x: unknown, now: number): Notes {
   const n = x as Partial<Notes> | null;
   const out: Notes = { v: 1, last: typeof n?.last === 'string' ? n.last.slice(0, 200) : null, speeds: Object.create(null) };
   if (n?.v !== 1 || !n.speeds || typeof n.speeds !== 'object') return out;
@@ -34,7 +40,7 @@ function sane(x: unknown): Notes {
     if (!files || typeof files !== 'object' || id.length > 200) continue;
     const f: Notes['speeds'][string] = Object.create(null);
     for (const [file, sp] of Object.entries(files).slice(0, FILES_KEPT)) {
-      if (sp && typeof sp.tps === 'number' && sp.tps > 0 && sp.tps <= TPS_MAX && typeof sp.n === 'number' && sp.n >= 1) f[file] = { tps: sp.tps, n: Math.floor(sp.n) };
+      if (sp && typeof sp.tps === 'number' && sp.tps > 0 && sp.tps <= TPS_MAX && typeof sp.n === 'number' && sp.n >= 1) f[file] = { tps: sp.tps, n: Math.floor(sp.n), at: okAt(sp.at) ? sp.at : now };
     }
     out.speeds[id] = f;
   }
@@ -121,7 +127,7 @@ export function plan(s: Snapshot, f: Field, m: EyeModel, strict: boolean): { car
 }
 
 export function create(ctx: BranchCtx): Branch {
-  const notes = sane(ctx.load<unknown>(null));
+  const notes = sane(ctx.load<unknown>(null), ctx.now());
   let snap: Snapshot | null = null;
   let subject: EyeModel | null = null;
   let look: ReturnType<typeof plan> | null = null;
@@ -133,12 +139,17 @@ export function create(ctx: BranchCtx): Branch {
   let savedAt = Number.NEGATIVE_INFINITY;
 
   const measured = (): Map<string, Measured[]> =>
-    new Map(Object.entries(notes.speeds).map(([id, files]) => [id, Object.entries(files).map(([file, x]) => ({ file, tps: x.tps, n: x.n }))]));
+    new Map(Object.entries(notes.speeds).map(([id, files]) => [id, Object.entries(files).map(([file, x]) => ({ file, tps: x.tps, n: x.n, at: x.at }))]));
 
   /** a device's answer speed on the loaded model, folded in when its answer count grew */
   function learn(s: Snapshot) {
+    const at = okAt(s.at) ? s.at : ctx.now();
+    // an `at` later than the look comes back to the look's time
+    for (const files of Object.values(notes.speeds)) for (const sp of Object.values(files)) if (sp.at > at) { sp.at = at; dirty = true; }
     const L = s.work.loaded;
     if (!L || L.mode === 'split' || !L.model.file) return;
+    const wrote = new Set<string>();
+    const newest = (files: Notes['speeds'][string]) => Math.max(Number.NEGATIVE_INFINITY, ...Object.values(files).map((x) => x.at));
     for (const d of L.devices) {
       if (!(typeof d.tps === 'number' && d.tps > 0 && d.tps <= TPS_MAX)) continue;
       const id = d.local ? 'local' : d.id;
@@ -146,11 +157,26 @@ export function create(ctx: BranchCtx): Branch {
       const was = lastDone.get(key);
       lastDone.set(key, d.done);
       if (was !== undefined && d.done <= was) continue;
-      if (!notes.speeds[id] && Object.keys(notes.speeds).length >= DEVICES_KEPT) continue;
+      if (!notes.speeds[id] && Object.keys(notes.speeds).length >= DEVICES_KEPT) {
+        // a new device pushes out the one measured longest ago: never this computer, never one just written
+        let out: string | null = null;
+        for (const [k, files] of Object.entries(notes.speeds)) if (k !== 'local' && !wrote.has(k) && (out == null || newest(files) < newest(notes.speeds[out]))) out = k;
+        if (out == null) continue;
+        delete notes.speeds[out];
+      }
       const files = (notes.speeds[id] ??= Object.create(null) as Notes['speeds'][string]);
       const sp = files[L.model.file];
-      if (sp) { sp.tps = Math.round((sp.tps + EWMA * (d.tps - sp.tps)) * 100) / 100; sp.n++; }
-      else if (Object.keys(files).length < FILES_KEPT) files[L.model.file] = { tps: d.tps, n: 1 };
+      if (sp) { sp.tps = Math.round((sp.tps + EWMA * (d.tps - sp.tps)) * 100) / 100; sp.n++; sp.at = at; }
+      else {
+        // a new file pushes out the device's file folded longest ago
+        if (Object.keys(files).length >= FILES_KEPT) {
+          let out: string | null = null;
+          for (const [k, x] of Object.entries(files)) if (out == null || x.at < files[out].at) out = k;
+          if (out != null) delete files[out];
+        }
+        files[L.model.file] = { tps: d.tps, n: 1, at };
+      }
+      wrote.add(id);
       dirty = true;
     }
   }
@@ -190,7 +216,7 @@ export function create(ctx: BranchCtx): Branch {
       const parts = (L?.parts ?? []).map((p) => `${p.name}: ${p.layers} layers · ${p.mb} MB${p.local ? ' · main device' : ''}`);
       const ideas = shown.length;
       // the speeds it learned, for the branches after it (peek)
-      const hints = Object.entries(notes.speeds).map(([id, files]) => ({ id, tps: Object.entries(files).map(([file, x]) => ({ file, tps: x.tps, n: x.n })) }));
+      const hints = Object.entries(notes.speeds).map(([id, files]) => ({ id, tps: Object.entries(files).map(([file, x]) => ({ file, tps: x.tps, n: x.n, at: x.at })) }));
       return {
         built: true,
         stat: w?.loading ? `loading ${w.loading.model}` : L ? `${MODE_WORD[L.mode] ?? L.mode} · ${L.model.name}${ideas ? ` · ${ideas} idea${ideas === 1 ? '' : 's'}` : ''}` : `nothing planned${ideas ? ` · ${ideas} idea${ideas === 1 ? '' : 's'}` : ''}`,

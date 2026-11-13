@@ -128,10 +128,102 @@ test('planner: split while the mac alone is clearly faster: a warning with the l
   assert.equal(c.title, 'split is slower than mac alone for Gemma 3 4B');
   assert.match(c.why, /^split answers at 4 tok\/s \(measured\); here on mac alone it would at ~12/);
   assert.deepEqual(c.action, { do: 'load', model: 'gemma3-4b', mode: 'here', devices: [] });
-  // the split's own tok/s never becomes the mac's speed
-  assert.deepEqual(look(s, 1).hints, [{ id: 'local', tps: [{ file: 'gemma3-4b.gguf', tps: 12, n: 6 }] }]);
+  // the split's own tok/s never becomes the mac's speed (old notes: at is the time they were loaded, 0 here)
+  assert.deepEqual(look(s, 1).hints, [{ id: 'local', tps: [{ file: 'gemma3-4b.gguf', tps: 12, n: 6, at: 0 }] }]);
   // no speed for the mac: nothing to compare, no card
   assert.deepEqual(ids(branch(planner.create).look(s)), []);
+});
+
+// ---- the planner's speeds keep learning (L7 P40, F3)
+
+const DAY = 24 * 3600_000;
+/** the planner with its own clock: notes are loaded at `now` */
+function plannerAt(now: number, notes: unknown = null) {
+  let kept: unknown = notes;
+  const b = planner.create({
+    now: () => now,
+    load: <T,>(fb: T): T => (kept as T) ?? fb,
+    save: (d: unknown) => { kept = structuredClone(d); },
+    emit: () => {},
+    peek: () => null,
+  });
+  return { b, notes: () => kept, hint: (id: string) => (b.view().hints ?? []).find((h: any) => h.id === id) };
+}
+
+test('planner speeds: a device that ran 8 models learns the 9th (the oldest file goes), the 41st device is measured (the longest unmeasured goes)', () => {
+  const ms = Array.from({ length: 9 }, (_, i) => model(`f${i}`, `F${i}`, 800, 0.5 * GB));
+  let p = plannerAt(0);
+  let t = AT;
+  for (let i = 0; i < 9; i++) {
+    for (let k = 1; k <= 3; k++) { t += 5000; p.b.observe(snap({ at: t, models: ms, work: { loaded: loaded(ms[i], 'phone', [on('p1', 'pixel', 10 + i, k)]), llama: false } }), null); }
+  }
+  const files = p.hint('p1').tps.map((x: any) => x.file);
+  assert.equal(files.length, 8);
+  assert.ok(files.includes('f8.gguf') && !files.includes('f0.gguf'), files.join());
+
+  p = plannerAt(0);
+  t = AT;
+  for (let i = 0; i < 41; i++) {
+    for (let k = 1; k <= 2; k++) { t += 5000; p.b.observe(snap({ at: t, models: [GEMMA], devices: [dev({ id: `d${i}` })], work: { loaded: loaded(GEMMA, 'phone', [on(`d${i}`, `d${i}`, 10, k)]), llama: false } }), null); }
+  }
+  const ids41 = (p.b.view().hints ?? []).map((h: any) => h.id);
+  assert.equal(ids41.length, 40);
+  assert.ok(ids41.includes('d40') && !ids41.includes('d0'), ids41.join());
+
+  // this computer is never pushed out, however long it went unmeasured
+  const speeds: Record<string, unknown> = { local: { 'gemma3-4b.gguf': { tps: 9, n: 4, at: AT - 30 * DAY } } };
+  for (let i = 0; i < 39; i++) speeds[`d${i}`] = { 'gemma3-4b.gguf': { tps: 9, n: 4, at: AT - i * DAY } };
+  p = plannerAt(AT, { v: 1, last: null, speeds });
+  p.b.observe(snap({ models: [GEMMA], devices: [dev({ id: 'new' })], work: { loaded: loaded(GEMMA, 'phone', [on('new', 'new', 10, 1)]), llama: false } }), null);
+  const kept = (p.b.view().hints ?? []).map((h: any) => h.id);
+  assert.equal(kept.length, 40);
+  assert.ok(kept.includes('local') && kept.includes('new') && !kept.includes('d38') && kept.includes('d37'), kept.join());
+});
+
+test('planner speeds: a recent file outweighs a long-ago one with more answers; no times: the most answers wins, as before', () => {
+  const s = snap({ devices: [dev()], models: [QWEN17, GEMMA] });
+  const gbs = (xs: any[]) => decide.field(s, { peek: () => null }, new Map([['p1', xs]])).seats.find((x: any) => x.id === 'p1').speed.gbs;
+  const q = decide.readGb(QWEN17)!, g = decide.readGb(GEMMA)!;
+  // n 50 sixty days ago weighs 20 × 0.5^(60/14) = 1.03 against n 3 now: the new one
+  assert.equal(gbs([{ file: QWEN17.file, tps: 10, n: 50, at: AT - 60 * DAY }, { file: GEMMA.file, tps: 5, n: 3, at: AT }]), 5 * g);
+  // n 50 one day ago weighs 19.0 against 3: the old one
+  assert.equal(gbs([{ file: QWEN17.file, tps: 10, n: 50, at: AT - DAY }, { file: GEMMA.file, tps: 5, n: 3, at: AT }]), 10 * q);
+  // no times: the most answers, beyond the cap of 20 too; equal answers keep the first
+  assert.equal(gbs([{ file: QWEN17.file, tps: 10, n: 50 }, { file: GEMMA.file, tps: 5, n: 3 }]), 10 * q);
+  assert.equal(gbs([{ file: GEMMA.file, tps: 5, n: 25 }, { file: QWEN17.file, tps: 10, n: 30 }]), 10 * q);
+  assert.equal(gbs([{ file: GEMMA.file, tps: 5, n: 4 }, { file: QWEN17.file, tps: 10, n: 4 }]), 5 * g);
+  // equal weight (both capped, both age 0): the newer at, before the larger n
+  assert.equal(gbs([{ file: GEMMA.file, tps: 5, n: 30, at: AT + 1000 }, { file: QWEN17.file, tps: 10, n: 20, at: AT + 2000 }]), 10 * q);
+  // the same answers: the newer one
+  assert.equal(gbs([{ file: GEMMA.file, tps: 5, n: 20, at: AT - DAY }, { file: QWEN17.file, tps: 10, n: 20, at: AT }]), 10 * q);
+});
+
+test('planner speeds: notes keep at through a round trip; old notes get the load time; a future at comes back to the look; a bad at is replaced, the entry stays', () => {
+  const s = (at: number) => snap({ at, models: [GEMMA, QWEN17], work: { loaded: loaded(GEMMA, 'phone', [on('p1', 'pixel', 9, 1)]), llama: false } });
+  let p = plannerAt(AT - 120_000);
+  p.b.observe(s(AT - 60_000), null);
+  p.b.observe(s(AT), null);   // the same answer count: nothing folded
+  assert.deepEqual(p.hint('p1').tps, [{ file: 'gemma3-4b.gguf', tps: 9, n: 1, at: AT - 60_000 }], 'hints carry at');
+  const saved = structuredClone(p.notes());
+  assert.deepEqual((saved as any).speeds.p1['gemma3-4b.gguf'], { tps: 9, n: 1, at: AT - 60_000 });
+  p = plannerAt(AT + 5000, saved);
+  assert.equal(p.hint('p1').tps[0].at, AT - 60_000, 'a round trip keeps at');
+
+  // old notes without at, and every bad at: the load time; the entries stay
+  const bad = [undefined, 'x', Number.NaN, Number.POSITIVE_INFINITY, -1, 8.64e15 + 1];
+  const files: Record<string, unknown> = {};
+  bad.forEach((at, i) => { files[`b${i}.gguf`] = { tps: 5, n: 2, ...(at === undefined ? {} : { at }) }; });
+  files['ok.gguf'] = { tps: 5, n: 2, at: 8.64e15 };
+  p = plannerAt(AT - 5000, { v: 1, last: null, speeds: { p2: files } });
+  const got = Object.fromEntries(p.hint('p2').tps.map((x: any) => [x.file, x.at]));
+  assert.equal(Object.keys(got).length, 7);
+  for (let i = 0; i < bad.length; i++) assert.equal(got[`b${i}.gguf`], AT - 5000, `b${i}`);
+  assert.equal(got['ok.gguf'], 8.64e15, 'in range: kept as it is until a look');
+  // the next look brings the future at back to the look's time; the others stay
+  p.b.observe(snap({ at: AT, models: [GEMMA] }), null);
+  const after = Object.fromEntries(p.hint('p2').tps.map((x: any) => [x.file, x.at]));
+  assert.equal(after['ok.gguf'], AT);
+  assert.equal(after['b0.gguf'], AT - 5000);
 });
 
 test('planner: thin evidence gives no card: nothing loaded before, a device without its free memory, a model still loading', () => {

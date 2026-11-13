@@ -189,7 +189,7 @@ export interface DeviceHint {
   id: string;                      // a device id from the snapshot, or "local" for this computer
   no?: string;                     // why no work should go to it now, in a few words
   tonight?: { guess: 'likely' | 'maybe' | 'unlikely' | 'unknown'; p: number; hours: number[] };   // hours: the chance per hour 22:00..06:00
-  tps?: { file: string; tps: number; n: number }[];   // measured tok/s per model file, n answers behind it
+  tps?: { file: string; tps: number; n: number; at?: number }[];   // measured tok/s per model file, n answers behind it, at: when it was last folded (ms)
 }
 
 /** A line a branch wants in the live feed. */

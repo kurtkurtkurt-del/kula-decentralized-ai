@@ -5,7 +5,8 @@
 // imports nothing of kula. A decode step streams the model's (active) weights once, so
 //   tok/s = what a device streams per second ÷ the GB one token reads.
 // What a device streams comes from a tok/s it really answered with on any model (the planner keeps
-// those, from the loaded model's live tok/s) or, failing that, from the memory bandwidth it measured
+// those, from the loaded model's live tok/s; a recent one with fewer answers can outweigh an old one
+// with many) or, failing that, from the memory bandwidth it measured
 // × kula's efficiency (0.6, a computer as a worker 0.3). This computer's bandwidth is not in the
 // look: until a model ran here its speed is "not measured yet", and no card quotes a number for it.
 // A split runs its layers one device after the other, so its token is the sum of each device's
@@ -39,7 +40,9 @@ export interface Seat {
 /** a device the deciding branches leave out, and why */
 export interface Barred { id: string; name: string; why: string }
 export interface Field { seats: Seat[]; barred: Barred[]; measured: Map<string, Measured[]> }
-export interface Measured { file: string; tps: number; n: number }
+export interface Measured { file: string; tps: number; n: number; at?: number }
+const N_CAP = 20;                   // answers beyond this add no more weight to a measured speed
+const HALF_LIFE_MS = 14 * 24 * 3600_000;   // a measured speed's weight halves every 14 days
 
 /** a model as the look names it: by id, file or name */
 export const modelOf = (s: Snapshot, key: string | null | undefined): EyeModel | null =>
@@ -83,14 +86,19 @@ export function untrusted(ctx: Pick<BranchCtx, 'peek'>): Map<string, string> {
   return out;
 }
 
-/** a device's best speed: measured tok/s on a model the look knows (the most answers behind it), else its bandwidth */
+/** a device's best speed: measured tok/s on a model the look knows, else its bandwidth. Of the
+ *  measured files the one with the most weight, min(n, 20) × 0.5^(age / 14 days) (no `at`: age 0);
+ *  ties go to the newer `at`, then the more answers. The chosen tok/s is taken as it is. */
 function speedOf(s: Snapshot, id: string, kind: string, bw: number | null, measured: Measured[] | undefined): Speed | null {
-  let best: { gbs: number; n: number } | null = null;
+  let best: { gbs: number; w: number; at: number; n: number } | null = null;
   for (const x of measured ?? []) {
     const m = s.models.find((y) => y.file === x.file);
     const gb = m ? readGb(m) : null;
     if (!gb || !(x.tps > 0)) continue;
-    if (!best || x.n > best.n) best = { gbs: x.tps * gb, n: x.n };
+    const at = typeof x.at === 'number' && Number.isFinite(x.at) ? x.at : s.at;
+    const age = Number.isFinite(s.at - at) ? Math.max(0, s.at - at) : 0;
+    const w = Math.min(x.n, N_CAP) * 0.5 ** (age / HALF_LIFE_MS);
+    if (!best || w > best.w || (w === best.w && (at > best.at || (at === best.at && x.n > best.n)))) best = { gbs: x.tps * gb, w, at, n: x.n };
   }
   if (best) return { gbs: best.gbs, from: 'measured' };
   if (bw && bw > 0) return { gbs: bw * (kind === 'pc' ? PC_EFF : EFF), from: 'bandwidth' };
