@@ -11,7 +11,9 @@
 // use", never stale. The stat and gauge count a device active only when its look is fresh or it is
 // in use; a stale one is "not checked lately". A device's line also says what its own worker
 // reported at the last probe (scan D M2): "answering someone else", "context N% full"; words only,
-// never a card or a hint. Its notes are
+// never a card or a hint. The one hint senses gives (peek only, never drawn) is each link's usual
+// round trip: { id, link: { srtt, rttvar } } in ms, the notes' own numbers, for a device that answered
+// the last look, is not stale and has the usual range its line shows (srtt over 0). Its notes are
 // one small json (ctx.save), bounded and saved at most once a minute; the view lists 40 device
 // lines at most and then how many it left out.
 // Every value taken from the snapshot is checked first: a reading only enters the notes when the
@@ -19,7 +21,7 @@
 // read-back would throw away, and no NaN or absurd number reaches the view. A shown number also has
 // a plausible ceiling: a latency up to 10 minutes, free memory up to 4 TB, a bandwidth of 0.01 to
 // 10 000 GB/s, a silence up to a year ("over a year ago" after that); anything beyond is left out.
-import type { Branch, BranchCtx, EyeDevice, Snapshot } from '../types.js';
+import type { Branch, BranchCtx, DeviceHint, EyeDevice, Snapshot } from '../types.js';
 import { active, gb, pct } from './util.js';
 
 const READINGS_MAX = 30;                 // new readings kept per device
@@ -462,6 +464,18 @@ export function create(ctx: BranchCtx): Branch {
       const lately = stale.length ? ` · ${stale.length} not checked lately` : '';
       const lines = seen.slice(0, MAX_DEVICES).map((x) => x.line);
       if (seen.length > MAX_DEVICES) lines.push(`and ${seen.length - MAX_DEVICES} more`);
+      // the link hint: answered the last look, not stale (a device in use never is, so it keeps the
+      // round trip from before the load), and the usual rule of its line with srtt over 0; one per id
+      const hints: DeviceHint[] = [];
+      const hinted = new Set<string>();
+      for (const x of seen) {
+        const n = x.n;
+        if (x.d.reachable !== true || x.stale || !n || hinted.has(x.d.id)) continue;
+        if (n.srtt == null || !(n.srtt > 0) || n.rttvar == null) continue;
+        if (n.r.filter((r) => r.ok && r.ms != null).length < OK_MIN) continue;
+        hinted.add(x.d.id);
+        hints.push({ id: x.d.id, link: { srtt: n.srtt, rttvar: n.rttvar } });
+      }
       return {
         built: true,
         stat: devs.length ? `${on} of ${devs.length} devices active${lately}` : 'no device yet',
@@ -474,6 +488,7 @@ export function create(ctx: BranchCtx): Branch {
         lines,
         note: devs.length ? undefined : 'no device yet. devices (top right) adds one.',
         what: 'keeps the last 30 probe readings of every device and says how quickly it usually answers, whether its link is flapping, and whether it has gone quiet.',
+        hints,
       };
     },
   };

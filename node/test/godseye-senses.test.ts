@@ -970,7 +970,9 @@ test('m2: a busy worker not in our load is "answering someone else"; only a line
   assert.equal(v.lines[0], 'pixel · reachable · 12 ms · usually 12 ms (4–20) · answering someone else · 3.3 GB free · 60 GB/s');
   assert.doesNotMatch(v.lines[1], /answering someone else|context/);
   assert.equal(v.suggestions, undefined, 'no card');
-  assert.equal(v.hints, undefined, 'no hint');
+  // L9 P50: senses now gives a link hint for each device with a usual round trip, so hints is no
+  // longer undefined. The worker's words are still never a hint: each hint holds its id and link only.
+  assert.deepEqual(v.hints!.map((h) => Object.keys(h).sort()), [['id', 'link'], ['id', 'link']], 'no hint from the worker');
   assert.equal(c.feed.length, feedBefore, 'no feed line either');
 });
 
@@ -1060,4 +1062,81 @@ test('m1: the worker\'s live free memory leaves ramMb as it is (observation only
   const at = last + 15_000;
   b.observe(snap([dev({ checkedAt: at, ramMb: 3400, worker: { at, busy: false, tokensUsed: 0, ctx: 0, ramFreeMb: 800 } })], at), null);
   assert.match(b.view().lines[0], / · 3.3 GB free · /);
+});
+
+// ---- L9 P50: each link's usual round trip as a hint (peek only, never drawn)
+
+/** n looks of the given devices, 15 s apart from 1 000; each entry is the overrides of one device */
+function looks(b: any, n: number, devs: Record<string, unknown>[] = [{}]) {
+  let t = 1_000;
+  for (let i = 0; i < n; i++) { b.observe(snap(devs.map((o) => dev({ ...o, checkedAt: t })), t), null); t += 15_000; }
+  return t - 15_000;
+}
+
+/** the RFC 6298 smooth of the given readings, built step by step */
+function smooth(ms: number[]) {
+  let s: { srtt: number | null; rttvar: number | null } = { srtt: null, rttvar: null };
+  for (const r of ms) s = rfc6298(s.srtt, s.rttvar, r);
+  return s as { srtt: number; rttvar: number };
+}
+
+test('p50: four ok looks give no hint; five 12 ms looks give the link with the notes\' numbers', () => {
+  const four = create(fakeCtx().ctx);
+  looks(four, 4);
+  assert.deepEqual(four.view().hints, []);
+  const b = create(fakeCtx().ctx);
+  looks(b, 5);
+  const want = smooth([12, 12, 12, 12, 12]);
+  assert.equal(want.rttvar, 1.8984375);                     // 6 * (3/4)^4
+  assert.deepEqual(b.view().hints, [{ id: 'p1', link: { srtt: 12, rttvar: want.rttvar } }]);
+});
+
+test('p50: no hint for a stale device, an unreachable one, or five 0 ms looks', () => {
+  const stale = create(fakeCtx().ctx);
+  const last = looks(stale, 5);
+  stale.observe(snap([dev({ checkedAt: last })], last + 45_001), null);
+  assert.equal(row(stale.view(), 'stale'), 'pixel');
+  assert.deepEqual(stale.view().hints, []);
+
+  const down = create(fakeCtx().ctx);
+  const l2 = looks(down, 5);
+  down.observe(snap([dev({ reachable: false, reachMs: null, reason: 'connect timeout', checkedAt: l2 + 15_000 })], l2 + 15_000), null);
+  assert.deepEqual(down.view().hints, []);
+
+  const zero = create(fakeCtx().ctx);
+  looks(zero, 5, [{ reachMs: 0 }]);
+  assert.match(zero.view().lines[0], /usually 0 ms/);       // the line still shows it
+  assert.deepEqual(zero.view().hints, []);
+});
+
+test('p50: a device holding layers of the load keeps its hint with an old checkedAt', () => {
+  const { b, last } = probedTwo();
+  const at = last + 600_000;
+  b.observe(loadedSnap([dev({ checkedAt: last }), dev({ id: 'p2', name: 'tab', checkedAt: last })], at, [], ['p1']), null);
+  const v = b.view();
+  assert.equal(row(v, 'stale'), 'tab');
+  assert.deepEqual(v.hints, [{ id: 'p1', link: smooth([12, 12, 12, 12, 12]) }]);
+});
+
+test('p50: two devices give two hints, each equal to the saved notes\' srtt and rttvar', () => {
+  const { c, ctx } = fakeCtx();
+  const b = create(ctx);
+  let t = 1_000;
+  const ms1 = [12, 14, 11, 13, 12, 15];
+  const ms2 = [200, 210, 190, 205, 198, 202];
+  for (let i = 0; i < ms1.length; i++) {
+    b.observe(snap([dev({ checkedAt: t, reachMs: ms1[i] }), dev({ id: 'p2', name: 'tab', checkedAt: t, reachMs: ms2[i] })], t), null);
+    t += 15_000;
+  }
+  c.t += 60_000;                                            // the same look again: the notes are saved
+  b.observe(snap([dev({ checkedAt: t - 15_000, reachMs: 15 }), dev({ id: 'p2', name: 'tab', checkedAt: t - 15_000, reachMs: 202 })], t - 15_000), null);
+  const saved = c.stored as any;
+  assert.ok(saved, 'saved');
+  const hints = b.view().hints!;
+  assert.deepEqual(hints, [
+    { id: 'p1', link: { srtt: saved.dev.p1.srtt, rttvar: saved.dev.p1.rttvar } },
+    { id: 'p2', link: { srtt: saved.dev.p2.srtt, rttvar: saved.dev.p2.rttvar } },
+  ]);
+  assert.notEqual(hints[0].link!.srtt, hints[1].link!.srtt);
+  for (const h of hints) for (const k of ['no', 'tonight', 'tps']) assert.equal(k in h, false, `no ${k} key`);
 });

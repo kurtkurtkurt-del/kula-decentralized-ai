@@ -184,12 +184,14 @@ export interface BranchView {
 }
 
 /** A branch's word on one device for the deciding branches (11.11.2026): forecast says tonight and
- *  the speeds it measured, limits says no to a device that should rest. Data, not drawn. */
+ *  the speeds it measured, limits says no to a device that should rest, senses says its link's usual
+ *  round trip. Data, not drawn. */
 export interface DeviceHint {
   id: string;                      // a device id from the snapshot, or "local" for this computer
   no?: string;                     // why no work should go to it now, in a few words
   tonight?: { guess: 'likely' | 'maybe' | 'unlikely' | 'unknown'; p: number; hours: number[] };   // hours: the chance per hour 22:00..06:00
   tps?: { file: string; tps: number; n: number; at?: number }[];   // measured tok/s per model file, n answers behind it, at: when it was last folded (ms)
+  link?: { srtt: number; rttvar: number };   // senses: its link's usual round trip and variation, ms (RFC 6298)
 }
 
 /** A line a branch wants in the live feed. */
