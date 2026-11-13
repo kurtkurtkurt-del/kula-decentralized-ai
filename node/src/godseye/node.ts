@@ -19,8 +19,17 @@ export function fileNotes(dir: string): EyeNotes {
     write: (id, text) => {
       fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
       const tmp = `${file(id)}.${process.pid}.tmp`;
-      fs.writeFileSync(tmp, text, { mode: 0o600 });
+      // the text reaches the disk before the rename, and the rename before the write returns (E7)
+      const fd = fs.openSync(tmp, 'w', 0o600);
+      try {
+        fs.writeFileSync(fd, text);
+        fs.fsyncSync(fd);
+      } finally { fs.closeSync(fd); }
       fs.renameSync(tmp, file(id));
+      try {
+        const dfd = fs.openSync(dir, 'r');
+        try { fs.fsyncSync(dfd); } finally { fs.closeSync(dfd); }
+      } catch {}
     },
     remove: (id) => {
       let names: string[] = [];

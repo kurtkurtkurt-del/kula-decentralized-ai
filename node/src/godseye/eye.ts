@@ -193,6 +193,7 @@ export class GodsEye {
     let n = 0;
     for (const id of BRANCH_IDS) {
       try { n += this.opts.notes.remove(id); } catch {}
+      try { n += this.opts.notes.remove(`${id}.bad`); } catch {}
     }
     this.branches.clear();
     this.broken.clear();
@@ -221,12 +222,18 @@ export class GodsEye {
     return {
       now: () => this.now(),
       load: <T>(fallback: T): T => {
-        try {
-          const text = notes.read(id);
-          if (text === null) return fallback;
-          const v = JSON.parse(text) as T;
-          return v === null ? fallback : v;   // notes holding JSON null are no notes
-        } catch { return fallback; }
+        let text: string | null;
+        try { text = notes.read(id); } catch { return fallback; }
+        if (text === null) return fallback;
+        let v: T;
+        try { v = JSON.parse(text) as T; }
+        catch {
+          // torn notes (a power cut mid-write): said once, kept aside, never the parse error or the text
+          this.log(`god's eye ${id}: its notes could not be read (${text.length} chars); starting fresh, the old text is kept as ${id}.bad`);
+          try { notes.write(`${id}.bad`, text); } catch {}
+          return fallback;
+        }
+        return v === null ? fallback : v;   // notes holding JSON null are no notes
       },
       save: (data: unknown) => {
         try { notes.write(id, JSON.stringify(data)); }
