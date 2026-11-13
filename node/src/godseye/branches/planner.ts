@@ -178,7 +178,9 @@ export function create(ctx: BranchCtx): Branch {
   let f: Field | null = null;
   let shown: Suggestion[] = [];
   const steady = new Steady();
-  const lastDone = new Map<string, number>();   // device|file → answers, this run only
+  // device|file → the load's since and its answer count when last seen, this run only, for the loaded
+  // file only: a reload (a new since) folds its first answer; a since that moves with the count unchanged does not
+  const lastDone = new Map<string, { since: number; done: number }>();
   let dirty = false;
   let savedAt = Number.NEGATIVE_INFINITY;
   let fit: HopFit = notes.hop ?? freshHop();
@@ -202,8 +204,8 @@ export function create(ctx: BranchCtx): Branch {
       const id = d.local ? 'local' : d.id;
       const key = `${id}|${L.model.file}`;
       const was = lastDone.get(key);
-      lastDone.set(key, d.done);
-      if (was !== undefined && d.done <= was) continue;
+      lastDone.set(key, { since: L.since, done: d.done });
+      if (was !== undefined && (was.since === L.since ? d.done <= was.done : d.done === was.done)) continue;
       if (!notes.speeds[id] && Object.keys(notes.speeds).length >= DEVICES_KEPT) {
         // a new device pushes out the one measured longest ago: never this computer, never one just written
         let out: string | null = null;
@@ -226,6 +228,8 @@ export function create(ctx: BranchCtx): Branch {
       wrote.add(id);
       dirty = true;
     }
+    // marks for the loaded file only (nothing loaded clears nothing: a flap folds nothing twice)
+    for (const key of lastDone.keys()) if (!key.endsWith('|' + L.model.file)) lastDone.delete(key);
   }
 
   /** a split's answer teaches the hop: when its answers grew since the look before, the chain of the
