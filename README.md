@@ -95,10 +95,12 @@ Everything you need is on the GitHub release page: **Releases → latest** in th
 | an Android phone or tablet (arm64, Android 7+) | `kula-android.apk` |
 | a Mac with Apple silicon, as an app | `kula-mac-arm64.dmg` |
 | a Mac with Apple silicon, in the terminal | `kula-node-mac-arm64` |
+| an Ubuntu or Debian computer (x64), as an app | `kula-linux-x64.deb` |
+| an Ubuntu or Debian computer (ARM), as an app | `kula-linux-arm64.deb` |
 | checking the downloads | `sha256sums.txt` |
 
-Intel Mac, Linux and Windows files are not on the release yet; build them from source
-(`cd node && npm install && npm run pack:bin -- --target linux-x64,win-x64`).
+Intel Mac and Windows files, and the Linux terminal file, are not on the release yet; build
+them from source (`cd node && npm install && npm run pack:bin -- --target linux-x64,win-x64`).
 
 The repository is public: every file downloads without a login.
 
@@ -130,6 +132,21 @@ Privacy & Security → **Open Anyway**; if macOS still refuses, run
 screen (5–10 minutes). It needs Apple's command line tools and cmake, once, before that:
 `xcode-select --install` and `brew install cmake ninja` (Homebrew: https://brew.sh). Then the
 chat page opens in its own window.
+
+### the computer, the easy way: the Linux app (Ubuntu, Debian)
+
+Download `kula-linux-x64.deb` (on an ARM computer: `kula-linux-arm64.deb`) from the release and
+install it in a terminal:
+
+```sh
+cd ~/Downloads
+sudo apt install ./kula-linux-x64.deb      # apt also brings libgomp1, which llama.cpp needs
+```
+
+Then open **kula** from the app menu. The first start downloads llama.cpp b11157 (about 17 MB,
+sha256-checked) instead of compiling it, and the chat page opens in its own window. So far it
+is checked only on GitHub's Ubuntu 24.04 test machines (x64 and arm64): not yet on a real
+desktop, not yet in a cluster with a phone. There is no AppImage for other distros yet.
 
 ### the computer, in the terminal (macOS shown; Linux and Windows the same with their file)
 
@@ -165,6 +182,8 @@ xattr -d com.apple.quarantine kula-node-mac-arm64    # see below
 - **settings** (bottom left) has the defaults, your custom instructions, **usage** (tokens per
   model, device and day, counted on this computer only), data controls and the `/v1` token
   (settings → developer; the start line only prints the token file's path).
+- Linux: the terminal file is not on the release yet; build it from source (above) or use the
+  Linux app.
 - Windows: run `kula-node-win-x64.exe setup`, then `kula-node-win-x64.exe ui`. When the firewall
   asks, allow kula-node on **private** networks only.
 - Running the file with no arguments shows a small menu; `info` prints what a cluster would
