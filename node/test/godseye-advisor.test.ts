@@ -212,3 +212,43 @@ test('a feed line when the first card changes, once it held; remembered across a
   for (let i = 0; i < 5; i++) again.tick();
   assert.equal(again.view().events.filter((e) => e.branch === 'advisor').length, 0);
 });
+
+// P39 (F2, F6): the advisor's night fit is review's (fit.ts)
+test('night: a split device the forecast has back by 22:00 brings its memory with it: a line, no card (P39, F2)', () => {
+  const TEN = new Date(2026, 10, 8, 22, 0).getTime();
+  const fc = { forecast: { built: true, stat: 'x', hints: [night('p2', [0.9, 0.9, 0.9, 0.9, 0.9, 0.9, 0.9, 0.9, 0.9])] } };
+  const s = snap({
+    host: { name: 'mac', freeMb: 4000 }, work: { llama: true },
+    devices: [dev({ ramMb: 6000 }), dev({ id: 'p2', name: 'galaxy', ramMb: 6000, reachable: false, reason: 'no answer' })],
+    projects: [proj({ start: TEN, mode: 'split', model: 'Big 14B', peers: ['p1', 'p2'] })],
+  });
+  // with galaxy: 4000*0.7 + 6000*0.75 + 6000*0.75 = 11800 >= 9000; without it 7300 would have said "too big"
+  const v = branch(fc).look(s);
+  assert.equal(v.suggestions.find((x: any) => x.id.startsWith('advisor:night:')), undefined, JSON.stringify(v.suggestions));
+  assert.ok(v.lines.includes('night project essay at 22:00: galaxy not here now, likely by 22:00.'), v.lines.join(' | '));
+  assert.ok(v.lines.includes('night project essay at 22:00: its other 1 device answer now and Big 14B fits.'), v.lines.join(' | '));
+});
+
+test('night: apart with no device chosen and a model no place holds is a card, not "its no devices ... fits" (P39, F6)', () => {
+  const s = (needMb: number) => snap({
+    host: { name: 'mac', freeMb: 4000 }, work: { llama: true },
+    devices: [dev({ ramMb: 6000 }), dev({ id: 'p2', name: 'galaxy', ramMb: 6000 })],
+    models: [model('Big', needMb)],
+    projects: [proj({ mode: 'apart', model: 'Big', peers: [] })],
+  });
+  let v = branch().look(s(9000));
+  const c = v.suggestions.find((x: any) => x.id === 'advisor:night:n1');
+  assert.equal(c.title, 'the night project at 23:00 would not start well: Big needs about 8.8 GB, no device offers more than 4.4 GB');
+  assert.equal(c.weight, 3);
+  assert.deepEqual(c.action, { do: 'open', panel: 'branch', branch: 'review' });
+  accepted(v);
+  v = branch().look(s(4000));
+  assert.deepEqual(ids(v), []);
+  assert.ok(v.lines.includes('night project essay at 23:00: its 2 devices answer now and Big fits.'), v.lines.join(' | '));
+});
+
+test('night: a here project that fits says this computer runs it (P39)', () => {
+  const v = branch().look(snap({ host: { name: 'mac', freeMb: 8000 }, work: { llama: true }, projects: [proj({ mode: 'here', peers: [] })] }));
+  assert.deepEqual(ids(v), []);
+  assert.ok(v.lines.includes('night project essay at 23:00: this computer runs it and Qwen3 4B fits.'), v.lines.join(' | '));
+});

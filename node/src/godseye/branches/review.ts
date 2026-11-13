@@ -15,10 +15,10 @@
 // to load the same model on home devices. It never keeps or emits the request text: its verdicts
 // are reason kinds and counts, held in memory only (nothing goes into its notes file), and a title
 // is shown with anything a sensitivity rule finds masked out.
-import type { Branch, BranchCtx, EyeDevice, EyeModel, EyeProject, Ring, Snapshot, Suggestion, SuggestAction } from '../types.js';
+import type { Branch, BranchCtx, EyeDevice, EyeProject, Ring, Snapshot, Suggestion, SuggestAction } from '../types.js';
 import { hhmm, pct } from './util.js';
 import { RINGS, kindWords, masked, mayGo, parts, privateKinds, ringOf, sense, widest, type Level, type Parts, type Sense } from './sensitivity.js';
-import { heldHere } from './decide.js';
+import { projectFit } from './fit.js';
 import { sha256Hex } from '../hash.js';
 
 export { masked } from './sensitivity.js';
@@ -79,28 +79,13 @@ function sendReasons(level: Level, rings: Ring[]): string[] {
 }
 
 /** The devices a project would use: the chosen ones; with none chosen in "apart", every paired one; "here" uses only this computer. */
-function projectDevices(p: EyeProject, s: Snapshot): (EyeDevice | undefined)[] {
+export function projectDevices(p: EyeProject, s: Snapshot): (EyeDevice | undefined)[] {
   if (p.mode === 'here') return [];
   if (!p.peers.length) return p.mode === 'apart' ? s.devices : [];
   return p.peers.map((id) => s.devices.find((d) => d.id === id));
 }
 
 const ringsOf = (devs: (EyeDevice | undefined)[]): Ring[] => RINGS.filter((r) => r === 'home' || devs.some((d) => d && ringOf(d) === r));
-
-function fits(m: EyeModel, p: EyeProject, devs: EyeDevice[], s: Snapshot): boolean | null {
-  // the runner unloads the model loaded now before it loads the project's: what it holds here is free then
-  const host = s.host.freeMb == null ? null : s.host.freeMb + heldHere(s);
-  if (p.mode === 'here') return host == null ? null : host >= m.needMb;
-  const rams = devs.map((d) => d.ramMb).filter((r): r is number => r != null);
-  if (p.mode === 'split') {
-    if (rams.length < devs.length || host == null) return null;  // not all known: no word
-    return rams.reduce((a, b) => a + b, 0) + host >= m.needMb;
-  }
-  // phone / apart: a whole copy has to fit at least one of them (apart may also run on this computer)
-  const sizes = p.mode === 'apart' && host != null ? [...rams, host] : rams;
-  if (!sizes.length) return null;
-  return sizes.some((r) => r >= m.needMb);
-}
 
 /** what a project's title and request say: its level, kinds and flags, and its pieces per ring. Verdicts only, no text. */
 export interface Read extends Sense { parts: Parts | null }
@@ -129,7 +114,12 @@ export function reviewProject(p: EyeProject, s: Snapshot, sn: Read = readRequest
   else if (req.length < SHORT_REQUEST) reasons.push('short-request');
   const m = s.models.find((x) => x.id === p.model);
   if (!m) reasons.push('unknown-model');
-  else if (fits(m, p, devs.filter((d): d is EyeDevice => !!d), s) === false) reasons.push('too-big');
+  else {
+    // the same fit as the advisor's, under the engine's shares (P39): 'too-big' only when it says no.
+    // A chosen device away now or not looked at yet is a missing device, not a too-big model
+    const f = projectFit(s, p, m);
+    if (f.fits === false && !f.gone.length) reasons.push('too-big');
+  }
   return { ok: reasons.length === 0, reasons, level: sn.level, kinds: sn.kinds, parts: sn.parts, rings };
 }
 

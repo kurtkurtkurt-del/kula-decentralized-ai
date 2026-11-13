@@ -118,7 +118,8 @@ test('sanity: a start already past, an end before the start, an empty or short r
       project({ id: '7', title: 'split fits', mode: 'split', peers: ['p1', 'p2'], model: 'big' }),
       project({ id: '8', title: 'split too big', mode: 'split', peers: ['p1', 'p2'], model: 'big', }),
     ],
-    host: { name: 'mac', freeMb: 4200 },
+    // P39: measured under the engine's shares, as the advisor does (was 4200 against raw memory)
+    host: { name: 'mac', freeMb: 6600 },
   }) as any, null);
   const v = b.view();
   const line = (t: string) => v.lines.find((l) => l.includes(`“${t}”`))!;
@@ -129,7 +130,7 @@ test('sanity: a start already past, an end before the start, an empty or short r
   assert.match(line('short'), /the request is very short/);
   assert.match(line('what model'), /this computer does not know its model/);
   assert.match(line('too big'), /does not fit the chosen devices/);
-  assert.match(line('split fits'), /· ok$/);                              // 1000 + 900 + 4200 ≥ 6000
+  assert.match(line('split fits'), /· ok$/);                              // 1000*.75 + 900*.75 + 6600*.7 = 6045 ≥ 6000
   // the same split with less free memory here no longer fits
   b.observe(snap({
     devices: [dev({ ramMb: 1000 }), dev({ id: 'p2', name: 'pixel 2', ramMb: 900 })],
@@ -282,4 +283,31 @@ test('keep it home on apart: here:false only when this computer was not in the l
   const d = inn.b.view().suggestions.find((x: any) => x.id === 'review:private-chat');
   assert.ok(d, 'no private-chat card');
   assert.deepEqual(d.action, { do: 'load', model: 'qwen-1.5b', mode: 'apart', devices: ['h1'], ctx: 4096 });
+});
+
+// P39 (F1): review measures a night project as kula's engine and the advisor do, under the shares
+// (LOCAL_SHARE 0.7 of this computer, WORKER_SHARE 0.75 of a device), through the one fit in fit.ts
+test('fits: under the engine\'s shares, as the advisor; unknown memory stays no word (P39, F1)', () => {
+  const big = model({ id: 'big', name: 'Big', needMb: 8700 });
+  const reasons = (o: Record<string, unknown>, p: Record<string, unknown>) => reviewProject(project({ model: 'big', ...p }), snap({ models: [big], ...o }) as any).reasons;
+  // split: 4000*0.7 + 6000*0.75 = 7300 < 8700 (raw 10000 said ok before)
+  assert.ok(reasons({ host: { name: 'mac', freeMb: 4000 }, devices: [dev({ ramMb: 6000 })] }, { mode: 'split', peers: ['p1'] }).includes('too-big'));
+  // here: 6000*0.7 = 4200 < 5000 (raw 6000 said ok before)
+  assert.ok(reasons({ host: { name: 'mac', freeMb: 6000 }, devices: [], models: [model({ id: 'big', name: 'Big', needMb: 5000 })] }, { mode: 'here', peers: [] }).includes('too-big'));
+  // a split that fits under the shares stays ok: 4000*0.7 + 8000*0.75 = 8800 >= 8700
+  const ok = reviewProject(project({ model: 'big', mode: 'split', peers: ['p1'] }), snap({ models: [big], host: { name: 'mac', freeMb: 4000 }, devices: [dev({ ramMb: 8000 })] }) as any);
+  assert.deepEqual(ok.reasons, []);
+  assert.equal(ok.ok, true);
+  // unknown memory, here or on a chosen split device: no word
+  assert.ok(!reasons({ host: { name: 'mac', freeMb: null }, devices: [] }, { mode: 'here', peers: [] }).includes('too-big'));
+  assert.ok(!reasons({ host: { name: 'mac', freeMb: 4000 }, devices: [dev({ ramMb: null })] }, { mode: 'split', peers: ['p1'] }).includes('too-big'));
+});
+
+// P39: a chosen device away now or not looked at yet is a missing device, never a too-big model
+test('fits: a split with a chosen device away or not looked at yet says no too-big (P39)', () => {
+  const big = model({ id: 'big', name: 'Big', needMb: 8700 });
+  const reasons = (d: Record<string, unknown>) => reviewProject(project({ model: 'big', mode: 'split', peers: ['p1'] }), snap({ models: [big], host: { name: 'mac', freeMb: 4000 }, devices: [dev({ ramMb: 8000, ...d })] }) as any).reasons;
+  assert.ok(!reasons({ reachable: null }).includes('too-big'), 'not looked at yet');
+  assert.ok(!reasons({ reachable: false, reason: 'timeout' }).includes('too-big'), 'away now');
+  assert.ok(!reasons({ reachable: false, ramMb: 1000 }).includes('too-big'), 'away now, even when small');
 });

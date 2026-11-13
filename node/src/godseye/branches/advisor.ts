@@ -7,14 +7,15 @@
 //            the hour most of them are, to plan the project for (between noon and 22:00 only)
 //   first    two or more cards on the panel from the others: which one first, in plain words,
 //            pointing at that card (its id is in this card's, never the same id)
-// The night project's fit uses the same shares as kula's planner (decide.ts). Each card holds SHOW
+// The night project's fit is review's (fit.ts, the shares of kula's planner). Each card holds SHOW
 // looks before it shows and goes HIDE looks after (decide.ts). A feed line when the first card
 // changes; the last one said is kept in its notes, so a restart does not say it again.
 import type { Branch, BranchCtx, BranchId, BranchView, Snapshot, Suggestion } from '../types.js';
 import { BRANCH_IDS } from '../types.js';
 import { active, gb, hhmm, pct } from './util.js';
 import { masked } from './review.js';   // a project's title may hold personal data: shown masked, as review does
-import { LOCAL_SHARE, Steady, WORKER_SHARE, cardId, heldHere, hintsOf, modelOf, names } from './decide.js';
+import { Steady, cardId, hintsOf, modelOf, names } from './decide.js';
+import { projectFit, type Fit } from './fit.js';
 import { cardRank } from '../rank.js';
 
 const LIKELY = 0.6;                // an hour a device is there with this chance or more counts
@@ -25,21 +26,16 @@ const MODE_WORD: Record<string, string> = { phone: 'on one device', apart: 'apar
 
 type Card = Suggestion & { branch: BranchId };
 
-/** a waiting night project's problems: gone devices, a model that is missing or does not fit */
-export function nightProblems(s: Snapshot, p: Snapshot['projects'][number]): { problems: string[]; gone: string[] } {
+/** a waiting night project's problems: gone devices, a model that is missing or does not fit; `expected`
+ *  are devices away now that the forecast has back by the start: counted with their memory, not gone */
+export function nightProblems(s: Snapshot, p: Snapshot['projects'][number], expected: Set<string> = new Set<string>()): { problems: string[]; gone: string[]; fit: Fit } {
   const m = modelOf(s, p.model);
-  const devs = p.peers.map((id) => ({ id, d: s.devices.find((d) => d.id === id) ?? null }));
-  const goneDevs = devs.filter((x) => !x.d || !active(x.d));
-  const caps = devs.flatMap((x) => (x.d && active(x.d) && x.d.ramMb ? [{ name: x.d.name, capMb: Math.floor(x.d.ramMb * WORKER_SHARE) }] : []));
-  // the project's load unloads the model here first (engine.load), so what it holds counts back (C2)
-  const hostCap = s.host.freeMb != null ? Math.floor((s.host.freeMb + heldHere(s)) * LOCAL_SHARE) : 0;
+  const fit = projectFit(s, p, m, expected);
   const problems: string[] = [];
-  if (goneDevs.length) problems.push(`${goneDevs.map((x) => x.d?.name ?? x.id).join(', ')} not reachable now`);
+  if (fit.gone.length) problems.push(`${fit.gone.map((id) => s.devices.find((d) => d.id === id)?.name ?? id).join(', ')} not reachable now`);
   if (!m) problems.push(`${p.model} is not in the model list`);
-  else if (p.mode === 'here') { if (!s.work.llama) problems.push('this computer cannot run a model itself'); else if (m.needMb > hostCap) problems.push(`${m.name} needs about ${gb(m.needMb)}, this computer has ${gb(hostCap)} to spare`); }
-  else if (p.mode === 'split') { const sum = caps.reduce((t, c) => t + c.capMb, 0) + (s.work.llama ? hostCap : 0); if (m.needMb > sum) problems.push(`${m.name} needs about ${gb(m.needMb)}, together they offer ${gb(sum)}`); }
-  else for (const c of caps) if (m.needMb > c.capMb) problems.push(`${m.name} needs about ${gb(m.needMb)}, ${c.name} offers ${gb(c.capMb)}`);
-  return { problems, gone: goneDevs.filter((x) => x.d).map((x) => x.id) };
+  problems.push(...fit.problems);
+  return { problems, gone: fit.gone.filter((id) => s.devices.some((d) => d.id === id)), fit };
 }
 
 /** the hour tonight most devices are likely there: [hour, how many, their names] */
@@ -99,8 +95,8 @@ export function create(ctx: BranchCtx): Branch {
           if (typeof p === 'number' && Number.isFinite(p) && p >= LIKELY) later.add(id);
         }
       }
-      const rest = later.size ? { ...waiting, peers: waiting.peers.filter((id) => !later.has(id)) } : waiting;
-      const { problems, gone } = nightProblems(s, rest);
+      // the devices it expects are counted with their memory (F2), never as gone
+      const { problems, gone, fit } = nightProblems(s, waiting, later);
       const when = `${masked(waiting.title)} at ${hhmm(waiting.start)}`;
       if (later.size) night.push(`night project ${when}: ${names([...later].map((id) => ({ name: s.devices.find((d) => d.id === id)!.name })))} not here now, likely by ${String(hour).padStart(2, '0')}:00.`);
       if (problems.length) {
@@ -111,7 +107,12 @@ export function create(ctx: BranchCtx): Branch {
           title: `the night project at ${hhmm(waiting.start)} would not start well: ${problems[0]}`,
           why: `night project ${when}: ${problems.join('; ')}. there is time to fix it before it starts.`,
         });
-      } else if (!later.size || rest.peers.length) night.push(`night project ${when}: its ${later.size ? 'other ' : ''}${rest.peers.length || 'no'} device${rest.peers.length === 1 ? '' : 's'} answer now and ${modelOf(s, waiting.model)!.name} fits.`);
+      } else {
+        const name = modelOf(s, waiting.model)!.name;
+        const n = fit.counted.filter((c) => active(c.device)).length;   // the counted devices that answer now
+        if (waiting.mode === 'here') night.push(`night project ${when}: this computer runs it and ${name} fits.`);
+        else if (!later.size || n) night.push(`night project ${when}: its ${later.size ? 'other ' : ''}${n || 'no'} device${n === 1 ? '' : 's'} answer now and ${name} fits.`);
+      }
     }
 
     // tonight: when most devices are likely there, from the forecast's hours
