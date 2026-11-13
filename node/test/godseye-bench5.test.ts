@@ -1,6 +1,7 @@
 // the brain bench v5 (L10 P57): the faster-split card's rule, the point against the interval's low
-// end, on every scenario of test/brain-bench/synth3.ts, seeds 1-5. Only the bench's soundness is
-// asserted; the shares and the verdict lines V1-V3 are printed for L11 to read, never asserted.
+// end, on every scenario of test/brain-bench/synth3.ts, seeds 1-5. The bench's soundness, the card's
+// rule (planner.ts splitFaster, L11 P59a) equal to `low` on every row, and V1-V3 are asserted; the
+// shares are printed.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
@@ -55,7 +56,17 @@ test('bench5: bench3 with `each` gives the same scorecard as without (far seed 1
   assert.equal(seen, plain.n);
 });
 
-test('bench5: the mean shares per scenario and the verdict lines (printed, never asserted)', () => {
+test('bench5: the card rule (planner.ts splitFaster) says what low says, whole and first, every scenario and seed', () => {
+  for (const name of SCENARIOS3) {
+    for (const seed of SEEDS) {
+      const c = card(name, seed);
+      assert.deepStrictEqual(c.shares.card, c.shares.low, `${name} seed ${seed}: whole`);
+      assert.deepStrictEqual(c.first.shares.card, c.first.shares.low, `${name} seed ${seed}: first`);
+    }
+  }
+});
+
+test('bench5: the mean shares per scenario (printed) and the verdict lines V1-V3 (asserted, L11 P59a)', () => {
   const whole = new Map<Scenario3Name, Shares5>();
   const first = new Map<Scenario3Name, Shares5>();
   for (const name of SCENARIOS3) {
@@ -80,4 +91,7 @@ test('bench5: the mean shares per scenario and the verdict lines (printed, never
   console.log(`V1 holds: ${yes(v1)} (every scenario, wrong(low) <= wrong(point) + 0.01 at 1.1 and 1.3)`);
   console.log(`V2 holds: ${yes(v2)} (every scenario, missed(low) <= missed(point) + 0.02 at 0.8)`);
   console.log(`V3 holds: ${yes(v3)} (far, first 100 from the shift, wrong(low) <= wrong(point) at 1.1)`);
+  assert.ok(v1, 'V1');
+  assert.ok(v2, 'V2');
+  assert.ok(v3, 'V3');
 });

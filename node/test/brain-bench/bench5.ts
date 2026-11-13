@@ -1,21 +1,23 @@
 // the brain bench v5 (L10 P57): the faster-split card's rule, measured. planner.ts shows "would run
-// faster split" on a point, S.tps >= A.tps * GAIN; hop.ts's 80% interval is only words on the card.
-// This bench asks whether the interval's low end is the better rule. bench3's stream (synth3.ts) is
+// faster split" on a point, S.tps >= A.tps * GAIN, before L11 P59a. This bench asked whether the interval's low end is the better rule. bench3's stream (synth3.ts) is
 // replayed and every scored answer is read through bench3's `each`: the learned guess `est` and its
 // interval `band`. Against it stand made-up "alone" speeds A = trueTps(name, i) * r for each ratio r
-// of RATIOS, so the truth is known: the split is faster exactly when r < 1. Three rules:
-//  - point:   est >= A * GAIN (today's card);
+// of RATIOS, so the truth is known: the split is faster exactly when r < 1. Four rules:
+//  - point:   est >= A * GAIN (the card before L11);
 //  - low:     band ? band.lo >= A : est >= A * GAIN;
-//  - lowGain: band ? band.lo >= A * GAIN : est >= A * GAIN.
+//  - lowGain: band ? band.lo >= A * GAIN : est >= A * GAIN;
+//  - card:    planner.ts's splitFaster(est, band ? band.lo : null, A, GAIN), the rule the card uses
+//             since L11 P59a: low, and the guess above A.
 // For each rule and ratio the share of answers where the rule says "faster", over the whole run and
 // over the first 100 answers from SHIFT_AT. Wrong = the share at r 1.1 and 1.3; missed = 1 minus the
-// share at r 0.6 and 0.8. No clock, no random and no network. Nothing here is shipped or wired.
+// share at r 0.6 and 0.8. No clock, no random and no network. The bench itself is not shipped.
 import { GAIN } from '../../src/godseye/branches/decide.ts';
+import { splitFaster } from '../../src/godseye/branches/planner.ts';
 import { runBench3, fromSnapshots } from './bench3.ts';
 import { scenario3, truth3, trueTps, SHIFT_AT, type Scenario3Name } from './synth3.ts';
 
 export const RATIOS = [0.6, 0.8, 0.9, 1.0, 1.1, 1.3] as const;
-export const RULES5 = ['point', 'low', 'lowGain'] as const;
+export const RULES5 = ['point', 'low', 'lowGain', 'card'] as const;
 export type Rule5 = (typeof RULES5)[number];
 export const FIRST5 = 100;
 
@@ -26,14 +28,14 @@ export interface Bench5Card extends Part5 { name: Scenario3Name; seed: number; f
 
 class Count {
   n = 0; nBand = 0;
-  says: Record<Rule5, number[]> = { point: RATIOS.map(() => 0), low: RATIOS.map(() => 0), lowGain: RATIOS.map(() => 0) };
+  says: Record<Rule5, number[]> = { point: RATIOS.map(() => 0), low: RATIOS.map(() => 0), lowGain: RATIOS.map(() => 0), card: RATIOS.map(() => 0) };
   part(): Part5 {
     const share = (xs: number[]): number[] => xs.map((x) => (this.n ? x / this.n : 0));
-    return { n: this.n, nBand: this.nBand, shares: { point: share(this.says.point), low: share(this.says.low), lowGain: share(this.says.lowGain) } };
+    return { n: this.n, nBand: this.nBand, shares: { point: share(this.says.point), low: share(this.says.low), lowGain: share(this.says.lowGain), card: share(this.says.card) } };
   }
 }
 
-/** bench3's stream for one scenario and seed, the three rules scored on each answer */
+/** bench3's stream for one scenario and seed, the four rules scored on each answer */
 export function runBench5(name: Scenario3Name, seed: number): Bench5Card {
   const whole = new Count();
   const first = new Count();
@@ -52,6 +54,7 @@ export function runBench5(name: Scenario3Name, seed: number): Bench5Card {
           if (point) c.says.point[j]++;
           if (band ? band.lo >= A : point) c.says.low[j]++;
           if (band ? band.lo >= A * GAIN : point) c.says.lowGain[j]++;
+          if (splitFaster(est, band ? band.lo : null, A, GAIN)) c.says.card[j]++;
         });
       }
     },

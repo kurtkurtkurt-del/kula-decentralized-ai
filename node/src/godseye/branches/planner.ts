@@ -3,7 +3,9 @@
 // The model it thinks about: the loaded one, else the one loaded last (its notes). For it, from one
 // look (decide.ts): alone on the fastest place it fits, apart on every place that holds a copy,
 // split over this computer and the devices near it. Cards:
-//   split   the model fits only split, or split is GAIN faster than the fastest place alone (both speeds known)
+//   split   the model fits only split, or split is faster than the fastest place alone (both speeds known):
+//           with a learned range (3 split answers, every speed answered, not estimated from bandwidth)
+//           when the range's low end reaches the place alone and the guess is above it, else GAIN faster
 //   apart   two or more places hold a copy and it is not loaded apart on all of them: n answers at once
 //   alone   it is split, and one place alone is GAIN faster (a warning, with the load that fixes it)
 //   barred  a device holding part of a split should rest or is not trusted: split without it
@@ -15,7 +17,8 @@
 // The links' cost is the one thing taken from a split (L9 P49, hop.ts): each split answer, with the
 // chain of the look before (its compute time from the seats' own speeds, senses' srtt of its links),
 // gives one k; split() prices a worker's link at k times its srtt (the prior k = 1 before 3 answers),
-// and the split card's why ends with the range it is likely in. Speeds are still never taken from a split.
+// and the split card's why ends with the range it is likely in; that range's low end is the faster-split
+// card's rule (L11 P59a, splitFaster). Speeds are still never taken from a split.
 // Notes: the last model, the speeds (at most 40 devices × 8 files, each with `at`, when it was last
 // folded), the hop fit (hop.ts), saved at most once a minute. A 9th file pushes out the device's file with the oldest `at`, a
 // 41st device the device whose newest `at` is oldest (never this computer, never the one just written).
@@ -67,7 +70,8 @@ const from = (xs: Seat[]) => (xs.some((x) => x.speed?.from === 'bandwidth') ? 'e
 const r1 = (x: number) => Math.round(x * 10) / 10;
 
 /** words for the end of a split card's why: how the links' cost is known and, once it can, the 80%
- *  range of the chain's tok/s; '' without a fit or a chain. Words only: no rule reads the range */
+ *  range of the chain's tok/s; '' without a fit or a chain. The faster-split rule reads the same range
+ *  through lowEnd */
 export function hopWords(S: Place, hop: HopFit | undefined): string {
   if (!hop || !S.chain) return '';
   const W = hop.errs.length;
@@ -77,6 +81,23 @@ export function hopWords(S: Place, hop: HopFit | undefined): string {
   if (!iv) return ` the links' cost is learned from the last ${W} split answers watched; no range yet.`;
   if (Number.isFinite(iv.hi)) return ` the links' cost is learned from the last ${W} split answers watched: likely ${r1(iv.lo)}\u{2013}${r1(iv.hi)} tok/s (8 in 10).`;
   return ` the links' cost is learned from the last ${W} split answers watched: likely ${r1(iv.lo)} tok/s or more (8 in 10).`;
+}
+
+/** is the split faster than the place alone: with the range's low end `lo`, when lo reaches it and the
+ *  guess est is above it (so the title never says "~3.5 tok/s; alone ~3.5"), each within slack; without
+ *  one, the point, est GAIN (gain) faster */
+export function splitFaster(est: number, lo: number | null, alone: number, gain: number, slack = 1): boolean {
+  return lo !== null ? lo * slack >= alone && est * slack > alone : est >= alone * gain;
+}
+
+/** the low end of the split's 80% range, or null when there is none to trust: no fit, no chain, fewer
+ *  than 3 ks, no range yet, or a seat of the split or of the place alone estimated from its bandwidth
+ *  (bench5 measured the rule with true speeds only) */
+export function lowEnd(S: Place, A: Place, hop: HopFit | undefined): number | null {
+  if (!hop || !S.chain || hop.ks.length < 3) return null;
+  if ([...S.seats, ...A.seats].some((x) => x.speed?.from === 'bandwidth')) return null;
+  const iv = hopInterval(chainTps(S.chain.computeMs, S.chain.links, hopK(hop)), hop.errs);
+  return iv ? iv.lo : null;
 }
 
 /** the planner's cards for one model in one look; strict to show, loose (SLACK) to stay; with a hop
@@ -99,7 +120,7 @@ export function plan(s: Snapshot, f: Field, m: EyeModel, strict: boolean, hop?: 
         title: `${m.name} fits only split: ${names(S.seats.map((x) => ({ name: seatName(s, x) })))} together hold it`,
         why: `it needs about ${gb1(m.needMb)}; the most one place offers is ${gb1(biggest)}. split, ${tpsWord(S.tps)}${S.tps ? ` (${from(S.seats)})` : ''}.${tonight(S.seats)}${hopWords(S, hop)}`,
       });
-    } else if (S.tps != null && A.tps != null && S.tps >= A.tps * gain) {
+    } else if (S.tps != null && A.tps != null && splitFaster(S.tps, lowEnd(S, A, hop), A.tps, gain, slack)) {
       cards.push({
         id: cardId('planner', 'split', m.id), kind: 'suggest', weight: 2, action: S.action, label: 'load split',
         title: `${m.name} would run faster split over ${names(S.seats.map((x) => ({ name: seatName(s, x) })))}: ~${S.tps} tok/s; alone ${where(s, A.seats[0])} ~${A.tps}`,
