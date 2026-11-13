@@ -38,7 +38,7 @@ export function repoRoots(): string[] {
   const pkg = packageRoot();
   roots.add(path.dirname(pkg));
   try {
-    const common = execFileSync('git', ['rev-parse', '--path-format=absolute', '--git-common-dir'], { cwd: pkg, stdio: ['ignore', 'pipe', 'ignore'] })
+    const common = execFileSync('git', ['rev-parse', '--path-format=absolute', '--git-common-dir'], { cwd: pkg, stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true })
       .toString().trim();
     if (common) roots.add(path.dirname(common));
   } catch {}

@@ -116,7 +116,7 @@ export async function detectGpu(): Promise<Gpu> {
       const vramMB = m ? Number(m[1]) * (m[2].toUpperCase() === 'GB' ? 1024 : 1) : 0;
       return { name: g.sppci_model ?? g._name ?? null, vramMB };
     }
-    const { stdout } = await execFileP('nvidia-smi', ['--query-gpu=name,memory.total', '--format=csv,noheader,nounits'], { timeout: 8000 });
+    const { stdout } = await execFileP('nvidia-smi', ['--query-gpu=name,memory.total', '--format=csv,noheader,nounits'], { timeout: 8000, windowsHide: true });
     const line = stdout.trim().split('\n')[0];
     if (!line) return { name: null, vramMB: 0 };
     const [name, mem] = line.split(',').map((s) => s.trim());

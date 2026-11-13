@@ -125,14 +125,14 @@ export function sha256File(file: string): Promise<string> {
 function run(cmd: string, args: string[], cwd: string, log: (s: string) => void): Promise<void> {
   return new Promise((resolve, reject) => {
     log(`$ ${cmd} ${args.join(' ')}`);
-    const p = spawn(cmd, args, { cwd, stdio: ['ignore', 'inherit', 'inherit'] });
+    const p = spawn(cmd, args, { cwd, stdio: ['ignore', 'inherit', 'inherit'], windowsHide: true });
     p.on('error', reject);
     p.on('exit', (code) => (code === 0 ? resolve() : reject(new Error(`${cmd} exited with ${code}`))));
   });
 }
 
 function have(cmd: string): boolean {
-  const r = spawnSync(cmd, ['--version'], { stdio: 'ignore' });
+  const r = spawnSync(cmd, ['--version'], { stdio: 'ignore', windowsHide: true });
   return !r.error;
 }
 
@@ -201,7 +201,7 @@ export async function planSetup(platform: string = process.platform, arch: strin
 }
 
 export const WINDOWS_FIREWALL_NOTE =
-  'windows: the first `kula-node share` makes windows defender firewall ask about kula-node; allow it on private networks only (that is your home wi-fi), never public';
+  'windows: when kula first opens itself to your network (kula-node share; in the app, "invite a device" or loading a file of this computer onto a phone), windows defender firewall asks about it (named kula or kula-node); allow it on private networks only (that is your home wi-fi), never public';
 
 export function describePlan(p: SetupPlan): string[] {
   const todo = p.downloads.filter((d) => !d.cached);
@@ -276,7 +276,7 @@ async function buildFromSource(plan: SetupPlan, log: Log): Promise<LlamaBinaries
 export function hasNvidia(): boolean {
   if (process.env.KULA_NVIDIA === '0') return false;
   if (process.env.KULA_NVIDIA === '1') return true;
-  const r = spawnSync('nvidia-smi', ['-L'], { stdio: 'ignore', timeout: 5000 });
+  const r = spawnSync('nvidia-smi', ['-L'], { stdio: 'ignore', timeout: 5000, windowsHide: true });
   return !r.error && r.status === 0;
 }
 
@@ -290,6 +290,13 @@ export async function fetchRelease(): Promise<Asset[]> {
   return rel.assets;
 }
 
+// On windows the tar of the system (bsdtar, reads zip), not whichever tar comes
+// first on the PATH (git's gnu tar does not read zip).
+export function tarProgram(platform: string = process.platform, env: NodeJS.ProcessEnv = process.env): string {
+  if (platform !== 'win32') return 'tar';
+  return path.win32.join(env.SystemRoot || 'C:\\Windows', 'System32', 'tar.exe');
+}
+
 // Linux and Windows: a release archive of the same tag.
 async function downloadRelease(plan: SetupPlan, log: Log): Promise<LlamaBinaries> {
   const dir = cacheDir();
@@ -301,7 +308,8 @@ async function downloadRelease(plan: SetupPlan, log: Log): Promise<LlamaBinaries
   fs.mkdirSync(out, { recursive: true });
   // tar reads zip too (bsdtar on windows 10+ and macOS; gnu tar on linux only
   // handles .tar.gz, and those are what linux gets)
-  for (const f of files) await run('tar', ['-xf', f, '-C', out], dir, log);
+  const tar = tarProgram();
+  for (const f of files) await run(tar, ['-xf', f, '-C', out], dir, log);
   const found = binariesUnder(out, 3);
   if (!found) {
     const rpc = RPC_NAMES.join(' or ');

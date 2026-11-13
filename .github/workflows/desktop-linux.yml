@@ -14,6 +14,7 @@ on:
     tags-ignore: ['**']
     paths:
       - 'desktop/**'
+      - '!desktop/tools/windows-smoke.ps1'
       - 'node/src/**'
       - 'node/package*.json'
       - '.github/workflows/desktop-linux.yml'

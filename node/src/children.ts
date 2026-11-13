@@ -49,7 +49,7 @@ export interface Child {
 
 export async function startChild(name: string, bin: string, args: string[], port: number, log: (s: string) => void, readyMs = 60000): Promise<Child> {
   log(`${name}: ${bin} ${args.join(' ')}`);
-  const proc = spawn(bin, args, { stdio: ['ignore', 'pipe', 'pipe'], env: childEnv(bin) });
+  const proc = spawn(bin, args, { stdio: ['ignore', 'pipe', 'pipe'], env: childEnv(bin), windowsHide: true });
   const tail: string[] = [];
   const onLine = (d: Buffer) => {
     for (const line of d.toString().split('\n')) {

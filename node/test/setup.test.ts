@@ -6,7 +6,7 @@ import path from 'node:path';
 import { createHash } from 'node:crypto';
 import release from './fixtures/release-b11157.json' with { type: 'json' };
 import { pickAsset, buildInstructions, parseSidecar, digestSha256 } from '../src/assets.ts';
-import { verifySidecar, planSetup, describePlan, placeCudaRuntime, SOURCE_SIZE, SOURCE_SHA256 } from '../src/llama.ts';
+import { verifySidecar, planSetup, describePlan, placeCudaRuntime, tarProgram, SOURCE_SIZE, SOURCE_SHA256 } from '../src/llama.ts';
 import { childEnv } from '../src/children.ts';
 import { bar, progressBar } from '../src/progress.ts';
 
@@ -197,4 +197,11 @@ test('childEnv: linux puts the program folder first on LD_LIBRARY_PATH, elsewher
   assert.equal(env.LD_LIBRARY_PATH, '/opt/x');
   assert.equal(childEnv('/h/bin/llama-server', 'darwin', env), env);
   assert.equal(childEnv('C:\\h\\llama-server.exe', 'win32', env), env);
+});
+
+test('tarProgram: windows takes the system tar.exe, not the first tar on the PATH; elsewhere tar', () => {
+  assert.equal(tarProgram('win32', { SystemRoot: 'D:\\Win' }), 'D:\\Win\\System32\\tar.exe');
+  assert.equal(tarProgram('win32', {}), 'C:\\Windows\\System32\\tar.exe');
+  assert.equal(tarProgram('linux', { SystemRoot: 'D:\\Win' }), 'tar');
+  assert.equal(tarProgram('darwin', {}), 'tar');
 });
