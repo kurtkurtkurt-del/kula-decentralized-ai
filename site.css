@@ -70,13 +70,16 @@ a.dl-btn:active { transform: translateY(0); }
 .dl-how li::before, .dl-needs li::before, .brain-points li::before { content: ""; position: absolute; left: 1px; top: .6em; width: 4px; height: 4px; border-radius: 50%; background: var(--meta); }
 .dl.is-later .dl-how { color: var(--meta); }
 .dl-how code, .dl-needs code { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 12px; overflow-wrap: anywhere; }
-.dl-needs { margin: 0 4px; font-size: 13px; line-height: 1.45; color: var(--mute); }
-.dl-needs summary { list-style: none; display: inline-flex; align-items: center; gap: 4px; cursor: pointer; color: var(--words); font-weight: 600; }
-.dl-needs summary::-webkit-details-marker { display: none; }
-.dl-needs summary svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; transition: transform .15s; }
-.dl-needs summary:hover { color: var(--accent); }
-.dl-needs[open] summary svg { transform: rotate(180deg); }
-.dl-needs ul { margin-top: 4px; }
+/* every card's steps fold out under it (closed at first), like the Mac's "what the first start needs" */
+.dl-needs, .dl-fold { margin: 0 4px; font-size: 13px; line-height: 1.45; color: var(--mute); }
+.dl-needs summary, .dl-fold summary { list-style: none; display: inline-flex; align-items: center; gap: 4px; cursor: pointer; color: var(--words); font-weight: 600; }
+.dl-needs summary::-webkit-details-marker, .dl-fold summary::-webkit-details-marker { display: none; }
+.dl-needs summary svg, .dl-fold summary svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; transition: transform .15s; }
+.dl-needs summary:hover, .dl-fold summary:hover { color: var(--accent); }
+.dl-needs[open] summary svg, .dl-fold[open] summary svg { transform: rotate(180deg); }
+.dl-needs ul, .dl-fold .dl-how { margin: 4px 0 0; }
+.dl.is-later .dl-fold summary { color: var(--meta); font-weight: 500; }
+.dl.is-later .dl-fold summary:hover { color: var(--mute); }
 
 /* the arrow on each button's right, and its menu */
 .more { flex: none; display: flex; }
