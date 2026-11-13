@@ -18,6 +18,10 @@
      kula-linux-arm64.deb (later kula-windows-x64.exe, kula-mac-x64.dmg). The repository is public:
      every download works without a GitHub login.
 
+     Two rows: computers on top, phones and tablets under them. No "for this device" mark: a
+     browser cannot tell an Intel Mac from Apple silicon, an ARM Linux from x64, or ChromeOS from
+     Linux, so the mark would often be wrong.
+
      Each button's arrow opens a small menu: the GitHub release, and building it yourself. An
      item whose link does not exist yet has no href, a data-slot name and data-todo: to fill it
      in, give it an href and drop data-todo. A "coming later" button becomes live the same way:
@@ -37,14 +41,14 @@
     <p class="lede">kula joins your phones, tablets and computers into one AI cluster that runs open
       models. They talk to each other directly — nothing goes to a cloud.</p>
 
-    <ul class="downloads" aria-label="download kula">
+    <h2 class="dl-group" id="dl-computers">computers</h2>
+    <ul class="downloads computers" aria-labelledby="dl-computers">
       <li class="dl" data-os="mac">
         <div class="dl-row">
           <a class="dl-btn" href="https://github.com/kurtkurtkurt-del/kula-decentralized-ai/releases/latest/download/kula-mac-arm64.dmg">
             <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="5" width="16" height="11" rx="1.5"/><path d="M2 19h20"/></svg>
-            <span class="dl-name">MacBook</span>
+            <span class="dl-name">Mac</span>
             <span class="dl-file">Apple silicon · .dmg</span>
-            <span class="dl-here">for this device</span>
           </a>
           <details class="more">
             <summary aria-label="more ways to get kula for Mac"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 10 5 5 5-5"/></svg></summary>
@@ -57,15 +61,18 @@
             </div>
           </details>
         </div>
-        <p class="dl-how">Drag kula to Applications. First open: right-click it → <b>Open</b> (macOS 15: Privacy &amp; Security → <b>Open Anyway</b>).</p>
+        <ul class="dl-how">
+          <li>Drag kula to Applications.</li>
+          <li>First open: right-click → <b>Open</b> (macOS 15: Privacy &amp; Security → <b>Open Anyway</b>).</li>
+          <li>The first start builds llama.cpp: 5–10 minutes, once.</li>
+        </ul>
       </li>
       <li class="dl" data-os="linux">
         <div class="dl-row">
           <a class="dl-btn" href="https://github.com/kurtkurtkurt-del/kula-decentralized-ai/releases/latest/download/kula-linux-x64.deb">
             <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="14" rx="1.5"/><path d="m7 9 3 2.5L7 14M12 14h5"/></svg>
             <span class="dl-name">Linux</span>
-            <span class="dl-file">Ubuntu/Debian x64 · .deb</span>
-            <span class="dl-here">for this device</span>
+            <span class="dl-file">Ubuntu, Debian · x64 .deb</span>
           </a>
           <details class="more">
             <summary aria-label="more ways to get kula for Linux"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 10 5 5 5-5"/></svg></summary>
@@ -76,7 +83,12 @@
             </div>
           </details>
         </div>
-        <p class="dl-how">Ubuntu 24.04: in a terminal, <b>sudo apt install ./kula-linux-x64.deb</b> (ARM: kula-linux-arm64.deb), then open kula from the app menu. The first start downloads llama.cpp (about 17 MB; with an NVIDIA card the CUDA build and its runtime, about 764 MB, ARM 698 MB). Checked only on GitHub's Ubuntu 24.04 test machines so far, which have no graphics card: first start, and a small model loaded and answered on the CPU. Not yet on a real desktop, not on a real NVIDIA card, not yet in a cluster with a phone.</p>
+        <ul class="dl-how">
+          <li>Install: <code>sudo apt install ./kula-linux-x64.deb</code></li>
+          <li>Open kula from the app menu.</li>
+          <li>The first start downloads llama.cpp: 17 MB (with an NVIDIA card about 764 MB).</li>
+          <li>Tested only on GitHub's Ubuntu 24.04 test machines: a small model answered. Not yet on a real desktop or an NVIDIA card.</li>
+        </ul>
       </li>
       <li class="dl is-later" data-os="windows">
         <div class="dl-row">
@@ -93,32 +105,20 @@
             </div>
           </details>
         </div>
-        <p class="dl-how">Not built yet: the desktop app has not run on Windows.</p>
+        <ul class="dl-how">
+          <li>Not built yet.</li>
+        </ul>
       </li>
-      <li class="dl is-later" data-os="ios">
-        <div class="dl-row">
-          <div class="dl-btn" aria-disabled="true">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="7" y="2.5" width="10" height="19" rx="2.5"/><path d="M11 18.5h2"/></svg>
-            <span class="dl-name">iOS</span>
-            <span class="dl-file">coming later</span>
-          </div>
-          <details class="more">
-            <summary aria-label="more ways to get kula for iOS"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 10 5 5 5-5"/></svg></summary>
-            <div class="menu">
-              <a data-slot="ios-release" data-todo><b>GitHub release</b><span>nothing yet</span></a>
-              <a data-slot="ios-build" data-todo><b>build it yourself</b><span>nothing yet</span></a>
-            </div>
-          </details>
-        </div>
-        <p class="dl-how">The iPhone app does not run models yet.</p>
-      </li>
+    </ul>
+
+    <h2 class="dl-group" id="dl-phones">phones and tablets</h2>
+    <ul class="downloads phones" aria-labelledby="dl-phones">
       <li class="dl" data-os="android">
         <div class="dl-row">
           <a class="dl-btn" href="https://github.com/kurtkurtkurt-del/kula-decentralized-ai/releases/latest/download/kula-android.apk">
             <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="2.5" width="12" height="19" rx="2.5"/><path d="M10 5h4"/><circle cx="12" cy="18" r=".6"/></svg>
             <span class="dl-name">Android</span>
             <span class="dl-file">phones &amp; tablets · .apk</span>
-            <span class="dl-here">for this device</span>
           </a>
           <details class="more">
             <summary aria-label="more ways to get kula for Android"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 10 5 5 5-5"/></svg></summary>
@@ -129,77 +129,103 @@
             </div>
           </details>
         </div>
-        <p class="dl-how">Open the apk and <b>allow installing from this source</b> when Android asks.</p>
+        <ul class="dl-how">
+          <li>Open the apk.</li>
+          <li>When Android asks, <b>allow installing from this source</b>.</li>
+        </ul>
+      </li>
+      <li class="dl is-later" data-os="ios">
+        <div class="dl-row">
+          <div class="dl-btn" aria-disabled="true">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="7" y="2.5" width="10" height="19" rx="2.5"/><path d="M11 18.5h2"/></svg>
+            <span class="dl-name">iPhone, iPad</span>
+            <span class="dl-file">coming later</span>
+          </div>
+          <details class="more">
+            <summary aria-label="more ways to get kula for iOS"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 10 5 5 5-5"/></svg></summary>
+            <div class="menu">
+              <a data-slot="ios-release" data-todo><b>GitHub release</b><span>nothing yet</span></a>
+              <a data-slot="ios-build" data-todo><b>build it yourself</b><span>nothing yet</span></a>
+            </div>
+          </details>
+        </div>
+        <ul class="dl-how">
+          <li>The iPhone app does not run models yet.</li>
+        </ul>
       </li>
     </ul>
-    <p class="closed-test"><b>On a Mac, once.</b> The app builds llama.cpp on its first start (5–10 minutes) and needs
-      Apple's command line tools and cmake for it: <code>xcode-select --install</code>, then
-      <code>brew install cmake ninja</code> (<a href="https://brew.sh">Homebrew</a>). If macOS still refuses to open
-      the app: <code>xattr -cr /Applications/kula.app</code> in Terminal.</p>
+
+    <div class="closed-test">
+      <b>Mac: what the first start needs</b>
+      <ul>
+        <li>Apple's command line tools: <code>xcode-select --install</code></li>
+        <li>cmake: <code>brew install cmake ninja</code> (<a href="https://brew.sh">Homebrew</a>)</li>
+        <li>If macOS still refuses to open it: <code>xattr -cr /Applications/kula.app</code> in Terminal</li>
+      </ul>
+    </div>
   </section>
 
   <section class="news wrap" aria-labelledby="news-h0">
     <h2 id="news-h0">what's new in 0.4.0</h2>
     <ul class="news-list">
-      <li><b>the brain measures itself.</b> Every branch's guesses are scored on replay benches; a
-        new method stays only when it wins. Device forecasts are twice as accurate and follow a
-        changed habit within days.</li>
-      <li><b>split across the internet, priced honestly.</b> kula learns what each link costs a
-        split and says the speed it expects as a range.</li>
-      <li><b>safer between friends.</b> A rewritten ledger is never "all clear", a card loads only
-        where it says, and peer names cannot hide characters.</li>
-      <li><b>still your call.</b> The brain watches, warns and suggests; you press. The phone app
-        stays 0.3.0 this time.</li>
+      <li><b>Linux app.</b> kula installs on Ubuntu and Debian computers as a normal app.</li>
+      <li><b>Better guesses about your devices.</b> kula guesses when each device will be free.
+        These guesses are now tested against recorded days and are about twice as accurate.</li>
+      <li><b>Speed estimates for a model shared over the internet.</b> kula measures each connection
+        and says how fast it expects the model to run, as a range.</li>
+      <li><b>Safety fixes between friends.</b> A device that rewrites its own history is no longer
+        shown as "all clear", and device names cannot hide characters.</li>
+      <li><b>The phone app is unchanged.</b> It stays at 0.3.0 this time.</li>
     </ul>
   </section>
 
   <section class="news wrap" aria-labelledby="news-h">
     <h2 id="news-h">what's new in 0.3.0</h2>
     <ul class="news-list">
-      <li><b>the brain suggests, you decide.</b> Every branch can now put a card on the brain panel,
-        on the computer and on the phone. Nothing happens until you press it.</li>
-      <li><b>your devices and your friends', nobody else.</b> A device is yours or a friend's;
-        strangers take no part. Every request is checked before it leaves your devices.</li>
-      <li><b>the phone has the same brain.</b> The twelve branches run on the phone too, from the
-        same source as the computer's.</li>
-      <li><b>night replay.</b> Play last night back in 30 seconds: which devices worked, on what,
+      <li><b>Suggestions you approve.</b> kula shows suggestions as cards on the computer and the
+        phone. Nothing happens until you press one.</li>
+      <li><b>Only your devices and your friends'.</b> Each device is yours or a friend's; unknown
+        devices cannot join. Every request is checked before it leaves your devices.</li>
+      <li><b>The phone has the same brain as the computer.</b> All twelve parts run on the phone
+        too, from the same code.</li>
+      <li><b>Last night in 30 seconds.</b> A replay shows which devices worked overnight, on what,
         and how many tokens.</li>
-      <li><b>"its owner cannot see the job".</b> A phone proves it with its hardware; 0.3.0 is the
-        first apk signed with kula's own key (uninstall 0.2.0 first).</li>
+      <li><b>Proof that a phone's owner cannot see the job.</b> The phone proves it with its
+        hardware. Uninstall the 0.2.0 app first: 0.3.0 is signed with a new key.</li>
     </ul>
   </section>
 
   <section class="news wrap" aria-labelledby="news-h2">
     <h2 id="news-h2">what's new in 0.2.0</h2>
     <ul class="news-list">
-      <li><b>the brain.</b> kula-node runs an observer over your devices, and the chat page draws
-        its twelve branches as a map around this computer. It looks every 5 seconds.</li>
-      <li><b>the black box.</b> A hash-chained record of everything the eye saw and said: a changed
-        line shows. It holds no prompts, answers, keys or addresses.</li>
-      <li><b>photos in the computer's chat.</b> A <b>+</b> takes up to three photos and asks which
-        vision model should see them (SmolVLM 500M, SmolVLM2 2.2B, Gemma 3 4B).</li>
-      <li><b>the phone's security report.</b> The brain tab's trust and verification: one verdict
-        for the cluster, with every paired device's checks under it.</li>
-      <li><b>unpair.</b> A paired phone or computer can have its access removed, from the phone
-        and from kula-node.</li>
-      <li><b>the desktop app.</b> kula's own icon, and a first start that lists what building
-        llama.cpp needs before setup runs.</li>
+      <li><b>The brain.</b> kula-node watches your devices every 5 seconds; the chat page shows its
+        twelve parts as a map around this computer.</li>
+      <li><b>A tamper-evident log.</b> Everything the brain saw and said is kept in a chained
+        record; a changed line shows. No prompts, answers, keys or addresses in it.</li>
+      <li><b>Photos in the computer's chat.</b> The <b>+</b> adds up to three photos and asks which
+        vision model should look at them.</li>
+      <li><b>A security report on the phone.</b> One verdict for the whole cluster, with each
+        paired device's checks under it.</li>
+      <li><b>Remove a device's access.</b> A paired phone or computer can be unpaired, from the
+        phone or from kula-node.</li>
+      <li><b>Desktop app.</b> kula's own icon, and a first start that lists what building
+        llama.cpp needs.</li>
     </ul>
   </section>
 
   <section class="band">
     <figure class="shot">
-      <picture><source srcset="chat-light.webp" media="(prefers-color-scheme: light)"><img src="chat-dark.webp" width="2000" height="1250" alt="kula on a Mac: the chat with its + for photos, and the brain as a map of twelve branches around this computer."></picture>
+      <picture><source srcset="chat-light.webp" media="(prefers-color-scheme: light)"><img src="chat-dark.webp" width="2000" height="1250" alt="kula on a Mac: the chat, and the brain as a map of twelve parts around this computer."></picture>
     </figure>
     <div class="brain wrap" aria-labelledby="brain-h">
       <h2 id="brain-h"><span class="dot" aria-hidden="true"></span>the brain</h2>
-      <p>God's eye over your devices, on the right of the picture: kula-node takes a look every
-        5 seconds and <b>twelve branches</b> say what they see. A <b>guard</b> cleans every look
-        first. It <b>never acts by itself</b>: it suggests, as cards, and only your tap carries one out. A <b>black box</b>
-        keeps a hash-chained record of everything it saw and said — a changed line shows — with
-        no prompts, answers, keys or addresses in it. Its <b>learn</b> tab collects papers, videos
-        and courses on local AI.</p>
-      <ul class="branches" aria-label="the twelve branches">
+      <ul class="brain-points">
+        <li>Shown on the right of the picture: kula-node looks at your devices every <b>5 seconds</b>, and <b>twelve parts</b> say what they see.</li>
+        <li>It <b>never acts by itself</b>: it suggests with cards, and only your tap carries one out.</li>
+        <li>A <b>tamper-evident log</b> keeps everything it saw and said, with no prompts, answers, keys or addresses in it.</li>
+        <li>Its <b>learn</b> tab collects papers, videos and courses on local AI.</li>
+      </ul>
+      <ul class="branches" aria-label="the twelve parts">
         <li><b>senses</b> who is here, how much memory, how fast</li>
         <li><b>memory</b> what changed, and why</li>
         <li><b>forecast</b> when each device will be free tonight</li>
@@ -246,17 +272,8 @@
 </footer>
 
 <script>
-  // highlight the visitor's own platform (an iPad that says "Macintosh" but has touch is iOS);
   // keep one arrow menu open at a time, close it on a click elsewhere or Escape
   (function () {
-    var ua = navigator.userAgent || '', p = (navigator.userAgentData && navigator.userAgentData.platform) || navigator.platform || '';
-    var os = /android/i.test(ua) ? 'android'
-      : /iphone|ipad|ipod/i.test(ua) || (/mac/i.test(p) && navigator.maxTouchPoints > 1) ? 'ios'
-      : /win/i.test(p) || /windows/i.test(ua) ? 'windows'
-      : /mac/i.test(p) || /mac os/i.test(ua) ? 'mac'
-      : /linux/i.test(p) || /linux/i.test(ua) ? 'linux' : '';
-    var li = os && document.querySelector('.dl[data-os="' + os + '"]');
-    if (li) li.classList.add('is-here');
     var menus = document.querySelectorAll('details.more');
     function closeAll(except) { menus.forEach(function (d) { if (d !== except) d.open = false; }); }
     menus.forEach(function (d) { d.addEventListener('toggle', function () { if (d.open) closeAll(d); }); });

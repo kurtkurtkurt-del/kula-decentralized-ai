@@ -1,6 +1,6 @@
 # kula decentralized ai
 
-**[kula's site: kurtkurtkurt-del.github.io/kula-decentralized-ai](https://kurtkurtkurt-del.github.io/kula-decentralized-ai/) — the download links (Android app, Mac app, kula-node) are there.**
+**[kula's site: kurtkurtkurt-del.github.io/kula-decentralized-ai](https://kurtkurtkurt-del.github.io/kula-decentralized-ai/) — the download links (Android app, Mac app, Linux app, kula-node) are there.**
 
 **join your phones, tablets and computers into one local AI cluster that runs open models.**
 
@@ -28,62 +28,64 @@ on a branch, never built).
 
 ## what's new in 0.4.0
 
-- **the brain measures itself.** Seven replay benches score every branch's guesses against plain
-  baselines, and a new method only stays when it wins there. Tonight's forecast says when a device
-  will be there with half the error of 0.3.0 and catches a changed habit within days; reach and
-  speed guesses carry an 80% range.
-- **split across the internet, priced honestly.** The planner learns what each link really costs a
-  split from the split's own answers (a far link was off by 179%, now about 7%), may prefer a near
-  phone to a far fast one, and the split card says the speed it expects as a range.
-- **phones in a split are seen.** A phone holding layers that keeps dropping out gets a card; one
-  working for 25 minutes gets a rest warning; its energy and night window count.
-- **safer between friends.** A friend's device can no longer rewrite its ledger and stay "all
-  clear", on the computer or the phone; a tap on a card loads only where the card says; the local
-  page no longer hands its address to other programs; peer names cannot carry hidden characters; an
-  honest day/night rhythm no longer turns a device red.
-- **the brain still decides nothing.** It watches, warns and suggests; you press.
-- **reaching friends far away:** the research and a plain proposal for joining devices across the
-  internet without a server of ours ([docs/network](docs/network/SUNUM.md)). No network code yet.
-- No new apk in 0.4.0: the phone app stays 0.3.0, so the phone-side fixes ship with the next apk.
+- **Linux app.** kula installs on Ubuntu and Debian computers as a normal app (`.deb`, for Intel/AMD
+  and ARM). So far it is tested only on GitHub's Ubuntu 24.04 test machines: it starts, and a small
+  model loads and answers.
+- **Better guesses about your devices.** kula guesses when each device will be free tonight. Every
+  guessing method is now tested against recorded days, and a new method is kept only if it does
+  better. The guesses are about twice as accurate as in 0.3.0 and adjust within days when your
+  habits change. Speed and reach guesses now come with a range (80% likely to fall inside it).
+- **Speed estimates for a model shared over the internet.** When one model is split across devices
+  that are far apart, kula measures what each connection costs and says the expected speed as a
+  range. On a far link its estimate was off by 179%; now by about 7%. It may pick a nearby phone
+  over a faster device far away.
+- **Warnings about phones in a split.** A phone that keeps dropping out gets a card; one that has
+  worked for 25 minutes gets a rest warning. Its battery and night hours count.
+- **Safety fixes between friends.** A friend's device that rewrites its own history is no longer
+  shown as "all clear" (computer and phone). A suggestion card loads a model only on the device it
+  names. The local page no longer gives its address to other programs. Device names cannot contain
+  hidden characters. A normal day/night pattern no longer marks a device red.
+- **You still decide.** kula watches, warns and suggests; nothing happens until you press.
+- **Plan for reaching friends far away.** Research and a proposal for connecting devices over the
+  internet without a kula server ([docs/network](docs/network/SUNUM.md)). No network code yet.
+- **The phone app is unchanged.** It stays at 0.3.0; the phone-side fixes come with the next apk.
 
 ## what's new in 0.3.0
 
-- **the brain suggests, you decide.** Every branch may now suggest or warn as a card on the brain
-  panel (computer and phone). Nothing happens until you press it: then kula loads, unloads, fetches
-  or looks again exactly as your own buttons would. The planner, executor, models and advisor
-  branches make real cards from what they measured ("Gemma 3 4B would run faster split over mac and
-  tablet").
-- **your devices and your friends', nobody else.** A device is *home* (yours) or *circle* (a
-  friend's); strangers take no part. The review branch sorts every request into private,
-  friends-ok or world-ok by named rules and keeps a key, a password or an injected order from going
-  anywhere unseen.
-- **the phone has the same brain.** The twelve branches run on the phone too, from the same source
-  as the computer's, with the cards on the brain tab.
-- **night replay.** Play last night back in 30 seconds: which devices worked, on what, how many
+- **Suggestions you approve.** kula can now suggest or warn with a card on the brain panel
+  (computer and phone). Nothing happens until you press it; then kula loads, unloads, downloads or
+  looks again, the same as your own buttons. Cards come from real measurements, for example
+  "Gemma 3 4B would run faster split over mac and tablet".
+- **Only your devices and your friends'.** Each device is marked *home* (yours) or *circle* (a
+  friend's); unknown devices take no part. Every request is sorted into private, friends-ok or
+  world-ok by named rules, so a key, a password or a hidden instruction cannot leave unseen.
+- **The phone has the same brain as the computer.** All twelve parts run on the phone too, from the
+  same code, with the cards on the brain tab.
+- **Last night in 30 seconds.** A replay shows which devices worked overnight, on what, and how many
   tokens (*replay* on the brain panel, or `kula-node brain replay`).
-- **"its owner cannot see the job".** A phone proves it with Android's hardware key attestation
-  (a locked bootloader, verified boot, the official kula build); the security report shows it.
-  0.3.0 is the first apk signed with kula's own release key, so this can say yes. Uninstall the
-  0.2.0 app first: Android does not update an app signed with another key.
-- **between homes.** The design of friends lending their devices' nights to each other (offers,
-  asks, checks with known answers, signed receipts, credit along friendships, no money):
+- **Proof that a phone's owner cannot see the job.** The phone proves it with Android's hardware key
+  attestation (locked bootloader, verified boot, the official kula build); the security report shows
+  it. 0.3.0 is the first apk signed with kula's own key: uninstall 0.2.0 first, because Android does
+  not update an app signed with another key.
+- **Plan for friends lending devices to each other.** The design for friends sharing their devices'
+  night hours (offers, requests, spot checks, signed receipts, no money):
   [docs/BEYIN-NET.md](docs/BEYIN-NET.md), with a 20-home simulation. No network code yet.
 - **MIT licence** for kula's own code.
 
 ## what's new in 0.2.0
 
-- **the brain.** kula-node on the computer runs an observer over the cluster, god's eye. The
-  chat page draws its twelve branches as a map around this computer; it looks every 5 seconds.
-- **the black box.** A hash-chained record of everything the eye saw and said. A changed line
-  breaks the chain and the memory branch says so. It holds no prompts, answers, keys or addresses.
-- **photos in the computer's chat.** A **+** in the message box takes up to three photos and asks
-  which vision model should see them (SmolVLM 500M, SmolVLM2 2.2B, Gemma 3 4B).
-- **the phone's security report.** The brain tab's *trust and verification*: one verdict for the
-  cluster (green all clear, red look at this), with every paired device's checks under it.
-- **remove a device's access.** A paired phone or computer can be unpaired, from the phone and
-  from kula-node; the gate refuses it from then on.
-- **the desktop app.** kula's own icon, and a first start that lists what building llama.cpp
-  needs (command line tools, cmake) before setup runs.
+- **The brain.** kula-node on the computer watches all your devices every 5 seconds. The chat page
+  shows its twelve parts as a map around this computer.
+- **A tamper-evident log.** Everything the brain saw and said is kept in a chained record; if a line
+  is changed, the chain breaks and kula says so. It holds no prompts, answers, keys or addresses.
+- **Photos in the computer's chat.** The **+** in the message box adds up to three photos and asks
+  which vision model should look at them (SmolVLM 500M, SmolVLM2 2.2B, Gemma 3 4B).
+- **A security report on the phone.** One verdict for the whole cluster (green: all clear, red: look
+  at this), with each paired device's checks under it.
+- **Remove a device's access.** A paired phone or computer can be unpaired, from the phone or from
+  kula-node; it is refused from then on.
+- **Desktop app.** kula's own icon, and a first start that lists what building llama.cpp needs
+  (command line tools, cmake) before it begins.
 
 ## try it
 
