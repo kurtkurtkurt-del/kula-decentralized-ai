@@ -82,7 +82,7 @@ test('the scorecard of every scenario, seed 1', () => {
 test('1: the same seed gives the same scorecard, another seed another one', () => {
   for (const name of SCENARIOS) {
     assert.deepStrictEqual(run(name, 1), card(name), `${name}: seed 1 twice`);
-    assert.notDeepStrictEqual(run(name, 2), card(name), `${name}: seed 2`);
+    assert.notDeepStrictEqual(v3Card(name, 2), card(name), `${name}: seed 2`);
   }
 });
 
@@ -320,16 +320,25 @@ test('P37 A3b (prediction): calibration and the rate\'s 80% cover hold on weekly
   }
 });
 
-test('P37 printed: v1, v2, v3 and createFixed(8) on the flip; v1, v2, v3 on weekly and coin, seeds 1 and 2', () => {
+/** the runs made only to print (v1 on the flip, createFixed(8), v1 on seed 2) run with KULA_BENCH_PRINT=1 */
+const PRINT_ALL = process.env.KULA_BENCH_PRINT === '1';
+
+test('P37 printed: v2 and v3 on the flip; v2, v3 on weekly and coin, seeds 1 and 2 (v1 and createFixed(8) with KULA_BENCH_PRINT=1)', () => {
   const r = (x: number | null): string => (x === null ? '-' : x.toFixed(6));
-  const s1 = flipOf('v1', createFixed(V1), 1);
-  console.log(`flip v1 (seed 1 only): week1 ${r(s1.week1)} \u{b7} d3to10 ${r(s1.d3to10)} \u{b7} whole ${r(s1.whole)} \u{b7} before ${r(s1.before)} \u{b7} lag ${s1.lag} d`);
-  for (const [which, mk] of [['v2', createV2], ['v3', undefined], ['fixed8', createFixed(8)]] as [string, Maker][]) {
+  if (PRINT_ALL) {
+    const s1 = flipOf('v1', createFixed(V1), 1);
+    console.log(`flip v1 (seed 1 only): week1 ${r(s1.week1)} \u{b7} d3to10 ${r(s1.d3to10)} \u{b7} whole ${r(s1.whole)} \u{b7} before ${r(s1.before)} \u{b7} lag ${s1.lag} d`);
+  }
+  const makers: [string, Maker][] = [['v2', createV2], ['v3', undefined]];
+  if (PRINT_ALL) makers.push(['fixed8', createFixed(8)]);
+  for (const [which, mk] of makers) {
     const m = flipMean(which, mk);
     console.log(`flip ${which} (mean of seeds 1-5): week1 ${r(m.week1)} \u{b7} d3to10 ${r(m.d3to10)} \u{b7} whole ${r(m.whole)} \u{b7} before ${r(m.before)} \u{b7} median lag ${m.lag} d \u{b7} control coin brier ${r(m.coin)} \u{b7} office brier ${r(m.office)}`);
   }
   for (const name of ['weekly', 'coin'] as const) for (const seed of [1, 2]) {
-    const rows: [string, Card][] = [['v1', seed === 1 ? v1Card(name, 1) : runV1(name, seed)], ['v2', v2Card(name, seed)], ['v3', v3Card(name, seed)]];
+    const rows: [string, Card][] = [['v2', v2Card(name, seed)], ['v3', v3Card(name, seed)]];
+    if (seed === 1) rows.unshift(['v1', v1Card(name, 1)]);
+    else if (PRINT_ALL) rows.unshift(['v1', runV1(name, seed)]);
     for (const [which, c] of rows) {
       const f = c.forecast;
       const d0 = f.brier === null || f.brier0 === null ? null : f.brier - f.brier0;
