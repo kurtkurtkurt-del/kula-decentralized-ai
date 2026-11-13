@@ -84,6 +84,26 @@ export function reachRate(name: string, id: string): number | null {
   return null;
 }
 
+// ---- L11 P62: a drift for bench7 (not in SCENARIOS2, not in scenario2)
+
+/** the look from which drifty answers at 0.70 instead of 0.95 */
+export const DRIFT_AT = 720;
+
+/** drift: 1440 looks. One device on wi-fi, drifty, answers at 0.95 before look DRIFT_AT and at
+ *  0.70 from it, in 20±3 ms. Its own stream. */
+export function* drift(seed: number, looks = 1440): Generator<Snapshot> {
+  const rng = rngFor('drift', seed);
+  for (let i = 0; i < looks; i++) {
+    const t = START + i * MIN;
+    const there = rng() < driftRate(i);
+    const ms = Math.max(1, Math.round(20 + 3 * gauss(rng)));
+    yield snapshot(t, [probed('drifty', there, t, ms, 'wifi')]);
+  }
+}
+
+/** drifty's true chance of answering at look i */
+export const driftRate = (i: number): number => (i >= DRIFT_AT ? 0.70 : 0.95);
+
 /** a scenario's stream by name; speed is synth.ts's own */
 export function scenario2(name: Scenario2Name, seed: number): Iterable<Snapshot> {
   switch (name) {

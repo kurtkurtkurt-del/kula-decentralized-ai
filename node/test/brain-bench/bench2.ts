@@ -20,7 +20,7 @@ import { fromSnapshots, snapshotOf, type BenchLook } from './bench.ts';
 import { create as makeSenses } from '../../src/godseye/branches/senses.ts';
 import { create as makeLearning } from '../../src/godseye/branches/learning.ts';
 import { create as makeConnections, usualMs } from '../../src/godseye/branches/connections.ts';
-import { freshMix, reachExperts, saneMix, EXPERTS } from '../../src/godseye/branches/reach.ts';
+import { freshMix, reachExperts, saneMix, EXPERTS, type ReachMix } from '../../src/godseye/branches/reach.ts';
 import type { Branch, BranchCtx, Snapshot } from '../../src/godseye/types.ts';
 
 export { fromSnapshots };
@@ -122,7 +122,15 @@ export function interval(est: number, errs: number[]): { lo: number; hi: number 
   return { lo: est / (1 + q), hi: q >= 1 ? Infinity : est / (1 - q) };
 }
 
-export interface Bench2Opts { shiftAt?: number; shiftTo?: number; rate?: (id: string) => number | null }
+/** one scored reach outcome as bench2 saw it (L11 P62): look i, the device, the outcome y,
+ *  learning's p and alpha from the notes of the look before, and the blend's mix (null while none) */
+export interface ReachSeen { i: number; id: string; y: 0 | 1; p: number; alpha: number; m: ReachMix | null }
+
+export interface Bench2Opts {
+  shiftAt?: number; shiftTo?: number; rate?: (id: string) => number | null;
+  /** called once per scored reach outcome, after it is counted; reads only */
+  eachReach?: (a: ReachSeen) => void;
+}
 
 /** the stream of looks through senses, learning and connections, scored. lag counts the ok
  *  readings at or after look shiftAt (default 720) before a guess is within 20% of shiftTo
@@ -206,6 +214,7 @@ export function runBench2(looks: Iterable<BenchLook>, opts: Bench2Opts = {}): Sc
             if (m.lo <= rate && rate <= m.hi) r.cov++;
             r.width += m.hi - m.lo;
           }
+          opts.eachReach?.({ i, id: d.id, y, p, alpha: lr.alpha, m });
         } else r.skipped++;
         r.last = y;
         r.sum += y;
