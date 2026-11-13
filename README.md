@@ -48,7 +48,9 @@ on a branch, never built).
 - **You still decide.** kula watches, warns and suggests; nothing happens until you press.
 - **Plan for reaching friends far away.** Research and a proposal for connecting devices over the
   internet without a kula server ([docs/network](docs/network/SUNUM.md)). No network code yet.
-- **The phone app is unchanged.** It stays at 0.3.0; the phone-side fixes come with the next apk.
+- **New Android app (0.4.0).** It brings the phone-side fixes: a pairing code is checked before it
+  is used, devices paired with an older version are repaired, the phone's check of a friend's
+  history works, and the brain tab's names and words are fixed. It installs over 0.3.0.
 
 ## what's new in 0.3.0
 
@@ -109,8 +111,8 @@ The repository is public: every file downloads without a login.
 ### the phone (and tablet)
 
 1. Download the apk on the phone (or copy it over), open it, and allow installing from that
-   source when Android asks. The apk is **debug-signed** for now: it installs fine for testing,
-   but a later properly signed build will not update over it (uninstall first then).
+   source when Android asks. The apk is signed with kula's own key (since 0.3.0), so a new
+   version installs over the old one. Coming from 0.2.0, uninstall that first.
 2. Open kula. No account is needed to run models or join devices.
 3. **passport** tab → **measure**: a few seconds of measuring memory, bandwidth, cpu, heat.
    Everything about which model fits is read from this.

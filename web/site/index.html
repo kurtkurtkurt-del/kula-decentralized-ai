@@ -175,12 +175,13 @@
         and says how fast it expects the model to run, as a range.</li>
       <li><b>Safety fixes between friends.</b> A device that rewrites its own history is no longer
         shown as "all clear", and device names cannot hide characters.</li>
-      <li><b>The phone app is unchanged.</b> It stays at 0.3.0 this time.</li>
+      <li><b>New Android app.</b> Version 0.4.0, with fixes for pairing and the brain tab. It
+        installs over 0.3.0.</li>
     </ul>
   </section>
 
-  <section class="news wrap" aria-labelledby="news-h">
-    <h2 id="news-h">what's new in 0.3.0</h2>
+  <details class="news news-old wrap">
+    <summary><h2 id="news-h">what's new in 0.3.0</h2><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 10 5 5 5-5"/></svg></summary>
     <ul class="news-list">
       <li><b>Suggestions you approve.</b> kula shows suggestions as cards on the computer and the
         phone. Nothing happens until you press one.</li>
@@ -193,10 +194,10 @@
       <li><b>Proof that a phone's owner cannot see the job.</b> The phone proves it with its
         hardware. Uninstall the 0.2.0 app first: 0.3.0 is signed with a new key.</li>
     </ul>
-  </section>
+  </details>
 
-  <section class="news wrap" aria-labelledby="news-h2">
-    <h2 id="news-h2">what's new in 0.2.0</h2>
+  <details class="news news-old wrap">
+    <summary><h2 id="news-h2">what's new in 0.2.0</h2><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 10 5 5 5-5"/></svg></summary>
     <ul class="news-list">
       <li><b>The brain.</b> kula-node watches your devices every 5 seconds; the chat page shows its
         twelve parts as a map around this computer.</li>
@@ -211,7 +212,7 @@
       <li><b>Desktop app.</b> kula's own icon, and a first start that lists what building
         llama.cpp needs.</li>
     </ul>
-  </section>
+  </details>
 
   <section class="band">
     <figure class="shot">
@@ -220,11 +221,14 @@
     <div class="brain wrap" aria-labelledby="brain-h">
       <h2 id="brain-h"><span class="dot" aria-hidden="true"></span>the brain</h2>
       <ul class="brain-points">
-        <li>Shown on the right of the picture: kula-node looks at your devices every <b>5 seconds</b>, and <b>twelve parts</b> say what they see.</li>
+        <li>kula-node looks at your devices every <b>5 seconds</b>, and <b>twelve parts</b> say what they see (the map in the picture).</li>
         <li>It <b>never acts by itself</b>: it suggests with cards, and only your tap carries one out.</li>
         <li>A <b>tamper-evident log</b> keeps everything it saw and said, with no prompts, answers, keys or addresses in it.</li>
         <li>Its <b>learn</b> tab collects papers, videos and courses on local AI.</li>
       </ul>
+      <figure class="brain-shot">
+        <picture><source srcset="brain-light.webp" media="(prefers-color-scheme: light)"><img src="brain-dark.webp" width="758" height="1410" loading="lazy" alt="kula's brain map in the app: the twelve parts in a ring around this computer, which has Qwen3 0.6B loaded; five parts are fine and seven quiet, with the answering speed (26.7 tokens a second) and the executor's card under the map."></picture>
+      </figure>
       <ul class="branches" aria-label="the twelve parts">
         <li><b>senses</b> who is here, how much memory, how fast</li>
         <li><b>memory</b> what changed, and why</li>
