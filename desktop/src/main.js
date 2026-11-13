@@ -97,9 +97,14 @@ async function ensureLlama() {
   if (!(await macReady())) return;
   say('step', 'setting up llama.cpp b11157: once on this computer, a few minutes');
   for (;;) {
-    const s = run(['setup'], (l) => say('line', l));
-    if ((await s.done) === 0) { say('step', 'llama.cpp is ready'); return; }
-    say('failed', 'setup did not finish. the lines above say why (on a mac: xcode-select --install, then brew install cmake ninja).');
+    // setup lines also go to stdout, so a run without anyone at the window (CI) shows its progress
+    const s = run(['setup'], (l) => { console.log(`setup: ${l}`); say('line', l); });
+    const code = await s.done;
+    console.log(`kula: setup exited ${code}`);
+    if (code === 0) { say('step', 'llama.cpp is ready'); return; }
+    say('failed', process.platform === 'darwin'
+      ? 'setup did not finish. the lines above say why (on a mac: xcode-select --install, then brew install cmake ninja).'
+      : 'setup did not finish. the lines above say why.');
     if ((await waitForChoice()) === 'skip') return;   // the page still works with phones; "here" and "split" will say setup is missing
     say('step', 'trying again');
   }
@@ -145,7 +150,10 @@ async function start() {
   await createWindow();
   console.log('kula: window up');
   if (!root) { say('failed', 'kula-node was not found inside the app. download it again.'); return; }
-  say('step', root.includes('Resources') ? 'kula is starting' : `kula is starting from ${root}`);
+  // the copy inside the app (Resources on a mac, resources on linux and windows) needs no path
+  const rel = app.isPackaged ? path.relative(process.resourcesPath, root) : null;
+  const inside = rel !== null && !rel.startsWith('..') && !path.isAbsolute(rel);
+  say('step', inside ? 'kula is starting' : `kula is starting from ${root}`);
   try {
     await ensureLlama();
     await openPage();

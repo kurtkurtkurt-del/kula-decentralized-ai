@@ -2,7 +2,8 @@
   "name": "kula-desktop",
   "productName": "kula",
   "version": "0.4.0",
-  "description": "kula's chat page as a desktop app for macOS and Windows",
+  "description": "kula's chat page as a desktop app for macOS, Windows and Linux",
+  "homepage": "https://github.com/kurtkurtkurt-del/kula-decentralized-ai",
   "license": "MIT",
   "private": true,
   "type": "module",
@@ -12,6 +13,7 @@
     "stage": "node tools/stage.mjs",
     "dist:mac": "node tools/stage.mjs && electron-builder --mac dmg --arm64",
     "dist:win": "node tools/stage.mjs && electron-builder --win nsis --x64",
+    "dist:linux": "node tools/stage.mjs && electron-builder --linux AppImage deb --x64 -c.artifactName='kula-linux-x64.${ext}' && electron-builder --linux AppImage deb --arm64 -c.artifactName='kula-linux-arm64.${ext}'",
     "app:mine": "node tools/stage.mjs && electron-builder --mac dir --arm64 -c.extraMetadata.kulaSource=\"$(cd ../node && pwd)\""
   },
   "devDependencies": {
@@ -51,6 +53,19 @@
     "nsis": {
       "oneClick": true,
       "perMachine": false
+    },
+    "linux": {
+      "target": [
+        "AppImage",
+        "deb"
+      ],
+      "executableName": "kula",
+      "category": "Utility",
+      "icon": "assets/icon.png",
+      "maintainer": "kula <noreply@users.noreply.github.com>"
+    },
+    "appImage": {
+      "executableArgs": []
     },
     "afterPack": "tools/after-pack.cjs"
   }

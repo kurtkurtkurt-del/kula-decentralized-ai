@@ -1,0 +1,127 @@
+# kula for the desktop on Linux: the four files (deb and AppImage, x64 and arm64) built once on x64,
+# then each arch smoke-tested on its own runner (desktop/tools/linux-smoke.sh: the deb as shipped,
+# first launch with llama.cpp, the chat page, quit, then the AppImage). Pushes to kula-main do not
+# run it; by hand (workflow_dispatch) or a push on any other branch that touches the desktop app or
+# kula-node. Never on tags and never publishes: the files stay an artifact of the run.
+name: desktop-linux
+
+on:
+  workflow_dispatch:
+  push:
+    branches-ignore: [kula-main]
+    tags-ignore: ['**']
+    paths:
+      - 'desktop/**'
+      - 'node/src/**'
+      - 'node/package*.json'
+      - '.github/workflows/desktop-linux.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: desktop-linux-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NODE_VERSION: 22
+  CI: 1
+
+jobs:
+  build:
+    name: build (deb + AppImage, x64 + arm64)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: |
+            node/package-lock.json
+            desktop/package-lock.json
+      - run: npm ci --no-audit --no-fund
+        working-directory: node
+      - run: npm ci --no-audit --no-fund
+        working-directory: desktop
+      - name: dist:linux
+        run: npm run dist:linux
+        working-directory: desktop
+      - name: the four files and their sums
+        working-directory: desktop/release
+        run: |
+          ls -la
+          files="kula-linux-x64.AppImage kula-linux-arm64.AppImage kula-linux-x64.deb kula-linux-arm64.deb"
+          for f in $files; do [ -f "$f" ] || { echo "missing $f"; exit 1; }; done
+          sha256sum $files > sha256sums-linux.txt
+          cat sha256sums-linux.txt
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: kula-linux
+          if-no-files-found: error
+          retention-days: 14
+          path: |
+            desktop/release/kula-linux-x64.AppImage
+            desktop/release/kula-linux-arm64.AppImage
+            desktop/release/kula-linux-x64.deb
+            desktop/release/kula-linux-arm64.deb
+            desktop/release/sha256sums-linux.txt
+
+  smoke:
+    name: smoke (${{ matrix.arch }})
+    needs: build
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { arch: x64, runner: ubuntu-24.04 }
+          - { arch: arm64, runner: ubuntu-24.04-arm }
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: kula-linux
+          path: ${{ runner.temp }}/kula-linux
+      # only xvfb: no libfuse2, no sysctl (the script measures the runner as it comes)
+      - name: xvfb
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q xvfb
+      - name: smoke
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SMOKE_OUT: ${{ runner.temp }}/smoke
+        run: |
+          mkdir -p "$SMOKE_OUT"
+          bash desktop/tools/linux-smoke.sh "${{ matrix.arch }}" "$RUNNER_TEMP/kula-linux" 2>&1 | tee "$SMOKE_OUT/smoke-output.txt"
+          exit "${PIPESTATUS[0]}"
+      - name: summary
+        if: ${{ always() }}
+        env:
+          SMOKE_OUT: ${{ runner.temp }}/smoke
+          ARCH: ${{ matrix.arch }}
+        run: |
+          {
+            echo "### desktop-linux smoke ($ARCH)"
+            echo '```'
+            grep -E '^(CHECK|FACT|APPIMAGE) ' "$SMOKE_OUT/smoke-output.txt" 2>/dev/null || echo '(no output)'
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: ${{ always() }}
+        with:
+          name: smoke-${{ matrix.arch }}
+          retention-days: 14
+          if-no-files-found: warn
+          path: |
+            ${{ runner.temp }}/smoke/*.txt
+            ${{ runner.temp }}/smoke/*.log
+            ${{ runner.temp }}/smoke/*.png
+            ${{ runner.temp }}/smoke/*.html
+            ${{ runner.temp }}/smoke/*.desktop
