@@ -61,7 +61,11 @@ export interface Scorecard3 {
   fit: HopFit;
 }
 
-export interface Bench3Opts { computeMs: number; shiftAt?: number; first?: number }
+/** one scored answer as bench5 reads it (L10 P57): the look index, the answer's tok/s, the learned
+ *  guess and its 80% interval (null before the fit has errors) */
+export interface Answer3 { i: number; tps: number; est: number; band: { lo: number; hi: number } | null }
+
+export interface Bench3Opts { computeMs: number; shiftAt?: number; first?: number; each?: (a: Answer3) => void }
 
 class Tally {
   n = 0; s = 0;
@@ -133,6 +137,7 @@ export function runBench3(looks: Iterable<BenchLook>, opts: Bench3Opts): Scoreca
             if (Number.isFinite(band.hi)) { iv.closed++; iv.width += (band.hi - band.lo) / est.learned; }
             else iv.open++;
           }
+          opts.each?.({ i, tps, est: est.learned, band });
           fit = hopStep(fit, computeMs, links, tps);
         }
       }

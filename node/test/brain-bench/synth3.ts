@@ -24,7 +24,7 @@ function rngFor(name: string, seed: number): () => number {
 type WorkerName = 'near' | 'far';
 
 /** a worker's base latency at look i: near is wi-fi at 20 ms; far is the internet, 140 then 260 */
-function baseOf(w: WorkerName, i: number): number {
+export function baseOf(w: WorkerName, i: number): number {
   if (w === 'near') return 20;
   return i >= SHIFT_AT ? 260 : 140;
 }
@@ -59,6 +59,14 @@ const SPECS: Record<Scenario3Name, Spec> = {
 export function truth3(name: Scenario3Name): { computeMs: number; k: number; workers: string[] } {
   const s = SPECS[name];
   return { computeMs: s.C, k: s.K, workers: [...s.workers] };
+}
+
+/** the scenario's noiseless tok/s at look i (L10 P57): 1000 / (C + sum_w (K base_w(i) + 0.5)) */
+export function trueTps(name: Scenario3Name, i: number): number {
+  const s = SPECS[name];
+  let ms = s.C;
+  for (const w of s.workers) ms += s.K * baseOf(w, i) + 0.5;
+  return 1000 / ms;
 }
 
 /** a scenario's stream: 1440 looks of 60 s from START, every worker reachable and probed each look.
