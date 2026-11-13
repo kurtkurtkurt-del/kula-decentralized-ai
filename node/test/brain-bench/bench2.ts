@@ -6,7 +6,11 @@
 //    80% interval, the exact inversion of learning's own error: q = the r-th smallest err with
 //    r = ceil(0.8(m+1)), lo = est/(1+q), hi = est/(1-q) (open when q >= 1); no interval when r > m.
 //    Scored with cover, width and the Winkler score, beside a fixed [est/1.2, est/0.8].
-//  - reach: learning's reach.p against the outcome, beside the last outcome and the running mean.
+//  - reach: learning's reach.p against the outcome, beside the last outcome and the running mean;
+//    the blend's reach.m.q (L7 P41) and each of its four experts on the same outcomes, and, for a
+//    device with one known rate (opts.rate), how often the blend's 80% interval holds that rate and
+//    its mean width. While the notes of the look before hold no m (only the first scored look) the
+//    blend is scored as reach.p, its experts as those of a fresh mix, and it gives no interval.
 //  - link latency: on each new ok reading, connections' usual ms of the via's kind, senses' srtt
 //    and the last ms; how far off each is, and how many readings after the shift look each takes
 //    to come within 20% of the new base.
@@ -16,6 +20,7 @@ import { fromSnapshots, snapshotOf, type BenchLook } from './bench.ts';
 import { create as makeSenses } from '../../src/godseye/branches/senses.ts';
 import { create as makeLearning } from '../../src/godseye/branches/learning.ts';
 import { create as makeConnections, usualMs } from '../../src/godseye/branches/connections.ts';
+import { freshMix, reachExperts, saneMix, EXPERTS } from '../../src/godseye/branches/reach.ts';
 import type { Branch, BranchCtx, Snapshot } from '../../src/godseye/types.ts';
 
 export { fromSnapshots };
@@ -65,6 +70,10 @@ export interface ReachScore {
   n: number; skipped: number;
   brier: number | null; brierNaive: number | null; brierBase: number | null;
   hit: number | null; hitNaive: number | null;
+  brierBlend: number | null; hitBlend: number | null;
+  experts: (number | null)[];   // each expert's own Brier: mean, v1, slow, markov
+  cover80: number | null;       // the blend's 80% interval holds the device's rate; null with no known rate
+  width80: number | null;       // its mean width over the same looks
 }
 export interface Off { pctOff: number | null; mae: number | null }
 export interface LatencyScore {
@@ -113,7 +122,7 @@ export function interval(est: number, errs: number[]): { lo: number; hi: number 
   return { lo: est / (1 + q), hi: q >= 1 ? Infinity : est / (1 - q) };
 }
 
-export interface Bench2Opts { shiftAt?: number; shiftTo?: number }
+export interface Bench2Opts { shiftAt?: number; shiftTo?: number; rate?: (id: string) => number | null }
 
 /** the stream of looks through senses, learning and connections, scored. lag counts the ok
  *  readings at or after look shiftAt (default 720) before a guess is within 20% of shiftTo
@@ -125,7 +134,8 @@ export function runBench2(looks: Iterable<BenchLook>, opts: Bench2Opts = {}): Sc
   let seats: { senses: Seat; learning: Seat; connections: Seat } | null = null;
 
   const speed = new Map<string, { n: number; skipped: number; open: number; conf: IntervalTally; fixed: IntervalTally }>();
-  const reach = new Map<string, { n: number; skipped: number; sq: number; sqNaive: number; sqBase: number; hit: number; hitNaive: number; last: number | null; sum: number; count: number }>();
+  const reach = new Map<string, { n: number; skipped: number; sq: number; sqNaive: number; sqBase: number; hit: number; hitNaive: number; last: number | null; sum: number; count: number; sqBlend: number; hitBlend: number; sqEx: number[]; covN: number; cov: number; width: number }>();
+  const rateOf = opts.rate ?? ((): number | null => null);
   const lat = new Map<string, { n: number; skipped: number; c: OffTally; s: OffTally; v: OffTally; last: number | null; lagC: number | null; lagS: number | null; afterC: number; afterS: number }>();
   const get = <V>(m: Map<string, V>, id: string, fresh: () => V): V => {
     let v = m.get(id);
@@ -171,8 +181,9 @@ export function runBench2(looks: Iterable<BenchLook>, opts: Bench2Opts = {}): Sc
 
         // reach: learning's p against this new reading
         const y = d.reachable ? 1 : 0;
-        const r = get(reach, d.id, () => ({ n: 0, skipped: 0, sq: 0, sqNaive: 0, sqBase: 0, hit: 0, hitNaive: 0, last: null as number | null, sum: 0, count: 0 }));
-        const p = ln?.devices?.[d.id]?.reach?.p;
+        const r = get(reach, d.id, () => ({ n: 0, skipped: 0, sq: 0, sqNaive: 0, sqBase: 0, hit: 0, hitNaive: 0, last: null as number | null, sum: 0, count: 0, sqBlend: 0, hitBlend: 0, sqEx: new Array<number>(EXPERTS).fill(0), covN: 0, cov: 0, width: 0 }));
+        const lr = ln?.devices?.[d.id]?.reach;
+        const p = lr?.p;
         if (typeof p === 'number' && r.last !== null) {
           const base = r.sum / r.count;
           r.n++;
@@ -181,6 +192,20 @@ export function runBench2(looks: Iterable<BenchLook>, opts: Bench2Opts = {}): Sc
           r.sqBase += (base - y) ** 2;
           if ((p >= 0.5 ? 1 : 0) === y) r.hit++;
           if (r.last === y) r.hitNaive++;
+
+          // the blend and its experts on the same outcome
+          const m = saneMix(lr.m);
+          const q = m !== null ? m.q : p;
+          r.sqBlend += (q - y) ** 2;
+          if ((q >= 0.5 ? 1 : 0) === y) r.hitBlend++;
+          const ex = reachExperts(m ?? freshMix(), p, lr.alpha);
+          for (let k = 0; k < EXPERTS; k++) r.sqEx[k] += (ex.p[k] - y) ** 2;
+          const rate = rateOf(d.id);
+          if (m !== null && rate !== null) {
+            r.covN++;
+            if (m.lo <= rate && rate <= m.hi) r.cov++;
+            r.width += m.hi - m.lo;
+          }
         } else r.skipped++;
         r.last = y;
         r.sum += y;
@@ -222,7 +247,11 @@ export function runBench2(looks: Iterable<BenchLook>, opts: Bench2Opts = {}): Sc
   for (const [id, t] of speed) out.speed[id] = { n: t.n, skipped: t.skipped, open: t.open, ...t.conf.score(), fixed: t.fixed.score() };
   for (const [id, r] of reach) {
     const m = (x: number): number | null => (r.n ? x / r.n : null);
-    out.reach[id] = { n: r.n, skipped: r.skipped, brier: m(r.sq), brierNaive: m(r.sqNaive), brierBase: m(r.sqBase), hit: m(r.hit), hitNaive: m(r.hitNaive) };
+    out.reach[id] = {
+      n: r.n, skipped: r.skipped, brier: m(r.sq), brierNaive: m(r.sqNaive), brierBase: m(r.sqBase), hit: m(r.hit), hitNaive: m(r.hitNaive),
+      brierBlend: m(r.sqBlend), hitBlend: m(r.hitBlend), experts: r.sqEx.map(m),
+      cover80: r.covN ? r.cov / r.covN : null, width80: r.covN ? r.width / r.covN : null,
+    };
   }
   for (const [id, l] of lat) {
     out.latency[id] = { n: l.n, skipped: l.skipped, connections: l.c.score(), senses: l.s.score(), naive: l.v.score(), lag: { connections: l.lagC, senses: l.lagS } };
@@ -244,6 +273,7 @@ export function scorecard2Text(name: string, sc: Scorecard2): string {
   }
   for (const [id, r] of Object.entries(sc.reach)) {
     lines.push(`  reach ${id}: n ${r.n} · skipped ${r.skipped} · brier ${r6(r.brier)} · brierNaive ${r6(r.brierNaive)} · brierBase ${r6(r.brierBase)} · hit ${r6(r.hit)} · hitNaive ${r6(r.hitNaive)}`);
+    lines.push(`    blend ${id}: brierBlend ${r6(r.brierBlend)} \u{b7} hitBlend ${r6(r.hitBlend)} \u{b7} cover80 ${r6(r.cover80)} \u{b7} width80 ${r6(r.width80)} \u{b7} experts mean ${r6(r.experts[0])} v1 ${r6(r.experts[1])} slow ${r6(r.experts[2])} markov ${r6(r.experts[3])}`);
   }
   for (const [id, l] of Object.entries(sc.latency)) {
     lines.push(`  latency ${id}: n ${l.n} · skipped ${l.skipped} · connections ${off(l.connections)} · senses ${off(l.senses)} · naive ${off(l.naive)} · lag connections ${r6(l.lag.connections)} senses ${r6(l.lag.senses)}`);

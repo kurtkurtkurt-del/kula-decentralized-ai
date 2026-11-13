@@ -76,6 +76,14 @@ export function* far(seed: number, looks = 1440): Generator<Snapshot> {
   }
 }
 
+/** a device's true chance of answering a probe, where it is one constant: steady in reach (0.95)
+ *  and far in far (0.97); null for every other device (bursty is a chain, near always answers) */
+export function reachRate(name: string, id: string): number | null {
+  if (name === 'reach' && id === 'steady') return 0.95;
+  if (name === 'far' && id === 'far') return 0.97;
+  return null;
+}
+
 /** a scenario's stream by name; speed is synth.ts's own */
 export function scenario2(name: Scenario2Name, seed: number): Iterable<Snapshot> {
   switch (name) {

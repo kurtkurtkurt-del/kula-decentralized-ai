@@ -27,9 +27,12 @@
 // A look more than a week ahead of the last good one (kept in the notes) neither records nor
 // forgets until the next look is near it; a remembered seen later than the look is clamped.
 // Saves are paced on ctx.now() alone and re-anchor when it steps back.
+// Beside the reach guess each device keeps a blend of four experts (reach.ts, kept as reach.m),
+// stepped on the same probes; nothing shows it yet.
 // It only reads the snapshot; it never touches a device or the work. Notes: <dir>/learning.json.
 import type { Branch, BranchCtx, BranchView, Snapshot } from '../types.js';
 import { hhmm } from './util.js';
+import { freshMix, reachExperts, reachStep, saneMix, type ReachMix } from './reach.js';
 
 export const ALPHA_MIN = 0.05;
 export const ALPHA_MAX = 0.8;
@@ -66,7 +69,7 @@ const MAX_N = 1e9;                 // scored guesses beyond this are not plausib
 const KEY_LEN = MAX_ID + 40;       // a load key `file|since`: a file id and a time
 
 interface Loop { alpha: number; fast: number; slow: number; n: number; emittedAlpha: number }
-interface Reach extends Loop { p: number; hits: string; at: number | null }
+interface Reach extends Loop { p: number; hits: string; at: number | null; m?: ReachMix }
 // done is the answer count of one load, keyed `file|since`: a new load counts from 0 again; a
 // speed from another model file restarts the guess (a fresh loop, unscored). Notes written before
 // key and file existed have neither: their next load scores from 0 and keeps the guess.
@@ -161,7 +164,11 @@ function saneReach(x: any): Reach | null {
   if (!okNum(x.p) || x.p < 0 || x.p > 1) return null;
   if (typeof x.hits !== 'string' || x.hits.length > HITS_MAX || !/^[01]*$/.test(x.hits)) return null;
   if (x.at != null && !okTime(x.at)) return null;
-  return { alpha: x.alpha, fast: x.fast, slow: x.slow, n: x.n, emittedAlpha: x.emittedAlpha, p: x.p, hits: x.hits, at: x.at ?? null };
+  const r: Reach = { alpha: x.alpha, fast: x.fast, slow: x.slow, n: x.n, emittedAlpha: x.emittedAlpha, p: x.p, hits: x.hits, at: x.at ?? null };
+  // the blend is optional: notes from before it have none, and a bad one is dropped (the device stays)
+  const m = x.m != null ? saneMix(x.m) : null;
+  if (m) r.m = m;
+  return r;
 }
 
 /** one device's speed guess, checked; null when it is not what this file wrote */
@@ -388,6 +395,8 @@ export function create(ctx: BranchCtx): Branch {
     const r = d.reach;
     if (!r) { d.reach = { ...loop(), p: y, hits: '', at: checkedAt }; dirty = true; return; }
     if (r.at === checkedAt) return;                                // the same look as before: nothing new
+    const mix = r.m ?? freshMix();                                 // the blend's experts before the outcome
+    const ex = reachExperts(mix, r.p, r.alpha);
     r.at = checkedAt;
     const guess = r.p >= 0.5 ? 1 : 0;
     r.hits = (r.hits + (guess === y ? '1' : '0')).slice(-HITS_MAX);
@@ -396,6 +405,7 @@ export function create(ctx: BranchCtx): Branch {
     r.p = r3(r.p + r.alpha * (y - r.p));
     taught(miss, d, 'reachability', r, old, at);
     dirty = true;
+    r.m = reachStep(mix, ex, y, r.p, r.alpha);                     // the blend learns from the same outcome
   }
 
   /** file: the loaded model file (null when the snapshot gives none usable); key: `file|since`,
