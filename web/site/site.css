@@ -125,14 +125,17 @@ a.dl-btn:active { transform: translateY(0); }
 .news-old[open] summary svg { transform: rotate(180deg); }
 
 /* ---------- the picture, and the brain under it, on the green band */
-.band { margin-top: 56px; padding-bottom: 48px; background: linear-gradient(to bottom, transparent 0, transparent 22%, var(--rail) 22%, var(--rail) 100%); }
-@media (min-width: 720px) { .band { margin-top: 72px; padding-bottom: 56px; } }
+.band { margin-top: 56px; padding: 36px 0 48px; background: var(--rail); }
+@media (min-width: 720px) { .band { margin-top: 72px; padding: 44px 0 56px; } }
+/* the chat picture right under the headline, before the downloads */
+.hero .hero-shot { max-width: none; margin: 36px 0 0; padding: 0; }
+@media (min-width: 720px) { .hero .hero-shot { margin-top: 44px; } }
 .shot { max-width: 1080px; margin: 0 auto; padding: 0 16px; }
 @media (min-width: 720px) { .shot { padding: 0 32px; } }
 .shot img { display: block; width: 100%; height: auto; border-radius: 12px; border: 1px solid var(--line2); box-shadow: var(--shot-shadow); background: var(--card); }
 @media (min-width: 720px) { .shot img { border-radius: 16px; } }
 
-.brain { margin-top: 32px; color: var(--rail-words); display: grid; gap: 10px; }
+.brain { margin-top: 0; color: var(--rail-words); display: grid; gap: 10px; }
 @media (min-width: 820px) { .brain { grid-template-columns: minmax(0, 1fr) 340px; grid-template-rows: auto auto auto 1fr; column-gap: 48px; align-items: start; }
   .brain > :not(.brain-shot) { grid-column: 1; } .brain-shot { grid-column: 2; grid-row: 1 / span 4; } }
 @media (min-width: 1000px) { .brain { grid-template-columns: minmax(0, 1fr) 380px; } }
