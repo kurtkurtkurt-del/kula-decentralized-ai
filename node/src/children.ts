@@ -1,6 +1,15 @@
 // Running ggml-rpc-server and llama-server as children, on free local ports.
 import net from 'node:net';
+import path from 'node:path';
 import { spawn, type ChildProcess } from 'node:child_process';
+
+// On linux the llama.cpp programs' libraries (and the CUDA runtime placed beside
+// them) are searched in the program's own folder too: a library's own search path
+// does not cover its dependencies' dependencies (libcublas -> libcublasLt).
+export function childEnv(bin: string, platform: NodeJS.Platform = process.platform, env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  if (platform !== 'linux') return env;
+  return { ...env, LD_LIBRARY_PATH: [path.dirname(bin), env.LD_LIBRARY_PATH].filter(Boolean).join(':') };
+}
 
 export function freePort(): Promise<number> {
   return new Promise((resolve, reject) => {
@@ -40,7 +49,7 @@ export interface Child {
 
 export async function startChild(name: string, bin: string, args: string[], port: number, log: (s: string) => void, readyMs = 60000): Promise<Child> {
   log(`${name}: ${bin} ${args.join(' ')}`);
-  const proc = spawn(bin, args, { stdio: ['ignore', 'pipe', 'pipe'] });
+  const proc = spawn(bin, args, { stdio: ['ignore', 'pipe', 'pipe'], env: childEnv(bin) });
   const tail: string[] = [];
   const onLine = (d: Buffer) => {
     for (const line of d.toString().split('\n')) {

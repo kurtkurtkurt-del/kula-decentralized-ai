@@ -9,8 +9,10 @@
 #      sha256, llama-server on 127.0.0.1) and answers one question; tok/s is a FACT, no threshold
 #   5 quit with the model still loaded: SIGTERM, then the port is free and nothing is left
 #   5b nvidia: `kula-node setup` in a home of its own with a fake nvidia-smi (the real detection,
-#      not KULA_NVIDIA=1): the cuda build and its cudart are picked, sha-checked, unpacked, and ldd
-#      in a clean ubuntu finds everything but the driver's libcuda.so.1. The gpu itself is not used.
+#      not KULA_NVIDIA=1): the cuda build and its cudart are picked, sha-checked, unpacked, the cudart
+#      files land beside llama-server, `setup --check` moves them there in a home of the first debs,
+#      and ldd (LD_LIBRARY_PATH as children.ts sets it) in a clean ubuntu finds everything but the
+#      driver's libcuda.so.1. The gpu itself is not used.
 #   6 the AppImage as shipped, then APPIMAGE_EXTRACT_AND_RUN=1 and/or userns=0 only as needed
 # Only xvfb is installed beforehand. The Chromium sandbox stays on: nothing here passes --no-sandbox.
 # usage: linux-smoke.sh <x64|arm64> <dir with the four files and sha256sums-linux.txt>
@@ -522,27 +524,65 @@ if [ -n "$NLS" ]; then
            if [ "$(dirname "$f")" = "$NBD" ]; then echo "$(basename "$f") (beside it)"; else echo "${f#"$NVBIN"/} (elsewhere)"; fi
          done | oneline || true)"
   fact "nvidia cuda libraries, llama-server at $NLSREL: ${cud:-no libcudart/libcublas at all}"
-  # ldd the programs and the llama.cpp libraries beside them, not the cudart ones (alone they can miss each other)
+  NLSDIR="$(dirname "$NLSREL")"
+  # the runtime patterns with no file beside llama-server (llama.ts placeCudaRuntime puts them there)
+  cuda_beside() { local p miss=""; for p in 'libcudart.so*' 'libcublas.so*' 'libcublasLt.so*'; do [ -n "$(find "$NBD" -maxdepth 1 -name "$p" | head -1)" ] || miss="$miss $p"; done; echo "${miss# }"; }
+  cudart_left() { find "$NVBIN" -mindepth 1 -maxdepth 1 -type d -name 'cudart-*' -exec basename {} \; | sort | oneline || true; }
+  # CHECK nvidia-layout: after the first setup the runtime is beside llama-server, no cudart-* folder left
+  lmiss="$(cuda_beside)"; lleft="$(cudart_left)"
+  if [ -z "$lmiss" ] && [ -z "$lleft" ]; then pass nvidia-layout "libcudart, libcublas, libcublasLt beside $NLSREL; no cudart-* left under bin"
+  else fail nvidia-layout "not beside llama-server: ${lmiss:-none}; cudart-* left under bin: ${lleft:-none}"; fi
+  # CHECK nvidia-repair: a home set up by the first debs (runtime in its own folder) is fixed by the
+  # `setup --check` the app runs on every start, without downloading again
+  OLDRT="$NVBIN/cudart-llama-$TAG-old"
+  NVREP="$OUT/nvidia-repair.log"
+  mkdir -p "$OLDRT"
+  nback=0
+  while IFS= read -r f; do mv "$f" "$OLDRT/" && nback=$((nback + 1)); done < <(find "$NBD" -maxdepth 1 \( -name 'libcudart.so*' -o -name 'libcublas.so*' -o -name 'libcublasLt.so*' \))
+  if [ "$nback" -eq 0 ]; then fail nvidia-repair "no cuda runtime beside llama-server to move back"; : > "$NVREP"
+  elif [ ! -f "$KN/dist/bin/kula-node.js" ]; then fail nvidia-repair "no $KN/dist/bin/kula-node.js"; : > "$NVREP"
+  else
+    rrc=0
+    ( cd "$KN" && env -u KULA_NVIDIA KULA_NODE_HOME="$NVH" KULA_RELEASE_JSON="$REL" PATH="$OUT/fakebin:$PATH" \
+        timeout 300 node dist/bin/kula-node.js setup --check ) > "$NVREP" 2>&1 || rrc=$?
+    rmiss="$(cuda_beside)"
+    rline="$(grep -m1 'files moved beside llama-server' "$NVREP" || true)"
+    ndl="$(grep -c 'downloading' "$NVREP" || true)"
+    if [ "$rrc" = 0 ] && [ -n "$rline" ] && [ -z "$rmiss" ] && [ "${ndl:-0}" = 0 ]; then pass nvidia-repair "$nback files moved back into cudart-llama-$TAG-old/; setup --check: exit 0, $rline, nothing downloaded"
+    else fail nvidia-repair "$nback files moved back; setup --check: exit $rrc, ${rline:-no files-moved line}, not beside: ${rmiss:-none}, downloading lines: ${ndl:-0}; last: $(tail -n 3 "$NVREP" | oneline)"; fi
+  fi
+  # ldd the programs and the llama.cpp libraries beside them, not the cudart ones (alone they can miss each other);
+  # first with LD_LIBRARY_PATH as children.ts childEnv sets it, then plain (a FACT: does the library's own path do?)
   list="$NLSREL"
   [ -n "$NRPC" ] && list="$list ${NRPC#"$NVBIN"/}"
   for f in $(find "$NBD" -maxdepth 1 \( -name 'libggml*.so*' -o -name 'libllama*.so*' -o -name 'libmtmd*.so*' \) | sort); do list="$list ${f#"$NVBIN"/}"; done
+  LDD="$OUT/nvidia-ldd-docker.txt"
   if docker run --rm -v "$NVBIN:/n:ro" -v "$DIR:/d:ro" ubuntu:24.04 sh -c "
       export DEBIAN_FRONTEND=noninteractive
       if apt-get update > /dev/null && apt-get install -y --no-install-recommends \$(dpkg-deb -f /d/kula-linux-$ARCH.deb Depends | tr ',' ' ') > /dev/null
       then echo 'kula: depends installed'; else echo 'kula: depends install failed'; exit 0; fi
+      echo 'kula: ldd with LD_LIBRARY_PATH=/n/$NLSDIR'
+      for f in $list; do echo \"== \$f\"; LD_LIBRARY_PATH=/n/$NLSDIR ldd \"/n/\$f\" 2>&1 || true; done
+      LD_LIBRARY_PATH=/n/$NLSDIR /n/$NLSREL --version > /tmp/v.txt 2>&1; echo \"kula: version exit \$?\"; cat /tmp/v.txt
+      echo 'kula: plain ldd'
       for f in $list; do echo \"== \$f\"; ldd \"/n/\$f\" 2>&1 || true; done
-      /n/$NLSREL --version > /tmp/v.txt 2>&1; echo \"kula: version exit \$?\"; cat /tmp/v.txt
-      exit 0" > "$OUT/nvidia-ldd-docker.txt" 2>&1; then
-    missing="$(sed -n '/^kula: version exit/q; p' "$OUT/nvidia-ldd-docker.txt" | awk '/=> not found/ {print $1}' | sort -u | oneline || true)"
+      exit 0" > "$LDD" 2>&1; then
+    missing="$(sed -n '/^kula: ldd with/,/^kula: version exit/p' "$LDD" | awk '/=> not found/ {print $1}' | sort -u | oneline || true)"
+    plain="$(sed -n '/^kula: plain ldd/,$p' "$LDD" | awk '/=> not found/ {print $1}' | sort -u | oneline || true)"
     others="$(tr ' ' '\n' <<< "$missing" | grep -vx 'libcuda.so.1' | grep . | oneline || true)"
-    if ! grep -q 'kula: depends installed' "$OUT/nvidia-ldd-docker.txt"; then fail nvidia-ldd "installing the deb's Depends failed: $(tail -n 3 "$OUT/nvidia-ldd-docker.txt" | oneline)"
-    elif [ -n "$others" ]; then fail nvidia-ldd "not found: $others ($(wc -w <<< "$list" | tr -d ' ') files looked at)"
-    else pass nvidia-ldd "ubuntu:24.04 with the deb's Depends: $(wc -w <<< "$list" | tr -d ' ') files, nothing missing but the driver's"; fi
+    nfiles="$(wc -w <<< "$list" | tr -d ' ')"
+    if ! grep -q 'kula: depends installed' "$LDD"; then fail nvidia-ldd "installing the deb's Depends failed: $(tail -n 3 "$LDD" | oneline)"
+    elif ! grep -qE '(^| |/)libggml-cuda\.so( |$)' <<< "$list"; then fail nvidia-ldd "libggml-cuda.so is not among the $nfiles files looked at: $list"
+    elif [ -n "$others" ]; then fail nvidia-ldd "LD_LIBRARY_PATH=/n/$NLSDIR, not found: $others ($nfiles files looked at)"
+    else pass nvidia-ldd "ubuntu:24.04 with the deb's Depends, LD_LIBRARY_PATH=/n/$NLSDIR: $nfiles files incl. libggml-cuda.so, nothing missing but the driver's"; fi
     if tr ' ' '\n' <<< "$missing" | grep -qx 'libcuda.so.1'; then fact "nvidia expected missing without a driver: libcuda.so.1"
     else fact "nvidia expected missing without a driver: none"; fi
-    fact "nvidia llama-server --version in the container: $(grep -m1 '^kula: version exit' "$OUT/nvidia-ldd-docker.txt" | sed 's/^kula: version //' || echo 'exit ?'), $(sed -n '/^kula: version exit/,$p' "$OUT/nvidia-ldd-docker.txt" | sed -n '2,$p' | grep -m1 . || echo 'no output')"
-  else fail nvidia-ldd "docker run failed: $(tail -n 3 "$OUT/nvidia-ldd-docker.txt" | oneline)"; fi
+    fact "nvidia llama-server --version in the container: $(grep -m1 '^kula: version exit' "$LDD" | sed 's/^kula: version //' || echo 'exit ?'), $(sed -n '/^kula: version exit/,/^kula: plain ldd/p' "$LDD" | sed '1d;$d' | grep -m1 . || echo 'no output')"
+    fact "nvidia plain ldd (no LD_LIBRARY_PATH) not found: ${plain:-none}"
+  else fail nvidia-ldd "docker run failed: $(tail -n 3 "$LDD" | oneline)"; fi
 else
+  fail nvidia-layout "no llama-server under $NVBIN"
+  fail nvidia-repair "no llama-server under $NVBIN"
   fail nvidia-ldd "no llama-server under $NVBIN"
 fi
 

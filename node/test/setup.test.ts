@@ -6,7 +6,8 @@ import path from 'node:path';
 import { createHash } from 'node:crypto';
 import release from './fixtures/release-b11157.json' with { type: 'json' };
 import { pickAsset, buildInstructions, parseSidecar, digestSha256 } from '../src/assets.ts';
-import { verifySidecar, planSetup, describePlan, SOURCE_SIZE, SOURCE_SHA256 } from '../src/llama.ts';
+import { verifySidecar, planSetup, describePlan, placeCudaRuntime, SOURCE_SIZE, SOURCE_SHA256 } from '../src/llama.ts';
+import { childEnv } from '../src/children.ts';
 import { bar, progressBar } from '../src/progress.ts';
 
 const fixture = path.join(path.dirname(new URL(import.meta.url).pathname), 'fixtures', 'release-b11157.json');
@@ -131,4 +132,69 @@ test('build instructions name the exact commands for each os', () => {
   assert.match(buildInstructions('b11157', 'win32'), /set KULA_LLAMA_DIR=%CD%\\build\\bin\\Release/);
   assert.match(buildInstructions('b11157', 'linux'), /apt install/);
   assert.match(buildInstructions('b11157', 'darwin'), /brew install cmake/);
+});
+
+// the CUDA build unpacks as two siblings: bin/llama-<tag>/ and bin/cudart-.../ (D4)
+function cudaTree(): { root: string; where: string } {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'kula-cudart-'));
+  const where = path.join(root, 'llama-b11157');
+  fs.mkdirSync(where);
+  for (const n of ['llama-server', 'ggml-rpc-server']) fs.writeFileSync(path.join(where, n), n);
+  const rt = path.join(root, 'cudart-x');
+  fs.mkdirSync(rt);
+  for (const n of ['libcudart.so.12', 'libcublas.so.12', 'libcublasLt.so.12']) fs.writeFileSync(path.join(rt, n), n);
+  fs.symlinkSync('libcudart.so.12', path.join(rt, 'libcudart.so'));
+  fs.mkdirSync(path.join(root, 'other'));
+  fs.writeFileSync(path.join(root, 'other', 'keep.txt'), 'keep');
+  return { root, where };
+}
+
+test('placeCudaRuntime moves the cudart files beside llama-server, once', () => {
+  const { root, where } = cudaTree();
+  try {
+    const moved = placeCudaRuntime(root, where);
+    assert.deepEqual(moved, ['libcublas.so.12', 'libcublasLt.so.12', 'libcudart.so', 'libcudart.so.12']);
+    for (const n of moved) assert.ok(fs.existsSync(path.join(where, n)), n);
+    const link = path.join(where, 'libcudart.so');
+    assert.ok(fs.lstatSync(link).isSymbolicLink());
+    assert.equal(fs.readFileSync(link, 'utf8'), 'libcudart.so.12');
+    assert.equal(fs.existsSync(path.join(root, 'cudart-x')), false);
+    assert.equal(fs.readFileSync(path.join(root, 'other', 'keep.txt'), 'utf8'), 'keep');
+    assert.equal(fs.readFileSync(path.join(where, 'llama-server'), 'utf8'), 'llama-server');
+    assert.deepEqual(placeCudaRuntime(root, where), []);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('placeCudaRuntime: a flat layout and a missing root move nothing; an existing name is kept', () => {
+  const flat = fs.mkdtempSync(path.join(os.tmpdir(), 'kula-cudart-flat-'));
+  const { root, where } = cudaTree();
+  try {
+    for (const n of ['llama-server', 'ggml-rpc-server', 'libcudart.so.12']) fs.writeFileSync(path.join(flat, n), n);
+    assert.deepEqual(placeCudaRuntime(flat, flat), []);
+    assert.deepEqual(fs.readdirSync(flat).sort(), ['ggml-rpc-server', 'libcudart.so.12', 'llama-server']);
+    assert.deepEqual(placeCudaRuntime(path.join(flat, 'nope'), flat), []);
+    // where inside a cudart-* directory: that one is skipped
+    const inner = path.join(root, 'cudart-x');
+    assert.deepEqual(placeCudaRuntime(root, inner), []);
+    assert.ok(fs.existsSync(path.join(inner, 'libcudart.so.12')));
+    fs.writeFileSync(path.join(where, 'libcublas.so.12'), 'already here');
+    const moved = placeCudaRuntime(root, where);
+    assert.deepEqual(moved, ['libcublasLt.so.12', 'libcudart.so', 'libcudart.so.12']);
+    assert.equal(fs.readFileSync(path.join(where, 'libcublas.so.12'), 'utf8'), 'already here');
+    assert.equal(fs.existsSync(path.join(root, 'cudart-x')), false);
+  } finally {
+    fs.rmSync(flat, { recursive: true, force: true });
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('childEnv: linux puts the program folder first on LD_LIBRARY_PATH, elsewhere the env is unchanged', () => {
+  const env = { PATH: '/usr/bin', LD_LIBRARY_PATH: '/opt/x' };
+  assert.deepEqual(childEnv('/h/bin/llama-b11157/llama-server', 'linux', env), { PATH: '/usr/bin', LD_LIBRARY_PATH: '/h/bin/llama-b11157:/opt/x' });
+  assert.equal(childEnv('/h/bin/llama-b11157/llama-server', 'linux', { PATH: '/usr/bin' }).LD_LIBRARY_PATH, '/h/bin/llama-b11157');
+  assert.equal(env.LD_LIBRARY_PATH, '/opt/x');
+  assert.equal(childEnv('/h/bin/llama-server', 'darwin', env), env);
+  assert.equal(childEnv('C:\\h\\llama-server.exe', 'win32', env), env);
 });

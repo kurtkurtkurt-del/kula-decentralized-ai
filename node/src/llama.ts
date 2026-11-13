@@ -62,6 +62,41 @@ function binariesUnder(root: string, depth = 3): LlamaBinaries | null {
   return null;
 }
 
+// The CUDA build's runtime comes in its own archive with its own top folder
+// (cudart-llama-<tag>-bin-...), a sibling of llama-<tag>/, where the loader does not
+// look. Moves every file and symlink of each cudart-* directory directly under root
+// into where (an existing name there is kept, the source dropped), removes that
+// directory and returns the moved names, sorted. A cudart-* directory that is where
+// or contains it is skipped; nothing else is touched. No root, nothing to move: [].
+export function placeCudaRuntime(root: string, where: string): string[] {
+  if (!fs.existsSync(root)) return [];
+  const target = path.resolve(where);
+  const inside = (dir: string, p: string) => {
+    const rel = path.relative(dir, p);
+    return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
+  };
+  const exists = (p: string) => { try { fs.lstatSync(p); return true; } catch { return false; } };
+  const moved: string[] = [];
+  const drain = (dir: string) => {
+    for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+      const from = path.join(dir, e.name);
+      if (e.isDirectory()) { drain(from); continue; }
+      const to = path.join(target, e.name);
+      if (exists(to)) { fs.rmSync(from, { force: true }); continue; }
+      fs.renameSync(from, to);
+      moved.push(e.name);
+    }
+  };
+  for (const e of fs.readdirSync(root, { withFileTypes: true })) {
+    if (!e.isDirectory() || !e.name.startsWith('cudart-')) continue;
+    const dir = path.resolve(root, e.name);
+    if (inside(dir, target)) continue;
+    drain(dir);
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+  return moved.sort();
+}
+
 // Where to look, in order: a build next to the repository, then our cache.
 export function candidates(): string[] {
   const list: string[] = [];
@@ -272,6 +307,8 @@ async function downloadRelease(plan: SetupPlan, log: Log): Promise<LlamaBinaries
     const rpc = RPC_NAMES.join(' or ');
     throw new Error(`the archive ${plan.downloads[0].name} has no ${rpc} inside (or no llama-server).\n` + buildInstructions());
   }
+  const placed = placeCudaRuntime(out, found.where);
+  log(`cuda runtime: ${placed.length} files placed beside llama-server`);
   return found;
 }
 
@@ -279,6 +316,17 @@ export async function setup(opts: { check?: boolean; dryRun?: boolean; log?: Log
   const log = opts.log ?? ((s) => console.log(s));
   const found = findLlama();
   if (found) {
+    // a home set up before the runtime was placed: move it now (also for --check, which the app runs on every start)
+    const bin = path.join(cacheDir(), 'bin');
+    const rel = path.relative(bin, found.where);
+    if (rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel))) {
+      try {
+        const moved = placeCudaRuntime(bin, found.where);
+        if (moved.length > 0) log(`cuda runtime: ${moved.length} files moved beside llama-server`);
+      } catch (e) {
+        log(`cuda runtime: could not move it beside llama-server: ${(e as Error).message}`);
+      }
+    }
     log(`llama.cpp ${TAG}: ${found.where}`);
     log(`  ${path.basename(found.rpcServer)}, ${path.basename(found.llamaServer)}`);
     return found;
