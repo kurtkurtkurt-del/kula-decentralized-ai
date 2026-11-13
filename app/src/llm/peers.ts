@@ -1,6 +1,7 @@
 import { deviceId, lastPassport, linkPassport } from '@/data/passport';
 import type { Passport } from '@/passport/contract';
 import { GATE_PORT, llama } from '@/llm/native';
+import { cleanName } from '@/llm/peerName';
 import { randomHex } from '@/llm/random';
 import { rememberPeer, saveShare, settings, share, touchPeer, type Peer } from '@/llm/store';
 
@@ -70,30 +71,8 @@ export function parseRelayCode(text: string, relayUrl = settings().relayUrl): Pe
   };
 }
 
-/**
- * A device name as the screen may show it: controls (C0, DEL, C1) and the line and paragraph
- * separators become a space; zero-width marks, direction overrides and isolates, word joiners
- * and the byte order mark go; runs of space become one. The same rules as kula-node's guard
- * (node/src/godseye/branches/guard.ts cleanName), copied on purpose: no import across packages.
- */
-export const cleanName = (s: string): string =>
-  s
-    .replace(/[\u{0}-\u{1f}\u{7f}-\u{9f}\u{2028}\u{2029}]/gu, ' ')
-    .replace(/[\u{200b}-\u{200f}\u{202a}-\u{202e}\u{2060}-\u{2069}\u{feff}]/gu, '')
-    .replace(/\s+/g, ' ')
-    .trim();
-
-/**
- * A stored peer's name as the screen may show it. A peer saved before names were checked can
- * carry a number, an object or an array there: then its host, then its id, then '?'.
- */
-export function peerName(p: { name?: unknown; host?: unknown; id?: unknown }): string {
-  const name = typeof p.name === 'string' ? cleanName(p.name).slice(0, 80) : '';
-  if (name) return name;
-  if (typeof p.host === 'string' && p.host) return p.host;
-  if (typeof p.id === 'string' && p.id) return p.id;
-  return '?';
-}
+// cleanName and peerName live in peerName.ts (store.ts heals names with them); still read from here
+export { cleanName, peerName } from '@/llm/peerName';
 
 /** Parses a peer qr into a Peer (nothing stored). Throws 'notPeer' | 'self' | 'old'. */
 export function parsePeerQr(text: string): Peer {

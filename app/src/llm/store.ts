@@ -3,6 +3,7 @@ import Storage from 'expo-sqlite/kv-store';
 import { CATALOG, modelUrl, type CatalogModel } from '@/llm/catalog';
 import { llama, type DownloadEvent } from '@/llm/native';
 import { factsFromMeta } from '@/llm/fit';
+import { cleanName, peerName } from '@/llm/peerName';
 import { tapDone, tapFail } from '@/lib/haptics';
 import { rate } from '@/llm/progress';
 
@@ -325,7 +326,55 @@ export const useSettings = () => useStore(settings);
 export const saveSettings = (patch: Partial<Settings>) => write(SETTINGS, { ...settings(), ...patch });
 
 // ---- peers -----------------------------------------------------------------------------
-export const peers = () => read<Peer[]>(PEERS, []);
+// healPeers (13.11.2026): a stored list is json some older build wrote, so it is checked on
+// every read and only known keys come back. Not a list: none. An entry that is no object, has
+// no id of 1-200 chars, or repeats an id goes; at most eight stay. A bad name becomes the
+// host's or id's (peerName), a bad field its empty value. Nothing is written here: the next
+// write (rememberPeer, touchPeer, forgetPeer) stores the healed list.
+const EPOCH = '1970-01-01T00:00:00.000Z';
+const isObj = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v);
+const num = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null);
+const when = (v: unknown): string | null => (typeof v === 'string' && v && Number.isFinite(Date.parse(v)) ? v : null);
+const relayOf = (r: unknown): Peer['relay'] =>
+  isObj(r) && typeof r.url === 'string' && /^(wss?|https?):\/\//i.test(r.url) && typeof r.code === 'string' && /^\d{6}$/.test(r.code)
+    ? { url: r.url.replace(/^http(s?):\/\//i, 'ws$1://'), code: r.code }
+    : null;
+function healPeer(o: Record<string, unknown>, id: string): Peer {
+  const host = typeof o.host === 'string' ? o.host : '';
+  const port = num(o.port);
+  return {
+    id,
+    name: cleanName(peerName({ name: o.name, host, id })).slice(0, 80) || '?',
+    host,
+    port: port !== null && Number.isInteger(port) && port >= 0 && port <= 65535 ? port : 0,
+    secret: typeof o.secret === 'string' ? o.secret : '',
+    fp: o.fp === '' ? '' : typeof o.fp === 'string' && /^[0-9a-f]{64}$/i.test(o.fp) ? o.fp.toLowerCase() : null,
+    pin: typeof o.pin === 'string' && o.pin.length <= 128 ? o.pin : null,
+    paired_at: when(o.paired_at),
+    relay: relayOf(o.relay),
+    kind: o.kind === 'pc' || o.kind === 'tablet' ? o.kind : 'phone',
+    ram: num(o.ram),
+    bw: num(o.bw),
+    passport: isObj(o.passport) ? o.passport : null,
+    added_at: when(o.added_at) ?? EPOCH,
+    last_ok: when(o.last_ok),
+  };
+}
+export function healPeers(raw: unknown): Peer[] {
+  if (!Array.isArray(raw)) return [];
+  const out: Peer[] = [];
+  const seen = new Set<string>();
+  for (const o of raw) {
+    if (out.length >= 8) break;
+    if (!isObj(o)) continue;
+    const id = o.id;
+    if (typeof id !== 'string' || id.length < 1 || id.length > 200 || seen.has(id)) continue;
+    seen.add(id);
+    out.push(healPeer(o, id));
+  }
+  return out;
+}
+export const peers = () => healPeers(read<unknown>(PEERS, []));
 export const usePeers = () => useStore(peers);
 export function rememberPeer(p: Peer) {
   write(PEERS, [p, ...peers().filter((x) => x.id !== p.id)].slice(0, 8));
