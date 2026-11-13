@@ -297,6 +297,25 @@ test('owner-blind: a warning card for a device in the running cluster that fails
   assert.deepEqual(ok.b.view().suggestions, []);
 });
 
+test('owner-blind: a device whose id has a space or is 92 chars long still gets its warning on the panel (E2)', async () => {
+  const { GodsEye, cleanCard, dark } = await import('../src/godseye/index.ts');
+  // the exact id for an odd device id is decide.ts's cardId; only its shape is asserted here
+  for (const id of ['pixel 8', 'w-' + 'a'.repeat(90)]) {
+    const d = device();
+    d.add();
+    const { b } = branch();
+    const s = { ...snap([eyeDev(d, trustOf(d, { attest: proof(false, DEBUG) }), { id })]), work: running([id, 'mac']) } as any;
+    b.observe(s, null);
+    const said = b.view().suggestions!;
+    assert.equal(said.length, 1, id);
+    assert.ok(said[0].id.startsWith('trust:owner-blind:'), said[0].id);
+    assert.ok(cleanCard(said[0]), `the eye keeps the card for ${JSON.stringify(id.slice(0, 12))}`);
+    const eye = new GodsEye({ snapshot: () => s, dir: '/nonexistent-p26', makers: { trust: () => ({ id: 'trust', observe() {}, view: () => ({ ...dark(), built: true, stat: 'x', suggestions: said }) }) } as any });
+    eye.tick();
+    assert.equal(eye.view().cards.filter((c: any) => c.branch === 'trust').length, 1, 'the owner-blind warning reaches the panel');
+  }
+});
+
 test('a full window of 64 KiB lines: the next answer hashes only its new line, and the verdict is the same (A8)', () => {
   const d = device();
   const pad = 'x'.repeat(64 * 1024 - 200);   // a line as long as the engine lets one be (64 KiB)

@@ -1071,6 +1071,12 @@ test('a device that answers only at its router\'s port or ipv6 gets one card; th
   assert.match(cards[1].why, /its ipv6 address/);
   assert.deepEqual(cards[0].action, { do: 'probe', devices: ['p1'] });
   for (const c of cards) assert.ok(cleanCard(c), 'the eye keeps the card as the branch wrote it');
+  // a device id with a space still gets its card (E2); the probe asks for the device by its own id
+  const odd = look([dev({ id: 'tab 2', name: 'tab', via: 'internet', reachedBy: 'ipv6' })]).suggestions ?? [];
+  assert.equal(odd.length, 1);
+  assert.ok(odd[0].id.startsWith('connections:internet:'), odd[0].id);
+  assert.ok(cleanCard(odd[0]), 'the eye keeps the card for an id with a space');
+  assert.equal((odd[0].action as any).devices[0], 'tab 2');
   // an older snapshot without reachedBy and a lan device: no card at all
   assert.equal(look([dev()]).suggestions, undefined);
   // the address never reaches a card

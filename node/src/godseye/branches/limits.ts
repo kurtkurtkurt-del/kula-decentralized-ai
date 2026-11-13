@@ -50,6 +50,7 @@
 // no duration is ever negative.
 import type { Branch, BranchCtx, Snapshot, Suggestion } from '../types.js';
 import { gb, hhmm } from './util.js';
+import { cardId } from './decide.js';
 import { masked } from './review.js';   // a project's title may hold personal data: shown masked, as review does
 
 export const TIGHT = 0.8;                       // memory use above this share is tight
@@ -125,7 +126,6 @@ export const HOT_C = 42;
 export const HEALTH_OLD_MS = 300_000;
 export const HEALTH_AHEAD_MS = 120_000;
 const CARDS_SHOWN = 5;
-const CARD_DEVICE = /^[\w.:@/-]{1,80}$/;        // a device id a card id can carry (eye.ts CARD_ID)
 type Health = { at: number; tempC: number | null; battery: number | null; charging: boolean | null; throttled: boolean | null };
 /** the reading when it is fresh for a look at `at`; anything not plain is unknown, a stale or
  *  unusable reading none at all */
@@ -593,7 +593,7 @@ export function create(ctx: BranchCtx): Branch {
         const name = shownName(d);
         const says = saysOf(verified.has(d.id));
         const card = (topic: string, title: string, why: string) => {
-          if (CARD_DEVICE.test(d.id)) cards.push({ id: `limits:${topic}:${d.id}`, kind: 'warn', weight: 3, title, why, action: { do: 'open', panel: 'branch', branch: 'limits' }, label: 'look' });
+          cards.push({ id: cardId('limits', topic, d.id), kind: 'warn', weight: 3, title, why, action: { do: 'open', panel: 'branch', branch: 'limits' }, label: 'look' });
         };
         if (h.tempC != null && h.tempC > HOT_C) {
           const c = round1(h.tempC);
@@ -658,13 +658,11 @@ export function create(ctx: BranchCtx): Branch {
         const from = round1(began);
         const to = round1(now2);
         next.set(`slow:${d.id}`, { text: `${name} slowed down: ${from} -> ${to} tok/s since this load began`, ended: `${name} is no longer slowed down` });
-        if (CARD_DEVICE.test(d.id)) {
-          cards.push({
-            id: `limits:slow:${d.id}`, kind: 'warn', weight: 2, title: `${name} slowed down: ${from} -> ${to} tok/s`,
-            why: `${from} -> ${to} tok/s since this load began (the median of its first 3 readings against its last 3); ${slowHeat(healthById.get(d.id) ?? null, verified.has(d.id))}. kula never stops it or moves its work: let it rest or cool, or leave it out of the next load.`,
-            action: { do: 'open', panel: 'branch', branch: 'limits' }, label: 'look',
-          });
-        }
+        cards.push({
+          id: cardId('limits', 'slow', d.id), kind: 'warn', weight: 2, title: `${name} slowed down: ${from} -> ${to} tok/s`,
+          why: `${from} -> ${to} tok/s since this load began (the median of its first 3 readings against its last 3); ${slowHeat(healthById.get(d.id) ?? null, verified.has(d.id))}. kula never stops it or moves its work: let it rest or cool, or leave it out of the next load.`,
+          action: { do: 'open', panel: 'branch', branch: 'limits' }, label: 'look',
+        });
       }
       for (const id of [...speeds.keys()]) if (!speedSeen.has(id)) { speeds.delete(id); speedGone.add(id); }
 

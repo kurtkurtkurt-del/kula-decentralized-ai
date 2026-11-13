@@ -1210,10 +1210,12 @@ test('health: card ids are stable from look to look, at most 5 cards, heat befor
   assert.equal(b.view().stat, '9 warnings');
   b.observe({ ...s, at: T0 + 5000 } as any, null);
   assert.deepEqual(b.view().suggestions!.map((c) => c.id), first);
-  // an id a card cannot carry: a warning line, no card
+  // an id a card id cannot carry as it is: a warning line and still a card (E2), its id made fit by cardId
   const odd = dev({ id: 'p 1/<x>', name: 'odd', health: H({ tempC: 45 }) });
   b.observe(snap(T0, { devices: [odd], loaded: loaded([ld({ id: odd.id, name: 'odd' })]) }) as any, null);
-  assert.deepEqual(cardsOf(b.view()), []);
+  const oddCards = b.view().suggestions ?? [];
+  assert.equal(oddCards.length, 1);
+  assert.match(oddCards[0].id, /^limits:heat:[\w.:@/-]+$/);
   assert.ok(b.view().lines.some((l) => l === 'warning: odd is hot: 45 °C, above 42 °C'));
 });
 
@@ -1505,7 +1507,7 @@ test('slow: the why says hot or throttled from the phone\'s fresh health, else h
   assert.match(why(H()), /not hot \(36\.5 °C\)/);
 });
 
-test('slow: an id a card cannot carry gets the line, no card; the card counts toward the cap of 5', () => {
+test('slow: an id a card id cannot carry as it is gets the line and a card; the card counts toward the cap of 5', () => {
   const { ctx } = fakeCtx();
   const b = create(ctx as any);
   const id = 'p 1/<x>';
@@ -1514,7 +1516,9 @@ test('slow: an id a card cannot carry gets the line, no card; the card counts to
     at += 15_000;
     b.observe(snap(at, { devices: [dev({ id, name: 'odd' })], loaded: loaded([ld({ id, name: 'odd', tps, done: i + 1 })]) }) as any, null);
   }
-  assert.deepEqual(cardsOf(b.view()), []);
+  const oddSlow = b.view().suggestions ?? [];
+  assert.equal(oddSlow.length, 1);
+  assert.match(oddSlow[0].id, /^limits:slow:[\w.:@/-]+$/);
   assert.ok(b.view().lines.includes('warning: odd slowed down: 64 -> 37 tok/s since this load began'), b.view().lines.join('\n'));
 
   // two phones hot, low and throttled (six health cards) and slow: five cards, the health ones first
@@ -1551,4 +1555,27 @@ test('slow: the hints for the deciding branches are the same with and without th
   assert.deepEqual(slowCards(slowed), [SLOW()]);
   assert.deepEqual(slowed.hints, steady.hints);
   assert.deepEqual(slowed.hints, [{ id: 'p1', no: 'should rest (limits)' }]);
+});
+
+test('a device id with a space still gets its hot card and its slow card (E2)', async () => {
+  const { cleanCard } = await import('../src/godseye/index.ts');
+  // the exact id for an odd device id is decide.ts's cardId; only its shape is asserted here
+  const id = 'tab 2';
+  const { ctx } = fakeCtx();
+  const b = create(ctx as any);
+  b.observe(snap(T0, { devices: [dev({ id, health: H({ tempC: 44.5 }) })], loaded: loaded([ld({ id })]) }) as any, null);
+  const hot = (b.view().suggestions ?? []).filter((c: any) => c.id.startsWith('limits:heat:'));
+  assert.equal(hot.length, 1);
+  assert.ok(cleanCard(hot[0]), 'the eye keeps the hot card');
+
+  const s = fakeCtx();
+  const sb = create(s.ctx as any);
+  let at = T0, done = 0;
+  for (const tps of [64, 64, 63, 40, 37, 37]) {
+    at += 15_000;
+    sb.observe(snap(at, { devices: [dev({ id })], loaded: loaded([ld({ id, tps, done: ++done })]) }) as any, null);
+  }
+  const slow = (sb.view().suggestions ?? []).filter((c: any) => c.id.startsWith('limits:slow:'));
+  assert.equal(slow.length, 1);
+  assert.ok(cleanCard(slow[0]), 'the eye keeps the slow card');
 });

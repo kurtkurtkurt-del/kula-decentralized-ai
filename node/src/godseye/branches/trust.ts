@@ -23,6 +23,7 @@ import type { Branch, BranchCtx, EyeDevice, EyeTrust, Snapshot, Suggestion, Trus
 import type { EyeKey, EyeKeys } from '../platform.js';
 import { fromBase64, sha256Hex } from '../hash.js';
 import { hhmm, pct } from './util.js';
+import { cardId } from './decide.js';
 
 // the signatures and the certificate's subject come from the platform (ctx.keys: node:crypto on a
 // computer, platform.ts); the hashes are plain TypeScript and the same everywhere
@@ -524,7 +525,7 @@ export function create(ctx: BranchCtx): Branch {
       const c = d.checks.find((x) => x.k === 'owner-blind');
       if (!c || c.ok !== false) continue;
       out.push({
-        id: `trust:owner-blind:${d.id}`, kind: 'warn', weight: 1,
+        id: cardId('trust', 'owner-blind', d.id), kind: 'warn', weight: 1,
         title: `${d.name} could read the jobs it runs`,
         why: `${c.text}. Prompts reach it in plain text, so only give it work you would show its owner.`,
         action: { do: 'open', panel: 'branch', branch: 'trust' }, label: 'look',

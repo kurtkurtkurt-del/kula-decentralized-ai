@@ -34,6 +34,7 @@
 // only looks again (a probe), which puts it back on the lan once the lan answers.
 import type { Branch, BranchCtx, BranchView, EyeDevice, Snapshot, Suggestion } from '../types.js';
 import { reachWord } from './util.js';
+import { cardId } from './decide.js';
 
 export const MAX_DEVICES = 40;
 export const MAX_KINDS = 6;
@@ -422,11 +423,11 @@ export function create(ctx: BranchCtx): Branch {
       for (const o of objs) {
         if (o === null || o.reachable !== true || !overInternet(o)) continue;
         const id = idOf(o.id);
-        if (id === null || !/^[\w.:@/-]{1,80}$/.test(id)) continue;   // the card id must stay a card id
+        if (id === null) continue;
         const name = cut(textOf(o.name) ?? '') || id;
         const at = o.reachedBy === 'mapped' ? 'the port its router opened' : o.reachedBy === 'ipv6' ? 'its ipv6 address' : 'an internet address';
         suggestions.push({
-          id: `connections:internet:${id}`, kind: 'warn', weight: 1,
+          id: cardId('connections', 'internet', id), kind: 'warn', weight: 1,
           title: `${name} is reached over the internet`,
           why: `its lan address did not answer; its pinned certificate answered at ${at}. answers are slower there, and only apart mode works over it: split mode needs the lan.`,
           action: { do: 'probe', devices: [id] }, label: 'look again',
