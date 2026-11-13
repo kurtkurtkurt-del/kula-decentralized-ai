@@ -127,8 +127,40 @@ async function openPage() {
   });
   console.log(`kula: opening ${url}`);
   await win.loadURL(url);
+  console.log('kula: page loaded');
   // KULA_SNAP=<file.png>: a picture of the window a few seconds after the page loaded (checks)
-  if (process.env.KULA_SNAP) setTimeout(() => win?.webContents.capturePage().then((img) => fs.writeFileSync(process.env.KULA_SNAP, img.toPNG())).catch(() => {}), 4000);
+  if (process.env.KULA_SNAP) snap(process.env.KULA_SNAP);
+}
+
+// the first try 4 s after the load, then up to 5 more 2 s apart; each try repaints first and
+// waits at most 5 s for the picture; the file is written only when the picture is not empty
+function snap(file) {
+  const TRIES = 6;
+  const attempt = async (n) => {
+    let why;
+    try {
+      if (!win || win.isDestroyed()) throw new Error('no window');
+      win.webContents.invalidate();
+      const img = await Promise.race([
+        win.webContents.capturePage(),
+        new Promise((resolve) => setTimeout(() => resolve(null), 5000)),
+      ]);
+      if (img === null) why = 'no answer in 5 s';
+      else if (img.isEmpty()) why = 'empty';
+      else {
+        const png = img.toPNG();
+        fs.writeFileSync(file, png);
+        console.log(`kula: snap ${png.length} bytes (try ${n})`);
+        return;
+      }
+    } catch (e) {
+      why = e.message;
+    }
+    console.log(`kula: snap try ${n}: ${why}`);
+    if (n < TRIES) setTimeout(() => attempt(n + 1), 2000);
+    else console.log('kula: snap gave up');
+  };
+  setTimeout(() => attempt(1), 4000);
 }
 
 function createWindow() {
@@ -158,6 +190,7 @@ async function start() {
     await ensureLlama();
     await openPage();
   } catch (e) {
+    console.error('kula: start failed: ' + e.message);
     say('failed', e.message);
   }
 }

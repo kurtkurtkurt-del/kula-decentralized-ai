@@ -9,7 +9,8 @@
 #   6 the AppImage as shipped, then APPIMAGE_EXTRACT_AND_RUN=1 and/or userns=0 only as needed
 # Only xvfb is installed beforehand. The Chromium sandbox stays on: nothing here passes --no-sandbox.
 # usage: linux-smoke.sh <x64|arm64> <dir with the four files and sha256sums-linux.txt>
-# prints CHECK <name> PASS|FAIL <detail>, FACT ..., APPIMAGE ...; exits 1 when any CHECK failed.
+# prints CHECK <name> PASS|FAIL <detail>, FACT ..., APPIMAGE ...; exits 1 when any CHECK failed
+# (step 6's AppImage checks are printed but not counted: the AppImage is not shipped).
 set -euo pipefail
 
 ARCH="${1:?arch: x64 or arm64}"
@@ -117,13 +118,22 @@ page_checks() {
   listen="$(port_listen "$PORT")"
   if [ "$listen" = "127.0.0.1:$PORT" ]; then pass "$t-listen-loopback" "$listen"; else fail "$t-listen-loopback" "listening on: ${listen:-nothing}"; fi
   if grep -q 'could not load' "$log"; then fail "$t-no-load-error" "$(grep -m1 'could not load' "$log")"; else pass "$t-no-load-error" "no 'could not load' in the log"; fi
+  # main.js prints this right after the window's loadURL resolved
+  for ((i = 0; i < 30; i++)); do grep -q 'kula: page loaded' "$log" && break; sleep 1; done
+  if grep -q 'kula: page loaded' "$log"; then pass "$t-page-loaded" "'kula: page loaded' in the log"; else fail "$t-page-loaded" "no 'kula: page loaded' in the log"; fi
+  # KULA_SNAP: main.js tries up to 6 times (4 s after the load, then 2 s apart, 5 s each at most)
   size=0
-  for ((i = 0; i < 30; i++)); do
+  for ((i = 0; i < 60; i++)); do
     size="$(stat -c %s "$png" 2>/dev/null || echo 0)"
     [ "$size" -gt 10240 ] && break
     sleep 1
   done
-  if [ "$size" -gt 10240 ]; then pass "$t-png" "$(basename "$png") $size bytes"; else fail "$t-png" "$(basename "$png") $size bytes"; fi
+  if [ "$size" -gt 10240 ]; then pass "$t-png" "$(basename "$png") $size bytes"
+  else
+    local what
+    if [ -f "$png" ]; then what="empty ($size bytes)"; else what=missing; fi
+    fail "$t-png" "$(basename "$png") $what; log: $(grep 'kula: snap' "$log" 2>/dev/null | oneline || true)"
+  fi
   ps_dump "$OUT/$t-ps.txt"
   n="$(nosandbox_count)"
   if [ "$n" = 0 ]; then pass "$t-sandbox-on" "no kula process has --no-sandbox ($(kula_pids | wc -l) processes)"
@@ -161,6 +171,10 @@ done
 dpkg-deb -f "$DEB" > "$OUT/deb-control.txt" || true
 fact "deb Package: $(dpkg-deb -f "$DEB" Package 2>/dev/null || true)"
 fact "deb Depends: $(dpkg-deb -f "$DEB" Depends 2>/dev/null || true)"
+# llama.cpp's ubuntu binaries need libgomp.so.1; the deb must bring it (desktop/package.json build.deb.depends)
+deps="$(dpkg-deb -f "$DEB" Depends 2>/dev/null || true)"
+if grep -qE '(^|[ ,])libgomp1([ ,(]|$)' <<< "$deps"; then pass deb-depends-libgomp "libgomp1 in Depends"
+else fail deb-depends-libgomp "no libgomp1 in Depends: ${deps:-none}"; fi
 others="$(grep -oE '[^[:space:]<>]*@[^[:space:]<>]*' "$OUT/deb-control.txt" | grep -vxF "$EMAIL" | sort -u | oneline || true)"
 if [ -z "$others" ]; then pass deb-control-email "only $EMAIL"; else fail deb-control-email "other @: $others"; fi
 
@@ -270,9 +284,19 @@ if [ -n "$RPC" ]; then
 else fail rpc-loopback "no rpc server under $LBIN"; fi
 if [ -n "$LS" ] && [ -n "$RPC" ]; then
   BD="$(dirname "$LS")"
-  if docker run --rm -v "$BD:/b:ro" ubuntu:24.04 sh -c "ldd /b/$(basename "$LS"); ldd /b/$(basename "$RPC")" > "$OUT/ldd-docker.txt" 2>&1; then
-    if grep -q 'not found' "$OUT/ldd-docker.txt"; then fail llama-ldd "$(grep 'not found' "$OUT/ldd-docker.txt" | sort -u | oneline)"
-    else pass llama-ldd "ubuntu:24.04: every library found"; fi
+  # a clean ubuntu:24.04 with only the deb's Depends (not the deb itself: its postinst loads AppArmor)
+  # the script inside always exits 0: what happened is read from its output; a non-zero exit is docker's own
+  if docker run --rm -v "$BD:/b:ro" -v "$DIR:/d:ro" ubuntu:24.04 sh -c "
+      export DEBIAN_FRONTEND=noninteractive
+      if apt-get update > /dev/null && apt-get install -y --no-install-recommends \$(dpkg-deb -f /d/kula-linux-$ARCH.deb Depends | tr ',' ' ') > /dev/null
+      then echo 'kula: depends installed'; else echo 'kula: depends install failed'; exit 0; fi
+      ldd /b/$(basename "$LS"); ldd /b/$(basename "$RPC")
+      /b/$(basename "$LS") --version 2>&1
+      exit 0" > "$OUT/ldd-docker.txt" 2>&1; then
+    if ! grep -q 'kula: depends installed' "$OUT/ldd-docker.txt"; then fail llama-ldd "installing the deb's Depends failed: $(tail -n 3 "$OUT/ldd-docker.txt" | oneline)"
+    elif grep -q 'not found' "$OUT/ldd-docker.txt"; then fail llama-ldd "$(grep 'not found' "$OUT/ldd-docker.txt" | sort -u | oneline)"
+    elif ! grep -q "$TAGNUM" "$OUT/ldd-docker.txt"; then fail llama-ldd "no $TAGNUM in llama-server --version: $(tail -n 3 "$OUT/ldd-docker.txt" | oneline)"
+    else pass llama-ldd "ubuntu:24.04 with the deb's Depends: every library found, $(grep -m1 "$TAGNUM" "$OUT/ldd-docker.txt")"; fi
   else fail llama-ldd "docker run failed: $(tail -n 3 "$OUT/ldd-docker.txt" | oneline)"; fi
 else fail llama-ldd "programs missing"; fi
 
@@ -280,6 +304,8 @@ else fail llama-ldd "programs missing"; fi
 quit_checks deb
 
 # ---------- step 6: the AppImage, home already seeded ----------
+# measured only: the AppImage is not shipped (D2), so its checks do not count toward the exit code
+FAILS_BEFORE_APPIMAGE=$FAILS
 appimage_try() {
   local label=$1 log n; shift
   log="$OUT/appimage-$label.log"
@@ -317,6 +343,8 @@ if [ "$R" = starts ]; then
 else
   fail appimage-start "final result $R"
 fi
+fact "appimage: $((FAILS - FAILS_BEFORE_APPIMAGE)) failed check(s), not shipped, not counted"
+FAILS=$FAILS_BEFORE_APPIMAGE
 
 DONE=1
 echo "== $FAILS failed check(s)"
