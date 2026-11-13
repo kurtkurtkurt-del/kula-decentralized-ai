@@ -11,19 +11,30 @@
 //    with dtWeeks = max(0, (tFold - slot.t) / (7*24*3600*1000)) and d = 0.5 ** (dtWeeks / HALF_LIFE_WEEKS),
 //    HALF_LIFE_WEEKS = 4:  n = n*d + 1;  s = s*d + x;  slot.t = tFold.  Fewer than 12 looks: dropped.
 //    A backward clock jump of more than an hour observes the same real hours again as new observations.
-//  - device prior: N = sum of n over its slots, S = sum of s; p0 = (S + 0.5) / (N + 1).
-//    K = 4 pseudo-observations: a = K*p0, b = K*(1-p0).
-//  - slot estimate: mean = (a + s) / (K + n). Interval (80%): wilson on p = mean with
-//    m = K + n, z = 1.2816: centre = (p + z*z/(2m)) / (1 + z*z/m);
+//  - levels (L6 P31, a hierarchical beta-binomial): N = sum of n over its slots, S = sum of s;
+//    p0 = (S + 0.5) / (N + 1); per hour of the day h = slot mod 24, Nh and Sh = the sums over the
+//    slots with that h (the slot itself included). The slot is shrunk to its hour of the day, the
+//    hour to the device's rate, each with a strength: EXPERTS = eight (Kh, Ks) pairs, inf meaning
+//    "the level above as it is" (expert 1 = (inf, 4) is the L5 forecast, K = 4 at p0):
+//    m = p0 or (Kh*p0 + Sh)/(Kh + Nh), c1 = N + 1 or Kh + Nh; p = m or (Ks*m + s)/(Ks + n),
+//    c = c1 or Ks + n; v = p(1-p)/(c+1).
+//  - slot estimate: the experts blended with the device's weights w: mean = sum w p,
+//    V = sum w (v + (p - mean)^2), nu = clamp(mean(1-mean)/V - 1, 1, 1e6). Interval (80% for the
+//    hour's chance): wilson on p = mean with m = nu, z = 1.2816: centre = (p + z*z/(2m)) / (1 + z*z/m);
 //    half = z*sqrt(p*(1-p)/m + z*z/(4*m*m)) / (1 + z*z/m); lo = max(0, centre-half),
 //    hi = min(1, centre+half).
+//  - the weights learn at every scored hour (below) by exponential weights on each expert's own
+//    squared error, eta = 1/2, with a fixed share of 0.001: w = 0.999 u/sum(u) + 0.001/8,
+//    u = w exp(-(p - x)^2 / 2). They start uniform and are kept per device in the notes (w).
+//    createFixed(k) is the same branch with w the unit vector of expert k, never learning.
 //  - tonight = the nine slots 22:00..06:00 of the night that starts on snapshot.at's day (after
 //    midnight and before 07:00: the night already running). tonight.mean = the average of the slot
 //    means, lo/hi = the average of the slot lo/hi; known = Math.round(N * 10) / 10 >= 3 (the value
 //    as shown: three folded hours are known, "3 of 3" can never say not enough), else guess
 //    'unknown' and the line says "not enough recent hours yet (N of 3)".
 //    guess: mean >= 0.6 likely, < 0.4 unlikely, else maybe. When none of tonight's nine slots has
-//    n > 0 the guess stands but the line says ", from daytime only". The stat counts only devices
+//    n > 0 the guess stands but the line says ", from other nights" when their hours of the day
+//    were seen on other days, else ", from daytime only". The stat counts only devices
 //    in the current snapshot, and says "no known device here now" when none of them is known while
 //    a gone one has a guess, or when none of them has a recent hour shown while a gone one has;
 //    a device gone from it keeps its line with "last seen today" (the same local date), "last seen
@@ -50,9 +61,11 @@
 // models each, one entry per seen hour of the week (168). Notes with v: 1 on disk are not
 // converted: only the tok/s averages are carried over (the availability held a few days of
 // over-counted 5 s looks), the availability starts fresh. Saved at most once a minute.
-//  - every folded hour is scored for the learning branch: just before the fold, what the slot and
-//    the prior said then (decayed to the fold time) against x, kept as the last MAX_PAIRS pairs per
-//    device, only while the device is known (the view's own rule), and handed over in the view.
+//  - every folded hour is scored for the learning branch: just before the fold, what the blended
+//    slot and the prior said then (decayed to the fold time) against x, kept as the last MAX_PAIRS
+//    pairs per device, only while the device is known (the view's own rule), and handed over in
+//    the view. The same scored hour then updates the device's weights w. A w in the notes that is
+//    not 8 finite numbers in [0, 1] summing to 1 is dropped (uniform again); v stays 2.
 // A feed line only when a device's tonight guess flips from likely to unlikely or back.
 import type { Branch, BranchCtx, BranchView, EyeDevice, Snapshot } from '../types.js';
 import { active } from './util.js';
@@ -97,6 +110,7 @@ interface DevNotes {
   tps: Record<string, Speed>;                         // by model file
   pairs: Pair[];                                      // the last MAX_PAIRS scored hours, oldest first
   last?: 'likely' | 'unlikely';                       // the last firm tonight guess (for the feed)
+  w?: number[];                                       // the experts' weights (absent: uniform)
 }
 export interface ForecastNotes {
   v: 2;
@@ -160,6 +174,88 @@ export function estimate(a: number, s: number, n: number, k: number, z = Z): { m
   const m = k + n;
   const mean = (a + s) / m;
   return { mean, ...wilson(mean, m, z) };
+}
+
+// ---- depth step 2 (L6 P31): the prior strength learned by prediction
+
+/** the eight ways to lean on the device's rate and its hour of the day, as (Kh, Ks) strengths;
+ *  Infinity means "take the level above as it is". The index is fixed: 1 is v1 (K = 4 at the
+ *  device's rate), 0 is the bare device rate. */
+export const EXPERTS: readonly (readonly [number, number])[] = [
+  [Infinity, Infinity], [Infinity, 4], [Infinity, 1], [Infinity, 0.25],
+  [1, Infinity], [1, 4], [1, 1], [1, 0.25],
+];
+export const V1 = 1;
+const NE = EXPERTS.length;
+const ETA = 0.5;                     // squared loss on [0,1] is exp-concave for eta <= 1/2
+const SHARE = 0.001;                 // fixed share: no expert's weight falls under SHARE / 8
+
+export interface Levels { N: number; S: number; p0: number; Nh: number[]; Sh: number[] }
+export interface Expert { p: number; c: number }
+
+/** the device's levels from its slots (already decayed to the read time): N = sum n, S = sum s,
+ *  p0 = (S + 0.5) / (N + 1); Nh[h], Sh[h] = the sums over the slots with slot mod 24 = h. */
+export function levels(slots: Iterable<[number, SlotStats]>): Levels {
+  let N = 0, S = 0;
+  const Nh = new Array<number>(24).fill(0);
+  const Sh = new Array<number>(24).fill(0);
+  for (const [k, st] of slots) {
+    N += st.n; S += st.s;
+    const h = ((k % 24) + 24) % 24;
+    Nh[h] += st.n; Sh[h] += st.s;
+  }
+  return { N, S, p0: (S + 0.5) / (N + 1), Nh, Sh };
+}
+
+/** every expert's mean p and strength c for a slot of hour h with its own (decayed) n and s:
+ *  m = p0 (Kh inf) or (Kh*p0 + Sh)/(Kh + Nh); c1 = N + 1 or Kh + Nh;
+ *  p = m (Ks inf) or (Ks*m + s)/(Ks + n); c = c1 or Ks + n. */
+export function experts(L: Levels, h: number, n: number, s: number): Expert[] {
+  const Nh = L.Nh[h] ?? 0, Sh = L.Sh[h] ?? 0;
+  return EXPERTS.map(([Kh, Ks]) => {
+    let m: number, c1: number;
+    if (Kh === Infinity) { m = L.p0; c1 = L.N + 1; } else { m = (Kh * L.p0 + Sh) / (Kh + Nh); c1 = Kh + Nh; }
+    if (Ks === Infinity) return { p: m, c: c1 };
+    return { p: (Ks * m + s) / (Ks + n), c: Ks + n };
+  });
+}
+
+/** the experts blended with weights w (sum 1): mean = sum w p; V = sum w (p(1-p)/(c+1) + (p - mean)^2);
+ *  nu = clamp(mean(1-mean)/V - 1, 1, 1e6) (1e6 when V is not > 0); the 80% interval is wilson on
+ *  the moment-matched beta of the mixture: wilson(mean, nu, z). */
+export function blend(ex: Expert[], w: readonly number[], z = Z): { mean: number; lo: number; hi: number; nu: number } {
+  let mean = 0;
+  for (let k = 0; k < ex.length; k++) mean += w[k] * ex[k].p;
+  let V = 0;
+  for (let k = 0; k < ex.length; k++) {
+    const { p, c } = ex[k];
+    V += w[k] * (p * (1 - p) / (c + 1) + (p - mean) ** 2);
+  }
+  const nu = V > 0 ? Math.min(1e6, Math.max(1, mean * (1 - mean) / V - 1)) : 1e6;
+  return { mean, ...wilson(mean, nu, z), nu };
+}
+
+/** one scored hour with outcome x: u = w exp(-eta (p - x)^2), eta = 1/2; then the fixed share
+ *  w = (1 - 0.001) u / sum(u) + 0.001 / 8. */
+export function learn(w: readonly number[], ex: Expert[], x: number): number[] {
+  const u = ex.map((e, k) => w[k] * Math.exp(-ETA * (e.p - x) ** 2));
+  const sum = u.reduce((a, b) => a + b, 0);
+  if (!(sum > 0) || !Number.isFinite(sum)) return uniform();
+  return u.map((v) => (1 - SHARE) * v / sum + SHARE / NE);
+}
+
+const uniform = (): number[] => new Array<number>(NE).fill(1 / NE);
+const unit = (k: number): number[] => EXPERTS.map((_, i) => (i === k ? 1 : 0));
+
+/** a weights vector from the notes: 8 finite numbers in [0, 1] summing to 1 within 1e-6 */
+function okW(w: unknown): w is number[] {
+  if (!Array.isArray(w) || w.length !== NE) return false;
+  let sum = 0;
+  for (const v of w) {
+    if (!okNum(v) || v < 0 || v > 1) return false;
+    sum += v;
+  }
+  return Math.abs(sum - 1) <= 1e-6;
 }
 
 /** the nine slots of the night that starts on `at`'s day, 22:00..06:00 (after midnight and before
@@ -243,6 +339,7 @@ function sane(x: unknown): ForecastNotes {
 function okDev(d: any): d is DevNotes {
   if (!d || typeof d !== 'object' || typeof d.name !== 'string' || !okNum(d.seen) || d.seen < 0 || d.seen > MAX_AT) return false;
   if (d.last != null && d.last !== 'likely' && d.last !== 'unlikely') delete d.last;
+  if (d.w !== undefined && !okW(d.w)) delete d.w;     // a bad weights vector: uniform again, the device stays
   if (!d.slots || typeof d.slots !== 'object' || Array.isArray(d.slots)) return false;
   const slots = Object.create(null) as Record<string, [number, number, number]>;
   for (const [k, st] of Object.entries(d.slots)) {
@@ -304,24 +401,41 @@ function snapshotDevices(snap: Snapshot | null): { id: string; name: string; dev
 /** the device's tonight: N (sum of its slots' decayed n), the mean and 80% interval over tonight's
  *  nine slots (an unseen slot stands on the prior alone), the guess, and whether any of the nine
  *  slots has ever been folded. */
-function tonightOf(d: DevNotes, at: number): { N: number; mean: number; lo: number; hi: number; guess: Guess; night: boolean; hours: number[] } {
+/** the device's slots decayed to `at` (for reading, not written back), as levels */
+function levelsAt(d: DevNotes, at: number): Levels {
+  return levels(Object.entries(d.slots).map(([k, [n, s, t]]) => [Number(k), decay({ n, s, t }, at)] as [number, SlotStats]));
+}
+
+/** one slot's blended estimate at `at` from the device's levels and the weights w */
+function slotEstimate(d: DevNotes, L: Levels, sl: number, at: number, w: readonly number[]) {
+  const st = d.slots[String(sl)];
+  const de = st && st[0] > 0 ? decay({ n: st[0], s: st[1], t: st[2] }, at) : { n: 0, s: 0 };
+  return blend(experts(L, sl % 24, de.n, de.s), w);
+}
+
+/** the device's tonight: N (sum of its slots' decayed n), the mean and 80% interval over tonight's
+ *  nine slots (each blended from the experts with the weights w), the guess, whether any of the
+ *  nine slots has ever been folded, and whether any of their hours of the day was (on any day). */
+function tonightOf(d: DevNotes, at: number, w: readonly number[]): { N: number; mean: number; lo: number; hi: number; guess: Guess; night: boolean; hourSeen: boolean; hours: number[] } {
   const slots = tonightSlots(at);
   const hours: number[] = [];
   // every slot decays to the look's time first, so a device that went quiet fades (not written back)
-  const pr = prior(Object.values(d.slots).map(([n, s, t]) => decay({ n, s, t }, at)));
+  const L = levelsAt(d, at);
   let mean = 0, lo = 0, hi = 0;
   let night = false;
   for (const sl of slots) {
     const st = d.slots[String(sl)];
     if (st && st[0] > 0) night = true;
-    const de = st ? decay({ n: st[0], s: st[1], t: st[2] }, at) : null;
-    const e = estimate(pr.a, de ? de.s : 0, de ? de.n : 0, PRIOR_K);
+    const e = slotEstimate(d, L, sl, at, w);
     mean += e.mean; lo += e.lo; hi += e.hi;
     hours.push(Math.round(e.mean * 100) / 100);
   }
   mean /= slots.length; lo /= slots.length; hi /= slots.length;
-  const guess: Guess = Math.round(pr.N * 10) / 10 < MIN_SLOTS ? 'unknown' : mean >= LIKELY ? 'likely' : mean < UNLIKELY ? 'unlikely' : 'maybe';
-  return { N: pr.N, mean, lo, hi, guess, night, hours };
+  const nightHours = new Set(slots.map((sl) => sl % 24));
+  let hourSeen = night;
+  if (!hourSeen) for (const [k, st] of Object.entries(d.slots)) if (st[0] > 0 && nightHours.has(Number(k) % 24)) { hourSeen = true; break; }
+  const guess: Guess = Math.round(L.N * 10) / 10 < MIN_SLOTS ? 'unknown' : mean >= LIKELY ? 'likely' : mean < UNLIKELY ? 'unlikely' : 'maybe';
+  return { N: L.N, mean, lo, hi, guess, night, hourSeen, hours };
 }
 
 /** the ids of the other devices the current load sits on (work.loaded.devices, local entries left
@@ -337,7 +451,21 @@ function seatedIds(snap: Snapshot): Set<string> {
   return out;
 }
 
+/** the learning branch: each device's weights learn from its own scored hours */
 export function create(ctx: BranchCtx): Branch {
+  return make(ctx, null);
+}
+
+/** the same branch with the weights fixed to the unit vector of expert k on every read (V1: the
+ *  L5 forecast exactly). It never learns and never writes w. Not a branch the eye builds. */
+export function createFixed(k: number): (ctx: BranchCtx) => Branch {
+  if (!Number.isInteger(k) || k < 0 || k >= NE) throw new RangeError(`no expert ${k}`);
+  return (ctx) => make(ctx, k);
+}
+
+function make(ctx: BranchCtx, fixed: number | null): Branch {
+  const fixedW = fixed === null ? null : unit(fixed);
+  const weightsOf = (d: DevNotes): readonly number[] => fixedW ?? d.w ?? uniform();
   const notes = sane(ctx.load<unknown>(null));
   let snap: Snapshot | null = null;
   let pendingAt: number | null = null;             // a far-forward look waiting for the next one to agree
@@ -407,15 +535,18 @@ export function create(ctx: BranchCtx): Branch {
             const key = String(cur.slot);
             const st = d.slots[key] ?? [0, 0, 0];
             const x = cur.there / cur.looks;
-            // score the guess first: what the slot and the prior said just before, decayed to the
-            // fold time; recorded only while the device is known (the view's own rule), so the
-            // very first folds of a device are not scored
-            const pr = prior(Object.values(d.slots).map(([n, s, t]) => decay({ n, s, t }, now.at)));
-            if (Math.round(pr.N * 10) / 10 >= MIN_SLOTS) {
+            // score the guess first: what the slot, its hour and the device's rate said just
+            // before, decayed to the fold time, blended with the weights then; recorded only while
+            // the device is known (the view's own rule), so the very first folds of a device are
+            // not scored. A scored hour then teaches the weights (the learning branch only)
+            const L = levelsAt(d, now.at);
+            if (Math.round(L.N * 10) / 10 >= MIN_SLOTS) {
               const de = st[0] > 0 ? decay({ n: st[0], s: st[1], t: st[2] }, now.at) : { n: 0, s: 0 };
-              const e = estimate(pr.a, de.s, de.n, PRIOR_K);
-              d.pairs.push({ t: now.at, p: e.mean, lo: e.lo, hi: e.hi, p0: pr.p0, x });
+              const ex = experts(L, cur.slot % 24, de.n, de.s);
+              const e = blend(ex, weightsOf(d));
+              d.pairs.push({ t: now.at, p: e.mean, lo: e.lo, hi: e.hi, p0: L.p0, x });
               if (d.pairs.length > MAX_PAIRS) d.pairs.splice(0, d.pairs.length - MAX_PAIRS);
+              if (fixedW === null) d.w = learn(d.w ?? uniform(), ex, x);
             }
             const f = fold({ n: st[0], s: st[1], t: st[2] }, x, now.at);
             d.slots[key] = [f.n, f.s, f.t];
@@ -425,7 +556,7 @@ export function create(ctx: BranchCtx): Branch {
         if (!d.cur) d.cur = { slot, looks: 0, there: 0, t: now.at };
         d.cur.looks++;
         if (seated ? dev.plugged !== false : active(dev)) d.cur.there++;
-        const t = tonightOf(d, now.at);
+        const t = tonightOf(d, now.at, weightsOf(d));
         if ((t.guess === 'likely' || t.guess === 'unlikely') && t.guess !== d.last) {
           if (d.last) ctx.emit(`forecast: ${name} is now ${t.guess} tonight 22–07 (${fmtPct(t.mean)}%, ${fmtPct(t.lo)}–${fmtPct(t.hi)}%)`);
           d.last = t.guess;
@@ -469,7 +600,7 @@ export function create(ctx: BranchCtx): Branch {
       }
       const ids = Object.keys(notes.dev).filter((id) => present(id) || Object.keys(notes.dev[id].slots).length > 0
         || (notes.dev[id].cur != null && notes.dev[id].cur!.looks > 0));
-      const rated = ids.map((id) => ({ id, d: notes.dev[id], t: tonightOf(notes.dev[id], at) }))
+      const rated = ids.map((id) => ({ id, d: notes.dev[id], t: tonightOf(notes.dev[id], at, weightsOf(notes.dev[id])) }))
         .sort((a, b) => (present(b.id) ? 1 : 0) - (present(a.id) ? 1 : 0)
           || (b.t.guess === 'unknown' ? -1 : b.t.mean) - (a.t.guess === 'unknown' ? -1 : a.t.mean)
           || a.d.name.localeCompare(b.d.name));
@@ -484,7 +615,7 @@ export function create(ctx: BranchCtx): Branch {
       const lines = rated.map(({ id, d, t }) => {
         const when = t.guess === 'unknown'
           ? `tonight 22–07: not enough recent hours yet (${fmtN(t.N)} of ${MIN_SLOTS})`
-          : `tonight 22–07: ${t.guess} ${fmtPct(t.mean)}% (${fmtPct(t.lo)}–${fmtPct(t.hi)}%)${t.night ? '' : ', from daytime only'}`;
+          : `tonight 22–07: ${t.guess} ${fmtPct(t.mean)}% (${fmtPct(t.lo)}–${fmtPct(t.hi)}%)${t.night ? '' : t.hourSeen ? ', from other nights' : ', from daytime only'}`;
         const holds0 = current.get(id)?.holds;
         const holds = typeof holds0 === 'string' ? holds0 : null;
         const speeds = Object.entries(d.tps);
@@ -532,13 +663,13 @@ export function create(ctx: BranchCtx): Branch {
           ['slots of the week seen', `${seen.size} of ${SLOTS}`],
           ['slot', `hour of the week, 0..${SLOTS - 1} = day (0 = sunday) * 24 + hour`],
           ['memory', `a slot's past halves every ${HALF_LIFE_WEEKS} weeks without a look there, decayed again when tonight is read`],
-          ['prior', `${PRIOR_K} pseudo-observations at the device's own overall rate`],
-          ['interval', `80% (wilson), tonight = the average of its nine slots`],
+          ['prior', 'learned per device: eight ways to lean on its own rate and its hour of the day, weighted by how each scored'],
+          ['interval', `80% for the hour's chance, tonight = the average of its nine slots`],
           ['tonight', '22:00–07:00 · likely: 60% or more · unlikely: under 40%'],
         ],
         lines,
         note: rated.length ? undefined : 'no device seen yet.',
-        what: 'guesses when each device is there tonight (22–07) from a decayed beta-binomial over its hours of the week, and how fast it will be from the tok/s it answered with.',
+        what: 'guesses when each device is there tonight (22–07) from its hours of the week, each leaning on the same hour of other days and on the device\'s own rate as much as that predicted well, and how fast it will be from the tok/s it answered with.',
         pairs,
         hints,
       };

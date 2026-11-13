@@ -10,7 +10,7 @@ const HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'kula-eye-learning-'));
 after(() => fs.rmSync(HOME, { recursive: true, force: true }));
 
 const { create, tune, brier, skill, calibration, ALPHA_MIN, ALPHA_MAX } = await import('../src/godseye/branches/learning.ts');
-const { create: forecastCreate } = await import('../src/godseye/branches/forecast.ts');
+const { create: forecastCreate, createFixed, V1 } = await import('../src/godseye/branches/forecast.ts');
 const { GodsEye, dark } = await import('../src/godseye/index.ts');
 
 const dev = (o: Record<string, unknown> = {}) => ({
@@ -255,8 +255,8 @@ test('the worse feed line once with hysteresis, and the recovery line above 0.05
   const skillRow = () => b.view().rows.find((r) => r[0] === 'forecast skill')![1];
   f.peeked = fcView([{ id: 'p1', name: 'pixel', scored: alt(48, 0.5, 0.4, 1, 0.5) }]);    // p never left p0
   b.observe(snap([dev()], 1000) as any, null);
-  assert.equal(skillRow(), 'no slot seen twice yet');
-  assert.equal(f.events.length, 0, 'no slot seen twice yet is not a verdict');
+  assert.equal(skillRow(), 'still at the device\'s own average');
+  assert.equal(f.events.length, 0, 'a forecast still at the device\'s own average is not a verdict');
   f.peeked = fcView([{ id: 'p1', name: 'pixel', scored: alt(48, 0.75, 0.4, 1, 0.5) }]);   // skill -0.25
   b.observe(snap([dev()], 1000) as any, null);
   assert.deepEqual(f.events, ['learning: the forecast is doing worse than each device\'s own average (skill -0.25 over 48 hours)']);
@@ -294,7 +294,7 @@ test('when the row stops showing a skill, the worse state clears with one line, 
   f.peeked = fcView([{ id: 'p1', name: 'pixel', scored: alt(48, 0.5, 0.4, 1, 0.5) }]);
   b.observe(snap([dev()], 2000) as any, null);
   assert.equal(f.events.length, 2);
-  assert.equal(f.events[1], 'learning: the forecast is no longer doing worse than each device\'s own average (no slot seen twice yet)');
+  assert.equal(f.events[1], 'learning: the forecast is no longer doing worse than each device\'s own average (still at the device\'s own average)');
   b.observe(snap([dev()], 3000) as any, null);                                            // still no skill: said once
   assert.equal(f.events.length, 2);
   // worse again, then the baseline shows 0.00: cleared again, with its own reason
@@ -429,23 +429,25 @@ test('a skill far below the baseline is shown clamped to -9.99, not as a huge nu
   assert.equal(f.events.length, 0, 'a baseline shown 0.01 is under the 0.05 floor: no verdict is said');
 });
 
-test('no slot seen twice yet: p only differs from p0 below two decimals', () => {
+// L6 P31: this stage was called "no slot seen twice yet"; under the learned forecast p can leave p0
+// before any slot is seen twice (it borrows the hour of the day), so it is named for what it checks
+test('still at the device\'s own average: p only differs from p0 below two decimals', () => {
   const f = fakeCtx();
   const b = create(f.ctx as any);
   // p = 0.502, p0 = 0.5: the same to two decimals; bs = 0.250004, skill = -0.000016
   f.peeked = fcView([{ id: 'p1', name: 'pixel', scored: alt(48, 0.502, 0.4, 1, 0.5) }]);
   b.observe(snap([dev()], 1000) as any, null);
   const v = b.view();
-  assert.deepEqual(v.rows.find((r) => r[0] === 'forecast skill'), ['forecast skill', 'no slot seen twice yet']);
-  assert.ok(v.lines.includes('pixel · forecast: no slot seen twice yet'));
+  assert.deepEqual(v.rows.find((r) => r[0] === 'forecast skill'), ['forecast skill', 'still at the device\'s own average']);
+  assert.ok(v.lines.includes('pixel · forecast: still at its own average'));
   assert.equal(f.events.length, 0, 'no skill is shown, so no feed line');
-  // one pair where p differs at two decimals is one pair: a slot has still not been seen twice
+  // one pair where p differs at two decimals is one pair: the forecast still says the average
   f.peeked = fcView([{ id: 'p1', name: 'pixel', scored: [...alt(47, 0.502, 0.4, 1, 0.5), pair(99, 0.2, 0.4, 1, 0.5, 1)] }]);
   b.observe(snap([dev()], 2000) as any, null);
-  assert.deepEqual(b.view().rows.find((r) => r[0] === 'forecast skill'), ['forecast skill', 'no slot seen twice yet']);
+  assert.deepEqual(b.view().rows.find((r) => r[0] === 'forecast skill'), ['forecast skill', 'still at the device\'s own average']);
 });
 
-test('no slot seen twice yet until at least 24 pairs differ from p0 to two decimals', () => {
+test('still at the device\'s own average until at least 24 pairs differ from p0 to two decimals', () => {
   const f = fakeCtx();
   const b = create(f.ctx as any);
   const skillRow = () => b.view().rows.find((r) => r[0] === 'forecast skill')![1];
@@ -453,12 +455,12 @@ test('no slot seen twice yet until at least 24 pairs differ from p0 to two decim
   const off = (n: number) => Array.from({ length: n }, (_, i) => pair(100 + i, 0.52, 0.4, 1, 0.5, i % 2));
   f.peeked = fcView([{ id: 'p1', name: 'pixel', scored: [...same(47), pair(99, 0.2, 0.4, 1, 0.5, 1)] }]);
   b.observe(snap([dev()], 1000) as any, null);
-  assert.equal(skillRow(), 'no slot seen twice yet', 'one pair that differs is not a slot seen twice');
-  assert.ok(b.view().lines.includes('pixel · forecast: no slot seen twice yet'));
+  assert.equal(skillRow(), 'still at the device\'s own average', 'one pair that differs is not enough');
+  assert.ok(b.view().lines.includes('pixel · forecast: still at its own average'));
   assert.equal(f.events.length, 0);
   f.peeked = fcView([{ id: 'p1', name: 'pixel', scored: [...same(25), ...off(23)] }]);
   b.observe(snap([dev()], 2000) as any, null);
-  assert.equal(skillRow(), 'no slot seen twice yet', '23 pairs that differ are still under 24');
+  assert.equal(skillRow(), 'still at the device\'s own average', '23 pairs that differ are still under 24');
   // the 24th: bs = (24 * 0.25 + 24 * 0.2504) / 48 = 0.2502, bs0 = 0.25,
   // skill = 1 - 0.2502 / 0.25 = -0.0008 -> shown +0.00, but now it is shown at all
   f.peeked = fcView([{ id: 'p1', name: 'pixel', scored: [...same(24), ...off(24)] }]);
@@ -595,19 +597,25 @@ test('three weeks of a weekly pattern, through the real forecast branch: the row
     }
   };
   // after every hour, the row must say exactly what its own data allows: not enough under 24 pairs,
-  // no slot seen twice while fewer than 24 pairs' p differs from p0 at two decimals, else a skill
+  // "still at the device's own average" while fewer than 24 pairs' p differs from p0 at two
+  // decimals, else a skill
   const rows: string[] = [];
   const rowNow = () => {
     const scored = (fc.view() as any).pairs.flatMap((d: any) => d.scored) as number[][];
     const differ = scored.filter((q) => Math.round(q[1] * 100) !== Math.round(q[4] * 100)).length;
     const row = b.view().rows.find((r) => r[0] === 'forecast skill')![1];
     if (scored.length < 24) assert.equal(row, `not enough scored hours yet (${scored.length} of 24)`);
-    else if (differ < 24) assert.equal(row, 'no slot seen twice yet');
+    else if (differ < 24) assert.equal(row, 'still at the device\'s own average');
     else assert.match(row, /^[+-]\d\.\d\d against each device's own average \(Brier 0\.\d\d vs 0\.\d\d\)$/);
     rows.push(row);
   };
   for (let day = 0; day < 21; day++) { hourLooks(day, 10, false); rowNow(); hourLooks(day, 22, true); rowNow(); }   // three weeks, two hours a day
-  assert.ok(rows.includes('no slot seen twice yet'), 'the row passed through no-slot: one pair is not a verdict');
+  // L6 P31: under L5 p equalled p0 until a slot was seen twice, so the row passed through that
+  // stage here. The learned forecast leans on the hour of the day from its first scored hour, so
+  // every pair already says something of its own: the row goes from "not enough" straight to a
+  // skill (the stage itself is tested above, on pairs made for it)
+  assert.ok(!rows.includes('still at the device\'s own average'), 'the learned forecast leaves the device\'s own average at once');
+  assert.ok(rows.includes('not enough scored hours yet (23 of 24)'), 'one pair at a time is still not a verdict');
   const v = b.view();
   // 42 hours looked at: 41 folds, the first four not scored (the device was not known yet)
   assert.equal(v.rows.find((r) => r[0] === 'forecast scored')![1], '37 hours');
@@ -617,9 +625,10 @@ test('three weeks of a weekly pattern, through the real forecast branch: the row
   assert.deepEqual(f.events.filter((e) => /the forecast is doing/.test(e)), [], 'a weekly pattern is not worse than the device\'s own average');
 });
 
-test('a habit flip: the skill goes negative, said once, and comes back once the habit returns', () => {
+/** a forecast branch and the learning branch driven together, two hours a day (10:00 and 22:00) */
+function habitRun(makeForecast: (ctx: any) => any) {
   const fcF = fakeCtx();
-  const fc = forecastCreate(fcF.ctx as any);
+  const fc = makeForecast(fcF.ctx as any);
   const f = fakeCtx();
   const b = create(f.ctx as any);
   const hourAt = (day: number, hour: number) => new Date(2026, 10, 8 + day, hour, 0, 0).getTime();
@@ -632,16 +641,52 @@ test('a habit flip: the skill goes negative, said once, and comes back once the 
       b.observe(s, null);
     }
   };
-  for (let day = 0; day < 21; day++) { hourLooks(day, 10, false); hourLooks(day, 22, true); }    // three weeks of nights
-  assert.match(b.view().rows.find((r) => r[0] === 'forecast skill')![1], /^\+0\.\d\d against/);
-  for (let day = 21; day < 42; day++) { hourLooks(day, 10, true); hourLooks(day, 22, false); }   // the habit flips to days
-  const worse = f.events.filter((e) => /^learning: the forecast is doing worse than each device's own average \(skill -\d+\.\d\d over \d+ hours\)$/.test(e));
-  assert.equal(worse.length, 1, f.events.join('\n'));
-  assert.match(b.view().rows.find((r) => r[0] === 'forecast skill')![1], /^-\d\.\d\d against/, 'the flipped forecast is worse than the device\'s own average');
-  for (let day = 42; day < 84; day++) { hourLooks(day, 10, false); hourLooks(day, 22, true); }   // back to nights, six weeks
-  const better = f.events.filter((e) => /^learning: the forecast is doing better than each device's own average again \(skill \+\d+\.\d\d over \d+ hours\)$/.test(e));
-  assert.equal(better.length, 1, f.events.join('\n'));
-  assert.match(b.view().rows.find((r) => r[0] === 'forecast skill')![1], /^\+0\.\d\d against/);
+  const days = (from: number, to: number, nights: boolean) => {
+    for (let day = from; day < to; day++) { hourLooks(day, 10, !nights); hourLooks(day, 22, nights); }
+  };
+  const skillRow = () => b.view().rows.find((r) => r[0] === 'forecast skill')![1];
+  /** the forecast's own skill over the hours it scored from t on: 1 - BS / BS0 */
+  const skillSince = (t: number) => {
+    const pairs = (fc.view() as any).pairs.flatMap((d: any) => d.scored).filter((q: number[]) => q[0] >= t);
+    const { bs, bs0 } = brier(pairs);
+    return { n: pairs.length, skill: 1 - bs / bs0 };
+  };
+  return { f, days, skillRow, skillSince, hourAt };
+}
+const WORSE = /^learning: the forecast is doing worse than each device's own average \(skill -\d+\.\d\d over \d+ hours\)$/;
+
+// L6 P31: this test is about learning's detector, which needs a forecast that gets worse: it runs
+// the L5 forecast (createFixed(V1)); the learned forecast's own case follows
+test('a habit flip: the skill goes negative, said once, and comes back once the habit returns', () => {
+  const r = habitRun(createFixed(V1));
+  r.days(0, 21, true);                                                       // three weeks of nights
+  assert.match(r.skillRow(), /^\+0\.\d\d against/);
+  r.days(21, 42, false);                                                     // the habit flips to days
+  const worse = r.f.events.filter((e) => WORSE.test(e));
+  assert.equal(worse.length, 1, r.f.events.join('\n'));
+  assert.match(r.skillRow(), /^-\d\.\d\d against/, 'the flipped forecast is worse than the device\'s own average');
+  r.days(42, 84, true);                                                      // back to nights, six weeks
+  const better = r.f.events.filter((e) => /^learning: the forecast is doing better than each device's own average again \(skill \+\d+\.\d\d over \d+ hours\)$/.test(e));
+  assert.equal(better.length, 1, r.f.events.join('\n'));
+  assert.match(r.skillRow(), /^\+0\.\d\d against/);
+});
+
+// measured, not assumed: right after the flip the learned forecast is surer of the old habit and
+// pays more (its skill over the whole flip is below the L5 one), but it adapts faster: over the
+// flip's last week it beats the device's own average while the L5 forecast does not. Its strong
+// skill before the flip keeps learning's whole-window skill above the worse line
+test('a habit flip with the learned forecast (L6 P31): no worse line, and over the flip\'s last week it adapts past the L5 one', () => {
+  const v1 = habitRun(createFixed(V1));
+  const v2 = habitRun(forecastCreate);
+  for (const r of [v1, v2]) { r.days(0, 21, true); r.days(21, 42, false); }
+  assert.deepEqual(v2.f.events.filter((e) => WORSE.test(e)), [], v2.f.events.join('\n'));
+  const flip = (r: typeof v1) => r.skillSince(r.hourAt(21, 0));
+  const lastWeek = (r: typeof v1) => r.skillSince(r.hourAt(35, 0));
+  console.log(`skill over the whole flip: L5 ${flip(v1).skill.toFixed(3)}, learned ${flip(v2).skill.toFixed(3)} (n ${flip(v2).n})`);
+  console.log(`skill over its last week: L5 ${lastWeek(v1).skill.toFixed(3)}, learned ${lastWeek(v2).skill.toFixed(3)} (n ${lastWeek(v2).n})`);
+  assert.equal(flip(v2).n, flip(v1).n, 'the same hours scored');
+  assert.ok(lastWeek(v2).skill > lastWeek(v1).skill, `last week: learned ${lastWeek(v2).skill} vs L5 ${lastWeek(v1).skill}`);
+  assert.ok(lastWeek(v2).skill > 0, 'by the last week of the flip the learned forecast beats the device\'s own average again');
 });
 
 test('learning reads only the view: its file never imports the forecast branch', () => {

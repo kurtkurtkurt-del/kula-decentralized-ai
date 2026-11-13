@@ -9,7 +9,7 @@
 //    as the naive guess);
 //  - skill = 1 - BS / BS0, shown only when there are at least 24 pairs, the baseline Brier shown
 //    to two decimals is not 0.00 (nothing to beat) and at least 24 pairs' p differs from p0 to two
-//    decimals (until a slot has been seen twice, p equals p0 by construction); what is shown is
+//    decimals (a forecast that still says the device's own average has nothing to judge); what is shown is
 //    clamped to [-9.99, +1.00], and the feed's thresholds compare that same shown value, never the
 //    raw one;
 //  - calibration: said = mean(p), was = mean(x) over the same pairs (is the chance it gave about
@@ -49,7 +49,7 @@ const FC_PAIRS_MAX = 200;          // …and its cap on scored hours per device
 const SKILL_MIN_PAIRS = 24;        // scored hours before the skill is shown
 const FEED_MIN_PAIRS = 48;         // …for the feed lines
 const SLOT_DIFF_MIN = 24;          // pairs whose p differs from p0 (two decimals) before a skill is shown:
-                                   // until a slot has been seen twice, p equals p0 by construction
+                                   // until then the forecast still says the device's own average
 const BASELINE_MIN = 0.05;         // the baseline Brier as shown must be at least this for a skill verdict
 const HOUR_MS = 3600_000;          // an α feed line at most this often per device
 const SKILL_WORSE = -0.05;         // the shown skill at or below this: worse than the device's own average
@@ -264,7 +264,9 @@ type Scored = ReturnType<typeof scorePairs>;
 
 /** what the skill row says, decided on the values as shown: nothing at all while there is no
  *  forecast view to read, nothing under 24 pairs, nothing to beat when the baseline Brier shown is
- *  0.00, no slot seen twice while fewer than 24 pairs' p differs from p0, else the shown skill. The
+ *  0.00, "still at the device's own average" while fewer than 24 pairs' p differs from p0 (the
+ *  forecast has hardly said anything of its own yet, so there is no skill to judge), else the
+ *  shown skill. The
  *  feed compares exactly the same shown value. */
 type ShownSkill =
   | { kind: 'less'; n: number }
@@ -287,7 +289,7 @@ function skillRowText(s: SkillShow): string {
   if (s.kind === 'noskill') return r2(s.bs) === 0
     ? `no skill to beat: the device's own average was exact (Brier ${fmt2(s.bs)} vs ${fmt2(s.bs0)})`
     : `no skill to beat: the device's own average leaves nothing to compare (Brier ${fmt2(s.bs)} vs ${fmt2(s.bs0)})`;
-  if (s.kind === 'noslot') return 'no slot seen twice yet';
+  if (s.kind === 'noslot') return 'still at the device\'s own average';
   return `${fmtSkill(s.shown)} against each device's own average (Brier ${fmt2(s.bs)} vs ${fmt2(s.bs0)})`;
 }
 
@@ -295,7 +297,7 @@ function skillRowText(s: SkillShow): string {
 function noSkillWhy(s: ShownSkill): string {
   if (s.kind === 'less') return 'too few scored hours';
   if (s.kind === 'noskill') return 'nothing to compare';
-  if (s.kind === 'noslot') return 'no slot seen twice yet';
+  if (s.kind === 'noslot') return 'still at the device\'s own average';
   return 'the baseline is too small to compare';
 }
 
@@ -303,7 +305,7 @@ function noSkillWhy(s: ShownSkill): string {
 function devLine(name: string, s: ShownSkill): string {
   if (s.kind === 'less') return `${name} · forecast: not enough scored hours yet (${s.n} of ${SKILL_MIN_PAIRS})`;
   if (s.kind === 'noskill') return `${name} · forecast: no skill to beat (Brier ${fmt2(s.bs)} vs ${fmt2(s.bs0)}) · ${fmtCalShort(s.cal)}`;
-  if (s.kind === 'noslot') return `${name} · forecast: no slot seen twice yet`;
+  if (s.kind === 'noslot') return `${name} · forecast: still at its own average`;
   return `${name} · forecast skill ${fmtSkill(s.shown)} (Brier ${fmt2(s.bs)} vs ${fmt2(s.bs0)}) · ${fmtCalShort(s.cal)}`;
 }
 

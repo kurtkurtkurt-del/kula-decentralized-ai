@@ -5,6 +5,9 @@
 // they said is scored against what the looks held:
 //  - forecast: its scored hours (view().pairs, gathered every 6000 looks and merged by device and
 //    t) as brier against its own prior, against 0.5, a ten-bin calibration, ece and the 80% cover;
+//    with opts.rate (the scenario's true chance of each scored hour, synth.ts rateOf) also how
+//    often the 80% interval holds that chance (rateCover80), and its mean width (width80);
+//    opts.forecast benches another forecast branch (createFixed(V1): the L5 forecast);
 //  - learning and forecast speed: the tok/s guess in the notes saved the look before, against the
 //    tok/s the device then answered with, beside a naive guess (the last tok/s seen);
 //  - senses: its feed lines, its flapping lines, its stale row, and the share of new readings that
@@ -90,7 +93,10 @@ export interface ForecastScore {
   skill: number | null;
   bins: Bin[];
   ece: number | null;
-  cover80: number | null;
+  cover80: number | null;         // lo <= x <= hi with x the hour's outcome (kept; it cannot judge a rate's interval)
+  rateN: number;                  // pairs whose hour has a known chance (opts.rate)
+  rateCover80: number | null;     // the share of those with lo <= rate <= hi
+  width80: number | null;         // the mean hi - lo
 }
 export interface SpeedScore {
   n: number;
@@ -118,26 +124,34 @@ export interface Scorecard {
 
 export type Pair = [number, number, number, number, number, number];   // [t, p, lo, hi, p0, x]
 
-export function forecastScore(pairs: Pair[]): ForecastScore {
+/** the pairs scored; rates[i] (when given) is the true chance of pair i's hour, or null */
+export function forecastScore(pairs: Pair[], rates?: (number | null)[]): ForecastScore {
   const n = pairs.length;
   const bins: { n: number; p: number; x: number }[] = Array.from({ length: 10 }, () => ({ n: 0, p: 0, x: 0 }));
-  let sq = 0, sq0 = 0, sqHalf = 0, cover = 0;
-  for (const [, p, lo, hi, p0, x] of pairs) {
+  let sq = 0, sq0 = 0, sqHalf = 0, cover = 0, rateN = 0, rateIn = 0, width = 0;
+  pairs.forEach(([, p, lo, hi, p0, x], i) => {
     sq += (p - x) ** 2;
     sq0 += (p0 - x) ** 2;
     sqHalf += (0.5 - x) ** 2;
     if (lo <= x && x <= hi) cover++;
+    width += hi - lo;
+    const r = rates?.[i];
+    if (typeof r === 'number') {
+      rateN++;
+      if (lo <= r && r <= hi) rateIn++;
+    }
     const b = bins[Math.min(9, Math.floor(p * 10))];
     b.n++; b.p += p; b.x += x;
-  }
+  });
   const outBins: Bin[] = bins.map((b) => ({ n: b.n, said: b.n ? b.p / b.n : null, was: b.n ? b.x / b.n : null }));
-  if (n === 0) return { n, brier: null, brier0: null, brierHalf: null, skill: null, bins: outBins, ece: null, cover80: null };
+  const rateCover80 = rateN ? rateIn / rateN : null;
+  if (n === 0) return { n, brier: null, brier0: null, brierHalf: null, skill: null, bins: outBins, ece: null, cover80: null, rateN, rateCover80, width80: null };
   let ece = 0;
   for (const b of outBins) if (b.n) ece += (b.n / n) * Math.abs((b.said as number) - (b.was as number));
   const brier = sq / n, brier0 = sq0 / n;
   return {
     n, brier, brier0, brierHalf: sqHalf / n, skill: brier0 > 0 ? 1 - brier / brier0 : null,
-    bins: outBins, ece, cover80: cover / n,
+    bins: outBins, ece, cover80: cover / n, rateN, rateCover80, width80: width / n,
   };
 }
 
@@ -197,13 +211,22 @@ function notesOf(s: Seat, i: number): { i: number; notes: any } | null {
   return s.parsed;
 }
 
-/** the stream of looks through the three branches, scored; keep.pairs gets the merged pairs */
-export function runBench(looks: Iterable<BenchLook>, keep?: { pairs?: Pair[] }): Scorecard {
+export interface BenchOpts {
+  /** the forecast branch to bench (default: forecast.ts's create) */
+  forecast?: BranchMaker;
+  /** the true chance that device id was there in the hour a pair at t scored, or null */
+  rate?: (id: string, t: number) => number | null;
+}
+export type BranchMaker = (ctx: BranchCtx) => Branch;
+
+/** the stream of looks through the three branches, scored; keep.pairs gets the merged pairs and
+ *  keep.ids the device of each, aligned */
+export function runBench(looks: Iterable<BenchLook>, keep?: { pairs?: Pair[]; ids?: string[] }, opts?: BenchOpts): Scorecard {
   const clock = { at: 0, i: 0 };
   let seats: { senses: Seat; forecast: Seat; learning: Seat } | null = null;
-  const pairs = new Map<string, Pair>();
+  const pairs = new Map<string, { id: string; q: Pair }>();
   const gather = (v: BranchView): void => {
-    for (const d of v.pairs ?? []) for (const q of d.scored) pairs.set(`${d.id}|${q[0]}`, q);
+    for (const d of v.pairs ?? []) for (const q of d.scored) pairs.set(`${d.id}|${q[0]}`, { id: d.id, q });
   };
   const learning = new SpeedTally();
   const fSpeed = new SpeedTally();
@@ -215,7 +238,7 @@ export function runBench(looks: Iterable<BenchLook>, keep?: { pairs?: Pair[] }):
     clock.i = i;
     seats ??= {
       senses: seat(makeSenses, clock, true),
-      forecast: seat(makeForecast, clock, false),
+      forecast: seat(opts?.forecast ?? makeForecast, clock, false),
       learning: seat(makeLearning, clock, false),
     };
     const now = snapshotOf(look.at, look.facts);
@@ -262,12 +285,15 @@ export function runBench(looks: Iterable<BenchLook>, keep?: { pairs?: Pair[] }):
     i++;
   }
   if (seats !== null) gather(seats.forecast.branch.view());
-  const merged = [...pairs.values()].sort((a, b) => a[0] - b[0]);
-  if (keep) keep.pairs = merged;
+  const all = [...pairs.values()].sort((a, b) => a.q[0] - b.q[0]);
+  const merged = all.map((e) => e.q);
+  if (keep) { keep.pairs = merged; keep.ids = all.map((e) => e.id); }
+  const rate = opts?.rate;
+  const rates = rate ? all.map((e) => rate(e.id, e.q[0])) : undefined;
   const emits = seats?.senses.emits ?? [];
   return {
     looks: i,
-    forecast: forecastScore(merged),
+    forecast: forecastScore(merged, rates),
     learning: learning.score(),
     forecastSpeed: fSpeed.score(),
     senses: {
@@ -292,7 +318,7 @@ export function scorecardText(name: string, sc: Scorecard): string {
   const s = sc.senses;
   return [
     `${name} · ${sc.looks} looks`,
-    `  forecast: n ${f.n} · brier ${r6(f.brier)} · brier0 ${r6(f.brier0)} · brierHalf ${r6(f.brierHalf)} · skill ${r6(f.skill)} · ece ${r6(f.ece)} · cover80 ${r6(f.cover80)}`,
+    `  forecast: n ${f.n} · brier ${r6(f.brier)} · brier0 ${r6(f.brier0)} · brierHalf ${r6(f.brierHalf)} · skill ${r6(f.skill)} · ece ${r6(f.ece)} · cover80 ${r6(f.cover80)} · rateCover80 ${r6(f.rateCover80)} (n ${f.rateN}) · width80 ${r6(f.width80)}`,
     `    bins: ${f.bins.map((b, k) => `${k}:${b.n}/${r6(b.said)}/${r6(b.was)}`).join(' ')}`,
     `  learning speed: ${sp(sc.learning)}`,
     `  forecast speed: ${sp(sc.forecastSpeed)}`,

@@ -162,6 +162,22 @@ export function* stable(seed: number, lossy = false): Generator<Snapshot> {
   }
 }
 
+/** the true chance that device id was there in the hour a pair at t scored (the hour of
+ *  t - 1 h, the fold being the first look of the next hour), as the scenario draws it:
+ *  weekly night 0.9 + 0.1 * 0.1 = 0.91 at 22-07, else 0.10; weekly office 0.9 + 0.1 * 0.05 = 0.905
+ *  mon-fri 9-17, else 0.05; coin 0.5; any other scenario or device: null. */
+export function rateOf(name: ScenarioName): (id: string, t: number) => number | null {
+  return (id, t) => {
+    const d = new Date(t - HOUR);
+    const h = d.getHours();
+    const dow = d.getDay();
+    if (name === 'weekly' && id === 'night') return h >= 22 || h < 7 ? 0.91 : 0.1;
+    if (name === 'weekly' && id === 'office') return dow >= 1 && dow <= 5 && h >= 9 && h < 17 ? 0.905 : 0.05;
+    if (name === 'coin' && id === 'coin') return 0.5;
+    return null;
+  };
+}
+
 /** a scenario's stream by name */
 export function scenario(name: ScenarioName, seed: number): Iterable<Snapshot> {
   switch (name) {
