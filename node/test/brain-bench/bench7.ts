@@ -21,6 +21,8 @@
 //  - excess: wilson(q, nuOf(q, S^2 + max(0, B - W))), disagreement only beyond the noise;
 //  - calm:   B <= W ? wsum's evidence : today's, both centred on q.
 // The card's `off` is the largest |b.q - m.q| over the scored outcomes.
+// L13 P65 wired `excess` into reachBlend, so `now` is `excess` (up to the saved range's rounding to
+// 1e-4). x2 and calm keep L12's nu (nuOf(q, W + B)), so their rows do not move.
 import { reachExperts, reachBlend, type Experts, type ReachMix } from '../../src/godseye/branches/reach.ts';
 import { runBench2, fromSnapshots, type ReachSeen } from './bench2.ts';
 import { scenario2, drift, driftRate, DRIFT_AT } from './synth2.ts';
@@ -63,7 +65,7 @@ export function wilson(q: number, nu: number): { lo: number; hi: number } {
 export const nuOf = (q: number, V: number): number => (V > 0 ? clampNu(q * (1 - q) / V - 1) : NU_MAX);
 
 /** the blend's q, the experts' weighted noise W, their weighted disagreement B and the noise S
- *  when they err together; reachBlend's V is W + B */
+ *  when they err together; reachBlend's V is S^2 + max(0, B - W) since L13 P65 (W + B before) */
 export function terms7(ex: Experts, w: readonly number[]): { q: number; W: number; B: number; S: number } {
   let q = 0;
   for (let k = 0; k < ex.p.length; k++) q += w[k] * ex.p[k];
@@ -88,6 +90,7 @@ export function ranges7(m: ReachMix, p: number, alpha: number): Record<Cand7, { 
 function rangesOf7(m: ReachMix, ex: Experts): Record<Cand7, { lo: number; hi: number }> {
   const b = reachBlend(ex, m.w);
   const { W, B, S } = terms7(ex, m.w);
+  const nuL12 = nuOf(b.q, W + B); // reachBlend's nu before L13 P65, for x2 and calm
   let nuW = 0;
   let top = 0;
   for (let k = 0; k < m.w.length; k++) {
@@ -100,10 +103,10 @@ function rangesOf7(m: ReachMix, ex: Experts): Record<Cand7, { lo: number; hi: nu
     wsum: wilson(m.q, clampNu(nuW)),
     slow: wilson(m.e, SLOW_C),
     heavy: wilson(m.q, clampNu(ex.c[top])),
-    x2: wilson(b.q, clampNu(2 * b.nu)),
+    x2: wilson(b.q, clampNu(2 * nuL12)),
     corr: wilson(b.q, nuOf(b.q, S * S)),
     excess: wilson(b.q, nuOf(b.q, S * S + Math.max(0, B - W))),
-    calm: B <= W ? wilson(b.q, clampNu(nuW)) : wilson(b.q, b.nu),
+    calm: B <= W ? wilson(b.q, clampNu(nuW)) : wilson(b.q, nuL12),
   };
 }
 

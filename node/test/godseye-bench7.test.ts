@@ -1,7 +1,7 @@
 // the brain bench v7 (L11 P62, L12 P64): reach's 80% range, today's and eight candidates, on steady,
 // far and a drift (test/brain-bench/bench7.ts), seeds 1-5. Only the bench's soundness is asserted; the
 // rows, off, the lines I1-I3, J1-J3 and pick2 are printed to read, never asserted. Their bounds are
-// predictions.
+// predictions. L13 P65 wired `excess`: now's and excess's rows are pinned and asserted equal.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
@@ -55,7 +55,8 @@ test('bench7: the copied wilson gives reachBlend\'s lo and hi on three inputs', 
   }
 });
 
-test('bench7: nuOf of terms7\'s W + B is reachBlend\'s nu on the three inputs', () => {
+// L13 P65 wired `excess`: reachBlend's V is S^2 + max(0, B - W) (it was W + B)
+test('bench7: nuOf of terms7\'s S^2 + max(0, B - W) is reachBlend\'s nu on the three inputs', () => {
   const inputs: [Experts, number[]][] = [
     [{ p: [0.95, 0.9, 0.93, 0.96], c: [400, 9, 39, 380] }, [0.4, 0.1, 0.2, 0.3]],
     [{ p: [0.5, 0.5, 0.5, 0.5], c: [1, 9, 39, 1] }, [0.25, 0.25, 0.25, 0.25]],
@@ -64,7 +65,7 @@ test('bench7: nuOf of terms7\'s W + B is reachBlend\'s nu on the three inputs', 
   for (const [ex, w] of inputs) {
     const b = reachBlend(ex, w);
     const t = terms7(ex, w);
-    const nu = nuOf(t.q, t.W + t.B);
+    const nu = nuOf(t.q, t.S * t.S + Math.max(0, t.B - t.W));
     assert.ok(Math.abs(nu - b.nu) <= 1e-9 * Math.abs(b.nu), `nu ${nu} vs ${b.nu}`);
   }
 });
@@ -74,6 +75,33 @@ test('bench7: now on steady seed 1 is bench2\'s cover80 and width80', () => {
   const now = card('reach', 1).whole.now;
   assert.ok(Math.abs((now.cover as number) - (b2.cover80 as number)) <= 1e-12, `cover ${now.cover} vs ${b2.cover80}`);
   assert.ok(Math.abs((now.width as number) - (b2.width80 as number)) <= 1e-12, `width ${now.width} vs ${b2.width80}`);
+});
+
+// L13 P65 wired `excess` into reachBlend: now (the saved m.lo, m.hi, rounded to 1e-4) is excess on
+// every scenario. Pinned, the mean over seeds 1-5 (was now: steady .9908/.0931/.0949, far
+// .9896/.0721/.0727): now steady cover .9590 width .0639 score .0690, far .8994/.0471/.0547, drift
+// .8231/.1301/.2080, after the shift .7497/.1896/.3325; excess steady .9586/.0639/.0690, far
+// .8990/.0471/.0547, drift .8223/.1301/.2080, after the shift .7497/.1896/.3325. They differ only
+// where a rounded bound flips a cover (at most .001 here).
+test('bench7: now is excess (L13 P65), the rows pinned', () => {
+  const pin: Record<string, [Part7, Part7]> = {};
+  for (const name of SCENARIOS7) {
+    pin[name] = [mean(name, 'now', (c) => c.whole), mean(name, 'excess', (c) => c.whole)];
+  }
+  pin.after = [mean('drift', 'now', (c) => c.after as Record<Cand7, Part7>), mean('drift', 'excess', (c) => c.after as Record<Cand7, Part7>)];
+  const want: Record<string, [number, number, number, number, number, number]> = {
+    reach: [0.9590, 0.0639, 0.0690, 0.9586, 0.0639, 0.0690],
+    far: [0.8994, 0.0471, 0.0547, 0.8990, 0.0471, 0.0547],
+    drift: [0.8231, 0.1301, 0.2080, 0.8223, 0.1301, 0.2080],
+    after: [0.7497, 0.1896, 0.3325, 0.7497, 0.1896, 0.3325],
+  };
+  for (const [key, [now, ex]] of Object.entries(pin)) {
+    const got = [now.cover, now.width, now.score, ex.cover, ex.width, ex.score] as number[];
+    got.forEach((g, i) => assert.ok(Math.abs(g - want[key][i]) <= 5e-5, `${key} [${i}]: ${g} vs ${want[key][i]}`));
+    assert.ok(Math.abs((now.cover as number) - (ex.cover as number)) <= 0.001, `${key} cover ${now.cover} vs ${ex.cover}`);
+    assert.ok(Math.abs((now.width as number) - (ex.width as number)) <= 1e-4, `${key} width ${now.width} vs ${ex.width}`);
+    assert.ok(Math.abs((now.score as number) - (ex.score as number)) <= 1e-4, `${key} score ${now.score} vs ${ex.score}`);
+  }
 });
 
 test('bench7: bench2 on reach seed 1 with and without eachReach is the same', () => {

@@ -54,13 +54,16 @@ test('blend: a unit vector gives that expert\'s p and nu = c; uniform weights by
     near(b.nu, ex.c[k], 1e-9, `nu of expert ${k}`);
     assert.ok(b.lo <= b.q && b.q <= b.hi, `expert ${k}: ${b.lo} ${b.q} ${b.hi}`);
   }
-  // uniform: q = 2.425/4 = 0.60625; V = 0.041836, nu = 0.238711/V - 1 = 4.7059; Wilson at 1.2816
-  // gives mid 0.578761 and half 0.250033
+  // uniform: q = 2.425/4 = 0.60625. L13 P65 (bench7's `excess`): v = p(1-p)/(c+1) =
+  // 0.046875, 0.0315, 0.006, 0.0625; W = 0.146875/4 = 0.036719; B = 0.020469/4 = 0.005117 (W + B is
+  // the old V 0.041836, nu 4.7059); B < W, so V = S^2 with S = (0.216506 + 0.177482 + 0.077460 +
+  // 0.25)/4 = 0.180362, V = 0.032530, nu = 0.238711/V - 1 = 6.3381; Wilson at 1.2816 gives
+  // mid 0.584382 and half 0.222728
   const u = reachBlend(ex, [0.25, 0.25, 0.25, 0.25]);
   near(u.q, 0.60625, 1e-12, 'uniform q');
-  near(u.nu, 4.7059, 1e-3, 'uniform nu');
-  near(u.lo, 0.32873, 1e-4, 'uniform lo');
-  near(u.hi, 0.82879, 1e-4, 'uniform hi');
+  near(u.nu, 6.3381, 1e-3, 'uniform nu');
+  near(u.lo, 0.36165, 1e-4, 'uniform lo');
+  near(u.hi, 0.80711, 1e-4, 'uniform hi');
   assert.ok(0 <= u.lo && u.lo <= u.q && u.q <= u.hi && u.hi <= 1);
   // all experts at certainty: V is 0, nu 1e6
   const sure = reachBlend({ p: [1, 1, 1, 1], c: [5, 5, 5, 5] }, [0.25, 0.25, 0.25, 0.25]);
@@ -216,9 +219,12 @@ const HEAD = {
 const P45 = {
   stat: 'reachability right 68%',     // (48 + 32) of 118 hits
   gauge: 68,
+  // L13 P65: reachBlend's range is bench7's `excess`, so the shown range narrows (alpha 22-90% to
+  // 30-86%, beta 33-73% to 39-68%); the test's `line` derives it from the saved m.lo and m.hi, and
+  // m.q (the guess) is unchanged
   lines: [
-    'alpha \u{b7} reach right 81% of 59 \u{b7} \u{3b1} 0.75 \u{b7} next look 62% (22\u{2013}90%)',
-    'beta \u{b7} reach right 54% of 59 \u{b7} \u{3b1} 0.8 \u{b7} next look 54% (33\u{2013}73%)',
+    'alpha \u{b7} reach right 81% of 59 \u{b7} \u{3b1} 0.75 \u{b7} next look 62% (30\u{2013}86%)',
+    'beta \u{b7} reach right 54% of 59 \u{b7} \u{3b1} 0.8 \u{b7} next look 54% (39\u{2013}68%)',
   ],
 };
 const noHits = (r: any) => { const { hits: _h, ...rest } = r; return rest; };

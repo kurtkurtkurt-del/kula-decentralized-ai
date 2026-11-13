@@ -123,6 +123,8 @@ test('P41 R4: the blend\'s hits are at most 0.01 below today\'s', () => {
   }
 });
 
+// L13 P65 (reachBlend takes bench7's `excess`), seed 1: steady cover80 .9325 width80 .0635 (was
+// .9944/.0913), far .8887/.0458 (was .9673/.0704)
 test('P41 R5 (prediction): the 80% interval holds the true rate at least 70% of the looks on steady and far', () => {
   for (const id of ['steady', 'far'] as const) {
     const r = row(id);

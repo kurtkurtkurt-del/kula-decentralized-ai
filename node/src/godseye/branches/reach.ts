@@ -8,9 +8,13 @@
 //    2 slow:   p = e (an average of rate 0.05), c = 39
 //    3 markov: after the last outcome k, a = t[2k+1] answers of b = t[2k] + a looks,
 //              p = (a+0.5)/(b+1), c = b+1; as the mean while there is no last outcome
-//  - blend: q = sum w p; V = sum w (p(1-p)/(c+1) + (p-q)^2) (the mixture's variance of the chance);
+//  - blend: q = sum w p; with v = p(1-p)/(c+1), W = sum w v (the experts' noise), B = sum w (p-q)^2
+//    (their disagreement) and S = sum w sqrt(v) (the noise when they err together),
+//    V = S^2 + max(0, B - W) (disagreement counted only beyond the noise);
 //    nu = clamp(q(1-q)/V - 1, 1, 1e6), 1e6 when V is not > 0; [lo, hi] = Wilson's 80% interval
 //    (z 1.2816) of q with nu looks.
+//    L13 P65: bench7's pick2 `excess`, mean score .1106 against W + B's .1278 (cover .96 steady,
+//    .90 far, .75 after a drift).
 //  - learn with outcome y: u = w exp(-0.5 (p-y)^2); w = 0.999 u/sum(u) + 0.001/4. The total squared
 //    error is at most the best expert's plus 2(ln 4 + 0.001 T).
 
@@ -73,11 +77,17 @@ function wilson(q: number, nu: number, z: number): { lo: number; hi: number } {
 export function reachBlend(ex: Experts, w: readonly number[]): Blend {
   let q = 0;
   for (let k = 0; k < EXPERTS; k++) q += w[k] * ex.p[k];
-  let V = 0;
+  let W = 0;
+  let B = 0;
+  let S = 0;
   for (let k = 0; k < EXPERTS; k++) {
     const p = ex.p[k];
-    V += w[k] * (p * (1 - p) / (ex.c[k] + 1) + (p - q) ** 2);
+    const v = p * (1 - p) / (ex.c[k] + 1);
+    W += w[k] * v;
+    B += w[k] * (p - q) ** 2;
+    S += w[k] * Math.sqrt(v);
   }
+  const V = S * S + Math.max(0, B - W);
   const nu = V > 0 ? Math.min(NU_MAX, Math.max(1, q * (1 - q) / V - 1)) : NU_MAX;
   const { lo, hi } = wilson(q, nu, Z80);
   return { q, nu, lo, hi };
