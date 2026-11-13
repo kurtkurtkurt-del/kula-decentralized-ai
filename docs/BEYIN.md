@@ -152,7 +152,7 @@ maths of kula's planner copied small into `branches/decide.ts` (the eye imports 
 
 | branch | cards | example |
 |---|---|---|
-| planner | split (fits only split, or GAIN 1.15× faster than the fastest place alone), apart (n answers at once), alone (split is slower: load it alone), barred (a device in the split should rest or is not trusted) | "Gemma 3 4B would run faster split over mac and tablet: ~11 tok/s; alone here on mac ~8.8" |
+| planner | split (fits only split, or GAIN 1.15× faster than the fastest place alone; once 3 split answers taught the link cost and every seat was measured, when the 80% range's low end reaches the fastest place alone), apart (n answers at once), alone (split is slower: load it alone), barred (a device in the split should rest or is not trusted) | "Gemma 3 4B would run faster split over mac and tablet: ~11 tok/s; alone here on mac ~8.8" |
 | executor | slow (apart: under a third of the fastest tok/s), rest (limits says so), failing (3 of its last 12 checks unreachable), idle (took no prompt for two minutes while another answered) | "galaxy answers at ~3 tok/s, this computer at ~14" → leave it out |
 | models | pick (nothing loaded: the biggest that fits a place), bigger (1.3× and fits the same places), tight (memory dropped since the load, it no longer fits), fetch (a catalog model clearly bigger than anything here), vision (photos came that nothing here could see) | "photos came but nothing here sees them: fetch SmolVLM 500M (0.5 GB)" |
 | advisor | night (a waiting project whose device is gone or whose model does not fit), tonight (the hour the forecast has most devices there), first (of the others' cards, which one first, said plainly) | "tonight 3 devices are likely free: plan the project for 02:00" |
