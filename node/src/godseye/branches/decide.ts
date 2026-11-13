@@ -9,8 +9,16 @@
 // with many) or, failing that, from the memory bandwidth it measured
 // × kula's efficiency (0.6, a computer as a worker 0.3). This computer's bandwidth is not in the
 // look: until a model ran here its speed is "not measured yet", and no card quotes a number for it.
+// A speed a device answered with on this very model file (weight 1 or more, as below) is taken as
+// it is for that model, never converted from another file.
 // A split runs its layers one device after the other, so its token is the sum of each device's
 // part plus a hop per worker; the bytes go to the fastest device first, as sim.ts does.
+//
+// A device's free memory is its worker's live reading (GET /status, `worker.ramFreeMb`) when that
+// is fresh (WORKER_FRESH_MS) and it holds none of our model; when it holds our model, a reading
+// taken after the load plus what our model holds there, never above what it said at pairing; while
+// a model loads, or with no such reading, what it said at pairing. A phone answering another master
+// (a fresh `busy` while it holds nothing of ours and nothing loads) is left out with a line: no card.
 import type { BranchCtx, DeviceHint, EyeDevice, EyeModel, Snapshot, SuggestAction, Suggestion } from '../types.js';
 import { sha256Hex } from '../hash.js';
 import { active } from './util.js';
@@ -21,6 +29,7 @@ export const EFF = 0.6;            // sim.ts DEFAULT_EFF: the share of its bandw
 export const PC_EFF = 0.3;         // planner.ts: a computer as a worker (measured on a mac m1)
 export const GAIN = 1.15;          // sim.ts GAIN_TO_SHARE: "faster" means at least this much faster
 export const HOP_MS = 10;          // per worker per token: 3 round trips of 3 ms (planner.ts net) and the activation
+export const WORKER_FRESH_MS = 120_000;   // a free device's worker reading is used this long after it came
 export const SLACK = 1.05;         // a card that shows stays while its reason holds within this much
 export const SHOW = 3;             // looks a reason must hold before its card shows
 export const HIDE = 4;             // looks a reason must be gone before its card goes
@@ -32,10 +41,11 @@ export interface Speed { gbs: number; from: 'measured' | 'bandwidth' }
 export interface Seat {
   id: string; name: string; local: boolean; kind: string;
   via: EyeDevice['via'] | 'here';
-  ramMb: number;                    // what it said it has free (this computer: free plus what the loaded model holds here)
+  ramMb: number;                    // what it has free: the worker's live reading or pairing's number, as field() says (this computer: free plus what the loaded model holds here)
   capMb: number;                    // what a model may take there (× the share)
   speed: Speed | null;
   tonight: DeviceHint['tonight'] | null;
+  files?: { file: string; tps: number }[];   // tok/s it answered with on these files, each weighing 1 or more
 }
 /** a device the deciding branches leave out, and why */
 export interface Barred { id: string; name: string; why: string }
@@ -62,6 +72,52 @@ export function heldHere(s: Snapshot): number {
   if (L.parts?.length) return L.parts.filter((p) => p.local).reduce((t, p) => t + p.mb, 0);
   if (L.mode === 'here' || L.devices.some((d) => d.local)) return modelOf(s, L.model.id)?.needMb ?? modelOf(s, L.model.file)?.needMb ?? Math.round(L.model.size / MB);
   return 0;
+}
+
+/** does a device hold part of the loaded model (by kula's own list of devices, or a part) */
+function seated(s: Snapshot, id: string): boolean {
+  const L = s.work.loaded;
+  if (!L) return false;
+  return L.devices.some((d) => !d.local && d.id === id) || (L.parts ?? []).some((p) => !p.local && p.id === id && p.mb > 0);
+}
+
+/** the MB the loaded model takes on a device: its parts, else the whole model when it is in the list, else 0 */
+export function heldOn(s: Snapshot, id: string): number {
+  const L = s.work.loaded;
+  if (!L) return 0;
+  const parts = (L.parts ?? []).filter((p) => !p.local && p.id === id).reduce((t, p) => t + (p.mb > 0 ? p.mb : 0), 0);
+  if (parts > 0) return parts;
+  if (L.devices.some((d) => !d.local && d.id === id)) return modelOf(s, L.model.id)?.needMb ?? modelOf(s, L.model.file)?.needMb ?? Math.round(L.model.size / MB);
+  return 0;
+}
+
+/** a device's free memory from its live reading or pairing (null: neither), and whether it answers someone else */
+function memoryOf(s: Snapshot, d: EyeDevice): { ram: number | null; busy: boolean } {
+  const paired = d.ramMb != null && d.ramMb > 0 ? d.ramMb : null;
+  const w = d.worker;
+  if (!w || typeof w.at !== 'number' || !Number.isFinite(w.at) || s.work.loading) return { ram: paired, busy: false };
+  const live = typeof w.ramFreeMb === 'number' && Number.isFinite(w.ramFreeMb) && w.ramFreeMb > 0 ? w.ramFreeMb : null;
+  if (seated(s, d.id)) {
+    const L = s.work.loaded!;
+    if (live == null || !(w.at >= L.since)) return { ram: paired, busy: false };
+    const sum = live + heldOn(s, d.id);
+    return { ram: paired == null ? sum : Math.min(paired, sum), busy: false };
+  }
+  const age = s.at - w.at;
+  const fresh = age >= 0 && age <= WORKER_FRESH_MS;
+  return { ram: fresh && live != null ? live : paired, busy: fresh && w.busy === true };
+}
+
+/** the measured files that weigh 1 or more, min(n, 20) × 0.5^(age / 14 days) (age as speedOf) */
+function filesOf(s: Snapshot, measured: Measured[] | undefined): { file: string; tps: number }[] {
+  const out: { file: string; tps: number }[] = [];
+  for (const x of measured ?? []) {
+    if (!(x.tps > 0) || out.some((y) => y.file === x.file)) continue;
+    const at = typeof x.at === 'number' && Number.isFinite(x.at) ? x.at : s.at;
+    const age = Number.isFinite(s.at - at) ? Math.max(0, s.at - at) : 0;
+    if (Math.min(x.n, N_CAP) * 0.5 ** (age / HALF_LIFE_MS) >= 1) out.push({ file: x.file, tps: x.tps });
+  }
+  return out;
 }
 
 /** the hints other branches gave, by device id */
@@ -120,26 +176,33 @@ export function field(s: Snapshot, ctx: Pick<BranchCtx, 'peek'>, measured?: Map<
   const tonightOf = (id: string) => hints.get(id)?.find((h) => h.tonight)?.tonight ?? null;
   const noOf = (id: string) => trust.get(id) ?? hints.get(id)?.find((h) => h.no)?.no ?? null;
   for (const d of s.devices) {
-    if (!active(d) || d.waitingPair || !(d.ramMb != null && d.ramMb > 0)) continue;
+    if (!active(d) || d.waitingPair) continue;
+    const { ram, busy } = memoryOf(s, d);
+    if (!(ram != null && ram > 0)) continue;
     // a stranger's phone sees the prompt in plain text: never a seat in a card. no ring is home
     // (paired before rings); a ring word kula does not know is taken as world, never as closer
     const ring = d.ring == null ? 'home' : d.ring;
     if (ring !== 'home' && ring !== 'circle') { barred.push({ id: d.id, name: d.name, why: 'a stranger\'s device (world)' }); continue; }
     const no = noOf(d.id);
     if (no) { barred.push({ id: d.id, name: d.name, why: no }); continue; }
-    seats.push({ id: d.id, name: d.name, local: false, kind: d.kind, via: d.via, ramMb: d.ramMb, capMb: Math.floor(d.ramMb * WORKER_SHARE), speed: speedOf(s, d.id, d.kind, d.bwGBs, speeds.get(d.id)), tonight: tonightOf(d.id) });
+    // answering another master: left out, a line in the view and nothing more (no card, no probe)
+    if (busy) { barred.push({ id: d.id, name: d.name, why: 'answering someone else' }); continue; }
+    seats.push({ id: d.id, name: d.name, local: false, kind: d.kind, via: d.via, ramMb: ram, capMb: Math.floor(ram * WORKER_SHARE), speed: speedOf(s, d.id, d.kind, d.bwGBs, speeds.get(d.id)), tonight: tonightOf(d.id), files: filesOf(s, speeds.get(d.id)) });
   }
   if (s.work.llama && s.host.freeMb != null && s.host.freeMb > 0) {
     const no = hints.get('local')?.find((h) => h.no)?.no ?? null;
     const ram = s.host.freeMb + heldHere(s);
     if (no) barred.push({ id: 'local', name: 'this computer', why: no });
-    else seats.push({ id: 'local', name: 'this computer', local: true, kind: 'pc', via: 'here', ramMb: ram, capMb: Math.floor(ram * LOCAL_SHARE), speed: speedOf(s, 'local', 'pc', null, speeds.get('local')), tonight: null });
+    else seats.push({ id: 'local', name: 'this computer', local: true, kind: 'pc', via: 'here', ramMb: ram, capMb: Math.floor(ram * LOCAL_SHARE), speed: speedOf(s, 'local', 'pc', null, speeds.get('local')), tonight: null, files: filesOf(s, speeds.get('local')) });
   }
   return { seats, barred, measured: speeds };
 }
 
-/** about how many tok/s this seat answers this model with, or null when not measured yet */
+/** about how many tok/s this seat answers this model with, or null when not measured yet: what it
+ *  answered with on this very file, else its best speed converted to this model */
 export function tpsOn(seat: Seat, m: EyeModel): number | null {
+  const own = seat.files?.find((x) => x.file === m.file);
+  if (own) return Math.round(own.tps * 10) / 10;
   const gb = readGb(m);
   return seat.speed && gb ? Math.round((seat.speed.gbs / gb) * 10) / 10 : null;
 }
@@ -189,7 +252,12 @@ export function split(f: Field, m: EyeModel, slack = 1): Place | null {
   const host = f.seats.find((x) => x.local);
   if (!host || !(m.catalog || m.here) || !(m.needMb > 0)) return null;
   const gb = readGb(m);
-  const speed = (x: Seat) => x.speed?.gbs ?? -1;
+  // a seat's GB/s for this model: what it streamed on this very file, else its best speed
+  const gbsOf = (x: Seat): number | null => {
+    const own = gb != null ? x.files?.find((y) => y.file === m.file) : undefined;
+    return own ? own.tps * gb! : x.speed?.gbs ?? null;
+  };
+  const speed = (x: Seat) => gbsOf(x) ?? -1;
   const workers = f.seats.filter((x) => !x.local && x.via !== 'relay').sort((a, b) => speed(b) - speed(a) || b.capMb - a.capMb);
   let best: Place | null = null;
   let bestMs = Infinity;
@@ -204,8 +272,8 @@ export function split(f: Field, m: EyeModel, slack = 1): Place | null {
     }).filter((x) => x.mb > 0 || x.seat.local);
     const used = shares.filter((x) => !x.seat.local && x.mb > 0);
     if (!used.length) continue;   // the host alone holds it: that is not a split
-    const known = gb != null && shares.every((x) => x.mb === 0 || x.seat.speed);
-    const ms = known ? shares.reduce((t, x) => t + (x.mb > 0 ? ((x.mb / m.needMb) * gb! * 1000) / x.seat.speed!.gbs : 0), 0) + used.length * HOP_MS : null;
+    const known = gb != null && shares.every((x) => x.mb === 0 || gbsOf(x.seat) != null);
+    const ms = known ? shares.reduce((t, x) => t + (x.mb > 0 ? ((x.mb / m.needMb) * gb! * 1000) / gbsOf(x.seat)! : 0), 0) + used.length * HOP_MS : null;
     const place: Place = { mode: 'split', seats: [host, ...used.map((x) => x.seat)], tps: ms ? Math.round((1000 / ms) * 10) / 10 : null, shares, action: loadAction(m, 'split', used.map((x) => x.seat)) };
     if (ms == null) { if (!best) best = place; break; }   // speeds unknown: the fewest that fit
     if (ms < bestMs) { best = place; bestMs = ms; }

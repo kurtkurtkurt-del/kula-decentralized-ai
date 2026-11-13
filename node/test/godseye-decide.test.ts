@@ -556,3 +556,122 @@ test('the eye: "tab 2" and "tab_2" both should rest: two cards, and dismissing o
   assert.equal(rest().length, 1, "the friend tab's own rest warning shows");
   assert.equal(rest()[0].id, 'executor:rest:tab_2');
 });
+
+// ---- P46 (13 Nov): field() reads the live worker; tpsOn prefers the model's own file. A seat's
+// memory is the worker's live free memory when a reading is fresh (or, for a device holding our
+// model, came after the load, plus what our model holds there, never above pairing); a phone
+// answering another master is left out with a line, no card; a speed measured on this very file
+// is taken as it is.
+
+const W = (o: Record<string, unknown> = {}) => ({ at: AT - 10_000, busy: false, tokensUsed: null, ctx: null, ramFreeMb: 3000, ...o });
+const seatOf = (s: any, id = 'p1', peeks: Record<string, any> = {}, measured?: Map<string, any[]>) =>
+  decide.field(s, { peek: (k: string) => peeks[k] ?? null }, measured).seats.find((x: any) => x.id === id);
+const mem = (s: any, id = 'p1') => { const x = seatOf(s, id); return x ? [x.ramMb, x.capMb] : null; };
+
+test('field: a fresh live reading is a free device\'s memory; a stale, future or empty one leaves pairing\'s number', () => {
+  const one = (o: Record<string, unknown> = {}, d: Record<string, unknown> = {}) => snap({ devices: [dev({ worker: W(o), ...d })] });
+  assert.deepEqual(mem(one()), [3000, 2250]);
+  assert.deepEqual(mem(one({ at: AT - decide.WORKER_FRESH_MS })), [3000, 2250], 'exactly 120 s: still fresh');
+  assert.deepEqual(mem(one({ at: AT - 121_000 })), [6000, 4500], '121 s old');
+  assert.deepEqual(mem(one({ at: AT + 1000 })), [6000, 4500], 'taken after the look');
+  for (const ramFreeMb of [null, Number.NaN, 0, -5]) assert.deepEqual(mem(one({ ramFreeMb })), [6000, 4500], String(ramFreeMb));
+  assert.deepEqual(mem(one({ at: Number.NaN })), [6000, 4500], 'no finite at: no reading');
+  assert.deepEqual(mem(snap({ devices: [dev({ worker: null })] })), [6000, 4500]);
+  assert.deepEqual(mem(one({ ramFreeMb: 8000 })), [8000, 6000], 'live above pairing: live');
+  assert.deepEqual(mem(one({}, { ramMb: null })), [3000, 2250], 'no pairing number: live alone');
+  assert.equal(mem(one({ ramFreeMb: null }, { ramMb: null })), null, 'neither: skipped, as before');
+});
+
+test('field: a device holding our model reads live plus what it holds, never above pairing, and only after the load', () => {
+  const M4 = model('m4', 'M4', 4000, 3 * GB);
+  const apartOn = (w: Record<string, unknown>, o: Record<string, unknown> = {}) => snap({
+    models: [M4, GEMMA], devices: [dev({ worker: W(w) })],
+    work: { loaded: loaded(M4, 'apart', [here(9), on('p1', 'pixel', 9)]), ...o },
+  });
+  assert.equal(decide.heldOn(apartOn({}), 'p1'), 4000);
+  assert.deepEqual(mem(apartOn({ ramFreeMb: 1500 })), [5500, 4125], '1500 + 4000');
+  assert.deepEqual(mem(apartOn({ ramFreeMb: 5000 })), [6000, 4500], 'min with pairing');
+  assert.deepEqual(mem(apartOn({ ramFreeMb: 1500, at: AT - 90_000 })), [6000, 4500], 'a reading before since');
+  // seated: a reading after since counts however old (since is AT - 60 s here, so nothing is old)
+  assert.deepEqual(mem(apartOn({ ramFreeMb: 1500, at: AT - 60_000 })), [5500, 4125], 'at since itself');
+  // a split part of 2000 MB with live 3000: 5000
+  const sp = snap({ models: [M4], devices: [dev({ worker: W({ ramFreeMb: 3000 }) })], work: { loaded: loaded(M4, 'split', [here(9)], { parts: [{ id: 'local', name: 'this computer', local: true, mb: 2000, layers: 20 }, { id: 'p1', name: 'pixel', local: false, mb: 2000, layers: 20 }] }) } });
+  assert.equal(decide.heldOn(sp, 'p1'), 2000);
+  assert.equal(decide.heldOn(sp, 'p2'), 0);
+  assert.deepEqual(mem(sp), [5000, 3750]);
+  // work.loading: pairing's number whatever the reading, seated or not
+  const loading = { loading: { mode: 'apart', model: 'M4', since: AT - 5000, line: 'loading' } };
+  assert.deepEqual(mem(apartOn({ ramFreeMb: 1500 }, loading)), [6000, 4500]);
+  assert.deepEqual(mem(snap({ devices: [dev({ worker: W() })], work: loading })), [6000, 4500]);
+});
+
+test('field: a phone answering someone else is left out with a line; seated, loading, stale or unknown busy stays a seat', () => {
+  const busy = (o: Record<string, unknown> = {}, work: Record<string, unknown> = {}) => snap({ devices: [dev({ worker: W({ busy: true, ...o }) }), dev({ id: 'p2', name: 'galaxy' })], work });
+  const f = decide.field(busy(), { peek: () => null });
+  assert.ok(!f.seats.some((x: any) => x.id === 'p1'));
+  assert.deepEqual(f.barred, [{ id: 'p1', name: 'pixel', why: 'answering someone else' }]);
+  // ring and trust/limits come first
+  assert.deepEqual(decide.field(busy(), { peek: (k: string) => (k === 'limits' ? { hints: [{ id: 'p1', no: 'should rest (limits)' }] } : null) }).barred.map((x: any) => x.why), ['should rest (limits)']);
+  // seated and busy: answering us
+  assert.ok(seatOf(busy({}, { loaded: loaded(GEMMA, 'phone', [on('p1', 'pixel', 9)]) })));
+  assert.ok(seatOf(busy({}, { loading: { mode: 'phone', model: 'Gemma 3 4B', since: AT - 5000, line: 'loading' } })), 'busy with our load');
+  assert.ok(seatOf(busy({ at: AT - 121_000 })), 'a stale busy reading');
+  assert.ok(seatOf(busy({ busy: null })), 'busy unknown');
+});
+
+test('planner: the busy phone is out of the apart card, the view says why, and no new card or action', () => {
+  const s = snap({
+    devices: [dev({ worker: W({ busy: true }) }), dev({ id: 'p2', name: 'galaxy' }), dev({ id: 'p3', name: 'tab' })],
+    work: { loaded: loaded(GEMMA, 'phone', [on('p2', 'galaxy', 9)]), llama: false },
+  });
+  const v = branch(planner.create).look(s);
+  assert.deepEqual(ids(v), ['planner:apart:gemma3-4b']);
+  const c = v.suggestions[0];
+  assert.equal(c.title, 'apart would answer 2 at once: galaxy and tab each hold Gemma 3 4B');
+  assert.deepEqual(c.action, { do: 'load', model: 'gemma3-4b', mode: 'apart', devices: ['p2', 'p3'], here: false });
+  assert.ok(v.lines.includes('pixel left out: answering someone else'));
+  assert.ok(!ids(v).some((x: string) => x.startsWith('planner:barred')));
+  accepted(v, 'planner');
+});
+
+test('tpsOn: a speed measured on the model\'s own file is taken as it is, when it weighs at least 1', () => {
+  const s = snap({ devices: [dev()], models: [QWEN17, GEMMA, BIG] });
+  const A = QWEN17, B = GEMMA, C = BIG;
+  const at = (xs: any[]) => seatOf(s, 'p1', {}, new Map([['p1', xs]]));
+  const b = { file: B.file, tps: 30, n: 20, at: AT };
+  // speedOf takes B (weight 20 against 3): today's number for any other file is B's GB/s ÷ its GB
+  const today = (m: any) => Math.round(((30 * decide.readGb(B)!) / decide.readGb(m)!) * 10) / 10;
+  let x = at([{ file: A.file, tps: 12, n: 3, at: AT }, b]);
+  assert.deepEqual(x.files, [{ file: A.file, tps: 12 }, { file: B.file, tps: 30 }]);
+  assert.equal(decide.tpsOn(x, A), 12);
+  assert.equal(decide.tpsOn(x, B), 30);
+  assert.equal(decide.tpsOn(x, C), today(C));
+  assert.notEqual(today(A), 12);
+  // n 1 fifteen days ago weighs 0.5^(15/14) = 0.48: not preferred
+  x = at([{ file: A.file, tps: 12, n: 1, at: AT - 15 * DAY }, b]);
+  assert.equal(decide.tpsOn(x, A), today(A));
+  // n 20 sixty days ago weighs 20 × 0.5^(60/14) = 1.03: preferred
+  x = at([{ file: A.file, tps: 12, n: 20, at: AT - 60 * DAY }, b]);
+  assert.equal(decide.tpsOn(x, A), 12);
+  // a zero tok/s is no entry
+  x = at([{ file: A.file, tps: 0, n: 20, at: AT }, b]);
+  assert.equal(decide.tpsOn(x, A), today(A));
+});
+
+test('split: a seat measured on this very file is ordered and timed by that speed (derived by hand)', () => {
+  const tablet = dev({ id: 't1', name: 'tablet', via: 'cable', ramMb: 3000, bwGBs: 70 });
+  const s = snap({ host: { name: 'mac', freeMb: 4600 }, devices: [tablet], models: [QWEN17, GEMMA] });
+  const measured = new Map<string, any[]>([
+    ['local', [{ file: GEMMA.file, tps: 8.8, n: 3, at: AT }]],
+    // tablet's heaviest file is Qwen (50 tok/s, 57.75 GB/s: before P46 it went first); on Gemma it answered at 5
+    ['t1', [{ file: GEMMA.file, tps: 5, n: 5, at: AT }, { file: QWEN17.file, tps: 50, n: 20, at: AT }]],
+  ]);
+  const p = decide.split(decide.field(s, { peek: () => null }, measured), GEMMA)!;
+  // Gemma's GB/s: the mac 8.8 × gb, the tablet 5 × gb: the mac first. caps: mac floor(4600 × 0.7) = 3220,
+  // tablet floor(3000 × 0.75) = 2250; 3400 MB: the mac 3220, the tablet 180
+  assert.deepEqual(p.shares!.map((x: any) => [x.seat.id, x.mb]), [['local', 3220], ['t1', 180]]);
+  // token ms = Σ (mb / need) × gb × 1000 / (tps × gb) + one hop = (3220/3400)·1000/8.8 + (180/3400)·1000/5 + 10
+  const ms = (3220 / 3400) * (1000 / 8.8) + (180 / 3400) * (1000 / 5) + decide.HOP_MS;
+  assert.equal(p.tps, Math.round((1000 / ms) * 10) / 10);
+  assert.equal(p.tps, 7.8);
+});
