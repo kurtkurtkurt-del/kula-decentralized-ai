@@ -1,7 +1,7 @@
 {
   "name": "kula-desktop",
   "productName": "kula",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "kula's chat page as a desktop app for macOS and Windows",
   "license": "MIT",
   "private": true,

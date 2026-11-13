@@ -26,6 +26,26 @@ and says when a device alone would be faster. Rule of thumb: jobs are split, mod
 iOS is out of scope for now: the app opens on iOS but runs no models (a Swift module is written
 on a branch, never built).
 
+## what's new in 0.4.0
+
+- **the brain measures itself.** Seven replay benches score every branch's guesses against plain
+  baselines, and a new method only stays when it wins there. Tonight's forecast says when a device
+  will be there with half the error of 0.3.0 and catches a changed habit within days; reach and
+  speed guesses carry an 80% range.
+- **split across the internet, priced honestly.** The planner learns what each link really costs a
+  split from the split's own answers (a far link was off by 179%, now about 7%), may prefer a near
+  phone to a far fast one, and the split card says the speed it expects as a range.
+- **phones in a split are seen.** A phone holding layers that keeps dropping out gets a card; one
+  working for 25 minutes gets a rest warning; its energy and night window count.
+- **safer between friends.** A friend's device can no longer rewrite its ledger and stay "all
+  clear", on the computer or the phone; a tap on a card loads only where the card says; the local
+  page no longer hands its address to other programs; peer names cannot carry hidden characters; an
+  honest day/night rhythm no longer turns a device red.
+- **the brain still decides nothing.** It watches, warns and suggests; you press.
+- **reaching friends far away:** the research and a plain proposal for joining devices across the
+  internet without a server of ours ([docs/network](docs/network/SUNUM.md)). No network code yet.
+- No new apk in 0.4.0: the phone app stays 0.3.0, so the phone-side fixes ship with the next apk.
+
 ## what's new in 0.3.0
 
 - **the brain suggests, you decide.** Every branch may now suggest or warn as a card on the brain
