@@ -43,305 +43,309 @@
     <p class="lede">kula joins your phones, tablets and computers into one AI cluster that runs open
       models. They talk to each other directly — nothing goes to a cloud.</p>
 
-    <h2 class="dl-group" id="dl-computers">computers</h2>
-    <ul class="downloads computers" aria-labelledby="dl-computers">
-      <li class="dl" data-os="mac">
-        <div class="dl-row">
-          <a class="dl-btn" href="https://github.com/kurtkurtkurt-del/kula-decentralized-ai/releases/latest/download/kula-mac-arm64.dmg">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="5" width="16" height="11" rx="1.5"/><path d="M2 19h20"/></svg>
-            <span class="dl-name">Mac</span>
-            <span class="dl-file">Apple silicon · .dmg</span>
-          </a>
-          <details class="more">
-            <summary aria-label="more ways to get kula for Mac"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 10 5 5 5-5"/></svg></summary>
-            <div class="menu">
-              <a data-slot="mac-release" href="https://github.com/kurtkurtkurt-del/kula-decentralized-ai/releases/latest/download/kula-mac-arm64.dmg"><b>GitHub release</b><span>kula-mac-arm64.dmg</span></a>
-              <a data-slot="mac-release-page" href="https://github.com/kurtkurtkurt-del/kula-decentralized-ai/releases/latest"><b>release page</b><span>notes, sha256, every file</span></a>
-              <a data-slot="mac-terminal" href="https://github.com/kurtkurtkurt-del/kula-decentralized-ai/releases/latest/download/kula-node-mac-arm64"><b>for the terminal</b><span>kula-node-mac-arm64 · the same chat page, no app</span></a>
-              <a data-slot="mac-build" href="https://github.com/kurtkurtkurt-del/kula-decentralized-ai/tree/main/desktop"><b>build it yourself</b><span>desktop/ · npm run dist:mac</span></a>            </div>
+    <section class="dl-box" aria-labelledby="dl-computers">
+      <h2 class="dl-group" id="dl-computers">computers</h2>
+      <ul class="downloads computers" aria-labelledby="dl-computers">
+        <li class="dl" data-os="mac">
+          <div class="dl-row">
+            <a class="dl-btn" href="https://github.com/kurtkurtkurt-del/kula-decentralized-ai/releases/latest/download/kula-mac-arm64.dmg">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="5" width="16" height="11" rx="1.5"/><path d="M2 19h20"/></svg>
+              <span class="dl-name">Mac</span>
+              <span class="dl-file">Apple silicon · .dmg</span>
+            </a>
+            <details class="more">
+              <summary aria-label="more ways to get kula for Mac"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 10 5 5 5-5"/></svg></summary>
+              <div class="menu">
+                <a data-slot="mac-release" href="https://github.com/kurtkurtkurt-del/kula-decentralized-ai/releases/latest/download/kula-mac-arm64.dmg"><b>GitHub release</b><span>kula-mac-arm64.dmg</span></a>
+                <a data-slot="mac-release-page" href="https://github.com/kurtkurtkurt-del/kula-decentralized-ai/releases/latest"><b>release page</b><span>notes, sha256, every file</span></a>
+                <a data-slot="mac-terminal" href="https://github.com/kurtkurtkurt-del/kula-decentralized-ai/releases/latest/download/kula-node-mac-arm64"><b>for the terminal</b><span>kula-node-mac-arm64 · the same chat page, no app</span></a>
+                <a data-slot="mac-build" href="https://github.com/kurtkurtkurt-del/kula-decentralized-ai/tree/main/desktop"><b>build it yourself</b><span>desktop/ · npm run dist:mac</span></a>            </div>
+            </details>
+          </div>
+          <details class="dl-fold">
+            <summary>how to install<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 10 5 5 5-5"/></svg></summary>
+            <ul class="dl-how">
+              <li>Drag kula to Applications.</li>
+              <li>First open: right-click → <b>Open</b> (macOS 15: Privacy &amp; Security → <b>Open Anyway</b>).</li>
+              <li>The first start builds llama.cpp: 5–10 minutes, once.</li>
+            </ul>
           </details>
-        </div>
-        <details class="dl-fold">
-          <summary>how to install<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 10 5 5 5-5"/></svg></summary>
-          <ul class="dl-how">
-            <li>Drag kula to Applications.</li>
-            <li>First open: right-click → <b>Open</b> (macOS 15: Privacy &amp; Security → <b>Open Anyway</b>).</li>
-            <li>The first start builds llama.cpp: 5–10 minutes, once.</li>
-          </ul>
-        </details>
-        <details class="dl-needs">
-          <summary>what the first start needs<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 10 5 5 5-5"/></svg></summary>
-          <ul>
-            <li>Apple's command line tools: <code>xcode-select --install</code></li>
-            <li>cmake: <code>brew install cmake ninja</code> (<a href="https://brew.sh">Homebrew</a>)</li>
-            <li>If macOS still refuses to open it: <code>xattr -cr /Applications/kula.app</code> in Terminal</li>
-          </ul>
-        </details>
-      </li>
-      <li class="dl" data-os="linux">
-        <div class="dl-row">
-          <a class="dl-btn" href="https://github.com/kurtkurtkurt-del/kula-decentralized-ai/releases/latest/download/kula-linux-x64.deb">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="14" rx="1.5"/><path d="m7 9 3 2.5L7 14M12 14h5"/></svg>
-            <span class="dl-name">Linux</span>
-            <span class="dl-file">Ubuntu, Debian · x64 .deb</span>
-          </a>
-          <details class="more">
-            <summary aria-label="more ways to get kula for Linux"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 10 5 5 5-5"/></svg></summary>
-            <div class="menu">
-              <a data-slot="linux-arm64" href="https://github.com/kurtkurtkurt-del/kula-decentralized-ai/releases/latest/download/kula-linux-arm64.deb"><b>ARM computer</b><span>kula-linux-arm64.deb</span></a>
-              <a data-slot="linux-release-page" href="https://github.com/kurtkurtkurt-del/kula-decentralized-ai/releases/latest"><b>release page</b><span>notes, sha256, every file</span></a>
-              <a data-slot="linux-build" href="https://github.com/kurtkurtkurt-del/kula-decentralized-ai/tree/main/desktop"><b>build it yourself</b><span>desktop/ · npm run dist:linux</span></a>
+          <details class="dl-needs">
+            <summary>what the first start needs<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 10 5 5 5-5"/></svg></summary>
+            <ul>
+              <li>Apple's command line tools: <code>xcode-select --install</code></li>
+              <li>cmake: <code>brew install cmake ninja</code> (<a href="https://brew.sh">Homebrew</a>)</li>
+              <li>If macOS still refuses to open it: <code>xattr -cr /Applications/kula.app</code> in Terminal</li>
+            </ul>
+          </details>
+        </li>
+        <li class="dl" data-os="linux">
+          <div class="dl-row">
+            <a class="dl-btn" href="https://github.com/kurtkurtkurt-del/kula-decentralized-ai/releases/latest/download/kula-linux-x64.deb">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="14" rx="1.5"/><path d="m7 9 3 2.5L7 14M12 14h5"/></svg>
+              <span class="dl-name">Linux</span>
+              <span class="dl-file">Ubuntu, Debian · x64 .deb</span>
+            </a>
+            <details class="more">
+              <summary aria-label="more ways to get kula for Linux"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 10 5 5 5-5"/></svg></summary>
+              <div class="menu">
+                <a data-slot="linux-arm64" href="https://github.com/kurtkurtkurt-del/kula-decentralized-ai/releases/latest/download/kula-linux-arm64.deb"><b>ARM computer</b><span>kula-linux-arm64.deb</span></a>
+                <a data-slot="linux-release-page" href="https://github.com/kurtkurtkurt-del/kula-decentralized-ai/releases/latest"><b>release page</b><span>notes, sha256, every file</span></a>
+                <a data-slot="linux-build" href="https://github.com/kurtkurtkurt-del/kula-decentralized-ai/tree/main/desktop"><b>build it yourself</b><span>desktop/ · npm run dist:linux</span></a>
+              </div>
+            </details>
+          </div>
+          <details class="dl-fold">
+            <summary>how to install<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 10 5 5 5-5"/></svg></summary>
+            <ul class="dl-how">
+              <li>Install: <code>sudo apt install ./kula-linux-x64.deb</code></li>
+              <li>Open kula from the app menu.</li>
+              <li>The first start downloads llama.cpp: 17 MB (with an NVIDIA card about 764 MB).</li>
+              <li>Tested only on GitHub's Ubuntu 24.04 test machines: a small model answered. Not yet on a real desktop or an NVIDIA card.</li>
+            </ul>
+          </details>
+        </li>
+        <li class="dl is-later" data-os="windows">
+          <div class="dl-row">
+            <div class="dl-btn" aria-disabled="true">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="12" rx="1.5"/><path d="M9 20h6M12 16v4"/></svg>
+              <span class="dl-name">Windows</span>
+              <span class="dl-file">coming soon</span>
             </div>
-          </details>
-        </div>
-        <details class="dl-fold">
-          <summary>how to install<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 10 5 5 5-5"/></svg></summary>
-          <ul class="dl-how">
-            <li>Install: <code>sudo apt install ./kula-linux-x64.deb</code></li>
-            <li>Open kula from the app menu.</li>
-            <li>The first start downloads llama.cpp: 17 MB (with an NVIDIA card about 764 MB).</li>
-            <li>Tested only on GitHub's Ubuntu 24.04 test machines: a small model answered. Not yet on a real desktop or an NVIDIA card.</li>
-          </ul>
-        </details>
-      </li>
-      <li class="dl is-later" data-os="windows">
-        <div class="dl-row">
-          <div class="dl-btn" aria-disabled="true">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="12" rx="1.5"/><path d="M9 20h6M12 16v4"/></svg>
-            <span class="dl-name">Windows</span>
-            <span class="dl-file">coming soon</span>
+            <details class="more">
+              <summary aria-label="more ways to get kula for Windows"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 10 5 5 5-5"/></svg></summary>
+              <div class="menu">
+                <a data-slot="windows-release" data-todo><b>GitHub release</b><span>kula-windows-x64.exe · not built yet</span></a>
+                <a data-slot="windows-build" data-todo><b>build it yourself</b><span>desktop/ · npm run dist:win · untested</span></a>
+              </div>
+            </details>
           </div>
-          <details class="more">
-            <summary aria-label="more ways to get kula for Windows"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 10 5 5 5-5"/></svg></summary>
-            <div class="menu">
-              <a data-slot="windows-release" data-todo><b>GitHub release</b><span>kula-windows-x64.exe · not built yet</span></a>
-              <a data-slot="windows-build" data-todo><b>build it yourself</b><span>desktop/ · npm run dist:win · untested</span></a>
+          <details class="dl-fold">
+            <summary>details<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 10 5 5 5-5"/></svg></summary>
+            <ul class="dl-how">
+              <li>Not built yet.</li>
+            </ul>
+          </details>
+        </li>
+        <li class="dl is-later" data-os="mac-intel">
+          <div class="dl-row">
+            <div class="dl-btn" aria-disabled="true">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="5" width="16" height="11" rx="1.5"/><path d="M2 19h20"/></svg>
+              <span class="dl-name">Intel Mac</span>
+              <span class="dl-file">coming soon</span>
             </div>
+          </div>
+          <details class="dl-fold">
+            <summary>details<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 10 5 5 5-5"/></svg></summary>
+            <ul class="dl-how">
+              <li>The Mac file above is for Apple silicon only.</li>
+            </ul>
           </details>
-        </div>
-        <details class="dl-fold">
-          <summary>details<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 10 5 5 5-5"/></svg></summary>
-          <ul class="dl-how">
-            <li>Not built yet.</li>
-          </ul>
-        </details>
-      </li>
-      <li class="dl is-later" data-os="mac-intel">
-        <div class="dl-row">
-          <div class="dl-btn" aria-disabled="true">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="5" width="16" height="11" rx="1.5"/><path d="M2 19h20"/></svg>
-            <span class="dl-name">Intel Mac</span>
-            <span class="dl-file">coming soon</span>
+        </li>
+        <li class="dl is-later" data-os="windows-arm">
+          <div class="dl-row">
+            <div class="dl-btn" aria-disabled="true">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="5" width="16" height="11" rx="1.5"/><path d="M2 19h20"/></svg>
+              <span class="dl-name">Windows on ARM</span>
+              <span class="dl-file">coming soon</span>
+            </div>
           </div>
-        </div>
-        <details class="dl-fold">
-          <summary>details<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 10 5 5 5-5"/></svg></summary>
-          <ul class="dl-how">
-            <li>The Mac file above is for Apple silicon only.</li>
-          </ul>
-        </details>
-      </li>
-      <li class="dl is-later" data-os="windows-arm">
-        <div class="dl-row">
-          <div class="dl-btn" aria-disabled="true">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="5" width="16" height="11" rx="1.5"/><path d="M2 19h20"/></svg>
-            <span class="dl-name">Windows on ARM</span>
-            <span class="dl-file">coming soon</span>
+          <details class="dl-fold">
+            <summary>details<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 10 5 5 5-5"/></svg></summary>
+            <ul class="dl-how">
+              <li>Laptops with a Snapdragon chip.</li>
+            </ul>
+          </details>
+        </li>
+        <li class="dl is-later" data-os="linux-other">
+          <div class="dl-row">
+            <div class="dl-btn" aria-disabled="true">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="14" rx="1.5"/><path d="m7 9 3 2.5L7 14M12 14h5"/></svg>
+              <span class="dl-name">Other Linux</span>
+              <span class="dl-file">coming soon</span>
+            </div>
           </div>
-        </div>
-        <details class="dl-fold">
-          <summary>details<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 10 5 5 5-5"/></svg></summary>
-          <ul class="dl-how">
-            <li>Laptops with a Snapdragon chip.</li>
-          </ul>
-        </details>
-      </li>
-      <li class="dl is-later" data-os="linux-other">
-        <div class="dl-row">
-          <div class="dl-btn" aria-disabled="true">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="14" rx="1.5"/><path d="m7 9 3 2.5L7 14M12 14h5"/></svg>
-            <span class="dl-name">Other Linux</span>
-            <span class="dl-file">coming soon</span>
+          <details class="dl-fold">
+            <summary>details<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 10 5 5 5-5"/></svg></summary>
+            <ul class="dl-how">
+              <li>Fedora, Arch and others. The .deb above is for Ubuntu and Debian.</li>
+            </ul>
+          </details>
+        </li>
+        <li class="dl is-later" data-os="chromeos">
+          <div class="dl-row">
+            <div class="dl-btn" aria-disabled="true">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="5" width="16" height="11" rx="1.5"/><path d="M2 19h20"/><circle cx="12" cy="10.5" r="2.5"/></svg>
+              <span class="dl-name">Chromebook</span>
+              <span class="dl-file">coming soon</span>
+            </div>
           </div>
-        </div>
-        <details class="dl-fold">
-          <summary>details<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 10 5 5 5-5"/></svg></summary>
-          <ul class="dl-how">
-            <li>Fedora, Arch and others. The .deb above is for Ubuntu and Debian.</li>
-          </ul>
-        </details>
-      </li>
-      <li class="dl is-later" data-os="chromeos">
-        <div class="dl-row">
-          <div class="dl-btn" aria-disabled="true">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="5" width="16" height="11" rx="1.5"/><path d="M2 19h20"/><circle cx="12" cy="10.5" r="2.5"/></svg>
-            <span class="dl-name">Chromebook</span>
-            <span class="dl-file">coming soon</span>
+          <details class="dl-fold">
+            <summary>details<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 10 5 5 5-5"/></svg></summary>
+            <ul class="dl-how">
+              <li>Not tested yet.</li>
+            </ul>
+          </details>
+        </li>
+        <li class="dl is-later" data-os="raspberry-pi">
+          <div class="dl-row">
+            <div class="dl-btn" aria-disabled="true">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="6" width="18" height="12" rx="1.5"/><rect x="8" y="9.5" width="5" height="5" rx=".5"/><path d="M16 9.5v5"/></svg>
+              <span class="dl-name">Raspberry Pi</span>
+              <span class="dl-file">coming soon</span>
+            </div>
           </div>
-        </div>
-        <details class="dl-fold">
-          <summary>details<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 10 5 5 5-5"/></svg></summary>
-          <ul class="dl-how">
-            <li>Not tested yet.</li>
-          </ul>
-        </details>
-      </li>
-      <li class="dl is-later" data-os="raspberry-pi">
-        <div class="dl-row">
-          <div class="dl-btn" aria-disabled="true">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="6" width="18" height="12" rx="1.5"/><rect x="8" y="9.5" width="5" height="5" rx=".5"/><path d="M16 9.5v5"/></svg>
-            <span class="dl-name">Raspberry Pi</span>
-            <span class="dl-file">coming soon</span>
+          <details class="dl-fold">
+            <summary>details<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 10 5 5 5-5"/></svg></summary>
+            <ul class="dl-how">
+              <li>Pi 5 with 64-bit Raspberry Pi OS. Not tested yet.</li>
+            </ul>
+          </details>
+        </li>
+        <li class="dl is-later" data-os="steam-deck">
+          <div class="dl-row">
+            <div class="dl-btn" aria-disabled="true">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="2" y="7" width="20" height="10" rx="4"/><rect x="8" y="9" width="8" height="6" rx=".5"/></svg>
+              <span class="dl-name">Steam Deck</span>
+              <span class="dl-file">coming soon</span>
+            </div>
           </div>
-        </div>
-        <details class="dl-fold">
-          <summary>details<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 10 5 5 5-5"/></svg></summary>
-          <ul class="dl-how">
-            <li>Pi 5 with 64-bit Raspberry Pi OS. Not tested yet.</li>
-          </ul>
-        </details>
-      </li>
-      <li class="dl is-later" data-os="steam-deck">
-        <div class="dl-row">
-          <div class="dl-btn" aria-disabled="true">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="2" y="7" width="20" height="10" rx="4"/><rect x="8" y="9" width="8" height="6" rx=".5"/></svg>
-            <span class="dl-name">Steam Deck</span>
-            <span class="dl-file">coming soon</span>
-          </div>
-        </div>
-        <details class="dl-fold">
-          <summary>details<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 10 5 5 5-5"/></svg></summary>
-          <ul class="dl-how">
-            <li>Not built yet.</li>
-          </ul>
-        </details>
-      </li>
-    </ul>
+          <details class="dl-fold">
+            <summary>details<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 10 5 5 5-5"/></svg></summary>
+            <ul class="dl-how">
+              <li>Not built yet.</li>
+            </ul>
+          </details>
+        </li>
+      </ul>
+    </section>
 
-    <h2 class="dl-group" id="dl-phones">phones and tablets</h2>
-    <ul class="downloads phones" aria-labelledby="dl-phones">
-      <li class="dl" data-os="android">
-        <div class="dl-row">
-          <a class="dl-btn" href="https://github.com/kurtkurtkurt-del/kula-decentralized-ai/releases/latest/download/kula-android.apk">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="2.5" width="12" height="19" rx="2.5"/><path d="M10 5h4"/><circle cx="12" cy="18" r=".6"/></svg>
-            <span class="dl-name">Android</span>
-            <span class="dl-file">phones &amp; tablets · .apk</span>
-          </a>
-          <details class="more">
-            <summary aria-label="more ways to get kula for Android"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 10 5 5 5-5"/></svg></summary>
-            <div class="menu">
-              <a data-slot="android-release" href="https://github.com/kurtkurtkurt-del/kula-decentralized-ai/releases/latest/download/kula-android.apk"><b>GitHub release</b><span>kula-android.apk</span></a>
-              <a data-slot="android-release-page" href="https://github.com/kurtkurtkurt-del/kula-decentralized-ai/releases/latest"><b>release page</b><span>notes, sha256, every file</span></a>
-              <a data-slot="android-build" href="https://github.com/kurtkurtkurt-del/kula-decentralized-ai/blob/main/README.md#build-from-source"><b>build it yourself</b><span>app/ · npm run apk</span></a>
-            </div>
+    <section class="dl-box" aria-labelledby="dl-phones">
+      <h2 class="dl-group" id="dl-phones">phones and tablets</h2>
+      <ul class="downloads phones" aria-labelledby="dl-phones">
+        <li class="dl" data-os="android">
+          <div class="dl-row">
+            <a class="dl-btn" href="https://github.com/kurtkurtkurt-del/kula-decentralized-ai/releases/latest/download/kula-android.apk">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="2.5" width="12" height="19" rx="2.5"/><path d="M10 5h4"/><circle cx="12" cy="18" r=".6"/></svg>
+              <span class="dl-name">Android</span>
+              <span class="dl-file">phones &amp; tablets · .apk</span>
+            </a>
+            <details class="more">
+              <summary aria-label="more ways to get kula for Android"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 10 5 5 5-5"/></svg></summary>
+              <div class="menu">
+                <a data-slot="android-release" href="https://github.com/kurtkurtkurt-del/kula-decentralized-ai/releases/latest/download/kula-android.apk"><b>GitHub release</b><span>kula-android.apk</span></a>
+                <a data-slot="android-release-page" href="https://github.com/kurtkurtkurt-del/kula-decentralized-ai/releases/latest"><b>release page</b><span>notes, sha256, every file</span></a>
+                <a data-slot="android-build" href="https://github.com/kurtkurtkurt-del/kula-decentralized-ai/blob/main/README.md#build-from-source"><b>build it yourself</b><span>app/ · npm run apk</span></a>
+              </div>
+            </details>
+          </div>
+          <details class="dl-fold">
+            <summary>how to install<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 10 5 5 5-5"/></svg></summary>
+            <ul class="dl-how">
+              <li>Open the apk.</li>
+              <li>When Android asks, <b>allow installing from this source</b>.</li>
+            </ul>
           </details>
-        </div>
-        <details class="dl-fold">
-          <summary>how to install<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 10 5 5 5-5"/></svg></summary>
-          <ul class="dl-how">
-            <li>Open the apk.</li>
-            <li>When Android asks, <b>allow installing from this source</b>.</li>
-          </ul>
-        </details>
-      </li>
-      <li class="dl is-later" data-os="ios">
-        <div class="dl-row">
-          <div class="dl-btn" aria-disabled="true">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="7" y="2.5" width="10" height="19" rx="2.5"/><path d="M11 18.5h2"/></svg>
-            <span class="dl-name">iPhone, iPad</span>
-            <span class="dl-file">coming soon</span>
-          </div>
-          <details class="more">
-            <summary aria-label="more ways to get kula for iOS"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 10 5 5 5-5"/></svg></summary>
-            <div class="menu">
-              <a data-slot="ios-release" data-todo><b>GitHub release</b><span>nothing yet</span></a>
-              <a data-slot="ios-build" data-todo><b>build it yourself</b><span>nothing yet</span></a>
+        </li>
+        <li class="dl is-later" data-os="ios">
+          <div class="dl-row">
+            <div class="dl-btn" aria-disabled="true">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="7" y="2.5" width="10" height="19" rx="2.5"/><path d="M11 18.5h2"/></svg>
+              <span class="dl-name">iPhone, iPad</span>
+              <span class="dl-file">coming soon</span>
             </div>
+            <details class="more">
+              <summary aria-label="more ways to get kula for iOS"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 10 5 5 5-5"/></svg></summary>
+              <div class="menu">
+                <a data-slot="ios-release" data-todo><b>GitHub release</b><span>nothing yet</span></a>
+                <a data-slot="ios-build" data-todo><b>build it yourself</b><span>nothing yet</span></a>
+              </div>
+            </details>
+          </div>
+          <details class="dl-fold">
+            <summary>details<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 10 5 5 5-5"/></svg></summary>
+            <ul class="dl-how">
+              <li>The iPhone app does not run models yet.</li>
+            </ul>
           </details>
-        </div>
-        <details class="dl-fold">
-          <summary>details<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 10 5 5 5-5"/></svg></summary>
-          <ul class="dl-how">
-            <li>The iPhone app does not run models yet.</li>
-          </ul>
-        </details>
-      </li>
-      <li class="dl is-later" data-os="harmonyos">
-        <div class="dl-row">
-          <div class="dl-btn" aria-disabled="true">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="2.5" width="12" height="19" rx="2.5"/><path d="M10 5h4"/><circle cx="12" cy="18" r=".6"/></svg>
-            <span class="dl-name">Huawei</span>
-            <span class="dl-file">coming soon</span>
+        </li>
+        <li class="dl is-later" data-os="harmonyos">
+          <div class="dl-row">
+            <div class="dl-btn" aria-disabled="true">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="2.5" width="12" height="19" rx="2.5"/><path d="M10 5h4"/><circle cx="12" cy="18" r=".6"/></svg>
+              <span class="dl-name">Huawei</span>
+              <span class="dl-file">coming soon</span>
+            </div>
           </div>
-        </div>
-        <details class="dl-fold">
-          <summary>details<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 10 5 5 5-5"/></svg></summary>
-          <ul class="dl-how">
-            <li>Newer Huawei phones (HarmonyOS NEXT) do not open Android apps.</li>
-          </ul>
-        </details>
-      </li>
-      <li class="dl is-later" data-os="fire">
-        <div class="dl-row">
-          <div class="dl-btn" aria-disabled="true">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="3" width="16" height="18" rx="2"/><circle cx="12" cy="18.5" r=".6"/></svg>
-            <span class="dl-name">Amazon Fire tablet</span>
-            <span class="dl-file">coming soon</span>
+          <details class="dl-fold">
+            <summary>details<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 10 5 5 5-5"/></svg></summary>
+            <ul class="dl-how">
+              <li>Newer Huawei phones (HarmonyOS NEXT) do not open Android apps.</li>
+            </ul>
+          </details>
+        </li>
+        <li class="dl is-later" data-os="fire">
+          <div class="dl-row">
+            <div class="dl-btn" aria-disabled="true">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="3" width="16" height="18" rx="2"/><circle cx="12" cy="18.5" r=".6"/></svg>
+              <span class="dl-name">Amazon Fire tablet</span>
+              <span class="dl-file">coming soon</span>
+            </div>
           </div>
-        </div>
-        <details class="dl-fold">
-          <summary>details<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 10 5 5 5-5"/></svg></summary>
-          <ul class="dl-how">
-            <li>Not tested yet.</li>
-          </ul>
-        </details>
-      </li>
-      <li class="dl is-later" data-os="android-tv">
-        <div class="dl-row">
-          <div class="dl-btn" aria-disabled="true">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="12" rx="1.5"/><path d="M9 20h6M12 16v4"/></svg>
-            <span class="dl-name">Android TV</span>
-            <span class="dl-file">coming soon</span>
+          <details class="dl-fold">
+            <summary>details<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 10 5 5 5-5"/></svg></summary>
+            <ul class="dl-how">
+              <li>Not tested yet.</li>
+            </ul>
+          </details>
+        </li>
+        <li class="dl is-later" data-os="android-tv">
+          <div class="dl-row">
+            <div class="dl-btn" aria-disabled="true">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="12" rx="1.5"/><path d="M9 20h6M12 16v4"/></svg>
+              <span class="dl-name">Android TV</span>
+              <span class="dl-file">coming soon</span>
+            </div>
           </div>
-        </div>
-        <details class="dl-fold">
-          <summary>details<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 10 5 5 5-5"/></svg></summary>
-          <ul class="dl-how">
-            <li>TV boxes and Google TV. Not tested yet.</li>
-          </ul>
-        </details>
-      </li>
-      <li class="dl is-later" data-os="quest">
-        <div class="dl-row">
-          <div class="dl-btn" aria-disabled="true">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="8" width="18" height="9" rx="3.5"/><circle cx="8.5" cy="12.5" r="1.5"/><circle cx="15.5" cy="12.5" r="1.5"/></svg>
-            <span class="dl-name">Meta Quest</span>
-            <span class="dl-file">coming soon</span>
+          <details class="dl-fold">
+            <summary>details<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 10 5 5 5-5"/></svg></summary>
+            <ul class="dl-how">
+              <li>TV boxes and Google TV. Not tested yet.</li>
+            </ul>
+          </details>
+        </li>
+        <li class="dl is-later" data-os="quest">
+          <div class="dl-row">
+            <div class="dl-btn" aria-disabled="true">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="8" width="18" height="9" rx="3.5"/><circle cx="8.5" cy="12.5" r="1.5"/><circle cx="15.5" cy="12.5" r="1.5"/></svg>
+              <span class="dl-name">Meta Quest</span>
+              <span class="dl-file">coming soon</span>
+            </div>
           </div>
-        </div>
-        <details class="dl-fold">
-          <summary>details<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 10 5 5 5-5"/></svg></summary>
-          <ul class="dl-how">
-            <li>Not tested yet.</li>
-          </ul>
-        </details>
-      </li>
-      <li class="dl is-later" data-os="linux-phone">
-        <div class="dl-row">
-          <div class="dl-btn" aria-disabled="true">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="2.5" width="12" height="19" rx="2.5"/><path d="m9 8 2 1.5L9 11M12 11h3"/></svg>
-            <span class="dl-name">Linux phone</span>
-            <span class="dl-file">coming soon</span>
+          <details class="dl-fold">
+            <summary>details<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 10 5 5 5-5"/></svg></summary>
+            <ul class="dl-how">
+              <li>Not tested yet.</li>
+            </ul>
+          </details>
+        </li>
+        <li class="dl is-later" data-os="linux-phone">
+          <div class="dl-row">
+            <div class="dl-btn" aria-disabled="true">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="2.5" width="12" height="19" rx="2.5"/><path d="m9 8 2 1.5L9 11M12 11h3"/></svg>
+              <span class="dl-name">Linux phone</span>
+              <span class="dl-file">coming soon</span>
+            </div>
           </div>
-        </div>
-        <details class="dl-fold">
-          <summary>details<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 10 5 5 5-5"/></svg></summary>
-          <ul class="dl-how">
-            <li>postmarketOS, Ubuntu Touch. Not built yet.</li>
-          </ul>
-        </details>
-      </li>
-    </ul>
+          <details class="dl-fold">
+            <summary>details<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 10 5 5 5-5"/></svg></summary>
+            <ul class="dl-how">
+              <li>postmarketOS, Ubuntu Touch. Not built yet.</li>
+            </ul>
+          </details>
+        </li>
+      </ul>
+    </section>
   </section>
 
   <section class="news wrap" aria-labelledby="news-h0">
