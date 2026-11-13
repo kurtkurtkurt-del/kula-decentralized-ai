@@ -116,12 +116,16 @@ const objOf = (x: unknown): Record<string, unknown> | null =>
   x !== null && typeof x === 'object' ? (x as Record<string, unknown>) : null;
 const sig = (at: number, text: string) => `${at}|${text}`;
 
-/** An address inside a person-readable text, replaced with "an address": a bracketed IPv6 with an
+/** An address inside a person-readable text. First a relay peer's "relay <6-digit code> via
+ *  <host/path>" becomes "a relay" (its pairing code and the relay's host never kept), then a ws://
+ *  or wss:// url becomes "an address"; then, also as "an address": a bracketed IPv6 with an
  *  optional port, a bare IPv6 (with :: or all eight groups, so a time like 12:30:45 stays), an
  *  IPv4 with an optional port, and a host:port whose host starts with a letter. A version such as
  *  1.2.3, a time such as 23:00 and plain words stay. Applied before the cut, so a cut never leaves
  *  half an address. */
 const ADDRESS = 'an address';
+const RELAY = /relay \d{6} via [^\s)]+/g;
+const WS_URL = /wss?:\/\/[^\s)]+/g;
 const V6_BRACKETED = /\[[0-9A-Fa-f.]*:[0-9A-Fa-f:.]*(?:%[\w.-]+)?\](?::\d{1,5})?/g;
 const V6_BARE = /(?<![\w:.])[0-9A-Fa-f]{0,4}(?::[0-9A-Fa-f]{0,4}){2,7}(?:(?:\.\d{1,3}){3})?(?:%[\w.-]*\w)?(?![\w:]|\.\d)/g;
 const V4 = /(?<![\w.])(?:\d{1,3}\.){3}\d{1,3}(?::\d{1,5})?(?![\w]|\.\d)/g;
@@ -132,6 +136,8 @@ const isV6 = (s: string): boolean => {
 };
 export function maskAddresses(text: string): string {
   return text
+    .replace(RELAY, 'a relay')
+    .replace(WS_URL, ADDRESS)
     .replace(V6_BRACKETED, ADDRESS)
     .replace(V6_BARE, (m) => (isV6(m) ? ADDRESS : m))
     .replace(V4, ADDRESS)

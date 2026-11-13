@@ -4,7 +4,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-const { create, diff, prune, stateOf, newDecisions, MAX_EVENTS, KEEP_MS } = await import('../src/godseye/branches/memory.ts');
+const { create, diff, prune, stateOf, newDecisions, maskAddresses, MAX_EVENTS, KEEP_MS } = await import('../src/godseye/branches/memory.ts');
 
 const T = new Date(2026, 10, 8, 23, 0, 0).getTime();   // Sunday 8 November 2026, 23:00 local
 const at = (s: number) => T + s * 1000;
@@ -841,6 +841,38 @@ test('old notes holding an address in a decision are cleaned on load', () => {
   assert.deepEqual(b.view().lines, ['23:00  paired with pixel at an address and an address']);
   assert.deepEqual((c.stored as any).logged.map((x: any) => x.text), ['paired with pixel at an address and an address']);
   assert.deepEqual((c.stored as any).future.map((x: any) => x.text), ['later paired with pixel at an address and an address']);
+  assert.equal(c.saves, 1, 'the cleaned notes are written back at once');
+});
+
+test('a relay peer\'s code and host, and a ws:// or wss:// url, never stay; near-misses do', () => {
+  assert.equal(maskAddresses('added friend (relay 482913 via relay.friend-home.net/kula)'), 'added friend (a relay)');
+  assert.equal(maskAddresses('added friend (relay 482913 via relay.example:8443/kula)'), 'added friend (a relay)');
+  assert.equal(maskAddresses('wss://relay.x.net/kula'), 'an address');
+  assert.equal(maskAddresses('ws://10.0.0.5:8080/x'), 'an address');
+  for (const same of ['the relay is down', 'relay 12345 via x', 'qwen2.5-7b-q4.gguf', '23:00', '1.2.3']) {
+    assert.equal(maskAddresses(same), same, `"${same}" stays as it is`);
+  }
+});
+
+test('old notes holding a relay\'s code and host in a decision are cleaned on load', () => {
+  const raw = 'added friend (relay 482913 via relay.friend-home.net/kula)';
+  const old = {
+    v: 1,
+    ev: [{ t: at(1), k: 'decision', d: null, n: null, x: raw }],
+    lastDecisionAt: at(0),
+    logged: [{ at: at(0), text: raw }],
+    future: [{ at: T + 400 * DAY, text: `later ${raw}` }],
+    state: { looked: true, devices: [], work: { loaded: null }, projects: [] },
+  };
+  const { c, ctx } = fakeCtx(old);
+  const b = create(ctx);
+  c.t = at(5);
+  b.observe(snap([], at(5), work({ decisions: [decision(at(0), raw)] })), null);   // the same decision: not re-logged
+  const out = leaked(b, c);
+  assert.ok(!out.includes('482913') && !out.includes('friend-home'), 'the code and the relay host are gone from the notes and the view');
+  assert.deepEqual(b.view().lines, ['23:00  added friend (a relay)']);
+  assert.deepEqual((c.stored as any).logged.map((x: any) => x.text), ['added friend (a relay)']);
+  assert.deepEqual((c.stored as any).future.map((x: any) => x.text), ['later added friend (a relay)']);
   assert.equal(c.saves, 1, 'the cleaned notes are written back at once');
 });
 

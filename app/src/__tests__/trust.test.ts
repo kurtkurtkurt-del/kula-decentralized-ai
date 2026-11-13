@@ -215,6 +215,10 @@ describe('clusterReport: one verdict', () => {
     const mine = clusterReport([ok], hostCheck({ ok: false, lines: 4 }));
     expect(sayHeadline(mine.headline, tx, 'pixel 9')).toBe('pixel 9: its own ledger is broken: the chain does not hold');
   });
+  it('this phone\'s own ledger says it read only its last lines; one line reads as before', () => {
+    expect(sayCheck(hostCheck({ ok: true, lines: 200 }), tx)).toBe('its own ledger: its last 200 lines, the chain holds');
+    expect(sayCheck(hostCheck({ ok: true, lines: 1 }), tx)).toBe('its own ledger: 1 line, the chain holds');
+  });
   it('a device not checked yet makes it grey; no device at all too', () => {
     expect(clusterReport([ok, grey], host)).toMatchObject({ verdict: 'unknown' });
     expect(sayHeadline(clusterReport([ok, grey], host).headline, tx, '')).toBe('not checked yet: tab');

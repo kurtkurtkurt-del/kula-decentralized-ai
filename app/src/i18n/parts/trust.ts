@@ -56,7 +56,7 @@ export const trust = {
   'trust.key.unknown': { en: 'it did not say where its key is', de: 'es hat nicht gesagt, wo sein schlüssel liegt', tr: 'anahtarının nerede olduğunu söylemedi' },
   'trust.host.none': { en: 'this phone keeps no ledger yet (it has not been shared)', de: 'dieses telefon führt noch kein register (es wurde noch nicht geteilt)', tr: 'bu telefon henüz defter tutmuyor (paylaşılmadı)' },
   'trust.host.ok.one': { en: 'its own ledger: {n} line, the chain holds', de: 'sein eigenes register: {n} zeile, die kette hält', tr: 'kendi defteri: {n} satır, zincir sağlam' },
-  'trust.host.ok.other': { en: 'its own ledger: {n} lines, the chain holds', de: 'sein eigenes register: {n} zeilen, die kette hält', tr: 'kendi defteri: {n} satır, zincir sağlam' },
+  'trust.host.ok.other': { en: 'its own ledger: its last {n} lines, the chain holds', de: 'sein eigenes register: die letzten {n} zeilen, die kette hält', tr: 'kendi defteri: son {n} satır, zincir sağlam' },
   'trust.host.broken': { en: 'its own ledger is broken: the chain does not hold', de: 'sein eigenes register ist kaputt: die kette hält nicht', tr: 'kendi defteri bozuk: zincir tutmuyor' },
   // the headline
   'trust.head.many': { en: '{n} things to look at. first, {first}', de: '{n} dinge zum ansehen. zuerst: {first}', tr: 'bakılacak {n} şey var. önce: {first}' },
