@@ -41,7 +41,8 @@ ever deleted. Nothing changed since the last release: skip this step and say so.
   `node/package-lock.json`, `desktop/package.json`, `desktop/package-lock.json`, `app/app.json`
   (`expo.version`); then `cd node && node tools/release-files.mjs --drafts`.
 - `README.md`: a "what's new in X.Y.Z" section above the previous one, in plain words (what a
-  person sees, not internals). `web/site/index.html`: the version in the comment, the kicker and the
+  person sees, not internals): each item opens with a plain "what changed" heading ("Linux app.",
+  "Better guesses about your devices."), never a slogan. `web/site/index.html`: the version in the comment, the kicker and the
   footer, and a "what's new" list. Check `node tools/docs-links.mjs`.
 - Commit (message ends with the Co-Authored-By line the session gives).
 
@@ -63,11 +64,20 @@ ever deleted. Nothing changed since the last release: skip this step and say so.
   (gives `kula-node-mac-arm64`; its smoke run must print the new version).
 - the Mac app: `cd desktop && rm -rf release && npm run dist:mac`; check
   `codesign --verify --deep --strict release/mac-arm64/kula.app`.
+- the Linux app: not built on this Mac. The push to main starts `.github/workflows/desktop-linux.yml`
+  (the version bump touches `desktop/package.json`; otherwise `gh workflow run desktop-linux.yml --ref main`).
+  Wait for that run on the pushed commit (`gh run list --workflow desktop-linux.yml --commit <sha>`); it must be
+  green with no `CHECK … FAIL` on both smoke jobs (x64, arm64). Then `gh run download <id> -n kula-linux` and
+  `shasum -a 256 -c sha256sums-linux.txt`. Take only `kula-linux-x64.deb` and `kula-linux-arm64.deb` from
+  that run (never rebuild them, never ship the AppImages: their launcher turns the sandbox off).
 
 ## 5. GitHub release and site
 
 - Assets, exactly these names (the site links to them): `kula-android.apk`,
-  `kula-mac-arm64.dmg`, `kula-node-mac-arm64`, `sha256sums.txt` (shasum -a 256 of the three).
+  `kula-mac-arm64.dmg`, `kula-node-mac-arm64`, `kula-linux-x64.deb`, `kula-linux-arm64.deb`,
+  `sha256sums.txt` (shasum -a 256 of the five). A release without the two debs breaks the site's Linux
+  links, because `releases/latest` moves to it. The same holds for the apk: when no apk is built for a
+  release, upload the previous release's `kula-android.apk` again (`gh release download vPREV -p kula-android.apk`).
 - `git tag -a vX.Y.Z -m "kula vX.Y.Z" kula-main && git push origin refs/tags/vX.Y.Z`, then
   `gh release create vX.Y.Z <assets> --title "kula vX.Y.Z: <a few words>" --notes-file <notes> --latest`.
   Notes: what's new (from the README), the files, how to install, known limits (what has not
