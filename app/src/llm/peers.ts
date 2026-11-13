@@ -70,6 +70,19 @@ export function parseRelayCode(text: string, relayUrl = settings().relayUrl): Pe
   };
 }
 
+/**
+ * A device name as the screen may show it: controls (C0, DEL, C1) and the line and paragraph
+ * separators become a space; zero-width marks, direction overrides and isolates, word joiners
+ * and the byte order mark go; runs of space become one. The same rules as kula-node's guard
+ * (node/src/godseye/branches/guard.ts cleanName), copied on purpose: no import across packages.
+ */
+export const cleanName = (s: string): string =>
+  s
+    .replace(/[\u{0}-\u{1f}\u{7f}-\u{9f}\u{2028}\u{2029}]/gu, ' ')
+    .replace(/[\u{200b}-\u{200f}\u{202a}-\u{202e}\u{2060}-\u{2069}\u{feff}]/gu, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+
 /** Parses a peer qr into a Peer (nothing stored). Throws 'notPeer' | 'self' | 'old'. */
 export function parsePeerQr(text: string): Peer {
   let o: PeerQr;
@@ -81,7 +94,11 @@ export function parsePeerQr(text: string): Peer {
   if (!o || o.k !== 'kula-peer') throw new Error('notPeer');
   if (o.v !== 2 && o.v !== 3) throw new Error('old');
   const relay = isRelayRef(o.relay) ? { url: relayUrlOf(o.relay.url), code: o.relay.code } : null;
-  if (!o.id || (!relay && (!o.host || !o.port))) throw new Error('notPeer');
+  // a code is only json: id and host are strings or the code is refused, and the name is read
+  // only when it is a string (the brain tab lower-cases it on every draw)
+  if (typeof o.id !== 'string' || o.id.length < 1 || o.id.length > 200) throw new Error('notPeer');
+  const host = typeof o.host === 'string' ? o.host : '';
+  if (!relay && (!host || !o.port)) throw new Error('notPeer');
   // a relayed connection must be tls end to end: a v2 code (shared secret) is never relayed
   if (relay && o.v !== 3) throw new Error('notPeer');
   let secret = '';
@@ -98,7 +115,7 @@ export function parsePeerQr(text: string): Peer {
   }
   if (o.id === myWorkerId) throw new Error('self');
   return {
-    id: o.id, name: o.name || o.host || `code ${relay?.code}`, host: o.host ?? '', port: Number(o.port) || 0, secret, fp, pin, paired_at: null, relay,
+    id: o.id, name: cleanName(typeof o.name === 'string' ? o.name : '').slice(0, 80) || host || `code ${relay?.code}`, host, port: Number(o.port) || 0, secret, fp, pin, paired_at: null, relay,
     kind: o.kind === 'pc' || o.kind === 'tablet' ? o.kind : 'phone',
     ram: o.ram ?? null, bw: o.bw ?? null, passport: (o.passport as Record<string, unknown>) ?? null,
     added_at: new Date().toISOString(), last_ok: null,

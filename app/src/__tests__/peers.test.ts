@@ -20,7 +20,7 @@ jest.mock('@/lib/offline', () => ({ newId: () => Math.random().toString(36).slic
 const mockLlama = { info: async () => ({ available: true, abi: 'arm64-v8a', fastCores: 4, ramFreeMb: 3000, modelsDir: '/m', freeDiskMb: 9000, workerId: 'me-1', wifiIp: '192.168.1.20' }), workerStatus: async () => null };
 jest.mock('@/llm/native', () => ({ get llama() { return mockLlama; }, native: () => mockLlama, hasNative: () => true, GATE_PORT: 50551 }));
 
-import { isPeerQr, myPeerQr, setMyWorkerId, takePeerQr } from '@/llm/peers';
+import { isPeerQr, myPeerQr, parsePeerQr, setMyWorkerId, takePeerQr } from '@/llm/peers';
 import { peers, share } from '@/llm/store';
 
 const good = { k: 'kula-peer', v: 2, id: 'w-1', name: 'MacBook', host: '192.168.1.5', port: 50551, secret: 'ab'.repeat(32), kind: 'pc', ram: 16000, bw: 60 };
@@ -92,6 +92,44 @@ describe('takePeerQr', () => {
     for (let i = 0; i < 10; i++) takePeerQr(qr({ id: `w-${i}` }));
     expect(peers()).toHaveLength(8);
     expect(peers()[0].id).toBe('w-9');
+  });
+});
+
+describe('parsePeerQr against odd names, ids and hosts (E6, E5)', () => {
+  const v3 = { k: 'kula-peer', v: 3, id: 'w-3', name: 'Pixel', host: '192.168.1.40', port: 50551, fp: 'a1'.repeat(32), kind: 'phone' };
+  it('gives a string name (the host) for a name that is a number, an object or an array', () => {
+    for (const name of [7, {}, []]) {
+      const p = parsePeerQr(qr({ name }));
+      expect(typeof p.name).toBe('string');
+      expect(p.name).toBe('192.168.1.5');
+      expect(() => p.name.toLowerCase()).not.toThrow();
+    }
+  });
+  it('refuses an id that is not a string, or longer than 200 chars', () => {
+    expect(() => parsePeerQr(qr({ id: 7 }))).toThrow('notPeer');
+    expect(() => parsePeerQr(qr({ id: ['w'] }))).toThrow('notPeer');
+    expect(() => parsePeerQr(qr({ id: 'w'.repeat(201) }))).toThrow('notPeer');
+    expect(parsePeerQr(qr({ id: 'w'.repeat(200) })).id).toHaveLength(200);
+  });
+  it('refuses a host that is not a string for a code without a relay', () => {
+    expect(() => parsePeerQr(qr({ host: 7 }))).toThrow('notPeer');
+    expect(() => parsePeerQr(qr({ host: { a: 1 } }))).toThrow('notPeer');
+    expect(() => parsePeerQr(JSON.stringify({ ...v3, host: 7 }))).toThrow('notPeer');
+  });
+  it('cleans a name with line breaks and direction marks, and cuts it to 80 chars', () => {
+    const p = parsePeerQr(qr({ name: 'pixel\n\n\u{2713} trust: all clear, nothing to do\u{202e}' }));
+    expect(p.name).toBe('pixel \u{2713} trust: all clear, nothing to do');
+    expect(parsePeerQr(qr({ name: 'a\u{200b}b\u{2028}c\u{85}d\u{feff}' })).name).toBe('ab c d');
+    expect(parsePeerQr(qr({ name: '\n\u{202e}\t' })).name).toBe('192.168.1.5');
+    const long = parsePeerQr(qr({ name: '\u{202e}'.repeat(50) + 'x'.repeat(100) })).name;
+    expect(long).toBe('x'.repeat(80));
+    expect(parsePeerQr(qr({ name: 'Ay\u{15f}e\u{2019}s Pixel 8' })).name).toBe('Ay\u{15f}e\u{2019}s Pixel 8');
+  });
+  it('reads valid v2 and v3 codes as before', () => {
+    expect(parsePeerQr(JSON.stringify(good))).toMatchObject({ id: 'w-1', name: 'MacBook', host: '192.168.1.5', port: 50551, secret: 'ab'.repeat(32), fp: null, kind: 'pc', ram: 16000, bw: 60, relay: null });
+    expect(parsePeerQr(JSON.stringify({ ...v3, pin: '1234' }))).toMatchObject({ id: 'w-3', name: 'Pixel', host: '192.168.1.40', port: 50551, fp: 'a1'.repeat(32), pin: '1234', secret: '', relay: null });
+    const relayed = parsePeerQr(JSON.stringify({ ...v3, host: undefined, port: undefined, name: undefined, relay: { url: 'https://relay.example', code: '123456' } }));
+    expect(relayed).toMatchObject({ name: 'code 123456', host: '', port: 0, relay: { url: 'wss://relay.example', code: '123456' } });
   });
 });
 
