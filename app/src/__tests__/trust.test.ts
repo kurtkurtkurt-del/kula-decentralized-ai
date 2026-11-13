@@ -80,6 +80,30 @@ describe('takeIn: what is kept between looks', () => {
     expect(check(ok, 'ledger').ok).toBe(true);
   });
 
+  // G2: asked from a line, only `found: true` goes on from it. Without it (null, left out, not a
+  // boolean) the first line was never checked against the head, so the ledger started over.
+  it('asked from a line, an answer without found: true is a ledger that started over', () => {
+    const n1 = takeIn(null, answer({ lines: ['1'] }), verified({ verified: 1, lastHash: H('1') }), null, 1_000);
+    for (const found of [null, false] as const) {
+      const n2 = takeIn(n1, answer({ found, lines: ['x', 'y'] }), verified({ verified: 2, lastHash: H('y') }), H('1'), 5_000);
+      expect(n2.fault).toEqual({ why: 'restart', at: 5_000, line: null });
+      expect(n2).toMatchObject({ head: H('y'), verified: 2, since: 5_000 });
+      expect(deviceReport(peer(), n2).verdict).toBe('bad');
+    }
+    // found: null and 'yes' come out of parseAnswer as null
+    expect(parseAnswer({ ledger: { found: null } }).found).toBeNull();
+    expect(parseAnswer({ ledger: { found: 'yes' } }).found).toBeNull();
+    expect(parseAnswer({ ledger: {} }).found).toBeNull();
+    // no found and no lines: the restart, and nothing to follow
+    const empty = takeIn(n1, answer({ found: null }), verified(), H('1'), 6_000);
+    expect(empty).toMatchObject({ fault: { why: 'restart', at: 6_000, line: null }, head: null, verified: 0, since: 0 });
+    // found: true goes on as before
+    const on = takeIn(n1, answer({ found: true, lines: ['2'] }), verified({ verified: 1, lastHash: H('2') }), H('1'), 7_000);
+    expect(on).toMatchObject({ fault: null, head: H('2'), verified: 2, since: 1_000 });
+    // a first look (no since, found null) is no restart
+    expect(takeIn(null, answer({ found: null, lines: ['1'] }), verified({ verified: 1, lastHash: H('1') }), null, 1).fault).toBeNull();
+  });
+
   it('a line that does not hold: the head stays at the last good one, the same line again is the same fault, accepting steps past it', () => {
     const n1 = takeIn(null, answer({ lines: ['1', '2', 'bad'] }), verified({ verified: 2, lastHash: H('2'), problem: 'sig', problemLine: H('b') }), null, 1_000);
     expect(n1).toMatchObject({ head: H('2'), verified: 2, fault: { why: 'sig', at: 1_000, line: H('b') } });
@@ -275,6 +299,78 @@ describe('look: one device asked', () => {
     expect(n).toMatchObject({ verified: 2, head: H('1'), fault: { why: 'sig', line: H('b') } });
     await look(peer(), n, io);
     expect(io.asked.at(-1)).toBe(H('1'));
+  });
+
+  // G2 ported (scratch g2.test.mts): a device that answers since=<head> without `found` and hands
+  // over a rewritten chain. The verify stand-in keeps TrustVerify.kt's rules: line 0's prev must be
+  // expectPrev when one is given, each next line's prev the line before.
+  describe('an answer without found: true (G2)', () => {
+    const line = (prev: string, h: string) => JSON.stringify({ prev, h });
+    const chainIO = (ledger: Record<string, unknown>) => {
+      const asked: string[] = [];
+      const expects: (string | null)[] = [];
+      const io: TrustIO & { asked: string[]; expects: (string | null)[] } = {
+        asked, expects,
+        tunnel: async () => 1,
+        get: async (url) => { asked.push(url); return { status: 200, body: { id: 'a'.repeat(32), key: { alg: 'ed25519', pub: 'AA==', store: 'keystore' }, cert: 'Q0VSVA==', gate: { v1: false }, ledger: { self: 'ok', more: false, ...ledger } } }; },
+        verify: async (_fp, _cert, _id, _alg, _pub, ls, expectPrev) => {
+          expects.push(expectPrev);
+          let last: string | null = expectPrev;
+          let n = 0;
+          for (let i = 0; i < ls.length; i++) {
+            const o = JSON.parse(ls[i]);
+            if ((i > 0 || expectPrev !== null) && o.prev !== last) return verified({ verified: n, lastHash: n ? last : null, problem: 'chain', problemLine: o.h });
+            last = o.h; n++;
+          }
+          return verified({ verified: n, lastHash: n ? last : null });
+        },
+        now: () => 2,
+      };
+      return io;
+    };
+    const head = H('h');
+    const was = (): TrustNote => ({ ...freshNote(), at: 1, answered: true, hasCert: true, certPinned: true, cnMatches: true, keyIdMatches: true, keyId: 'a'.repeat(32), head, verified: 40, since: 1 });
+    const forged = [line('x'.repeat(64), 'n1'), line('n1', 'n2')];
+
+    const shapes: [string, Record<string, unknown>][] = [['left out', {}], ['null', { found: null }], ["'yes'", { found: 'yes' }]];
+    it.each(shapes)('found %s with a rewritten chain: the restart, the new chain followed, accept clears it', async (_w, f) => {
+      const io = chainIO({ ...f, lines: forged });
+      const n = await look(peer(), was(), io);
+      expect(io.asked[0]).toMatch(new RegExp(`since=${head}`));
+      expect(io.expects[0]).toBeNull();
+      expect(n.fault).toEqual({ why: 'restart', at: 2, line: null });
+      expect(n).toMatchObject({ head: 'n2', verified: 2, since: 2 });
+      expect(deviceReport(peer(), n)).toMatchObject({ verdict: 'bad', accept: true });
+      const ok = accept(n);
+      expect(ok).toMatchObject({ fault: null, head: 'n2' });
+      expect(check(ok, 'ledger').ok).toBe(true);
+    });
+
+    it('found left out and no lines: the restart, head null', async () => {
+      const n = await look(peer(), was(), chainIO({ lines: [] }));
+      expect(n).toMatchObject({ fault: { why: 'restart' }, head: null, verified: 0 });
+    });
+
+    it('found: true with linked lines goes on; with an unlinked first line it is a chain fault', async () => {
+      const io = chainIO({ found: true, lines: [line(head, 'n1'), line('n1', 'n2')] });
+      const n = await look(peer(), was(), io);
+      expect(io.expects[0]).toBe(head);
+      expect(n).toMatchObject({ fault: null, head: 'n2', verified: 42, since: 1 });
+      const broken = await look(peer(), was(), chainIO({ found: true, lines: forged }));
+      expect(broken).toMatchObject({ fault: { why: 'chain', line: 'n1' }, head, verified: 40 });
+    });
+
+    it('found: false: the restart, as before', async () => {
+      const n = await look(peer(), was(), chainIO({ found: false, lines: forged }));
+      expect(n).toMatchObject({ fault: { why: 'restart' }, head: 'n2', verified: 2 });
+    });
+
+    it('a first look (no since, found null) is no restart', async () => {
+      const io = chainIO({ lines: forged });
+      const n = await look(peer(), null, io);
+      expect(io.asked[0]).not.toMatch(/since=/);
+      expect(n).toMatchObject({ fault: null, head: 'n2', verified: 2 });
+    });
   });
 
   it('a tunnel that does not open: not checked, with the reason', async () => {

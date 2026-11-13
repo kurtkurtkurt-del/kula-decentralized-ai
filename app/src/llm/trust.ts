@@ -19,7 +19,9 @@ import type { Peer } from '@/llm/store';
 //
 // One difference from the computer: the computer keeps a window of the lines received and asks
 // from the last one received (`upTo`); the phone verifies as it receives, so it asks from the last
-// line verified here and keeps only that line's hash.
+// line verified here and keeps only that line's hash. One rule the same: asked from a line, only an
+// answer that says `found: true` goes on from it. `found: false`, null, left out or not a boolean is
+// a ledger that started over (as the computer's engine treats it), never a quiet continuation.
 
 export const ROUNDS = 5;        // asks per look while the device says there is more
 export const GUESS_LIMIT = 5;   // wrong codes in a day that turn the refused check red
@@ -79,9 +81,11 @@ const FAULTS: readonly string[] = ['chain', 'sig', 'nosig', 'json', 'key'];
 /**
  * One answer folded into what was kept. [askedSince]: the line the look asked from (the last
  * one verified), null for a first look; [v] is TrustVerify.kt's result over the answer's lines,
- * checked against [askedSince] when the device found it. A device that no longer has that line
- * started its ledger over (cleared, or rewritten): red until the person says they know, and the
- * new chain is followed from its first line here.
+ * checked against [askedSince] only when the device said `found: true`. A device that does not
+ * say it found that line (`found` false, null, left out or not a boolean) started its ledger over
+ * (cleared, or rewritten): red until the person says they know, and the new chain is followed from
+ * its first line here. Its first line was never checked against the head, so it is never a
+ * continuation.
  */
 export function takeIn(was: TrustNote | null, a: TrustAnswer, v: TrustVerified, askedSince: string | null, now: number): TrustNote {
   const n: TrustNote = { ...(was ?? freshNote()) };
@@ -89,7 +93,7 @@ export function takeIn(was: TrustNote | null, a: TrustAnswer, v: TrustVerified, 
   n.store = a.store; n.v1 = a.v1; n.self = a.self; n.rejectsDay = a.rejectsDay;
   n.hasCert = !!(a.cert && a.pub && a.id);
   n.certPinned = v.certPinned; n.cnMatches = v.cnMatches; n.keyIdMatches = v.keyIdMatches; n.keyId = v.keyId;
-  if (askedSince && a.found === false) {
+  if (askedSince && a.found !== true) {
     n.fault = { why: 'restart', at: now, line: null };
     n.head = null; n.verified = 0; n.since = 0;
   }
