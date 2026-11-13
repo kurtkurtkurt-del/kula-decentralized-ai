@@ -144,9 +144,13 @@ sudo apt install ./kula-linux-x64.deb      # apt also brings libgomp1, which lla
 ```
 
 Then open **kula** from the app menu. The first start downloads llama.cpp b11157 (about 17 MB,
-sha256-checked) instead of compiling it, and the chat page opens in its own window. So far it
-is checked only on GitHub's Ubuntu 24.04 test machines (x64 and arm64): not yet on a real
-desktop, not yet in a cluster with a phone. There is no AppImage for other distros yet.
+sha256-checked) instead of compiling it, and the chat page opens in its own window. Where
+`nvidia-smi` works it downloads the CUDA build and its runtime instead: 763.9 MB on x64, 698.0 MB
+on ARM. So far it is checked only on GitHub's Ubuntu 24.04 test machines (x64 and arm64, no
+graphics card): first start, and a small model (Qwen3 0.6B) loaded and answered on the CPU. For
+NVIDIA only the download, the sha256 sums and the place of the libraries are checked; no real
+card has run it. Not yet on a real desktop, not yet in a cluster with a phone. There is no
+AppImage for other distros yet.
 
 ### the computer, in the terminal (macOS shown; Linux and Windows the same with their file)
 
