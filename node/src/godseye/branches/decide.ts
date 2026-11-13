@@ -12,7 +12,10 @@
 // A speed a device answered with on this very model file (weight 1 or more, as below) is taken as
 // it is for that model, never converted from another file.
 // A split runs its layers one device after the other, so its token is the sum of each device's
-// part plus a hop per worker; the bytes go to the fastest device first, as sim.ts does.
+// part plus a hop per worker; the bytes go to the fastest device first, as sim.ts does. The hop is
+// HOP_MS, or, when the planner hands split() a k (hop.ts) and senses gave the worker's link, k times
+// that link's usual round trip (srtt); such a split also says its chain (compute time and links), so
+// the planner can learn k from the split's own answers and say the range (L9 P49).
 //
 // A device's free memory is its worker's live reading (GET /status, `worker.ramFreeMb`) when that
 // is fresh (WORKER_FRESH_MS) and it holds none of our model; when it holds our model, a reading
@@ -22,6 +25,7 @@
 import type { BranchCtx, DeviceHint, EyeDevice, EyeModel, Snapshot, SuggestAction, Suggestion } from '../types.js';
 import { sha256Hex } from '../hash.js';
 import { active } from './util.js';
+import type { Link } from './hop.js';
 
 export const LOCAL_SHARE = 0.7;    // sim.ts: of this computer's free memory a model may take
 export const WORKER_SHARE = 0.75;  // sim.ts: of a device's advertised free memory
@@ -46,6 +50,7 @@ export interface Seat {
   speed: Speed | null;
   tonight: DeviceHint['tonight'] | null;
   files?: { file: string; tps: number }[];   // tok/s it answered with on these files, each weighing 1 or more
+  link?: Link;                      // senses: its link's usual round trip (ms); never on this computer's seat
 }
 /** a device the deciding branches leave out, and why */
 export interface Barred { id: string; name: string; why: string }
@@ -131,6 +136,23 @@ export function hintsOf(ctx: Pick<BranchCtx, 'peek'>): Map<string, DeviceHint[]>
   return out;
 }
 
+/** the links senses gave, by device id: an entry with a string id and a link whose srtt is finite in
+ *  (0, 600000] ms; a missing or odd rttvar is 0. Read by shape, so a hint without a link is no entry */
+export function linksOf(ctx: Pick<BranchCtx, 'peek'>): Map<string, Link> {
+  const out = new Map<string, Link>();
+  const hs = ctx.peek('senses')?.hints;
+  if (!Array.isArray(hs)) return out;
+  for (const h of hs) {
+    if (!h || typeof h.id !== 'string') continue;
+    const l = (h as { link?: unknown }).link;
+    if (l === null || typeof l !== 'object') continue;
+    const { srtt, rttvar } = l as { srtt?: unknown; rttvar?: unknown };
+    if (typeof srtt !== 'number' || !Number.isFinite(srtt) || !(srtt > 0) || srtt > 600_000) continue;
+    out.set(h.id, { srtt, rttvar: typeof rttvar === 'number' && Number.isFinite(rttvar) && rttvar >= 0 ? rttvar : 0 });
+  }
+  return out;
+}
+
 /** the devices trust says no to: a bad verdict, with its first failed check */
 export function untrusted(ctx: Pick<BranchCtx, 'peek'>): Map<string, string> {
   const out = new Map<string, string>();
@@ -165,6 +187,7 @@ function speedOf(s: Snapshot, id: string, kind: string, bw: number | null, measu
 export function field(s: Snapshot, ctx: Pick<BranchCtx, 'peek'>, measured?: Map<string, Measured[]>): Field {
   const hints = hintsOf(ctx);
   const trust = untrusted(ctx);
+  const links = linksOf(ctx);
   // the measured speeds: the planner's own notes, or what it handed the others
   let speeds = measured;
   if (!speeds) {
@@ -187,7 +210,8 @@ export function field(s: Snapshot, ctx: Pick<BranchCtx, 'peek'>, measured?: Map<
     if (no) { barred.push({ id: d.id, name: d.name, why: no }); continue; }
     // answering another master: left out, a line in the view and nothing more (no card, no probe)
     if (busy) { barred.push({ id: d.id, name: d.name, why: 'answering someone else' }); continue; }
-    seats.push({ id: d.id, name: d.name, local: false, kind: d.kind, via: d.via, ramMb: ram, capMb: Math.floor(ram * WORKER_SHARE), speed: speedOf(s, d.id, d.kind, d.bwGBs, speeds.get(d.id)), tonight: tonightOf(d.id), files: filesOf(s, speeds.get(d.id)) });
+    const link = links.get(d.id);
+    seats.push({ id: d.id, name: d.name, local: false, kind: d.kind, via: d.via, ramMb: ram, capMb: Math.floor(ram * WORKER_SHARE), speed: speedOf(s, d.id, d.kind, d.bwGBs, speeds.get(d.id)), tonight: tonightOf(d.id), files: filesOf(s, speeds.get(d.id)), ...(link ? { link } : {}) });
   }
   if (s.work.llama && s.host.freeMb != null && s.host.freeMb > 0) {
     const no = hints.get('local')?.find((h) => h.no)?.no ?? null;
@@ -221,6 +245,7 @@ export interface Place {
   tps: number | null;               // one answer's speed: the fastest seat (apart) or the chain (split); null: not measured yet
   shares?: { seat: Seat; mb: number }[];
   action: SuggestAction;
+  chain?: { computeMs: number; links: Link[] };   // split with a k and every worker's link: its compute time per token and the links, in order
 }
 
 /** apart without this computer's seat says here:false: kula's engine runs this computer in apart
@@ -246,23 +271,28 @@ export function apart(f: Field, m: EyeModel, slack = 1): Place | null {
   return { mode: 'apart', seats: fit, tps: known.length ? Math.max(...known) : null, action: loadAction(m, 'apart', fit) };
 }
 
+/** a seat's GB/s for this model (gb: its readGb): what it streamed on this very file, else its best speed */
+export function gbsFor(x: Seat, m: EyeModel, gb: number | null): number | null {
+  const own = gb != null ? x.files?.find((y) => y.file === m.file) : undefined;
+  return own ? own.tps * gb! : x.speed?.gbs ?? null;
+}
+
 /** one model across this computer and the devices near it (never a relay), the bytes on the
- *  fastest first; the fewest workers that give the shortest token, or that fit when a speed is unknown */
-export function split(f: Field, m: EyeModel, slack = 1): Place | null {
+ *  fastest first; the fewest workers that give the shortest token, or that fit when a speed is unknown.
+ *  With a usable k (finite, > 0) a worker with a link costs k times its srtt per token instead of HOP_MS,
+ *  and a place whose every worker has a link says its chain; without one it is as before L9 */
+export function split(f: Field, m: EyeModel, slack = 1, k?: number): Place | null {
   const host = f.seats.find((x) => x.local);
   if (!host || !(m.catalog || m.here) || !(m.needMb > 0)) return null;
   const gb = readGb(m);
-  // a seat's GB/s for this model: what it streamed on this very file, else its best speed
-  const gbsOf = (x: Seat): number | null => {
-    const own = gb != null ? x.files?.find((y) => y.file === m.file) : undefined;
-    return own ? own.tps * gb! : x.speed?.gbs ?? null;
-  };
+  const usable = typeof k === 'number' && Number.isFinite(k) && k > 0;
+  const gbsOf = (x: Seat): number | null => gbsFor(x, m, gb);
   const speed = (x: Seat) => gbsOf(x) ?? -1;
   const workers = f.seats.filter((x) => !x.local && x.via !== 'relay').sort((a, b) => speed(b) - speed(a) || b.capMb - a.capMb);
   let best: Place | null = null;
   let bestMs = Infinity;
-  for (let k = 1; k <= workers.length; k++) {
-    const devs = [host, ...workers.slice(0, k)];
+  for (let n = 1; n <= workers.length; n++) {
+    const devs = [host, ...workers.slice(0, n)];
     if (devs.reduce((t, x) => t + x.capMb * slack, 0) < m.needMb) continue;
     let left = m.needMb;
     const shares = [...devs].sort((a, b) => speed(b) - speed(a)).map((seat) => {
@@ -273,12 +303,40 @@ export function split(f: Field, m: EyeModel, slack = 1): Place | null {
     const used = shares.filter((x) => !x.seat.local && x.mb > 0);
     if (!used.length) continue;   // the host alone holds it: that is not a split
     const known = gb != null && shares.every((x) => x.mb === 0 || gbsOf(x.seat) != null);
-    const ms = known ? shares.reduce((t, x) => t + (x.mb > 0 ? ((x.mb / m.needMb) * gb! * 1000) / gbsOf(x.seat)! : 0), 0) + used.length * HOP_MS : null;
+    const computeMs = known ? shares.reduce((t, x) => t + (x.mb > 0 ? ((x.mb / m.needMb) * gb! * 1000) / gbsOf(x.seat)! : 0), 0) : 0;
+    const hop = used.reduce((t, x) => t + (usable && x.seat.link ? k! * x.seat.link.srtt : HOP_MS), 0);
+    const ms = known ? computeMs + hop : null;
     const place: Place = { mode: 'split', seats: [host, ...used.map((x) => x.seat)], tps: ms ? Math.round((1000 / ms) * 10) / 10 : null, shares, action: loadAction(m, 'split', used.map((x) => x.seat)) };
+    if (known && usable && used.every((x) => x.seat.link)) place.chain = { computeMs, links: used.map((x) => x.seat.link!) };
     if (ms == null) { if (!best) best = place; break; }   // speeds unknown: the fewest that fit
     if (ms < bestMs) { best = place; bestMs = ms; }
   }
   return best;
+}
+
+/** the loaded split's chain of model m, as split() would say it: each part's compute time from its
+ *  seat's speed on m and the workers' links; null when any of it is missing */
+export function loadedChain(s: Snapshot, f: Field, m: EyeModel): { computeMs: number; links: Link[] } | null {
+  const L = s.work.loaded;
+  if (!L || L.mode !== 'split' || !(L.model.id === m.id || L.model.file === m.file)) return null;
+  const parts = (L.parts ?? []).filter((p) => p.mb > 0);
+  const total = parts.reduce((t, p) => t + p.mb, 0);
+  const gb = readGb(m);
+  if (!parts.length || !(total > 0) || !gb) return null;
+  let computeMs = 0;
+  const links: Link[] = [];
+  for (const p of parts) {
+    const seat = p.local ? f.seats.find((x) => x.local) : f.seats.find((x) => !x.local && x.id === p.id);
+    if (!seat) return null;
+    const gbs = gbsFor(seat, m, gb);
+    if (gbs == null || !(gbs > 0)) return null;
+    computeMs += ((p.mb / total) * gb * 1000) / gbs;
+    if (!seat.local) {
+      if (!seat.link) return null;
+      links.push(seat.link);
+    }
+  }
+  return links.length ? { computeMs, links } : null;
 }
 
 // ---- words

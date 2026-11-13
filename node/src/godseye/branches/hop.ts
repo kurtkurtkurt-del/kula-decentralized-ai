@@ -14,8 +14,8 @@
 // their median. Its last HOP_ERRS relative errors (|tps - est| / tps) give a split-conformal 80%
 // interval around the guess.
 //
-// Nothing reads this file yet: no branch, hint, card or note imports it (L8). The bench
-// (test/brain-bench/bench3.ts) measures it first; wiring it is L9. Pure: no clock, no ctx, no import.
+// planner.ts and decide.ts read it (L9 P49): split() prices the links with k, the planner learns k from
+// split answers and says the range in the split card's why. Pure: no clock, no ctx, no import.
 
 /** one worker's link, in ms: senses' srtt and rttvar */
 export interface Link { srtt: number; rttvar: number }

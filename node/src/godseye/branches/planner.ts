@@ -12,12 +12,17 @@
 // the tok/s is the whole chain's), else its measured bandwidth; this computer has none until a model
 // ran here, and then a card quotes no number for it. Each card holds SHOW looks before it shows and
 // goes HIDE looks after its reason went, with SLACK on every threshold, so it does not flap.
+// The links' cost is the one thing taken from a split (L9 P49, hop.ts): each split answer, with the
+// chain of the look before (its compute time from the seats' own speeds, senses' srtt of its links),
+// gives one k; split() prices a worker's link at k times its srtt (the prior k = 1 before 3 answers),
+// and the split card's why ends with the range it is likely in. Speeds are still never taken from a split.
 // Notes: the last model, the speeds (at most 40 devices × 8 files, each with `at`, when it was last
-// folded), saved at most once a minute. A 9th file pushes out the device's file with the oldest `at`, a
+// folded), the hop fit (hop.ts), saved at most once a minute. A 9th file pushes out the device's file with the oldest `at`, a
 // 41st device the device whose newest `at` is oldest (never this computer, never the one just written).
 import type { Branch, BranchCtx, BranchView, EyeModel, Snapshot, Suggestion } from '../types.js';
 import { hhmm } from './util.js';
-import { GAIN, SLACK, Steady, alone, apart, cardId, field, gb1, modelOf, names, seatName, split, tpsOn, tpsWord, type Field, type Measured, type Place, type Seat } from './decide.js';
+import { GAIN, SLACK, Steady, alone, apart, cardId, field, gb1, loadedChain, modelOf, names, seatName, split, tpsOn, tpsWord, type Field, type Measured, type Place, type Seat } from './decide.js';
+import { chainTps, freshHop, hopInterval, hopK, hopStep, saneHop, type HopFit } from './hop.js';
 
 const MODE_WORD: Record<string, string> = { phone: 'on the phone', apart: 'apart', split: 'split', here: 'here' };
 const DEVICES_KEPT = 40;
@@ -27,7 +32,7 @@ const AT_MAX = 8.64e15;            // the last ms a Date can hold
 const EWMA = 0.3;                  // a new answer's weight in a device's average speed
 const SAVE_EVERY_MS = 60_000;
 
-interface Notes { v: 1; last: string | null; speeds: Record<string, Record<string, { tps: number; n: number; at: number }>> }
+interface Notes { v: 1; last: string | null; speeds: Record<string, Record<string, { tps: number; n: number; at: number }>>; hop?: HopFit }
 
 const okAt = (t: unknown): t is number => typeof t === 'number' && Number.isFinite(t) && t >= 0 && t <= AT_MAX;
 
@@ -44,6 +49,8 @@ function sane(x: unknown, now: number): Notes {
     }
     out.speeds[id] = f;
   }
+  const hop = saneHop(n.hop);
+  if (hop) out.hop = hop;
   return out;
 }
 
@@ -57,12 +64,28 @@ export function seatedIds(s: Snapshot): Set<string> {
 const where = (s: Snapshot, x: Seat) => (x.local ? `here on ${seatName(s, x)}` : `on ${x.name}`);
 const from = (xs: Seat[]) => (xs.some((x) => x.speed?.from === 'bandwidth') ? 'estimated from memory bandwidth' : 'from the speeds they answered with');
 
-/** the planner's cards for one model in one look; strict to show, loose (SLACK) to stay */
-export function plan(s: Snapshot, f: Field, m: EyeModel, strict: boolean): { cards: Suggestion[]; alone: Place | null; apart: Place | null; split: Place | null } {
+const r1 = (x: number) => Math.round(x * 10) / 10;
+
+/** words for the end of a split card's why: how the links' cost is known and, once it can, the 80%
+ *  range of the chain's tok/s; '' without a fit or a chain. Words only: no rule reads the range */
+export function hopWords(S: Place, hop: HopFit | undefined): string {
+  if (!hop || !S.chain) return '';
+  const W = hop.errs.length;
+  const raw = chainTps(S.chain.computeMs, S.chain.links, hopK(hop));
+  const iv = hopInterval(raw, hop.errs);
+  if (hop.ks.length < 3) return ` the links' cost is assumed (one usual round trip per worker per token): ${W} of 3 split answers watched.`;
+  if (!iv) return ` the links' cost is learned from the last ${W} split answers watched; no range yet.`;
+  if (Number.isFinite(iv.hi)) return ` the links' cost is learned from the last ${W} split answers watched: likely ${r1(iv.lo)}\u{2013}${r1(iv.hi)} tok/s (8 in 10).`;
+  return ` the links' cost is learned from the last ${W} split answers watched: likely ${r1(iv.lo)} tok/s or more (8 in 10).`;
+}
+
+/** the planner's cards for one model in one look; strict to show, loose (SLACK) to stay; with a hop
+ *  fit the split prices its links with the fit's k */
+export function plan(s: Snapshot, f: Field, m: EyeModel, strict: boolean, hop?: HopFit): { cards: Suggestion[]; alone: Place | null; apart: Place | null; split: Place | null } {
   const slack = strict ? 1 : SLACK;
   const gain = strict ? GAIN : 1 + (GAIN - 1) / 3;
   const L = s.work.loaded && (s.work.loaded.model.id === m.id || s.work.loaded.model.file === m.file) ? s.work.loaded : null;
-  const A = alone(f, m, slack), P = apart(f, m, slack), S = split(f, m, slack);
+  const A = alone(f, m, slack), P = apart(f, m, slack), S = split(f, m, slack, hop ? hopK(hop) : undefined);
   const cards: Suggestion[] = [];
   const seated = seatedIds(s);
   const tonight = (xs: Seat[]) => xs.filter((x) => x.tonight?.guess === 'unlikely').map((x) => ` ${x.name} is unlikely to be there tonight (forecast ${Math.round(x.tonight!.p * 100)}%).`).join('');
@@ -74,13 +97,13 @@ export function plan(s: Snapshot, f: Field, m: EyeModel, strict: boolean): { car
       cards.push({
         id: cardId('planner', 'split', m.id), kind: 'suggest', weight: 2, action: S.action, label: 'load split',
         title: `${m.name} fits only split: ${names(S.seats.map((x) => ({ name: seatName(s, x) })))} together hold it`,
-        why: `it needs about ${gb1(m.needMb)}; the most one place offers is ${gb1(biggest)}. split, ${tpsWord(S.tps)}${S.tps ? ` (${from(S.seats)})` : ''}.${tonight(S.seats)}`,
+        why: `it needs about ${gb1(m.needMb)}; the most one place offers is ${gb1(biggest)}. split, ${tpsWord(S.tps)}${S.tps ? ` (${from(S.seats)})` : ''}.${tonight(S.seats)}${hopWords(S, hop)}`,
       });
     } else if (S.tps != null && A.tps != null && S.tps >= A.tps * gain) {
       cards.push({
         id: cardId('planner', 'split', m.id), kind: 'suggest', weight: 2, action: S.action, label: 'load split',
         title: `${m.name} would run faster split over ${names(S.seats.map((x) => ({ name: seatName(s, x) })))}: ~${S.tps} tok/s; alone ${where(s, A.seats[0])} ~${A.tps}`,
-        why: `the layers go to the fastest device first; each token crosses ${S.seats.length - 1} link${S.seats.length === 2 ? '' : 's'} (${from([...S.seats, ...A.seats])}).${tonight(S.seats)}`,
+        why: `the layers go to the fastest device first; each token crosses ${S.seats.length - 1} link${S.seats.length === 2 ? '' : 's'} (${from([...S.seats, ...A.seats])}).${tonight(S.seats)}${hopWords(S, hop)}`,
       });
     }
   }
@@ -137,6 +160,9 @@ export function create(ctx: BranchCtx): Branch {
   const lastDone = new Map<string, number>();   // device|file → answers, this run only
   let dirty = false;
   let savedAt = Number.NEGATIVE_INFINITY;
+  let fit: HopFit = notes.hop ?? freshHop();
+  let chainWas: ReturnType<typeof loadedChain> = null;   // the loaded split's chain in the look before
+  let seen: { key: string; done: number } | null = null;   // the split's answers when last seen
 
   const measured = (): Map<string, Measured[]> =>
     new Map(Object.entries(notes.speeds).map(([id, files]) => [id, Object.entries(files).map(([file, x]) => ({ file, tps: x.tps, n: x.n, at: x.at }))]));
@@ -181,6 +207,25 @@ export function create(ctx: BranchCtx): Branch {
     }
   }
 
+  /** a split's answer teaches the hop: when its answers grew since the look before, the chain of the
+   *  look before and the measured tok/s give one k (hop.ts) */
+  function watch(s: Snapshot, fl: Field) {
+    const chainNow = subject ? loadedChain(s, fl, subject) : null;
+    const L = s.work.loaded;
+    if (L && L.mode === 'split') {
+      const d = L.devices.find((x) => x.local) ?? L.devices[0];
+      const key = L.model.file + '|' + L.since;
+      if (d && typeof d.tps === 'number' && d.tps > 0 && d.tps <= TPS_MAX && Number.isFinite(d.done)) {
+        if (seen?.key === key && d.done > seen.done && chainWas) {
+          const next = hopStep(fit, chainWas.computeMs, chainWas.links, d.tps);
+          if (next !== fit) { fit = next; notes.hop = fit; dirty = true; }
+        }
+        seen = { key, done: d.done };
+      }
+    } else seen = null;
+    chainWas = chainNow;
+  }
+
   return {
     id: 'planner',
     observe(now) {
@@ -191,8 +236,9 @@ export function create(ctx: BranchCtx): Branch {
       if (id && id !== notes.last) { notes.last = id; dirty = true; }
       subject = L ? modelOf(now, L.model.id) ?? modelOf(now, L.model.file) : now.work.loading ? null : modelOf(now, notes.last);
       f = field(now, ctx, measured());
-      look = subject ? plan(now, f, subject, true) : null;
-      const loose = subject ? plan(now, f, subject, false).cards : [];
+      watch(now, f);
+      look = subject ? plan(now, f, subject, true, fit) : null;
+      const loose = subject ? plan(now, f, subject, false, fit).cards : [];
       shown = steady.step(look?.cards ?? [], loose);
       const t = ctx.now();
       if (dirty && t - savedAt >= SAVE_EVERY_MS) { ctx.save(notes); savedAt = t; dirty = false; }
@@ -213,6 +259,7 @@ export function create(ctx: BranchCtx): Branch {
         for (const x of f.seats) rows.push([seatName(s, x), `${gb1(x.capMb)} for a model · ${x.speed ? `${x.speed.gbs.toFixed(1)} GB/s ${x.speed.from === 'measured' ? 'measured' : 'from its bandwidth'}` : 'speed not measured yet'}${x.tonight && x.tonight.guess !== 'unknown' ? ` · tonight ${x.tonight.guess}` : ''}`]);
         for (const b of f.barred) thinks.push(`${b.name} left out: ${b.why}`);
       }
+      if (fit.ks.length > 0) rows.push(['link cost', fit.ks.length >= 3 ? `k ${hopK(fit).toFixed(2)} \u{d7} the usual round trip, from ${fit.ks.length} split answers` : `not learned yet: ${fit.ks.length} of 3 split answers`]);
       const parts = (L?.parts ?? []).map((p) => `${p.name}: ${p.layers} layers · ${p.mb} MB${p.local ? ' · main device' : ''}`);
       const ideas = shown.length;
       // the speeds it learned, for the branches after it (peek)
