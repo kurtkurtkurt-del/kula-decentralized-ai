@@ -192,12 +192,38 @@ export function nightOf(day: string): { from: number; to: number } | null {
 export function replayBox(box: Box, q: ReplayQuery = {}, now = Date.now()): Replay {
   const asked = Number.isFinite(q.from) || Number.isFinite(q.to) || Number.isFinite(q.fromN) || Number.isFinite(q.toN);
   if (asked) return buildReplay(box, q, 'asked', now);
-  const night = buildReplay(box, { ...lastNight(now), frames: q.frames }, 'night', now);
-  if (night.summary.looks > 0) return night;
-  return buildReplay(box, { from: now - 12 * HOUR, to: now, frames: q.frames }, '12h', now);
+  // one walk feeds both stretches: the night's, and the 12 hours' for when the night has no look
+  const night = collector({ ...lastNight(now), frames: q.frames }, 'night', now);
+  const day = collector({ from: now - 12 * HOUR, to: now, frames: q.frames }, '12h', now);
+  const next = replayer();
+  const walked = walkBox(box, (r, bad) => {
+    const look = next(r);
+    night.take(r, bad, look);
+    day.take(r, bad, look);
+  });
+  const n = night.finish(walked);
+  return n.summary.looks > 0 ? n : day.finish(walked);
 }
 
 export function buildReplay(box: Box, q: ReplayQuery, range: Replay['range'] = 'asked', now = Date.now()): Replay {
+  const c = collector(q, range, now);
+  const next = replayer();
+  return c.finish(walkBox(box, (r, bad) => c.take(r, bad, next(r))));
+}
+
+type Walked = ReturnType<NonNullable<Box['walk']>>;
+type Rebuilt = ReturnType<ReturnType<typeof replayer>>;
+
+/** a box without walk() (a stub) walks as empty */
+function walkBox(box: Box, fn: (r: BoxRecord, bad: string | null) => void): Walked {
+  return typeof box.walk === 'function'
+    ? box.walk(fn)
+    : { count: 0, from: 0, last: 0, firstT: null, lastT: null, problem: null, problemN: null };
+}
+
+/** one stretch: take() is handed every record of the walk in n order, with the look the replayer
+ *  rebuilt from it; finish() cuts the frames once the walk is done */
+function collector(q: ReplayQuery, range: Replay['range'], now: number): { take(r: BoxRecord, bad: string | null, look: Rebuilt): void; finish(walked: Walked): Replay } {
   const byN = Number.isFinite(q.fromN) || Number.isFinite(q.toN);
   const fromN = Number.isFinite(q.fromN) ? Math.floor(q.fromN as number) : 1;
   const toN = Number.isFinite(q.toN) ? Math.floor(q.toN as number) : Number.MAX_SAFE_INTEGER;
@@ -206,7 +232,6 @@ export function buildReplay(box: Box, q: ReplayQuery, range: Replay['range'] = '
   if (!byN && to < from) [from, to] = [to, from];
   const inRange = (r: BoxRecord): boolean => (byN ? r.n >= fromN && r.n <= toN && (!Number.isFinite(q.from) || r.t >= (q.from as number)) && (!Number.isFinite(q.to) || r.t <= (q.to as number)) : r.t >= from && r.t <= to);
 
-  const next = replayer();
   let before: Look | null = null;             // the last look before the stretch
   const looks: Look[] = [];
   const feed: ReplayFeed[] = [];
@@ -221,185 +246,186 @@ export function buildReplay(box: Box, q: ReplayQuery, range: Replay['range'] = '
   let minT = Number.POSITIVE_INFINITY;
   let maxT = Number.NEGATIVE_INFINITY;
 
-  const walked = typeof box.walk === 'function'
-    ? box.walk((r, bad) => {
-      if (bad !== null && bads.length < BAD_MAX) bads.push({ n: r.n, problem: bad });
-      const x = isObj(r.x) ? r.x : null;
-      const isIn = inRange(r);
-      if (firstIn === null && !isIn && r.k === 'key' && x !== null && x.i === 0) keyStart = r.n;
-      const look = next(r);
-      if (isIn) {
-        if (firstIn === null) firstIn = r.n;
-        lastIn = r.n;
-        countIn++;
-        if (byN) { minT = Math.min(minT, r.t); maxT = Math.max(maxT, r.t); }
-      }
-      if (look !== null) {
-        if (isIn) looks.push(lookOf(r.n, look.at, look.facts));
-        else if (firstIn === null) before = lookOf(r.n, look.at, look.facts);
-        return;
-      }
-      if (r.k === 'feed' && x !== null && isIn) {
-        if (feed.length >= FEED_MAX) return;
-        const text = typeof x.text === 'string' ? x.text.slice(0, TEXT_MAX) : '(a line with private words, kept out)';
-        feed.push({ t: r.t, branch: str(r.b, 40), text });
-      } else if (r.k === 'verdict' && x !== null && typeof x.who === 'string' && typeof x.to === 'string') {
-        const who = x.who.slice(0, 200);
-        const v = x.to === 'ok' || x.to === 'bad' ? x.to : 'unknown';
-        if (isIn) verdictEvents.push({ t: r.t, who, to: v });
-        else if (firstIn === null && (who in verdictsAt || Object.keys(verdictsAt).length < VERDICTS_MAX)) verdictsAt[who] = v;
-      } else if (isIn && r.k !== 'act' && r.k !== 'broken' && r.k !== 'other') {
-        marks.push({ t: r.t, k: r.k.slice(0, 20) });
-      }
-    })
-    : { count: 0, from: 0, last: 0, firstT: null, lastT: null, problem: null, problemN: null };
-
-  if (byN) {
-    if (!Number.isFinite(q.from)) from = Number.isFinite(minT) ? minT : now;
-    if (!Number.isFinite(q.to)) to = Number.isFinite(maxT) ? maxT : from;
-  }
-  // the clock is not the order: looks are drawn by their time, the record keeps its own order
-  looks.sort((a, b) => a.t - b.t || a.n - b.n);
-  feed.sort((a, b) => a.t - b.t);
-  verdictEvents.sort((a, b) => a.t - b.t);
-  marks.sort((a, b) => a.t - b.t);
-
-  const span = Math.max(0, to - from);
-  const cap = Math.max(1, Math.min(FRAMES_MAX, Number.isFinite(q.frames) && (q.frames as number) >= 1 ? Math.floor(q.frames as number) : FRAMES_MAX));
-  const count = Math.max(1, Math.min(cap, Math.ceil(span / STEP_MIN)));
-  const step = span / count || STEP_MIN;
-
-  // ---- the frames, one pass over the looks
-  const frames: ReplayFrame[] = [];
-  const verdicts: Record<string, string> = { ...verdictsAt };
-  const devNames = new Map<string, { name: string; kind: string }>();
-  const work = new Map<string, { workMs: number; tokens: number; answers: number }>();
-  const models: string[] = [];
-  let prev: Look | null = before;
-  let li = 0, fi = 0, vi = 0, mi = 0;
-  let tokens = 0, answers = 0, workMs = 0, offMs = 0, badVerdicts = 0;
-  let stoppedAt = Number.NEGATIVE_INFINITY;
-  const seen = new Set<string>();
-  const worked = new Set<string>();
-  const remember = (id: string, d: DevState): void => {
-    if (!devNames.has(id) && devNames.size < DEVICES_MAX * 4) devNames.set(id, { name: d.name, kind: d.kind });
+  const take = (r: BoxRecord, bad: string | null, look: Rebuilt): void => {
+    if (bad !== null && bads.length < BAD_MAX) bads.push({ n: r.n, problem: bad });
+    const x = isObj(r.x) ? r.x : null;
+    const isIn = inRange(r);
+    if (firstIn === null && !isIn && r.k === 'key' && x !== null && x.i === 0) keyStart = r.n;
+    if (isIn) {
+      if (firstIn === null) firstIn = r.n;
+      lastIn = r.n;
+      countIn++;
+      if (byN) { minT = Math.min(minT, r.t); maxT = Math.max(maxT, r.t); }
+    }
+    if (look !== null) {
+      if (isIn) looks.push(lookOf(r.n, look.at, look.facts));
+      else if (firstIn === null) before = lookOf(r.n, look.at, look.facts);
+      return;
+    }
+    if (r.k === 'feed' && x !== null && isIn) {
+      if (feed.length >= FEED_MAX) return;
+      const text = typeof x.text === 'string' ? x.text.slice(0, TEXT_MAX) : '(a line with private words, kept out)';
+      feed.push({ t: r.t, branch: str(r.b, 40), text });
+    } else if (r.k === 'verdict' && x !== null && typeof x.who === 'string' && typeof x.to === 'string') {
+      const who = x.who.slice(0, 200);
+      const v = x.to === 'ok' || x.to === 'bad' ? x.to : 'unknown';
+      if (isIn) verdictEvents.push({ t: r.t, who, to: v });
+      else if (firstIn === null && (who in verdictsAt || Object.keys(verdictsAt).length < VERDICTS_MAX)) verdictsAt[who] = v;
+    } else if (isIn && r.k !== 'act' && r.k !== 'broken' && r.k !== 'other') {
+      marks.push({ t: r.t, k: r.k.slice(0, 20) });
+    }
   };
 
-  for (let i = 0; i < count; i++) {
-    const a = from + i * step;
-    const b = i === count - 1 ? to + 1 : from + (i + 1) * step;
-    const busy = new Map<string, number | null>();   // id → best tok/s, for every device busy in the frame
-    const done = new Map<string, number>();
-    let frameTokens = 0, frameAnswers = 0, frameWork = 0;
-    let lookIn = false;
-    for (; li < looks.length && looks[li].t < b; li++) {
-      const cur = looks[li];
-      lookIn = true;
-      if (cur.model && !models.includes(cur.model) && models.length < 20) models.push(cur.model);
-      for (const [id, d] of cur.devs) {
-        remember(id, d);
-        if (d.present) seen.add(id);
-        if (d.busy) busy.set(id, Math.max(busy.get(id) ?? 0, d.tps ?? 0) || null);
-      }
-      if (prev !== null) {
-        // a stretch the eye did not watch counts nothing, however busy the looks around it were
-        const dt = cur.t - prev.t > GAP_MS ? 0 : Math.max(0, cur.t - Math.max(prev.t, from));
-        let anyBusy = false;
-        for (const [id, p] of prev.devs) {
-          if (!p.busy) continue;
-          anyBusy = true;
-          const tps = p.tps ?? cur.devs.get(id)?.tps ?? 0;
-          const w = work.get(id) ?? { workMs: 0, tokens: 0, answers: 0 };
-          w.workMs += dt;
-          w.tokens += (tps * dt) / 1000;
-          work.set(id, w);
-          frameTokens += (tps * dt) / 1000;
-          worked.add(id);
+  const finish = (walked: Walked): Replay => {
+    if (byN) {
+      if (!Number.isFinite(q.from)) from = Number.isFinite(minT) ? minT : now;
+      if (!Number.isFinite(q.to)) to = Number.isFinite(maxT) ? maxT : from;
+    }
+    // the clock is not the order: looks are drawn by their time, the record keeps its own order
+    looks.sort((a, b) => a.t - b.t || a.n - b.n);
+    feed.sort((a, b) => a.t - b.t);
+    verdictEvents.sort((a, b) => a.t - b.t);
+    marks.sort((a, b) => a.t - b.t);
+
+    const span = Math.max(0, to - from);
+    const cap = Math.max(1, Math.min(FRAMES_MAX, Number.isFinite(q.frames) && (q.frames as number) >= 1 ? Math.floor(q.frames as number) : FRAMES_MAX));
+    const count = Math.max(1, Math.min(cap, Math.ceil(span / STEP_MIN)));
+    const step = span / count || STEP_MIN;
+
+    // ---- the frames, one pass over the looks
+    const frames: ReplayFrame[] = [];
+    const verdicts: Record<string, string> = { ...verdictsAt };
+    const devNames = new Map<string, { name: string; kind: string }>();
+    const work = new Map<string, { workMs: number; tokens: number; answers: number }>();
+    const models: string[] = [];
+    let prev: Look | null = before;
+    let li = 0, fi = 0, vi = 0, mi = 0;
+    let tokens = 0, answers = 0, workMs = 0, offMs = 0, badVerdicts = 0;
+    let stoppedAt = Number.NEGATIVE_INFINITY;
+    const seen = new Set<string>();
+    const worked = new Set<string>();
+    const remember = (id: string, d: DevState): void => {
+      if (!devNames.has(id) && devNames.size < DEVICES_MAX * 4) devNames.set(id, { name: d.name, kind: d.kind });
+    };
+
+    for (let i = 0; i < count; i++) {
+      const a = from + i * step;
+      const b = i === count - 1 ? to + 1 : from + (i + 1) * step;
+      const busy = new Map<string, number | null>();   // id → best tok/s, for every device busy in the frame
+      const done = new Map<string, number>();
+      let frameTokens = 0, frameAnswers = 0, frameWork = 0;
+      let lookIn = false;
+      for (; li < looks.length && looks[li].t < b; li++) {
+        const cur = looks[li];
+        lookIn = true;
+        if (cur.model && !models.includes(cur.model) && models.length < 20) models.push(cur.model);
+        for (const [id, d] of cur.devs) {
+          remember(id, d);
+          if (d.present) seen.add(id);
+          if (d.busy) busy.set(id, Math.max(busy.get(id) ?? 0, d.tps ?? 0) || null);
         }
-        if (anyBusy) frameWork += dt;
-        // answers: the done counter grows; a new load starts it again from nothing
-        for (const [id, c] of cur.devs) {
-          if (!c.loaded) continue;
-          const p = prev.devs.get(id);
-          const same = p !== undefined && p.loaded && prev.since === cur.since && prev.model === cur.model;
-          const got = same ? (c.done >= p.done ? c.done - p.done : c.done) : prev.model === null && cur.since >= from ? c.done : 0;
-          if (got <= 0) continue;
-          done.set(id, (done.get(id) ?? 0) + got);
-          frameAnswers += got;
-          const w = work.get(id) ?? { workMs: 0, tokens: 0, answers: 0 };
-          w.answers += got;
-          work.set(id, w);
-          worked.add(id);
+        if (prev !== null) {
+          // a stretch the eye did not watch counts nothing, however busy the looks around it were
+          const dt = cur.t - prev.t > GAP_MS ? 0 : Math.max(0, cur.t - Math.max(prev.t, from));
+          let anyBusy = false;
+          for (const [id, p] of prev.devs) {
+            if (!p.busy) continue;
+            anyBusy = true;
+            const tps = p.tps ?? cur.devs.get(id)?.tps ?? 0;
+            const w = work.get(id) ?? { workMs: 0, tokens: 0, answers: 0 };
+            w.workMs += dt;
+            w.tokens += (tps * dt) / 1000;
+            work.set(id, w);
+            frameTokens += (tps * dt) / 1000;
+            worked.add(id);
+          }
+          if (anyBusy) frameWork += dt;
+          // answers: the done counter grows; a new load starts it again from nothing
+          for (const [id, c] of cur.devs) {
+            if (!c.loaded) continue;
+            const p = prev.devs.get(id);
+            const same = p !== undefined && p.loaded && prev.since === cur.since && prev.model === cur.model;
+            const got = same ? (c.done >= p.done ? c.done - p.done : c.done) : prev.model === null && cur.since >= from ? c.done : 0;
+            if (got <= 0) continue;
+            done.set(id, (done.get(id) ?? 0) + got);
+            frameAnswers += got;
+            const w = work.get(id) ?? { workMs: 0, tokens: 0, answers: 0 };
+            w.answers += got;
+            work.set(id, w);
+            worked.add(id);
+          }
+        }
+        prev = cur;
+      }
+      const fm: string[] = [];
+      for (; mi < marks.length && marks[mi].t < b; mi++) {
+        if (fm.length < 8 && !fm.includes(marks[mi].k)) fm.push(marks[mi].k);
+        if (marks[mi].k === 'stop') stoppedAt = marks[mi].t;
+      }
+      const fl: ReplayFeed[] = [];
+      for (; fi < feed.length && feed[fi].t < b; fi++) if (fl.length < FEED_FRAME_MAX) fl.push(feed[fi]);
+      for (; vi < verdictEvents.length && verdictEvents[vi].t < b; vi++) {
+        const e = verdictEvents[vi];
+        if (e.to === 'bad' && verdicts[e.who] !== 'bad') badVerdicts++;
+        if (e.who in verdicts || Object.keys(verdicts).length < VERDICTS_MAX) verdicts[e.who] = e.to;
+      }
+      const off = prev === null || (!lookIn && (a - prev.t > GAP_MS || stoppedAt > prev.t));
+      if (off) offMs += Math.min(b, to) - a;
+      tokens += frameTokens;
+      answers += frameAnswers;
+      workMs += frameWork;
+      const shown = off ? null : prev;
+      const devices: ReplayDevice[] = [];
+      if (shown) {
+        for (const [id, d] of shown.devs) {
+          const isBusy = busy.has(id);
+          devices.push({
+            id, name: d.name, kind: d.kind, via: d.via, present: d.present, loaded: d.loaded,
+            busy: isBusy, tps: isBusy ? busy.get(id) ?? d.tps : d.tps, plugged: d.plugged, answers: done.get(id) ?? 0,
+          });
         }
       }
-      prev = cur;
+      frames.push({
+        t: Math.round(a), off,
+        model: shown?.model ?? null, mode: shown?.mode ?? null, loading: shown?.loading ?? null,
+        devices, tokens: Math.round(tokens), answers, workMs: Math.round(workMs), verdicts: { ...verdicts }, feed: fl, marks: fm,
+      });
     }
-    const fm: string[] = [];
-    for (; mi < marks.length && marks[mi].t < b; mi++) {
-      if (fm.length < 8 && !fm.includes(marks[mi].k)) fm.push(marks[mi].k);
-      if (marks[mi].k === 'stop') stoppedAt = marks[mi].t;
-    }
-    const fl: ReplayFeed[] = [];
-    for (; fi < feed.length && feed[fi].t < b; fi++) if (fl.length < FEED_FRAME_MAX) fl.push(feed[fi]);
-    for (; vi < verdictEvents.length && verdictEvents[vi].t < b; vi++) {
-      const e = verdictEvents[vi];
-      if (e.to === 'bad' && verdicts[e.who] !== 'bad') badVerdicts++;
-      if (e.who in verdicts || Object.keys(verdicts).length < VERDICTS_MAX) verdicts[e.who] = e.to;
-    }
-    const off = prev === null || (!lookIn && (a - prev.t > GAP_MS || stoppedAt > prev.t));
-    if (off) offMs += Math.min(b, to) - a;
-    tokens += frameTokens;
-    answers += frameAnswers;
-    workMs += frameWork;
-    const shown = off ? null : prev;
-    const devices: ReplayDevice[] = [];
-    if (shown) {
-      for (const [id, d] of shown.devs) {
-        const isBusy = busy.has(id);
-        devices.push({
-          id, name: d.name, kind: d.kind, via: d.via, present: d.present, loaded: d.loaded,
-          busy: isBusy, tps: isBusy ? busy.get(id) ?? d.tps : d.tps, plugged: d.plugged, answers: done.get(id) ?? 0,
-        });
-      }
-    }
-    frames.push({
-      t: Math.round(a), off,
-      model: shown?.model ?? null, mode: shown?.mode ?? null, loading: shown?.loading ?? null,
-      devices, tokens: Math.round(tokens), answers, workMs: Math.round(workMs), verdicts: { ...verdicts }, feed: fl, marks: fm,
-    });
-  }
 
-  const byDevice = [...work.entries()]
-    .map(([id, w]) => ({ id, name: devNames.get(id)?.name ?? id, workMs: Math.round(w.workMs), tokens: Math.round(w.tokens), answers: w.answers }))
-    .sort((x, y) => y.workMs - x.workMs || y.answers - x.answers);
-  const rests = feed.filter((l) => l.branch === 'limits' && /should rest/.test(l.text)).length;
-  const warnings = feed.filter((l) => l.branch === 'limits').length;
+    const byDevice = [...work.entries()]
+      .map(([id, w]) => ({ id, name: devNames.get(id)?.name ?? id, workMs: Math.round(w.workMs), tokens: Math.round(w.tokens), answers: w.answers }))
+      .sort((x, y) => y.workMs - x.workMs || y.answers - x.answers);
+    const rests = feed.filter((l) => l.branch === 'limits' && /should rest/.test(l.text)).length;
+    const warnings = feed.filter((l) => l.branch === 'limits').length;
 
-  // the chain over the stretch: from the key its first look is built on to its last record
-  const spanFrom = keyStart ?? firstIn ?? 0;
-  const spanTo = firstIn === null ? 0 : lastIn;
-  const inSpan = firstIn === null ? undefined : bads.find((x) => x.n >= spanFrom && x.n <= spanTo);
-  // a line that is not a record has no n: it breaks the link of the next one, which is in bads
-  const chain: ReplayChain = {
-    ok: inSpan === undefined,
-    problem: inSpan?.problem ?? null,
-    n: inSpan?.n ?? null,
-    whole: walked.problem === null,
-    wholeProblem: walked.problem,
+    // the chain over the stretch: from the key its first look is built on to its last record
+    const spanFrom = keyStart ?? firstIn ?? 0;
+    const spanTo = firstIn === null ? 0 : lastIn;
+    const inSpan = firstIn === null ? undefined : bads.find((x) => x.n >= spanFrom && x.n <= spanTo);
+    // a line that is not a record has no n: it breaks the link of the next one, which is in bads
+    const chain: ReplayChain = {
+      ok: inSpan === undefined,
+      problem: inSpan?.problem ?? null,
+      n: inSpan?.n ?? null,
+      whole: walked.problem === null,
+      wholeProblem: walked.problem,
+    };
+
+    return {
+      from, to, step, range,
+      records: { from: firstIn ?? 0, to: lastIn, count: countIn },
+      box: { first: walked.firstT, last: walked.lastT, records: walked.count },
+      devices: [...devNames.entries()].map(([id, d]) => ({ id, name: d.name, kind: d.kind })),
+      frames,
+      summary: {
+        looks: looks.length, devices: worked.size, seen: seen.size, workMs: Math.round(workMs), byDevice,
+        tokens: Math.round(tokens), answers, models, rests, warnings, badVerdicts, offMs: Math.round(offMs),
+      },
+      chain,
+    };
   };
 
-  return {
-    from, to, step, range,
-    records: { from: firstIn ?? 0, to: lastIn, count: countIn },
-    box: { first: walked.firstT, last: walked.lastT, records: walked.count },
-    devices: [...devNames.entries()].map(([id, d]) => ({ id, name: d.name, kind: d.kind })),
-    frames,
-    summary: {
-      looks: looks.length, devices: worked.size, seen: seen.size, workMs: Math.round(workMs), byDevice,
-      tokens: Math.round(tokens), answers, models, rests, warnings, badVerdicts, offMs: Math.round(offMs),
-    },
-    chain,
-  };
+  return { take, finish };
 }
 
 // ---- the words: the cli's summary, and the page's card says the same

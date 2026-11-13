@@ -296,6 +296,36 @@ test('replay: last night by default, the last 12 hours when the night is empty',
   assert.deepEqual([r.box.first, r.box.records > 0], [T0, true]);
 });
 
+test('replay: the default walks the box once, for the night and the 12 hours together', () => {
+  const counted = (box: ReturnType<typeof openBox>) => {
+    const c = { walks: 0, box: Object.create(box) as ReturnType<typeof openBox> };
+    c.box.walk = (fn) => { c.walks++; return box.walk!(fn); };
+    return c;
+  };
+  // looks only in the last 12 hours: 10:00 → 10:10 the next morning, after the night ended
+  const T1 = new Date(2026, 10, 11, 10, 0).getTime();
+  const day = writer(fresh('once-12h'));
+  day.mark(T1, 'start', { v: 1, everyMs: 10_000 });
+  for (let t = T1; t <= T1 + 10 * MIN; t += 10_000) day.look(t, { loaded: true, busy: { a: 10 }, done: { a: 1 } });
+  const at14 = new Date(2026, 10, 11, 14, 0).getTime();
+  // looks last night: the hour from 22:00
+  const night = hour(fresh('once-night'));
+  for (const frames of [undefined, 40]) {
+    const a = counted(day.box);
+    const r12 = replayBox(a.box, frames === undefined ? {} : { frames }, at14);
+    assert.equal(a.walks, 1, `12h, frames ${frames}: one walk`);
+    assert.equal(r12.range, '12h');
+    assert.ok(r12.summary.looks > 0);
+    assert.deepEqual(r12, buildReplay(day.box, { from: at14 - 12 * 60 * MIN, to: at14, frames }, '12h', at14));
+    const b = counted(night.box);
+    const rn = replayBox(b.box, frames === undefined ? {} : { frames }, at14);
+    assert.equal(b.walks, 1, `night, frames ${frames}: one walk`);
+    assert.equal(rn.range, 'night');
+    assert.ok(rn.summary.looks > 0);
+    assert.deepEqual(rn, buildReplay(night.box, { ...lastNight(at14), frames }, 'night', at14));
+  }
+});
+
 test('kula-node brain replay: a short summary of the stretch, the chain, and its exit code', () => {
   const dir = path.join(process.env.KULA_NODE_HOME!, 'godseye', 'box');
   const lines: string[] = [];
