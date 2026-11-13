@@ -11,6 +11,7 @@ import { probeRelay, CODE_RE, normalizeRelayUrl, type RelayRef } from './relay.j
 import type { GateIdentity } from './tls.js';
 import { home } from './paths.js';
 import { groupOf, groupPeers } from './ui/devices.js';
+import { cleanName } from './godseye/branches/guard.js';
 
 export type PeerKind = 'phone' | 'tablet' | 'pc';
 
@@ -212,7 +213,7 @@ export function parsePeerText(text: string, relayUrl?: string): Peer {
   const num = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : null);
   return {
     id: typeof obj.id === 'string' && obj.id ? obj.id : relay ? `relay:${relay.code}` : `${host}:${port}`,
-    name: typeof obj.name === 'string' && obj.name ? obj.name : host || `code ${relay?.code}`,
+    name: cleanName(typeof obj.name === 'string' ? obj.name : '').slice(0, 80) || host || `code ${relay?.code}`,
     host,
     port: Number.isInteger(port) ? port : 0,
     secret,

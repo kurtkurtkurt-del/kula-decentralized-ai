@@ -193,3 +193,12 @@ test('parses a v3 code with fingerprint, pin and relay; a relay code typed by ha
   assert.ok(learned.paired_at);
   assert.equal(maskSecret(''), '-');
 });
+
+test('a pairing code\'s name is stored clean: no line breaks, zero-width or bidi chars, at most 80 chars (E5)', () => {
+  const name = 'pixel\n\n\u{2713} trust: all clear\u{202e}\u{200b}' + 'x'.repeat(100);
+  const p = parsePeerText(JSON.stringify({ k: 'kula-peer', v: 2, id: 'e5', name, host: '192.168.1.40', port: 50551, secret: '0123456789abcdef0123456789abcdef' }));
+  assert.ok(!/[\u{0000}-\u{001f}\u{007f}-\u{009f}\u{2028}\u{2029}\u{200b}-\u{200f}\u{202a}-\u{202e}\u{2060}-\u{2069}\u{feff}]/u.test(p.name), JSON.stringify(p.name));
+  assert.equal(p.name, ('pixel \u{2713} trust: all clear' + 'x'.repeat(100)).slice(0, 80));
+  const blank = parsePeerText(JSON.stringify({ k: 'kula-peer', v: 2, id: 'e5b', name: '\n\u{202e}', host: '192.168.1.41', port: 50551, secret: '0123456789abcdef0123456789abcdef' }));
+  assert.equal(blank.name, '192.168.1.41', 'a name of controls only falls back to the host');
+});

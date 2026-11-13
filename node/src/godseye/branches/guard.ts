@@ -173,8 +173,17 @@ export const num = (x: unknown, lo: number, hi: number): number | null =>
 /** a usable id: a non-empty string of at most ID_MAX chars (cut ids are never compared with full ones) */
 export const idOf = (x: unknown): string | null => typeof x === 'string' && x.length > 0 && x.length <= ID_MAX ? x : null;
 
-/** a name: a non-empty string cut to NAME_MAX, else the id cut to NAME_MAX */
-export const nameOf = (x: unknown, id: string): string => (typeof x === 'string' && x.length > 0 ? x : id).slice(0, NAME_MAX);
+/** a name as it may be shown: controls (C0, DEL and C1, U+2028/U+2029) become a space, zero-width
+ *  and bidi marks (U+200B-U+200F, U+202A-U+202E, U+2060-U+2069, U+FEFF) go, whitespace folds to one
+ *  space. a peer picks its own name, so a line break or U+202E must not reshape a card title (E5) */
+export const cleanName = (s: string): string =>
+  s.replace(/[\u{0000}-\u{001f}\u{007f}-\u{009f}\u{2028}\u{2029}]/gu, ' ')
+    .replace(/[\u{200b}-\u{200f}\u{202a}-\u{202e}\u{2060}-\u{2069}\u{feff}]/gu, '')
+    .replace(/\s+/g, ' ').trim();
+
+/** a name: the cleaned string cut to NAME_MAX, else the cleaned id, else 'a device' */
+export const nameOf = (x: unknown, id: string): string =>
+  ((typeof x === 'string' ? cleanName(x) : '') || cleanName(id) || 'a device').slice(0, NAME_MAX);
 
 /** the array, or [] when it is not one */
 export const list = (x: unknown): unknown[] => (Array.isArray(x) ? x : []);

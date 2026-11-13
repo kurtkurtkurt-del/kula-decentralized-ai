@@ -694,3 +694,64 @@ test('through the eye: a loaded, non-local phone whose proof says its owner can 
   eye.tick();
   assert.equal(eye.view().cards.some((c) => c.id === 'trust:owner-blind:p1'), false, 'a passing proof: no card');
 });
+
+// ---- E5: a device name is the peer's own word. cleanName turns controls (C0, DEL, C1, U+2028/9)
+// into spaces and drops zero-width and bidi marks (U+200B-200F, U+202A-202E, U+2060-2069, U+FEFF),
+// then folds whitespace, before the cut to NAME_MAX
+const BAD_NAME = 'pixel\n\n\u{2713} trust: all clear, nothing to do\u{202e}';
+const BANNED = /[\u{0000}-\u{001f}\u{007f}-\u{009f}\u{2028}\u{2029}\u{200b}-\u{200f}\u{202a}-\u{202e}\u{2060}-\u{2069}\u{feff}]/u;
+
+test('cleanName: line breaks and bidi marks go, the words stay', async () => {
+  const { cleanName } = await import('../src/godseye/branches/guard.ts') as any;
+  assert.equal(cleanName(BAD_NAME), 'pixel \u{2713} trust: all clear, nothing to do');
+  assert.equal(cleanName('a\u{2028}b\u{2029}c\u{0085}d\u{007f}e'), 'a b c d e');
+  assert.equal(cleanName('pi\u{200b}x\u{200d}e\u{feff}l\u{2066}'), 'pixel');
+  assert.equal(cleanName('Ay\u{015f}e\'s Pixel 8'), 'Ay\u{015f}e\'s Pixel 8');
+});
+
+test('nameOf: a name of controls only falls back to the id; the cut comes after cleaning; a plain name is unchanged', () => {
+  assert.equal(nameOf('\n\u{202e}\u{200b}\t\u{0000}', 'p1'), 'p1');
+  assert.equal(nameOf('\n'.repeat(100) + 'pixel', 'p1'), 'pixel');
+  assert.equal(nameOf('\u{200b}'.repeat(70) + 'x'.repeat(100), 'p1'), 'x'.repeat(NAME_MAX));
+  assert.equal(nameOf('Ay\u{015f}e\'s Pixel 8', 'p1'), 'Ay\u{015f}e\'s Pixel 8');
+  assert.equal(nameOf('\u{202e}', '\u{200b}'), 'a device');
+});
+
+test('clean: no guarded device, loaded device or part name keeps a control, zero-width or bidi char', () => {
+  const s = clean({
+    at: 1_000_000, host: { name: 'mac', freeMb: 8000 }, models: [], projects: [],
+    devices: [{ id: 'p1', name: BAD_NAME, kind: 'phone', via: 'wifi', where: '192.168.1.33:50551', reachable: true }],
+    work: { loaded: { mode: 'split', model: { id: 'm', name: 'M', file: 'm.gguf', size: 1 }, ctx: 4096, since: 1,
+      devices: [{ id: 'p1', name: BAD_NAME, local: false, busy: false, tps: null, done: 0 }],
+      parts: [{ id: 'p1', name: BAD_NAME, local: false, mb: 1, layers: 1 }] },
+      loading: null, chatting: 0, plan: [], decisions: [], llama: true },
+  })!;
+  const names = [...s.devices.map((d) => d.name), ...s.work.loaded!.devices.map((d) => d.name), ...(s.work.loaded!.parts ?? []).map((p) => p.name)];
+  assert.equal(names.length, 3);
+  for (const n of names) {
+    assert.ok(!BANNED.test(n), JSON.stringify(n));
+    assert.equal(n, 'pixel \u{2713} trust: all clear, nothing to do');
+  }
+});
+
+test('through the eye (E4 proof): a peer-chosen name with line breaks and U+202E does not reach a card title', async () => {
+  const { GodsEye, dark } = await import('../src/godseye/index.ts') as any;
+  const d = { id: 'p1', name: BAD_NAME, kind: 'phone', via: 'wifi', where: '192.168.1.33:50551', reachedBy: 'lan', reachable: true, reachMs: 12, reason: null,
+    checkedAt: 1_000_000, lastOk: null, ramMb: 6000, bwGBs: null, gpu: null, tls: true, waitingPair: false, plugged: null, holds: null, trust: null };
+  let t = 1_000_000;
+  const work = { loaded: { mode: 'apart', model: { id: 'm', name: 'M', file: 'm.gguf', size: 1e9 }, ctx: 4096, since: 1, devices: [
+    { id: 'local', name: 'mac', local: true, busy: false, tps: 20, done: 5 },
+    { id: 'p1', name: BAD_NAME, local: false, busy: false, tps: 20, done: 5 },
+  ] }, loading: null, chatting: 0, plan: [], decisions: [], llama: true };
+  const eye = new GodsEye({
+    now: () => t,
+    snapshot: () => ({ at: t, host: { name: 'mac', freeMb: 8000 }, devices: [d], projects: [], work,
+      models: [{ id: 'm', name: 'M', file: 'm.gguf', size: 1e9, quant: 'Q4_K_M', params_b: 1, catalog: true, here: true, needMb: 1000 }] }),
+    dir: '/nonexistent-e4',
+    makers: { limits: () => ({ id: 'limits', observe() {}, view: () => ({ ...dark(), built: true, stat: 'x', hints: [{ id: 'p1', no: 'should rest: it is hot' }] }) }) },
+  });
+  for (let i = 0; i < 4; i++) { t += 5000; eye.tick(); }
+  const card = eye.view().cards.find((c: any) => c.id === 'executor:rest:p1');
+  assert.ok(card, JSON.stringify(eye.view().cards.map((c: any) => c.id)));
+  assert.ok(!BANNED.test(card.title), JSON.stringify(card.title));
+});
