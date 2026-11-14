@@ -52,7 +52,8 @@
     },
     "nsis": {
       "oneClick": true,
-      "perMachine": false
+      "perMachine": false,
+      "artifactName": "kula-windows-x64.${ext}"
     },
     "linux": {
       "target": [
