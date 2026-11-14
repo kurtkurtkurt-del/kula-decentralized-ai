@@ -1,6 +1,6 @@
 {
   "name": "kula-node",
-  "version": "0.5.0",
+  "version": "0.4.0",
   "description": "make this computer a worker in a kula phone cluster",
   "license": "MIT",
   "private": true,

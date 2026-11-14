@@ -26,16 +26,13 @@ and says when a device alone would be faster. Rule of thumb: jobs are split, mod
 iOS is out of scope for now: the app opens on iOS but runs no models (a Swift module is written
 on a branch, never built).
 
-## what's new in 0.5.0 · 14 November 2026
-
-- **Windows app.** kula installs on Windows 10 and 11 computers (Intel/AMD, x64) as a normal app,
-  for you only, without admin rights. It brings the Visual C++ runtime that llama.cpp needs, so it
-  also starts on a fresh Windows. So far it is tested only on GitHub's Windows Server 2022 and 2025
-  test machines: it installs, starts, a small model loads and answers, and it uninstalls cleanly.
-- The phone app is unchanged: the release carries the 0.4.0 apk again.
-
 ## what's new in 0.4.0 · 13 November 2026
 
+- **Windows app** (added 14 November 2026). kula installs on Windows 10 and 11 computers (Intel/AMD,
+  x64) as a normal app, for you only, without admin rights. It brings the Visual C++ runtime that
+  llama.cpp needs, so it also starts on a fresh Windows. So far it is tested only on GitHub's Windows
+  Server 2022 and 2025 test machines: it installs, starts, a small model loads and answers, and it
+  uninstalls cleanly.
 - **Linux app.** kula installs on Ubuntu and Debian computers as a normal app (`.deb`, for Intel/AMD
   and ARM). So far it is tested only on GitHub's Ubuntu 24.04 test machines: it starts, and a small
   model loads and answers.
