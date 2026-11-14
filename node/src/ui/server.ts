@@ -33,6 +33,7 @@ import { openBox } from '../godseye/box.js';
 import { replayBox } from '../godseye/replay.js';
 import { Invite, INVITE_TTL_MS, type Guest } from './invite.js';
 import { qrSvg } from '../dashboard/qr.js';
+import { ShareHere } from './sharehere.js';
 import { lanIPv4 } from '../sysinfo.js';
 import { splitPhotos, PHOTO_MAX_CHARS } from './vision.js';
 
@@ -52,6 +53,7 @@ export interface UiOptions {
   onInvite?: (url: string | null) => void; // told every new invite url (null: invites off)
   projects?: ProjectRunner;    // night projects; kula-node ui starts one that watches the clock
   eye?: GodsEye | false;       // god's eye (src/godseye), the brain; default: one that looks every 5 s, false: none
+  share?: ShareHere;           // "share this computer" (a worker for other devices); default: a real one on port 50551
   rootRedirect?: boolean;      // GET / answers 302 to the page (only for a kula.app installed before KULA_LAUNCHER=2); default false
 }
 
@@ -192,6 +194,7 @@ export async function startUi(opts: UiOptions): Promise<UiServer> {
   // god's eye, the brain: watches from above, fed copies only (godseye/types.ts, godseye-feed.ts)
   const eye = opts.eye === false ? null : opts.eye ?? new GodsEye({ snapshot: () => kulaSnapshot(engine, projects), dir: path.join(home(), 'godseye'), log, box: { dir: path.join(home(), 'godseye', 'box') } });
   eye?.start();
+  const shareHere = opts.share ?? new ShareHere({ log });
   const token = opts.token ?? loadOrCreateToken();
   if (opts.prefix !== undefined && !PREFIX_RE.test(opts.prefix)) throw new Error('the prefix must be 24 hex characters');
   const prefix = opts.prefix ?? randomBytes(12).toString('hex');
@@ -315,6 +318,9 @@ export async function startUi(opts: UiOptions): Promise<UiServer> {
       // what the background look heard, and this computer's qr (a phone pairs by scanning it)
       if (route === 'nearby') return json(res, 200, engine.nearby());
       if (route === 'hostpair') return json(res, 200, engine.hostPair());
+      // "share this computer": its state and code, and the qr another device scans (no-store: the code changes)
+      if (route === 'share') return json(res, 200, shareHere.view());
+      if (route === 'share.svg') { const t = shareHere.qr(); return t ? send(res, 200, qrSvg(t), TYPES['.svg'], { 'cache-control': 'no-store' }) : send(res, 404, 'not sharing'); }
       if (route === 'hostpair.svg') { const t = engine.hostPairPayload(); return t ? send(res, 200, qrSvg(t), TYPES['.svg'], { 'cache-control': 'no-store' }) : send(res, 404, 'no qr open'); }
       if (route === 'models') return json(res, 200, engine.models());
       if (route === 'lineup') return json(res, 200, engine.lineup());
@@ -456,6 +462,8 @@ export async function startUi(opts: UiOptions): Promise<UiServer> {
     // "pair" takes the code from the phone's share screen. The code never comes back.
     if (route === 'cable/use') { try { return json(res, 200, engine.useCable(body?.serial)); } catch (e) { return fail(e); } }
     if (route === 'cable/pair') { try { return json(res, 200, await engine.pairCable(body?.serial, body?.code)); } catch (e) { return fail(e); } }
+    if (route === 'share/start') { const v = await shareHere.start(); return json(res, v.error ? 500 : 200, v); }
+    if (route === 'share/stop') return json(res, 200, await shareHere.stop());
     if (route === 'hostpair/new') return json(res, 200, engine.openHostPair());
     if (route === 'hostpair/close') return json(res, 200, engine.closeHostPair());
     if (route === 'nearby/look') { try { return json(res, 200, await engine.look()); } catch (e) { return fail(e, 500); } }
@@ -617,6 +625,7 @@ export async function startUi(opts: UiOptions): Promise<UiServer> {
     invite: { set: setInvite, rotate: rotateInvite, info: () => inviteInfo() },
     close: async () => {
       eye?.stop();
+      await shareHere.stop().catch(() => {});
       projects.stop();
       for (const s of open) s.destroy();
       open.clear();

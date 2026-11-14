@@ -92,7 +92,13 @@ const logSinks = new Set<(s: string) => void>();
 export const log = (s: string) => { console.log(`${stamp()}  ${s}`); for (const f of logSinks) f(`${stamp()}  ${s}`); };
 
 // What `share` hands back: stop(), with the gate port and the dashboard on it (tests, the cli's log).
-export type ShareHandle = (() => Promise<void>) & { gatePort: number; dashboard: Dashboard | null };
+// deviceName: what the qr and mdns call this computer (a function's own name is read-only);
+// qr(): the payload the last qr carried (its json; '' before the first); code(): the open one-time
+// pairing code and when it runs out (null without tls); host: the lan address in the qr
+export type ShareHandle = (() => Promise<void>) & {
+  gatePort: number; dashboard: Dashboard | null; deviceName: string; host: string | null;
+  qr(): string; code(): { pin: string; exp: number } | null;
+};
 
 export async function share(opts: ShareOptions): Promise<ShareHandle> {
   const models = expandHome(opts.models);
@@ -352,7 +358,16 @@ export async function share(opts: ShareOptions): Promise<ShareHandle> {
     ledgerUi.stop();
     logSinks.delete(logSink);
     if (dashboard) await dashboard.close();
-  }, { gatePort: gate.port, dashboard });
+  }, {
+    gatePort: gate.port, dashboard, deviceName: name, host,
+    qr: () => qrText,
+    // a code that ran out by time is renewed here, so whoever asks never shows a dead one
+    code: () => {
+      if (!tlsServer) return null;
+      if (tlsServer.pin === null || (tlsServer.pinExpiresAt != null && Date.now() > tlsServer.pinExpiresAt)) tlsServer.onPinUsed?.();
+      return tlsServer.pin === null ? null : { pin: tlsServer.pin, exp: tlsServer.pinExpiresAt ?? 0 };
+    },
+  });
   return stop;
 }
 

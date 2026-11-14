@@ -1636,6 +1636,36 @@ $('tab-scan').hidden = !canScan;
 // code by itself. Nothing is typed. A new qr makes a new code; closing the bubble drops it.
 let hostShown = false;
 let hostExp = null;
+// ---- share this computer (ui/sharehere.ts): start/stop, its code and qr, renewed while open
+let shareTimer = null;
+let shareCode = null;
+function renderShare(v) {
+  const btn = $('share-toggle'), img = $('share-qr'), line = $('share-line');
+  btn.disabled = !!v.starting;
+  btn.textContent = v.starting ? 'starting… (measuring this computer)' : v.on ? 'stop sharing' : 'start sharing';
+  if (v.on && v.code) {
+    if (shareCode !== v.code) { shareCode = v.code; img.src = `${apiUrl('share.svg')}?t=${encodeURIComponent(v.code)}`; }
+    img.hidden = false;
+    const until = v.codeExpiresAt ? new Date(v.codeExpiresAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : null;
+    line.textContent = `sharing as ${v.name} at ${v.host ?? 'no wi-fi address'}:${v.port} · code ${v.code} (works once${until ? `, until ${until}` : ''}; a new one follows)` + (v.note ? `\n\n${v.note}` : '');
+  } else {
+    img.hidden = true; shareCode = null;
+    line.textContent = v.error ? `could not start: ${v.error}` : v.on ? `sharing as ${v.name}` : '';
+  }
+}
+async function refreshShare() {
+  try { renderShare(await getJson('share')); } catch (e) { $('share-line').textContent = e.message; }
+}
+$('share-me').addEventListener('toggle', () => {
+  clearInterval(shareTimer); shareTimer = null;
+  if ($('share-me').open) { refreshShare(); shareTimer = setInterval(() => { if ($('devices').open) refreshShare(); }, 5000); }
+});
+$('share-toggle').addEventListener('click', async () => {
+  const on = $('share-toggle').textContent === 'stop sharing';
+  renderShare({ on, starting: !on, name: null, host: null, port: null, code: null, error: null, note: null });
+  try { renderShare(await postJson(on ? 'share/stop' : 'share/start')); } catch (e) { $('share-line').textContent = e.message; refreshShare(); }
+});
+
 let hostPairedSeen = null;
 async function showHostPair(fresh = false) {
   hostShown = true;

@@ -681,9 +681,12 @@ export class Engine {
     const fp = await this.pinPair(host, port, pin);
     if (fpStart && !fp.startsWith(fpStart)) throw new Error('the certificate does not match what the phone shows: not pairing');
     const now = new Date().toISOString();
+    // what mdns heard at this address names it and says what it is (a computer that shares is 'pc')
+    const heard = this.near.list.find((r) => r.host === host && r.port === port);
+    const kind: PeerKind = heard?.kind === 'pc' || heard?.kind === 'tablet' ? heard.kind : 'phone';
     const peer: Peer = {
-      id: `${host}:${port}`, name: input.name?.trim().slice(0, 60) || `phone ${host}`, host, port, secret: '', fp, pin: null, paired_at: now,
-      relay: null, kind: 'phone', ram: null, bw: null, gpu: null, vram: null, passport: null, added_at: now, last_ok: now,
+      id: `${host}:${port}`, name: input.name?.trim().slice(0, 60) || heard?.name?.slice(0, 60) || `${kind === 'pc' ? 'computer' : kind} ${host}`, host, port, secret: '', fp, pin: null, paired_at: now,
+      relay: null, kind, ram: null, bw: null, gpu: null, vram: null, passport: null, added_at: now, last_ok: now,
     };
     const file = this.file();
     const { list } = upsertPeer(readPeers(file), peer);

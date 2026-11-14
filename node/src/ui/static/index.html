@@ -241,6 +241,14 @@
           <button type="button" class="primary" id="add-paste">add</button>
         </div>
       </details>
+      <!-- "share this computer": the same worker as kula-node share, from here (ui/sharehere.ts) -->
+      <details class="add" id="share-me">
+        <summary>share this computer</summary>
+        <p class="hint">your other devices can then run model layers on this computer. on another computer: devices → add a device → same wi-fi, pick this one and type the code below. on a phone: connected devices → scan a code. all on the same wi-fi.</p>
+        <p><button type="button" class="pill" id="share-toggle">start sharing</button></p>
+        <img id="share-qr" class="invite-qr host-qr" alt="this computer's sharing qr code" hidden>
+        <p class="hint" id="share-line" aria-live="polite"></p>
+      </details>
       <p class="msg" id="add-msg" role="status"></p>
     </section>
   </div>
