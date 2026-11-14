@@ -53,6 +53,13 @@ h1 { font-size: clamp(40px, 9vw, 76px); line-height: 1.02; letter-spacing: -0.03
 .downloads { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: 1fr; gap: 14px 12px; text-align: left; }
 @media (min-width: 520px) { .downloads { grid-template-columns: 1fr 1fr; } }
 @media (min-width: 880px) { .downloads.computers { grid-template-columns: repeat(3, 1fr); gap: 16px; } .downloads.phones { grid-template-columns: repeat(3, 1fr); gap: 16px; } }
+.dl-more { margin: 14px 0 0; }
+.dl-more > summary { list-style: none; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; padding: 7px 14px; border: 1px solid rgba(255, 255, 255, 0.22); border-radius: 999px; font-size: 14px; color: var(--mute); }
+.dl-more > summary::-webkit-details-marker { display: none; }
+.dl-more > summary:hover { color: inherit; border-color: rgba(255, 255, 255, 0.4); }
+.dl-more > summary svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 2; transition: transform .15s; }
+.dl-more[open] > summary svg { transform: rotate(180deg); }
+.dl-more > .downloads { margin-top: 14px; }
 .dl { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
 .dl-row { position: relative; display: flex; gap: 6px; }
 .dl-btn { position: relative; flex: 1; min-width: 0; display: grid; grid-template-columns: auto 1fr; grid-template-rows: auto auto; column-gap: 12px; align-items: center;
