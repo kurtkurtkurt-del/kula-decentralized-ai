@@ -440,7 +440,8 @@ function Step-Install {
 
   if ($S.Inst) {
     $need = @('resources\kula-node\dist\bin\kula-node.js', 'resources\kula-node\node_modules\ws', 'resources\kula-node\node_modules\bonjour-service',
-      'resources\kula-node\node_modules\qrcode-terminal', 'resources\kula-node\src\ui\static\index.html', 'Uninstall kula.exe')
+      'resources\kula-node\node_modules\qrcode-terminal', 'resources\kula-node\src\ui\static\index.html', 'Uninstall kula.exe',
+      'resources\kula-node\vcrt\msvcp140.dll', 'resources\kula-node\vcrt\vcruntime140.dll', 'resources\kula-node\vcrt\vcruntime140_1.dll')
     $miss = @($need | Where-Object { -not (Test-Path -LiteralPath (Join-Path $S.Inst $_)) })
     $missTxt = if ($miss.Count) { "missing: $($miss -join ', ')" } else { "all $($need.Count) there: $($need -join ', ')" }
     Verdict 'win-files' ($miss.Count -eq 0) $missTxt

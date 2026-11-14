@@ -6,7 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { spawn, spawnSync } from 'node:child_process';
-import { home, repoRoots } from './paths.js';
+import { home, repoRoots, packageRoot } from './paths.js';
 import { download } from './download.js';
 import { pickAsset, buildInstructions as instructionsFor, parseSidecar, digestSha256, type Asset } from './assets.js';
 import { progressBar, mb } from './progress.js';
@@ -95,6 +95,49 @@ export function placeCudaRuntime(root: string, where: string): string[] {
     fs.rmSync(dir, { recursive: true, force: true });
   }
   return moved.sort();
+}
+
+// Windows: llama.cpp's release is built with msvc and needs its runtime (msvcp140.dll,
+// vcruntime140.dll, vcruntime140_1.dll), which a fresh windows does not have. The desktop app
+// ships visual studio's redistributable copy in vcrt/ (KULA_VCRT_DIR overrides); every dll of it
+// is copied beside llama-server, where the loader looks first. A file already there with the same
+// size stays. Returns the copied names, sorted. No folder: [].
+export const VC_RUNTIME = ['msvcp140.dll', 'vcruntime140.dll', 'vcruntime140_1.dll'];
+export const VC_REDIST_URL = 'https://aka.ms/vs/17/release/vc_redist.x64.exe';
+export function vcRuntimeDir(env: NodeJS.ProcessEnv = process.env): string {
+  return env.KULA_VCRT_DIR || path.join(packageRoot(), 'vcrt');
+}
+export function placeVcRuntime(from: string, where: string): string[] {
+  if (!fs.existsSync(from)) return [];
+  const copied: string[] = [];
+  for (const e of fs.readdirSync(from, { withFileTypes: true })) {
+    if (!e.isFile() || !e.name.toLowerCase().endsWith('.dll')) continue;
+    const src = path.join(from, e.name);
+    const dst = path.join(where, e.name);
+    try { if (fs.statSync(dst).size === fs.statSync(src).size) continue; } catch {}
+    fs.copyFileSync(src, dst);
+    copied.push(e.name);
+  }
+  return copied.sort();
+}
+// The runtime's names found neither beside llama-server nor in system32 (case does not matter).
+export function vcRuntimeMissing(where: string, system32: string): string[] {
+  const names = (dir: string) => { try { return new Set(fs.readdirSync(dir).map((n) => n.toLowerCase())); } catch { return new Set<string>(); } };
+  const here = names(where), sys = names(system32);
+  return VC_RUNTIME.filter((n) => !here.has(n) && !sys.has(n));
+}
+function windowsRuntime(where: string, place: boolean, log: Log): void {
+  if (process.platform !== 'win32') return;
+  if (place) {
+    try {
+      const copied = placeVcRuntime(vcRuntimeDir(), where);
+      if (copied.length > 0) log(`vc++ runtime: ${copied.length} files placed beside llama-server`);
+    } catch (e) {
+      log(`vc++ runtime: could not place it beside llama-server: ${(e as Error).message}`);
+    }
+  }
+  const missing = vcRuntimeMissing(where, path.win32.join(process.env.SystemRoot || 'C:\\Windows', 'System32'));
+  if (missing.length > 0) log(`vc++ runtime: ${missing.join(', ')} missing, llama.cpp cannot start without it; install microsoft's visual c++ redistributable (x64): ${VC_REDIST_URL}`);
 }
 
 // Where to look, in order: a build next to the repository, then our cache.
@@ -317,6 +360,7 @@ async function downloadRelease(plan: SetupPlan, log: Log): Promise<LlamaBinaries
   }
   const placed = placeCudaRuntime(out, found.where);
   log(`cuda runtime: ${placed.length} files placed beside llama-server`);
+  windowsRuntime(found.where, true, log);
   return found;
 }
 
@@ -327,7 +371,8 @@ export async function setup(opts: { check?: boolean; dryRun?: boolean; log?: Log
     // a home set up before the runtime was placed: move it now (also for --check, which the app runs on every start)
     const bin = path.join(cacheDir(), 'bin');
     const rel = path.relative(bin, found.where);
-    if (rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel))) {
+    const ours = rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
+    if (ours) {
       try {
         const moved = placeCudaRuntime(bin, found.where);
         if (moved.length > 0) log(`cuda runtime: ${moved.length} files moved beside llama-server`);
@@ -335,6 +380,7 @@ export async function setup(opts: { check?: boolean; dryRun?: boolean; log?: Log
         log(`cuda runtime: could not move it beside llama-server: ${(e as Error).message}`);
       }
     }
+    windowsRuntime(found.where, ours, log);
     log(`llama.cpp ${TAG}: ${found.where}`);
     log(`  ${path.basename(found.rpcServer)}, ${path.basename(found.llamaServer)}`);
     return found;

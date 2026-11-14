@@ -6,7 +6,7 @@ import path from 'node:path';
 import { createHash } from 'node:crypto';
 import release from './fixtures/release-b11157.json' with { type: 'json' };
 import { pickAsset, buildInstructions, parseSidecar, digestSha256 } from '../src/assets.ts';
-import { verifySidecar, planSetup, describePlan, placeCudaRuntime, tarProgram, SOURCE_SIZE, SOURCE_SHA256 } from '../src/llama.ts';
+import { verifySidecar, planSetup, describePlan, placeCudaRuntime, placeVcRuntime, vcRuntimeMissing, vcRuntimeDir, tarProgram, SOURCE_SIZE, SOURCE_SHA256 } from '../src/llama.ts';
 import { childEnv } from '../src/children.ts';
 import { bar, progressBar } from '../src/progress.ts';
 
@@ -148,6 +148,29 @@ function cudaTree(): { root: string; where: string } {
   fs.writeFileSync(path.join(root, 'other', 'keep.txt'), 'keep');
   return { root, where };
 }
+
+test('placeVcRuntime copies the vc++ dlls beside llama-server, once; vcRuntimeMissing looks there and in system32', () => {
+  const t = fs.mkdtempSync(path.join(os.tmpdir(), 'kula-vcrt-'));
+  try {
+    const from = path.join(t, 'vcrt'), where = path.join(t, 'bin'), sys = path.join(t, 'System32');
+    for (const d of [from, where, sys]) fs.mkdirSync(d);
+    for (const n of ['msvcp140.dll', 'VCRUNTIME140.dll', 'vcruntime140_1.dll', 'readme.txt']) fs.writeFileSync(path.join(from, n), n);
+    fs.writeFileSync(path.join(where, 'llama-server.exe'), 'x');
+    assert.deepEqual(vcRuntimeMissing(where, sys), ['msvcp140.dll', 'vcruntime140.dll', 'vcruntime140_1.dll']);
+    fs.writeFileSync(path.join(sys, 'MSVCP140.DLL'), 'sys');
+    assert.deepEqual(vcRuntimeMissing(where, sys), ['vcruntime140.dll', 'vcruntime140_1.dll']);
+    assert.deepEqual(placeVcRuntime(from, where), ['VCRUNTIME140.dll', 'msvcp140.dll', 'vcruntime140_1.dll']);
+    assert.equal(fs.existsSync(path.join(where, 'readme.txt')), false);
+    assert.equal(fs.readFileSync(path.join(where, 'msvcp140.dll'), 'utf8'), 'msvcp140.dll');
+    assert.deepEqual(vcRuntimeMissing(where, path.join(t, 'nope')), []);
+    assert.deepEqual(placeVcRuntime(from, where), []);
+    assert.deepEqual(placeVcRuntime(path.join(t, 'nope'), where), []);
+    assert.equal(vcRuntimeDir({ KULA_VCRT_DIR: from }), from);
+    assert.equal(path.basename(vcRuntimeDir({})), 'vcrt');
+  } finally {
+    fs.rmSync(t, { recursive: true, force: true });
+  }
+});
 
 test('placeCudaRuntime moves the cudart files beside llama-server, once', () => {
   const { root, where } = cudaTree();
