@@ -8,6 +8,7 @@ import path from 'node:path';
 import { share as startShare, type ShareHandle, type ShareOptions } from '../share.js';
 import { home } from '../paths.js';
 import { WINDOWS_FIREWALL_NOTE } from '../llama.js';
+import { keepAwake, type KeepAwake } from '../awake.js';
 
 export const SHARE_PORT = 50551;
 
@@ -29,8 +30,9 @@ export class ShareHere {
   private handle: ShareHandle | null = null;
   private starting: Promise<void> | null = null;
   private error: string | null = null;
+  private awake: KeepAwake | null = null;
 
-  constructor(private opts: { port?: number; models?: string; name?: string; start?: ShareStarter; log?: (s: string) => void } = {}) {}
+  constructor(private opts: { port?: number; models?: string; name?: string; start?: ShareStarter; log?: (s: string) => void; awake?: () => KeepAwake } = {}) {}
 
   view(): ShareView {
     const h = this.handle;
@@ -62,6 +64,8 @@ export class ShareHere {
             dashboard: false,
           });
           this.opts.log?.(`sharing this computer on port ${this.handle.gatePort}`);
+          // no sleep while it lends itself: a sleeping worker drops out mid-answer (awake.ts)
+          this.awake = (this.opts.awake ?? (() => keepAwake(this.opts.log)))();
         } catch (e) {
           const m = (e as Error).message;
           this.error = /EADDRINUSE/.test(m) ? 'the share port is taken: is kula-node share already running in a terminal? stop it there first' : m;
@@ -78,6 +82,8 @@ export class ShareHere {
     if (this.starting) await this.starting;
     const h = this.handle;
     this.handle = null;
+    this.awake?.stop();
+    this.awake = null;
     if (h) { await h(); this.opts.log?.('stopped sharing this computer'); }
     return this.view();
   }

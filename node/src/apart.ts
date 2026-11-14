@@ -7,7 +7,7 @@ import { Tunnel } from './gate.js';
 import { RelayTunnel } from './relay.js';
 import { probePeers, reachable, peerTls, dialOf, type Peer } from './peers.js';
 import type { GateIdentity } from './tls.js';
-import { freePort, startChild } from './children.js';
+import { freePort, startChild, exited } from './children.js';
 import type { LlamaBinaries } from './llama.js';
 
 export interface Message { role: 'system' | 'user' | 'assistant'; content: string }
@@ -138,7 +138,7 @@ export async function startLlamaServer(llama: LlamaBinaries | null, file: string
   const t0 = Date.now();
   for (;;) {
     try { const r = await fetch(`http://127.0.0.1:${port}/health`); if (r.ok) break; } catch {}
-    if (child.proc.exitCode !== null) throw new Error('llama-server exited while loading');
+    if (exited(child.proc)) throw new Error('llama-server exited while loading');
     if (Date.now() - t0 > 600000) { await child.stop(); throw new Error('llama-server took too long to load the model'); }
     await new Promise((r) => setTimeout(r, 300));
   }

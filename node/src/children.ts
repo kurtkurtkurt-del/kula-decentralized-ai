@@ -3,6 +3,12 @@ import net from 'node:net';
 import path from 'node:path';
 import { spawn, type ChildProcess } from 'node:child_process';
 
+// A child has ended when it exited with a code OR was killed by a signal (then exitCode stays null
+// and signalCode says which: llama-server aborting on a worker that went away is SIGABRT).
+export function exited(p: { exitCode: number | null; signalCode: NodeJS.Signals | null }): boolean {
+  return p.exitCode !== null || p.signalCode !== null;
+}
+
 // On linux the llama.cpp programs' libraries (and the CUDA runtime placed beside
 // them) are searched in the program's own folder too: a library's own search path
 // does not cover its dependencies' dependencies (libcublas -> libcublasLt).
@@ -34,7 +40,7 @@ export function portOpen(port: number, timeoutMs = 500): Promise<boolean> {
 export async function waitForPort(child: ChildProcess, port: number, timeoutMs: number): Promise<void> {
   const t0 = Date.now();
   while (Date.now() - t0 < timeoutMs) {
-    if (child.exitCode !== null) throw new Error(`exited with ${child.exitCode} before listening`);
+    if (exited(child)) throw new Error(`exited with ${child.exitCode ?? child.signalCode} before listening`);
     if (await portOpen(port)) return;
     await new Promise((r) => setTimeout(r, 150));
   }
@@ -75,7 +81,7 @@ export async function startChild(name: string, bin: string, args: string[], port
     proc,
     port,
     stop: () => new Promise<void>((resolve) => {
-      if (proc.exitCode !== null) return resolve();
+      if (exited(proc)) return resolve();
       const t = setTimeout(() => { proc.kill('SIGKILL'); }, 3000);
       proc.once('exit', () => { clearTimeout(t); resolve(); });
       proc.kill('SIGTERM');

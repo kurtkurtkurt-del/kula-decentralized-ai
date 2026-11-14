@@ -14,7 +14,7 @@ import { home, expandHome } from './paths.js';
 import { lanIPv4, globalIPv6, freeRamMB, measureBandwidth, detectGpu } from './sysinfo.js';
 import { startPortMapper, mapLine, type PortMapper } from './portmap.js';
 import type { PeerAddr } from './peers.js';
-import { freePort, startChild, type Child } from './children.js';
+import { freePort, startChild, type Child, exited } from './children.js';
 import { startApiServer, type ApiServer } from './api.js';
 import { loadOrCreateKey } from './audit/key.js';
 import { Ledger } from './audit/ledger.js';
@@ -175,7 +175,7 @@ export async function share(opts: ShareOptions): Promise<ShareHandle> {
   const targets = async (channel: Channel): Promise<number | null> => {
     if (channel === 'rpc') {
       if (!llama) return null;
-      if (rpc && rpc.proc.exitCode === null) return rpc.port;
+      if (rpc && !exited(rpc.proc)) return rpc.port;
       rpc = null;
       rpcStarting ??= startRpc().finally(() => { rpcStarting = null; });
       try { rpc = await rpcStarting; return rpc.port; } catch (e) { log(`ggml-rpc-server failed: ${(e as Error).message}`); return null; }

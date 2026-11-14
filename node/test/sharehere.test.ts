@@ -18,7 +18,8 @@ function fakeStarter(seen: ShareOptions[], stops: { n: number }) {
 test('ShareHere starts the worker once, shows its code and qr, and stops it', async () => {
   const seen: ShareOptions[] = [];
   const stops = { n: 0 };
-  const s = new ShareHere({ port: 50999, models: '/tmp/m', start: fakeStarter(seen, stops) });
+  let awake = 0, slept = 0;
+  const s = new ShareHere({ port: 50999, models: '/tmp/m', start: fakeStarter(seen, stops), awake: () => { awake++; return { how: 'test', stop: () => { slept++; } }; } });
   assert.deepEqual({ on: s.view().on, qr: s.qr() }, { on: false, qr: null });
   const [a, b] = await Promise.all([s.start(), s.start()]);
   assert.equal(seen.length, 1, 'two clicks start one worker');
@@ -37,6 +38,7 @@ test('ShareHere starts the worker once, shows its code and qr, and stops it', as
   assert.equal(off.on, false);
   assert.equal(off.code, null);
   assert.equal(stops.n, 1);
+  assert.deepEqual([awake, slept], [1, 1], 'awake while sharing, not after');
   await s.stop();
   assert.equal(stops.n, 1, 'stopping twice stops once');
 });
@@ -48,6 +50,7 @@ test('ShareHere: a taken port says so in plain words and can be tried again', as
   const ok = fakeStarter(seen, stops);
   const s = new ShareHere({
     port: 50999,
+    awake: () => ({ how: 'test', stop() {} }),
     start: async (o) => { if (fail) throw new Error('listen EADDRINUSE: address already in use :::50999'); return ok(o); },
   });
   const v = await s.start();

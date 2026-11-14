@@ -28,6 +28,13 @@ on a branch, never built).
 
 ## what's new in 0.4.0 · 13 November 2026
 
+- **Computers help each other** (added 14 November 2026). In **devices**, one computer can **share
+  this computer** and another can **add a computer** with its one-time code; a model can then be
+  split between them. kula measures each one (memory, graphics card, the network to it), gives
+  the strongest the most layers, leaves out a device that would slow things down and says why,
+  keeps a sharing computer awake, and carries on without a computer that goes away. Tested
+  between two kula copies on one Mac (a model split, answering, and going on when one left), not
+  yet on two real computers.
 - **Windows app** (added 14 November 2026). kula installs on Windows 10 and 11 computers (Intel/AMD,
   x64) as a normal app, for you only, without admin rights. It brings the Visual C++ runtime that
   llama.cpp needs, so it also starts on a fresh Windows. So far it is tested only on GitHub's Windows
@@ -254,7 +261,10 @@ with the slowest of those networks instead of a fixed guess, and says in plain w
 how many layers and on what (memory, or an NVIDIA card's VRAM), who is left out because the
 answers come faster without it, the estimate as a range, and when this computer alone would be
 faster (then it suggests "here"). An NVIDIA card's speed is guessed from its name until it is
-measured. So far this ran between two kula copies on one Mac only, not
+measured. A computer that shares does not go to sleep (the screen still may). When a computer in a
+split goes away (closed, asleep, off the wi-fi), the next answer notices, the model is loaded again
+with the devices that are left (or on this computer alone), and the answer comes anyway; if half an
+answer was already on screen, kula says so and asks you to ask again. So far this ran between two kula copies on one Mac only, not
 yet between two real computers.
 
 **A guest network keeps devices apart.** Guest, hotel, office, campus and many home wi-fis stop

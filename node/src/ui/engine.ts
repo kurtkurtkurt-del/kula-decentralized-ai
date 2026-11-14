@@ -369,6 +369,8 @@ export class Engine {
   private closed = false;
   private peeks = new Map<string, { at: number; peek: GatePeek }>();
   // this computer's qr (kula-host v1): its one-time code, until when, and who paired with it
+  // what the model was loaded with last: a split that lost a device loads again from it, without that device
+  private lastLoad: Parameters<Engine['load']>[0] | null = null;
   private hostPin: { pin: string; exp: number; peerId: string | null; tried: Set<string> } | null = null;
   private hostIdCache: string | null = null;
   readonly catalog: CatalogEntry[];
@@ -1604,6 +1606,7 @@ export class Engine {
       this.cluster = cluster;
       this.loaded = { mode, model: { id: cat?.id ?? `local:${localOnly!.name}`, name: modelName, file: path.basename(file), size }, ctx, devices: [], since: Date.now(), ...(splitParts ? { parts: splitParts } : {}), sees: mode === 'here' && !!mmproj };
       this.plan = plan;
+      this.lastLoad = { ...req };
       this.note(`${modelName} ready on ${cluster.devices.map((d) => d.name).join(', ')} (${mode})`);
       const st = this.status();
       emit({ done: true, status: st });
@@ -1639,7 +1642,7 @@ export class Engine {
   // `photos`: the newest user message's photos (data urls, ui/vision.ts), answered the way
   // routePhotos says; `onReading` is told before a vision model reads them. The reply carries
   // how they were answered (`photos`), with the reading for the page to keep.
-  async chat(messages: Message[], onToken: (t: string) => void, o: { maxTokens?: number; temperature?: number; signal?: AbortSignal; use?: Use; photos?: string[]; onReading?: (r: { by: string; n: number; tight: boolean }) => void } = {}): Promise<Reply & { stopped?: boolean; photos?: PhotoNote }> {
+  async chat(messages: Message[], onToken: (t: string) => void, o: { retried?: boolean; maxTokens?: number; temperature?: number; signal?: AbortSignal; use?: Use; photos?: string[]; onReading?: (r: { by: string; n: number; tight: boolean }) => void } = {}): Promise<Reply & { stopped?: boolean; photos?: PhotoNote }> {
     if (!this.cluster || !this.loaded) throw new Error('no model loaded: open connect and load one');
     const loaded = this.loaded;
     const photos = checkPhotos(o.photos);
@@ -1680,11 +1683,40 @@ export class Engine {
       const dev = this.cluster?.devices.find((d) => d.busy)?.name ?? this.cluster?.devices[0]?.name ?? 'unknown device';
       if (ac.signal.aborted && pieces) this.usage.record({ ...count, device: dev, completion: pieces, ms: Date.now() - t0, firstMs: first, stopped: true });
       else this.usage.record({ ...count, device: dev, completion: 0, ms: 0, firstMs: 0, failed: true });
+      // a split whose device went away (asleep, wi-fi gone, kula closed there): load again
+      // without it and, when nothing of the answer was shown yet, answer again
+      if (!ac.signal.aborted && loaded.mode === 'split' && !o.retried) {
+        const gone = await this.recoverSplit(loaded).catch(() => null);
+        if (gone) {
+          if (!pieces) return this.chat(messages, onToken, { ...o, retried: true });
+          throw new Error(`${gone} dropped out in the middle of the answer; kula loaded the model again without it: ask again.`);
+        }
+      }
       throw e;
     } finally {
       this.chats.delete(ac);
       o.signal?.removeEventListener('abort', relay);
     }
+  }
+
+  // The devices of a split that no longer answer on their rpc channel; when there are any,
+  // the model is loaded again with the others (or here alone) and their names come back.
+  private async recoverSplit(loaded: NonNullable<Engine['loaded']>): Promise<string | null> {
+    const ids = (loaded.parts ?? []).filter((x) => !x.local).map((x) => x.id);
+    if (!ids.length || !this.lastLoad) return null;
+    const file = this.file();
+    const peers = ids.map((id) => findPeer(readPeers(file), id)).filter((p): p is Peer => !!p);
+    const probes = await probePeers(peers, this.opts.probeMs ?? 2000, ['rpc'], undefined, this.identity());
+    const gone = probes.filter((r) => !r.rpc.ok);
+    if (!gone.length) return null;
+    const names = gone.map((r) => (r.peer.named ? r.peer.name : publicName(r.peer.name))).join(', ');
+    for (const r of gone) this.reach.set(r.peer.id, { r: { ok: false, reason: (r.rpc as { reason: string }).reason }, at: Date.now() });
+    const keep = new Set(gone.map((r) => r.peer.id));
+    const rest = Array.isArray(this.lastLoad.peers) ? (this.lastLoad.peers as unknown[]).map(String).filter((id) => !keep.has(id)) : [];
+    this.note(`${names} stopped answering in the split: loading the model again ${rest.length ? 'without it' : 'on this computer alone'}`);
+    await this.unload(true);
+    await this.load({ ...this.lastLoad, peers: rest }, () => {});
+    return names;
   }
 
   // ---- photos (10.11.2026, ui/vision.ts): the vision model on this computer and its setting

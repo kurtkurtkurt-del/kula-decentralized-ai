@@ -9,7 +9,7 @@ import { planWithProbe, tensorSplit, MB, type Plan, type ProbeFn } from './plann
 import { guessShape } from './gguf.js';
 import { peerTls, type Peer } from './peers.js';
 import type { GateIdentity } from './tls.js';
-import { freePort, startChild, type Child } from './children.js';
+import { freePort, startChild, type Child, exited } from './children.js';
 import type { LlamaBinaries } from './llama.js';
 import type { SimModel, SimNet } from './sim.js';
 
@@ -86,7 +86,7 @@ export async function startSplitServer(llama: LlamaBinaries | null, modelFile: s
   const t0 = Date.now();
   for (;;) {
     try { const r = await fetch(`http://127.0.0.1:${port}/health`); if (r.ok) break; } catch {}
-    if (child.proc.exitCode !== null) throw new Error('llama-server exited while loading (a worker dropped?)');
+    if (exited(child.proc)) throw new Error('llama-server exited while loading (a worker dropped?)');
     if (Date.now() - t0 > 900000) { await child.stop(); throw new Error('llama-server took too long to load over rpc'); }
     await new Promise((r) => setTimeout(r, 300));
   }
