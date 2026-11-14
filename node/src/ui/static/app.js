@@ -12,6 +12,9 @@ const base = location.pathname.replace(/[^/]*$/, '');
 const apiUrl = (p) => `${base}api/${p}`;
 const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
 const svg = (paths) => { const ns = 'http://www.w3.org/2000/svg'; const s = document.createElementNS(ns, 'svg'); s.setAttribute('viewBox', '0 0 20 20'); s.setAttribute('aria-hidden', 'true'); for (const d of paths) { const p = document.createElementNS(ns, 'path'); p.setAttribute('d', d); s.appendChild(p); } return s; };
+// what a device is, in words; what was typed per address in "add a computer" (kept across redraws)
+const KIND_WORD = { pc: 'computer', phone: 'phone', tablet: 'tablet' };
+const pcCodes = new Map();
 const ICON = {
   copy: ['M7 7h8.5v9.5H7z', 'M13 7V4.5H4.5V13H7'],
   again: ['M15.5 10a5.5 5.5 0 1 1-1.7-4', 'M15.5 3.8v3.4h-3.4'],
@@ -1330,6 +1333,7 @@ function renderDevices() {
     if ([g.cableOn, g.wifiOn, g.relayOn].filter(Boolean).length > 1) lines.push(`talks over ${g.via === 'cable' ? 'the cable' : 'wi-fi'} now`);
     const p0 = g.peers[0];
     const extra = [];
+    if (p0?.kind) extra.push(KIND_WORD[p0.kind] || p0.kind);
     if (p0?.ram) extra.push(`${(p0.ram / 1024).toFixed(1)} GB free`);
     if (g.peers.find((p) => p.holds)) extra.push(`holds ${g.peers.find((p) => p.holds).holds}`);
     if (g.peers.some((p) => p.waitingPair)) extra.push('pairs on first contact');
@@ -1411,15 +1415,64 @@ function renderNearby() {
   const rows = list.map((r) => {
     const row = el('div', 'near');
     const who = el('div', 'who');
-    who.append(el('b', '', r.name), el('span', '', `${r.host}:${r.port} · ${NEAR_WORDS[r.state] || 'nearby'}`));
-    const b = el('button', 'pill', 'pair');
+    who.append(el('b', '', r.name), el('span', '', `${r.kind === 'pc' ? 'computer · ' : ''}${r.host}:${r.port} · ${NEAR_WORDS[r.state] || 'nearby'}`));
+    const b = el('button', 'pill', r.kind === 'pc' ? 'add' : 'pair');
     b.type = 'button';
-    b.addEventListener('click', () => { $('add').open = true; showTab('host'); addMsg(`on ${r.name}: open kula → scan a computer, and point it at this code.`); });
+    if (r.kind === 'pc') b.addEventListener('click', () => openAddComputer());
+    else b.addEventListener('click', () => { $('add').open = true; showTab('host'); addMsg(`on ${r.name}: open kula → scan a computer, and point it at this code.`); });
     row.append(el('span', 'dot no'), who, b);
     return row;
   });
   box.replaceChildren(...(rows.length ? [el('h4', '', 'nearby, not paired'), ...rows] : []));
+  renderPcList();
 }
+
+// ---- add a computer: the computers sharing on this wi-fi (mdns kind pc), each added with its code
+function openAddComputer() {
+  if (!$('devices').open) openDevices();
+  $('add').open = true;
+  showTab('pc');
+  postJson('nearby/look').then((v) => { NEAR = v; renderNearby(); }).catch(() => {});
+}
+function renderPcList() {
+  const box = $('pc-list');
+  if (!box) return;
+  const list = (NEAR.list || []).filter((r) => r.kind === 'pc' && !r.peer && r.state !== 'paired');
+  $('pc-none').hidden = list.length > 0;
+  // redraw only when the list changed: a code being typed keeps its box and cursor
+  const key = list.map((r) => `${r.host}:${r.port}:${r.state}:${r.name}`).join('|');
+  if (box.dataset.key === key) return;
+  box.dataset.key = key;
+  const focused = document.activeElement?.dataset?.addr;
+  box.replaceChildren(...list.map((r) => {
+    const addr = `${r.host}:${r.port}`;
+    const row = el('div', 'near pc');
+    const who = el('div', 'who');
+    who.append(el('b', '', r.name), el('span', '', `${addr} · ${r.state === 'code' ? 'sharing, has a code open' : NEAR_WORDS[r.state] || 'heard on this wi-fi'}`));
+    const code = el('input', 'pc-code');
+    code.placeholder = 'its code';
+    code.spellcheck = false;
+    code.dataset.addr = addr;
+    code.value = pcCodes.get(addr) || '';
+    code.addEventListener('input', () => pcCodes.set(addr, code.value));
+    const b = el('button', 'pill', 'add');
+    b.type = 'button';
+    const go = async () => {
+      const pin = code.value.trim();
+      if (!pin) { code.focus(); return; }
+      b.disabled = true;
+      addMsg(`adding ${r.name}…`);
+      try { const row = await postJson('peers/add', { address: addr, pin, name: r.name }); pcCodes.delete(addr); await added(row); }
+      catch (e) { addMsg(e.message, 'bad'); } finally { b.disabled = false; }
+    };
+    b.addEventListener('click', go);
+    code.addEventListener('keydown', (e) => { if (e.key === 'Enter') go(); });
+    row.append(el('span', 'dot no'), who, code, b);
+    if (focused === addr) queueMicrotask(() => code.focus());
+    return row;
+  }));
+}
+$('add-pc-btn').addEventListener('click', () => openAddComputer());
 
 let nearBusy = false;
 async function refreshNearby() {
@@ -1625,6 +1678,7 @@ function showTab(name) {
   for (const b of document.querySelectorAll('.tab-body')) b.hidden = b.dataset.body !== name;
   if (name !== 'scan') stopScan();
   if (name === 'host') { if ($('devices').open && $('add').open) showHostPair(); } else hideHostPair();
+  if (name === 'pc') renderPcList();
 }
 for (const t of document.querySelectorAll('.tab')) t.addEventListener('click', () => showTab(t.dataset.tab));
 const canScan = 'BarcodeDetector' in window;

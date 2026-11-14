@@ -197,10 +197,12 @@
       <div id="dev-list" class="dev-list" aria-live="polite"></div>
       <div id="near-list" class="near-list" aria-live="polite" hidden></div>
       <p class="hint" id="cable-help"></p>
+      <p class="add-pc-row"><button type="button" class="pill" id="add-pc-btn">add a computer</button></p>
       <details class="add" id="add">
         <summary>add a device</summary>
         <div class="tabs" role="tablist">
           <button type="button" role="tab" class="tab" data-tab="host">same wi-fi</button>
+          <button type="button" role="tab" class="tab" data-tab="pc">a computer</button>
           <button type="button" role="tab" class="tab" data-tab="scan" id="tab-scan" hidden>scan the qr</button>
           <button type="button" role="tab" class="tab" data-tab="type">type it</button>
           <button type="button" role="tab" class="tab" data-tab="paste">paste a code</button>
@@ -226,6 +228,12 @@
             <label class="pill file">a photo of it<input type="file" id="scan-file" accept="image/*"></label>
           </div>
           <p class="hint">hold the phone's qr up to this computer's camera.</p>
+        </div>
+        <!-- a computer that shares itself (devices → share this computer): heard on mdns, added with its code -->
+        <div class="tab-body" data-body="pc" hidden>
+          <p class="hint">on the other computer: kula → devices → share this computer → start sharing. it shows up here within a few seconds; type the code it shows. both on the same wi-fi.</p>
+          <div id="pc-list" class="near-list pc-list" aria-live="polite"></div>
+          <p class="hint" id="pc-none">no computer is sharing on this wi-fi yet. not listed? use “type it” with the address and code it shows.</p>
         </div>
         <div class="tab-body" data-body="type" hidden>
           <p class="hint">on the phone: kula → share this phone. it shows its address and a one-time code.</p>

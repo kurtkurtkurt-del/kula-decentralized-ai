@@ -244,10 +244,12 @@ every device and shows who took how many.
 
 **computer ↔ computer, from the chat page.** On the computer that lends itself: **devices → share
 this computer → start sharing**; it shows a one-time code and a QR (Windows: allow kula on private
-networks when the firewall asks). On the other computer: **devices → add a device → type it**,
-with the address and code the first one shows; the first one is also listed under the devices
-heard on the wi-fi. So far this ran between two kula copies on one Mac only, not yet between two
-real computers, and choosing which computer takes which layers comes next.
+networks when the firewall asks). On the other computer: **devices → add a computer**: the
+computers sharing on the wi-fi are listed; type the code the one you want shows and press add
+(not listed: **add a device → type it** with its address and code). The device list then says
+"computer" or "phone" on each row. So far this ran between two kula copies on one Mac only, not
+yet between two real computers; measuring each computer and choosing which one takes which
+layers come next.
 
 **A guest network keeps devices apart.** Guest, hotel, office, campus and many home wi-fis stop
 devices from seeing each other ("client isolation"); nothing in kula can get around it. When
