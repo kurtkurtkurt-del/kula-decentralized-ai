@@ -18,6 +18,8 @@ export interface Plan {
   mode: 'split';
   used: (Peer & { assignedMb: number; layers: number })[];
   skipped: { peer: Peer; why: string }[];
+  // answered, but the planner found the answers faster without them
+  notNeeded: Peer[];
   localMb: number;
   localLayers?: number;
   fitsAlone: boolean;
@@ -69,18 +71,19 @@ export function planSplit(input: PlanInput): Plan {
     const sim = planShares({
       model: input.model, ctx: input.ctx, share: input.share, all: input.all, net,
       local: withMeasured({ id: 'me', capMb: input.localFreeMb * LOCAL_SHARE, bw: input.localBw || DEFAULT_BW, eff: input.localEff ?? DEFAULT_EFF }, input.model, input.localTps),
-      workers: input.peers.map((p) => withMeasured({ id: p.id, capMb: (p.ram ?? 2000) * WORKER_SHARE, bw: p.bw ?? DEFAULT_BW, eff: p.kind === 'pc' ? 0.3 : DEFAULT_EFF }, input.model, input.peerTps?.[p.id])),
+      workers: input.peers.map((p) => { const w = workerSide(p); return withMeasured({ id: p.id, capMb: w.capMb, bw: w.bw, eff: w.eff }, input.model, input.peerTps?.[p.id]); }),
     });
     return {
       mode: 'split',
       used: sim.used.map((u) => ({ ...(input.peers.find((p) => p.id === u.id) as Peer), assignedMb: u.assignedMb, layers: u.layers })),
       skipped: input.skipped ?? [],
+      notNeeded: input.peers.filter((p) => !sim.used.some((u) => u.id === p.id)),
       localMb: sim.localMb, localLayers: sim.localLayers, fitsAlone: sim.fitsAlone, aloneFaster: sim.aloneFaster, totalMb: sim.totalMb, needMb: sim.needMb, est: sim.est, estAlone: sim.estAlone,
     };
   } catch (e) {
     if ((e as Error).message === 'toobig' || (e as Error).message === 'local') {
       const need = Math.round(input.model.fileMb * 1.05 + (input.model.kvMbPer1k * input.ctx) / 1024 + 300);
-      throw new TooBig(need, Math.round(input.localFreeMb * LOCAL_SHARE + input.peers.reduce((a, p) => a + (p.ram ?? 2000) * WORKER_SHARE, 0)));
+      throw new TooBig(need, Math.round(input.localFreeMb * LOCAL_SHARE + input.peers.reduce((a, p) => a + workerSide(p).capMb, 0)));
     }
     throw e;
   }
@@ -109,4 +112,67 @@ export async function planWithProbe(opts: Omit<PlanInput, 'peers' | 'skipped'> &
 // workers in the order of the tunnels. Weights are the assigned MB.
 export function tensorSplit(plan: Plan): number[] {
   return [plan.localMb, ...plan.used.map((u) => u.assignedMb)];
+}
+
+// ---- what each worker brings, and the plan in words (14.11.2026) ----------------------------
+//
+// A computer whose llama.cpp runs on an NVIDIA card (Linux and Windows download the CUDA build
+// only when nvidia-smi answers) keeps its layers in the card's memory: VRAM is its room, not
+// its RAM, and the card is its speed. The card's speed is not measured yet, so it is guessed low
+// from its name. Apple silicon shares one memory (its vram is 0) and an AMD card gets the cpu
+// build: both stay on RAM and the measured memory speed.
+export const VRAM_SHARE = 0.85;
+export const GPU_EFF = 0.5;
+const NVIDIA = /nvidia|geforce|rtx|gtx|quadro|tesla|a100|h100|h200|l40/i;
+
+export function gpuGuessGbs(name: string): number {
+  if (/rtx\s*(50\d0|40[89]0)|a100|h100|h200|l40/i.test(name)) return 700;
+  if (/rtx\s*(40|30)\d0|a6000/i.test(name)) return 400;
+  if (/rtx\s*20\d0|gtx\s*16\d0/i.test(name)) return 250;
+  return 150;
+}
+
+export interface WorkerSide { capMb: number; bw: number; eff: number; on: 'gpu' | 'cpu'; guessed: boolean }
+
+export function workerSide(p: Pick<Peer, 'kind' | 'ram' | 'bw' | 'gpu' | 'vram'>): WorkerSide {
+  if (p.kind === 'pc' && p.gpu && NVIDIA.test(p.gpu) && (p.vram ?? 0) >= 2048) {
+    return { capMb: p.vram! * VRAM_SHARE, bw: gpuGuessGbs(p.gpu), eff: GPU_EFF, on: 'gpu', guessed: true };
+  }
+  return { capMb: (p.ram ?? 2000) * WORKER_SHARE, bw: p.bw ?? DEFAULT_BW, eff: p.kind === 'pc' ? 0.3 : DEFAULT_EFF, on: 'cpu', guessed: p.bw == null };
+}
+
+// an estimate is a model of the hardware and the network, not a measurement: say it as a range
+export function tpsRange(tps: number): string {
+  const r = (x: number) => (x >= 10 ? Math.round(x) : Math.round(x * 10) / 10);
+  return `${r(tps * 0.6)}–${r(tps * 1.15)}`;
+}
+
+// The plan in plain words: who takes how much and on what, who is left out and why, the
+// estimate as a range, and the honest advice when this computer alone would do better.
+export function explainPlan(pl: Plan, model: string, nameOf: (p: Peer) => string = (p) => p.name): string[] {
+  const out: string[] = [];
+  const net = (p: Peer) => (p.link && p.link.mbps != null ? `network ${p.link.mbps} MB/s, ${p.link.rttMs} ms` : 'network not measured');
+  const gb = (mb: number) => Math.round(mb / 102.4) / 10;
+  const brings = (p: Peer) => {
+    const w = workerSide(p);
+    return w.on === 'gpu'
+      ? `its graphics card (${p.gpu}, ${gb(p.vram ?? 0)} GB; its speed is guessed from the name)`
+      : `its memory (${p.bw != null ? `${Math.round(p.bw)} GB/s` : 'speed not known'})`;
+  };
+  const short = (p: Peer) => (workerSide(p).on === 'gpu' ? `${p.gpu}` : `memory ${p.bw != null ? `${Math.round(p.bw)} GB/s` : 'speed not known'}`);
+  if (!pl.used.length) out.push(`${model} runs on this computer alone.`);
+  else {
+    out.push(`${model} is split over ${pl.used.length + 1} devices; the strongest takes the most:`);
+    out.push(pl.localLayers ? `this computer: ${pl.localLayers} layers and the input and output layers (${pl.localMb} MB).` : `this computer: the input and output layers (${pl.localMb} MB).`);
+    for (const u of pl.used) out.push(`${nameOf(u)}: ${u.layers} layers (${u.assignedMb} MB) on ${brings(u)}; ${net(u)}.`);
+  }
+  for (const p of pl.notNeeded) out.push(`${nameOf(p)} left out: the answers come faster without it (${short(p)}; ${net(p)}).`);
+  for (const s of pl.skipped) out.push(`${nameOf(s.peer)} left out: ${s.why}.`);
+  if (pl.est && pl.used.length) out.push(`estimate: about ${tpsRange(pl.est.tps)} tok/s (worked out from memory speeds and the network, not measured yet).`);
+  if (pl.fitsAlone && pl.aloneFaster && pl.estAlone) {
+    out.push(`suggestion: it fits on this computer alone and runs faster here (about ${tpsRange(pl.estAlone.tps)} tok/s): pick “here”, or “apart” to answer several chats at once.`);
+  } else if (pl.fitsAlone && pl.estAlone && pl.est) {
+    out.push(`it would also fit here alone (about ${tpsRange(pl.estAlone.tps)} tok/s); split is faster.`);
+  }
+  return out;
 }

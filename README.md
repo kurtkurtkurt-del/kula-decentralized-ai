@@ -250,8 +250,12 @@ computers sharing on the wi-fi are listed; type the code the one you want shows 
 "computer" or "phone" on each row. A computer added this way brings what it measured about itself
 (free RAM, memory speed, graphics card), and the network to it is measured at once (a few MB
 through its gate: MB/s and the delay); **measure** on its row does it again. A split then plans
-with the slowest of those networks instead of a fixed guess. So far this ran between two kula copies on one Mac only, not
-yet between two real computers; choosing which one takes which layers comes next.
+with the slowest of those networks instead of a fixed guess, and says in plain words who takes
+how many layers and on what (memory, or an NVIDIA card's VRAM), who is left out because the
+answers come faster without it, the estimate as a range, and when this computer alone would be
+faster (then it suggests "here"). An NVIDIA card's speed is guessed from its name until it is
+measured. So far this ran between two kula copies on one Mac only, not
+yet between two real computers.
 
 **A guest network keeps devices apart.** Guest, hotel, office, campus and many home wi-fis stop
 devices from seeing each other ("client isolation"); nothing in kula can get around it. When

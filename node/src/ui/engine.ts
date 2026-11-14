@@ -26,7 +26,7 @@ import { home, repoRoots } from '../paths.js';
 import { findLlama, sha256File, type LlamaBinaries } from '../llama.js';
 import { download, sha256Of } from '../download.js';
 import { prepareSplit, startSplitServer } from '../split.js';
-import { TooBig } from '../planner.js';
+import { explainPlan, TooBig } from '../planner.js';
 import { simModelOf } from '../gguf.js';
 import { publicName } from '../devicenames.js';
 import { freeRamMB, measureBandwidth, sourceAddressTo, lanIPv4 } from '../sysinfo.js';
@@ -1591,12 +1591,10 @@ export class Engine {
           this.extraClose.push(setup.close);
           const pl = setup.plan;
           splitParts = [{ id: 'local', name: 'this computer', local: true, mb: pl.localMb, layers: pl.localLayers ?? 0 }, ...pl.used.map((u) => ({ id: u.id, name: u.named ? u.name : publicName(u.name), local: false, mb: u.assignedMb, layers: u.layers }))];
-          plan.push(`${modelName} is split: this computer keeps ${pl.localMb} MB of it${pl.used.length ? `, ${pl.used.map((u) => `${u.named ? u.name : publicName(u.name)} ${u.assignedMb} MB (${u.layers} layers)`).join(', ')}` : ''}.`);
-          if (!pl.used.length) plan.push('no phone answered on its rpc channel: the model runs here alone.');
-          if (pl.fitsAlone) plan.push(`it would fit here alone${pl.aloneFaster ? ' and would be faster that way' : ''}; it is shared because split was asked for.`);
+          // who takes how much and on what, who is left out and why, the estimate as a range (planner.ts)
+          for (const l of explainPlan(pl, modelName, (p) => (p.named ? p.name : publicName(p.name)))) plan.push(l);
+          if (!pl.used.length && pl.skipped.length) plan.push('no device answered on its rpc channel: the model runs here alone.');
           if (req.all === true) plan.push('every device you picked holds a part, even where fewer would be faster.');
-          for (const s of pl.skipped) plan.push(`${s.peer.name} left out: ${s.why}.`);
-          if (pl.est) plan.push(`estimate: about ${Math.round(pl.est.tps * 10) / 10} tok/s.`);
           cluster = await openApart({ ...common, model: ref, peers: [], localModelFile: file, llama, startBackend: (f, c) => startSplitServer(llama, f, c, setup!, common.log) });
         }
       }
