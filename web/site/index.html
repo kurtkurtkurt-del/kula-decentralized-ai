@@ -10,12 +10,12 @@
 <link rel="stylesheet" href="site.css">
 </head>
 <body>
-<!-- kula's download page (v0.4.0, 13.11.2026). Plain html + site.css, no build step, nothing
+<!-- kula's download page (v0.5.0, 14.11.2026). Plain html + site.css, no build step, nothing
      fetched from anywhere else.
 
      Downloads use the newest GitHub release by stable asset names, so the release must carry
      exactly: kula-mac-arm64.dmg, kula-node-mac-arm64, kula-android.apk, kula-linux-x64.deb,
-     kula-linux-arm64.deb (later kula-windows-x64.exe, kula-mac-x64.dmg). The repository is public:
+     kula-linux-arm64.deb, kula-windows-x64.exe (later kula-mac-x64.dmg). The repository is public:
      every download works without a GitHub login.
 
      Two rows: computers on top, phones and tablets under them. No "for this device" mark: a
@@ -38,7 +38,7 @@
 
 <main>
   <section class="hero wrap">
-    <p class="kicker"><span class="dot" aria-hidden="true"></span> open models · on your own devices · v0.4.0</p>
+    <p class="kicker"><span class="dot" aria-hidden="true"></span> open models · on your own devices · v0.5.0</p>
     <h1>Your devices,<br>one local AI.</h1>
     <p class="lede">kula joins your phones, tablets and computers into one AI cluster that runs open
       models. They talk to each other directly — nothing goes to a cloud.</p>
@@ -109,25 +109,29 @@
             </ul>
           </details>
         </li>
-        <li class="dl is-later" data-os="windows">
+        <li class="dl" data-os="windows">
           <div class="dl-row">
-            <div class="dl-btn" aria-disabled="true">
+            <a class="dl-btn" href="https://github.com/kurtkurtkurt-del/kula-decentralized-ai/releases/latest/download/kula-windows-x64.exe">
               <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="12" rx="1.5"/><path d="M9 20h6M12 16v4"/></svg>
               <span class="dl-name">Windows</span>
-              <span class="dl-file">coming soon</span>
-            </div>
+              <span class="dl-file">Windows 10, 11 · x64 .exe</span>
+            </a>
             <details class="more">
               <summary aria-label="more ways to get kula for Windows"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 10 5 5 5-5"/></svg></summary>
               <div class="menu">
-                <a data-slot="windows-release" data-todo><b>GitHub release</b><span>kula-windows-x64.exe · not built yet</span></a>
-                <a data-slot="windows-build" data-todo><b>build it yourself</b><span>desktop/ · npm run dist:win · untested</span></a>
+                <a data-slot="windows-release-page" href="https://github.com/kurtkurtkurt-del/kula-decentralized-ai/releases/latest"><b>release page</b><span>notes, sha256, every file</span></a>
+                <a data-slot="windows-build" href="https://github.com/kurtkurtkurt-del/kula-decentralized-ai/tree/main/desktop"><b>build it yourself</b><span>desktop/ · npm run dist:win</span></a>
               </div>
             </details>
           </div>
           <details class="dl-fold">
-            <summary>details<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 10 5 5 5-5"/></svg></summary>
+            <summary>how to install<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 10 5 5 5-5"/></svg></summary>
             <ul class="dl-how">
-              <li>Not built yet.</li>
+              <li>Open the file. If Windows says it protected your PC: <b>More info</b> → <b>Run anyway</b>.</li>
+              <li>It installs for you only, no admin needed, and opens kula.</li>
+              <li>The first start downloads llama.cpp: 19 MB (with an NVIDIA card about 650 MB).</li>
+              <li>When the firewall asks: allow kula on private networks only (your home wi-fi).</li>
+              <li>Tested only on GitHub's Windows Server 2022 and 2025 test machines: a small model answered. Not yet on a real PC or an NVIDIA card.</li>
             </ul>
           </details>
         </li>
@@ -353,7 +357,16 @@
   </section>
 
   <section class="news wrap" aria-labelledby="news-h0">
-    <h2 id="news-h0">what's new in 0.4.0 <time class="news-date" datetime="2026-11-13">13 November 2026</time></h2>
+    <h2 id="news-h0">what's new in 0.5.0 <time class="news-date" datetime="2026-11-14">14 November 2026</time></h2>
+    <ul class="news-list">
+      <li><b>Windows app.</b> kula installs on Windows 10 and 11 computers as a normal app, without
+        admin rights, and also starts on a fresh Windows.</li>
+      <li><b>The phone app stays 0.4.0.</b> Nothing changed on the phone side.</li>
+    </ul>
+  </section>
+
+  <details class="news news-old wrap">
+    <summary><h2 id="news-h1">what's new in 0.4.0 <time class="news-date" datetime="2026-11-13">13 November 2026</time></h2><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 10 5 5 5-5"/></svg></summary>
     <ul class="news-list">
       <li><b>Linux app.</b> kula installs on Ubuntu and Debian computers as a normal app.</li>
       <li><b>Better guesses about your devices.</b> kula guesses when each device will be free.
@@ -365,7 +378,7 @@
       <li><b>New Android app.</b> Version 0.4.0, with fixes for pairing and the brain tab. It
         installs over 0.3.0.</li>
     </ul>
-  </section>
+  </details>
 
   <details class="news news-old wrap">
     <summary><h2 id="news-h">what's new in 0.3.0 <time class="news-date" datetime="2026-11-11">11 November 2026</time></h2><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 10 5 5 5-5"/></svg></summary>
@@ -456,7 +469,7 @@
     <a href="https://huggingface.co/bartowski/mistralai_Mistral-Small-3.2-24B-Instruct-2506-GGUF">Mistral Small</a>
     <a href="https://huggingface.co/unsloth/GLM-4.7-Flash-GGUF">GLM 4.7</a>
   </nav>
-  <p class="small">kula v0.4.0 · runs on <a href="https://github.com/ggml-org/llama.cpp">llama.cpp</a> · type: Inter Tight (SIL OFL)</p>
+  <p class="small">kula v0.5.0 · runs on <a href="https://github.com/ggml-org/llama.cpp">llama.cpp</a> · type: Inter Tight (SIL OFL)</p>
 </footer>
 
 <script>

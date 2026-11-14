@@ -1,6 +1,6 @@
 # kula decentralized ai
 
-**[kula's site: kurtkurtkurt-del.github.io/kula-decentralized-ai](https://kurtkurtkurt-del.github.io/kula-decentralized-ai/) — the download links (Android app, Mac app, Linux app, kula-node) are there.**
+**[kula's site: kurtkurtkurt-del.github.io/kula-decentralized-ai](https://kurtkurtkurt-del.github.io/kula-decentralized-ai/) — the download links (Android app, Mac app, Linux app, Windows app, kula-node) are there.**
 
 **join your phones, tablets and computers into one local AI cluster that runs open models.**
 
@@ -25,6 +25,14 @@ and says when a device alone would be faster. Rule of thumb: jobs are split, mod
 
 iOS is out of scope for now: the app opens on iOS but runs no models (a Swift module is written
 on a branch, never built).
+
+## what's new in 0.5.0 · 14 November 2026
+
+- **Windows app.** kula installs on Windows 10 and 11 computers (Intel/AMD, x64) as a normal app,
+  for you only, without admin rights. It brings the Visual C++ runtime that llama.cpp needs, so it
+  also starts on a fresh Windows. So far it is tested only on GitHub's Windows Server 2022 and 2025
+  test machines: it installs, starts, a small model loads and answers, and it uninstalls cleanly.
+- The phone app is unchanged: the release carries the 0.4.0 apk again.
 
 ## what's new in 0.4.0 · 13 November 2026
 
@@ -101,9 +109,10 @@ Everything you need is on the GitHub release page: **Releases → latest** in th
 | a Mac with Apple silicon, in the terminal | `kula-node-mac-arm64` |
 | an Ubuntu or Debian computer (x64), as an app | `kula-linux-x64.deb` |
 | an Ubuntu or Debian computer (ARM), as an app | `kula-linux-arm64.deb` |
+| a Windows 10 or 11 computer (x64), as an app | `kula-windows-x64.exe` |
 | checking the downloads | `sha256sums.txt` |
 
-Intel Mac and Windows files, and the Linux terminal file, are not on the release yet; build
+Intel Mac files, and the Linux and Windows terminal files, are not on the release yet; build
 them from source (`cd node && npm install && npm run pack:bin -- --target linux-x64,win-x64`).
 
 The repository is public: every file downloads without a login.
@@ -156,6 +165,21 @@ NVIDIA only the download, the sha256 sums and the place of the libraries are che
 card has run it. Not yet on a real desktop, not yet in a cluster with a phone. There is no
 AppImage for other distros yet.
 
+### the computer, the easy way: the Windows app (Windows 10, 11)
+
+Download `kula-windows-x64.exe` from the release and open it. The installer is not signed yet, so
+Windows may say it protected your PC: **More info** → **Run anyway**. It installs for you only (no
+admin) and opens kula; uninstall it from Settings → Apps like any other app.
+
+The first start downloads llama.cpp b11157 (about 19 MB, sha256-checked) and the chat page opens
+in its own window. Where `nvidia-smi` works it downloads the CUDA build and its runtime instead
+(about 650 MB). When the firewall asks, allow kula on **private** networks only (your home wi-fi),
+never public. So far it is checked only on GitHub's Windows Server 2022 and 2025 test machines (no
+graphics card): install, first start, llama.cpp in a clean Windows container, a small model (Qwen3
+0.6B) loaded and answered on the CPU, a home folder with a space and Turkish letters in its name,
+quit, and uninstall. For NVIDIA only the download, the sha256 sums and the place of the libraries
+are checked. Not yet on a real PC, not yet in a cluster with a phone.
+
 ### the computer, in the terminal (macOS shown; Linux and Windows the same with their file)
 
 Checked on 8.11.2026 on an 8 GB MacBook Air (Apple silicon), starting from nothing in a fresh
@@ -193,7 +217,8 @@ xattr -d com.apple.quarantine kula-node-mac-arm64    # see below
 - Linux: the terminal file is not on the release yet; build it from source (above) or use the
   Linux app.
 - Windows: run `kula-node-win-x64.exe setup`, then `kula-node-win-x64.exe ui`. When the firewall
-  asks, allow kula-node on **private** networks only.
+  asks, allow kula-node on **private** networks only. On a fresh Windows, `setup` asks for
+  Microsoft's Visual C++ runtime first (the Windows app brings it with it).
 - Running the file with no arguments shows a small menu; `info` prints what a cluster would
   see of this computer (RAM, memory bandwidth, gpu).
 

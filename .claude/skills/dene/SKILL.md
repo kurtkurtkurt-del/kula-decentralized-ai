@@ -70,13 +70,18 @@ ever deleted. Nothing changed since the last release: skip this step and say so.
   green with no `CHECK … FAIL` on both smoke jobs (x64, arm64). Then `gh run download <id> -n kula-linux` and
   `shasum -a 256 -c sha256sums-linux.txt`. Take only `kula-linux-x64.deb` and `kula-linux-arm64.deb` from
   that run (never rebuild them, never ship the AppImages: their launcher turns the sandbox off).
+- the Windows app: not built on this Mac either. The same push starts `.github/workflows/desktop-windows.yml`
+  (or `gh workflow run desktop-windows.yml --ref main`). Wait for its run on the pushed commit; it must be
+  green with no `CHECK … FAIL` on both smoke jobs (windows-2022, windows-2025). Then
+  `gh run download <id> -n kula-windows` and `shasum -a 256 -c sha256sums-windows.txt`; take
+  `kula-windows-x64.exe` from that run, never rebuild it.
 
 ## 5. GitHub release and site
 
 - Assets, exactly these names (the site links to them): `kula-android.apk`,
   `kula-mac-arm64.dmg`, `kula-node-mac-arm64`, `kula-linux-x64.deb`, `kula-linux-arm64.deb`,
-  `sha256sums.txt` (shasum -a 256 of the five). A release without the two debs breaks the site's Linux
-  links, because `releases/latest` moves to it. The same holds for the apk: when no apk is built for a
+  `kula-windows-x64.exe`, `sha256sums.txt` (shasum -a 256 of the six). A release without the two debs
+  or the exe breaks the site's Linux or Windows links, because `releases/latest` moves to it. The same holds for the apk: when no apk is built for a
   release, upload the previous release's `kula-android.apk` again (`gh release download vPREV -p kula-android.apk`).
 - `git tag -a vX.Y.Z -m "kula vX.Y.Z" kula-main && git push origin refs/tags/vX.Y.Z`, then
   `gh release create vX.Y.Z <assets> --title "kula vX.Y.Z: <a few words>" --notes-file <notes> --latest`.

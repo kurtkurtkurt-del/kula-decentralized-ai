@@ -1,7 +1,7 @@
 {
   "name": "kula-desktop",
   "productName": "kula",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "kula's chat page as a desktop app for macOS, Windows and Linux",
   "homepage": "https://github.com/kurtkurtkurt-del/kula-decentralized-ai",
   "license": "MIT",
