@@ -145,11 +145,13 @@ test('discover collects _kula._tcp answers from a (fake) bonjour browser, withou
   const p = discover(150, fake as any);
   browser.emit('up', { name: 'kula pixel 7f1c0a2e', port: 50551, addresses: ['fe80::1', '192.168.1.33'], txt: { id: '7f1c0a2e-1', name: 'pixel', ram: '7600', bw: '12.5', kind: 'phone', v: 'rpc7' } });
   browser.emit('up', { name: 'kula pixel 7f1c0a2e', port: 50551, addresses: ['192.168.1.33'], txt: { id: '7f1c0a2e-1', name: 'pixel' } }); // the same one again
-  browser.emit('up', { name: 'kula mac', port: 50552, addresses: ['192.168.1.20'], txt: { id: 'm', name: 'mac', kind: 'pc', ram: '12000', bw: '45' } });
+  browser.emit('up', { name: 'kula mac', port: 50552, addresses: ['192.168.1.20'], txt: { id: 'm', name: 'mac', kind: 'pc', ram: '12000', bw: '45', gpu: 'RTX 4070', vram: '12282' } });
   const found = await p;
   assert.equal(destroyed, 1);
   assert.equal(found.length, 2);
-  assert.deepEqual(found[0], { id: '7f1c0a2e-1', name: 'pixel', host: '192.168.1.33', port: 50551, kind: 'phone', ram: 7600, bw: 12.5, v: 'rpc7' });
+  assert.deepEqual(found[0], { id: '7f1c0a2e-1', name: 'pixel', host: '192.168.1.33', port: 50551, kind: 'phone', ram: 7600, bw: 12.5, gpu: null, vram: null, v: 'rpc7' });
+  // a computer's record names its graphics card (share.ts)
+  assert.deepEqual([found[1]?.gpu, found[1]?.vram], ['RTX 4070', 12282]);
   assert.ok(!JSON.stringify(found).includes('secret'));
 });
 

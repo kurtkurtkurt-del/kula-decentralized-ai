@@ -13,7 +13,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { openApart, openPeerDevice, startLlamaServer, type Cluster, type Message, type ModelRef, type Reply, type StartBackend, type WireMessage } from '../apart.js';
-import { readPeers, writePeers, parsePeerText, upsertPeer, findPeer, probePeers, peersFile, whereIs, discover, reachedBy, isRing, ringOf, widestRing, WORLD_CLOSED, type AddrVia, type Peer, type PeerProbe, type Found, type PeerKind, type Ring } from '../peers.js';
+import { measureLink, netOf, type Link } from '../link.js';
+import { peerTls, readPeers, writePeers, parsePeerText, upsertPeer, findPeer, probePeers, peersFile, whereIs, discover, reachedBy, isRing, ringOf, widestRing, WORLD_CLOSED, type AddrVia, type Peer, type PeerProbe, type Found, type PeerKind, type Ring } from '../peers.js';
 import { connectRemote, handshake, peekGate, GateRefused, type GatePeek } from '../gate.js';
 import { Adb, isSerial, stateHelp, NO_ADB_HELP, type CableDevice } from './cable.js';
 import { loadOrCreateIdentity, fingerprint, Paired, type GateIdentity } from '../tls.js';
@@ -132,6 +133,7 @@ export function foldTrust(was: TrustLook | null, b: any, at: number, pin: string
 export interface PeerRow {
   id: string; name: string; kind: string; where: string; far: boolean; tls: boolean; waitingPair: boolean;
   ram: number | null; bw: number | null; gpu: string | null; last_ok: string | null;
+  link: Link | null;               // the last measured network to it (link.ts)
   reach: Reach | null; probedAt: number | null;
   cable: { serial: string; plugged: boolean | null } | null;   // on a usb cable; plugged: null until adb was asked
   holds: string | null;               // the model file the phone has loaded, as its /status said at the last probe
@@ -181,7 +183,7 @@ export interface Ways {
 //   new      a kula device that does not know this computer
 //   silent   announced, but nothing answers at its address
 export type NearState = 'ready' | 'paired' | 'code' | 'knows' | 'new' | 'silent';
-export interface NearbyRow { name: string; host: string; port: number; kind: string | null; state: NearState; peer: string | null }
+export interface NearbyRow { name: string; host: string; port: number; kind: string | null; state: NearState; peer: string | null; ram?: number | null; bw?: number | null; gpu?: string | null; vram?: number | null }
 export interface HostPairView {
   open: boolean;                     // a qr is up and its code unused
   exp: number | null; left: number;  // when it stops (ms epoch), ms left
@@ -257,6 +259,7 @@ export type CatalogEntry = UiModel & { url?: string; mmprojUrl?: string };
 
 export interface EngineOptions {
   peersFile?: string;
+  measureLink?: typeof measureLink;     // the network test (link.ts); tests hand in a fake
   catalog?: CatalogEntry[];
   modelDirs?: string[];                  // where local .gguf files are looked for; the first is where downloads go
   llama?: LlamaBinaries | null | (() => LlamaBinaries | null);
@@ -304,7 +307,7 @@ export function defaultModelDirs(): string[] {
 export function peerRow(p: Peer, probe?: Reach | null, probedAt: number | null = null, plugged: boolean | null = null, holds: string | null = null): PeerRow {
   return {
     id: p.id, name: p.named ? p.name : publicName(p.name), kind: p.kind, where: whereIs(p), far: !!p.relay, tls: !!p.fp, waitingPair: !p.fp && !!p.pin,
-    ram: p.ram ?? null, bw: p.bw ?? null, gpu: p.gpu ?? null, last_ok: p.last_ok ?? null,
+    ram: p.ram ?? null, bw: p.bw ?? null, gpu: p.gpu ?? null, last_ok: p.last_ok ?? null, link: p.link ?? null,
     reach: probe ?? null, probedAt,
     cable: p.cable ? { serial: p.cable.serial, plugged } : null,
     holds,
@@ -686,14 +689,29 @@ export class Engine {
     const kind: PeerKind = heard?.kind === 'pc' || heard?.kind === 'tablet' ? heard.kind : 'phone';
     const peer: Peer = {
       id: `${host}:${port}`, name: input.name?.trim().slice(0, 60) || heard?.name?.slice(0, 60) || `${kind === 'pc' ? 'computer' : kind} ${host}`, host, port, secret: '', fp, pin: null, paired_at: now,
-      relay: null, kind, ram: null, bw: null, gpu: null, vram: null, passport: null, added_at: now, last_ok: now,
+      relay: null, kind, ram: heard?.ram ?? null, bw: heard?.bw ?? null, gpu: heard?.gpu ?? null, vram: heard?.vram ?? null, passport: null, added_at: now, last_ok: now,
     };
     const file = this.file();
     const { list } = upsertPeer(readPeers(file), peer);
     writePeers(list, file);
     this.reach.set(peer.id, { r: { ok: true }, at: Date.now() });
     this.note(`paired with ${peer.name} at ${host}:${port}`);
+    // a computer is measured right away: the planner needs its network before a split
+    if (kind === 'pc') await this.measure(peer.id).catch(() => {});
     return this.rowOf(peer.id);
+  }
+
+  // the network to a paired device, measured now (link.ts) and kept on its record
+  async measure(id: string): Promise<PeerRow> {
+    const file = this.file();
+    const p = findPeer(readPeers(file), id);
+    if (!p) throw new Error('no such device');
+    if (p.relay) throw new Error('a device far away (relay) is not measured: split needs the lan');
+    const link = await (this.opts.measureLink ?? measureLink)(p, peerTls(p, this.identity()));
+    const { list } = upsertPeer(readPeers(file), { ...p, link });
+    writePeers(list, file);
+    this.note(link.error ? `${p.name}: the network could not be measured: ${link.error}` : `${p.name}: ${link.mbps} MB/s, ${link.rttMs} ms over the network`);
+    return this.rowOf(p.id);
   }
 
   // One handshake with the one-time code: learns the phone's certificate (the code's proof
@@ -1023,7 +1041,7 @@ export class Engine {
           if (!r || !r.r.ok || now - r.at > 30_000 || this.heard.has(w.id)) toProbe.add(w.id);
         }
       }
-      rows.push({ name: String(f.name).slice(0, 60), host: f.host, port: f.port, kind: f.kind, state: g ? 'paired' : state, peer: g ? g[0].id : null });
+      rows.push({ name: String(f.name).slice(0, 60), host: f.host, port: f.port, kind: f.kind, state: g ? 'paired' : state, peer: g ? g[0].id : null, ram: f.ram, bw: f.bw, gpu: f.gpu ?? null, vram: f.vram ?? null });
     }
     if (toProbe.size) {
       const before = new Map([...toProbe].map((id) => [id, this.reach.get(id)?.r.ok ?? null]));
@@ -1565,7 +1583,7 @@ export class Engine {
           for (const p of peers.filter((p) => p.relay)) plan.push(`${p.name} is far away (relay): split needs the lan, so it is left out.`);
           let setup;
           try {
-            setup = await prepareSplit({ model: simModelOf(file), ctx, localFreeMb: freeRamMB(), localBw: bw, peers: near, share: true, all: req.all === true, probeMs: common.probeMs, log: common.log, identity: common.identity });
+            setup = await prepareSplit({ model: simModelOf(file), ctx, localFreeMb: freeRamMB(), localBw: bw, peers: near, net: netOf(near.map((p) => p.link)), share: true, all: req.all === true, probeMs: common.probeMs, log: common.log, identity: common.identity });
           } catch (e) {
             if (e instanceof TooBig) throw new Error(`too big: the model needs about ${e.needMb} MB, these devices offer ${e.totalMb} MB`);
             throw e;

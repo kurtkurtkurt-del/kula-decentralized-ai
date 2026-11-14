@@ -2,6 +2,7 @@
 // reach them and the secret each gate wants. Kept in ~/.kula-node/peers.json
 // with mode 600, because the secrets are in it. Also: finding workers that
 // announce themselves over mdns (_kula._tcp) and a short tcp + handshake probe.
+import type { Link } from './link.js';
 import fs from 'node:fs';
 import net from 'node:net';
 import path from 'node:path';
@@ -57,6 +58,8 @@ export interface Peer {
   bw: number | null;  // GB/s
   gpu?: string | null;
   vram?: number | null;
+  // the last measured link to it from this computer (link.ts): MB/s and delay
+  link?: Link | null;
   passport?: Record<string, unknown> | null;
   // on a usb cable: reached through an adb forward to this phone (ui/cable.ts). host is
   // 127.0.0.1 and port is the forward's local port, made again on every connect.
@@ -319,6 +322,8 @@ export interface Found {
   kind: string | null;
   ram: number | null;
   bw: number | null;
+  gpu?: string | null;   // a computer's graphics card, when its record says
+  vram?: number | null;  // MB
   v: string | null;
 }
 
@@ -345,6 +350,8 @@ export function discover(ms = 3000, bonjour: { find: Bonjour['find']; destroy: B
         kind: typeof txt.kind === 'string' ? txt.kind : old?.kind ?? null,
         ram: num(txt.ram) ?? old?.ram ?? null,
         bw: num(txt.bw) ?? old?.bw ?? null,
+        gpu: typeof txt.gpu === 'string' && txt.gpu ? txt.gpu.slice(0, 60) : old?.gpu ?? null,
+        vram: num(txt.vram) ?? old?.vram ?? null,
         v: typeof txt.v === 'string' ? txt.v : old?.v ?? null,
       });
     };

@@ -1335,9 +1335,13 @@ function renderDevices() {
     const extra = [];
     if (p0?.kind) extra.push(KIND_WORD[p0.kind] || p0.kind);
     if (p0?.ram) extra.push(`${(p0.ram / 1024).toFixed(1)} GB free`);
+    if (p0?.kind === 'pc' && p0.bw) extra.push(`memory ${Math.round(p0.bw)} GB/s`);
+    if (p0?.gpu) extra.push(p0.gpu);
     if (g.peers.find((p) => p.holds)) extra.push(`holds ${g.peers.find((p) => p.holds).holds}`);
     if (g.peers.some((p) => p.waitingPair)) extra.push('pairs on first contact');
     if (extra.length) lines.push(extra.join(' · '));
+    const lk = g.peers.find((p) => p.link)?.link;
+    if (lk) lines.push(lk.error ? `network: not measured (${lk.error})` : `network: ${lk.mbps} MB/s, ${lk.rttMs} ms delay`);
     for (const t of lines) who.appendChild(el('span', '', t));
     const tools = el('div', 'dev-tools');
     let cr = null;
@@ -1349,6 +1353,18 @@ function renderDevices() {
       pen.appendChild(svg(['M12.5 4.5l3 3L8 15H5v-3z', 'M11 6l3 3']));
       pen.addEventListener('click', () => startRename(g, who, name));
       tools.appendChild(pen);
+    }
+    const pc = g.peers.find((p) => p.kind === 'pc' && !p.far);
+    if (pc) {
+      const m = el('button', 'pill', 'measure');
+      m.type = 'button';
+      m.title = `how fast the network to ${g.name} is (a few MB through its gate)`;
+      m.addEventListener('click', async () => {
+        m.disabled = true; m.textContent = 'measuring…';
+        try { const r = await postJson('peers/measure', { id: pc.id }); toast(r.link?.error ? `${g.name}: ${r.link.error}` : `${g.name}: ${r.link.mbps} MB/s, ${r.link.rttMs} ms`); } catch (err) { toast(err.message); }
+        refreshPeers(false);
+      });
+      tools.appendChild(m);
     }
     if (g.cable) {
       cr = cableRow(g.cable.serial);
@@ -1780,6 +1796,8 @@ async function added(row) {
   else if (!settings.peers.includes(row.id)) settings.peers.push(row.id);
   saveSettings();
   await refreshPeers(false);
+  // look again now, so the device just added leaves "nearby, not paired" at once
+  postJson('nearby/look').then((v) => { NEAR = v; renderNearby(); }).catch(() => {});
 }
 
 $('add-type').addEventListener('click', async () => {

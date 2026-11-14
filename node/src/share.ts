@@ -335,7 +335,7 @@ export async function share(opts: ShareOptions): Promise<ShareHandle> {
     type: 'kula',
     protocol: 'tcp',
     port: gate.port,
-    txt: { id, ram: String(ram), bw: String(bw), name, kind: 'pc', v: 'rpc7' },
+    txt: { id, ram: String(ram), bw: String(bw), name, kind: 'pc', v: 'rpc7', ...(gpu.name ? { gpu: gpu.name.slice(0, 60), vram: String(gpu.vramMB ?? 0) } : {}) },
   });
   service.on('error', (e: Error) => log(`mdns: ${e.message}`));
   log(`mdns _kula._tcp announced as "${name}"`);

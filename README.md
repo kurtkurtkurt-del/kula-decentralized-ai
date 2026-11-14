@@ -247,9 +247,11 @@ this computer → start sharing**; it shows a one-time code and a QR (Windows: a
 networks when the firewall asks). On the other computer: **devices → add a computer**: the
 computers sharing on the wi-fi are listed; type the code the one you want shows and press add
 (not listed: **add a device → type it** with its address and code). The device list then says
-"computer" or "phone" on each row. So far this ran between two kula copies on one Mac only, not
-yet between two real computers; measuring each computer and choosing which one takes which
-layers come next.
+"computer" or "phone" on each row. A computer added this way brings what it measured about itself
+(free RAM, memory speed, graphics card), and the network to it is measured at once (a few MB
+through its gate: MB/s and the delay); **measure** on its row does it again. A split then plans
+with the slowest of those networks instead of a fixed guess. So far this ran between two kula copies on one Mac only, not
+yet between two real computers; choosing which one takes which layers comes next.
 
 **A guest network keeps devices apart.** Guest, hotel, office, campus and many home wi-fis stop
 devices from seeing each other ("client isolation"); nothing in kula can get around it. When
