@@ -45,9 +45,11 @@ h1 { font-size: clamp(40px, 9vw, 76px); line-height: 1.02; letter-spacing: -0.03
 .lede { max-width: 34em; margin: 20px auto 0; font-size: clamp(17px, 2.4vw, 19px); color: var(--mute); }
 
 /* ---------- the buttons, each with its arrow menu: computers in one row, phones and tablets under them */
-.dl-group { margin: 40px 0 10px; font-size: 12px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; color: var(--meta); text-align: left; }
+.dl-box { margin: 40px 0 0; padding: 18px 18px 20px; border: 1px solid rgba(255, 255, 255, 0.22); border-radius: 22px; background: rgba(255, 255, 255, 0.015); text-align: left; }
+.dl-box + .dl-box { margin-top: 22px; }
+@media (max-width: 519px) { .dl-box { padding: 14px 12px 16px; border-radius: 18px; } }
+.dl-group { margin: 0 0 14px 2px; font-size: 12px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; color: var(--words); text-align: left; }
 .dl-group + .downloads { margin-top: 0; }
-.downloads + .dl-group { margin-top: 28px; }
 .downloads { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: 1fr; gap: 14px 12px; text-align: left; }
 @media (min-width: 520px) { .downloads { grid-template-columns: 1fr 1fr; } }
 @media (min-width: 880px) { .downloads.computers { grid-template-columns: repeat(3, 1fr); gap: 16px; } .downloads.phones { grid-template-columns: repeat(3, 1fr); gap: 16px; } }
@@ -70,13 +72,16 @@ a.dl-btn:active { transform: translateY(0); }
 .dl-how li::before, .dl-needs li::before, .brain-points li::before { content: ""; position: absolute; left: 1px; top: .6em; width: 4px; height: 4px; border-radius: 50%; background: var(--meta); }
 .dl.is-later .dl-how { color: var(--meta); }
 .dl-how code, .dl-needs code { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 12px; overflow-wrap: anywhere; }
-.dl-needs { margin: 0 4px; font-size: 13px; line-height: 1.45; color: var(--mute); }
-.dl-needs summary { list-style: none; display: inline-flex; align-items: center; gap: 4px; cursor: pointer; color: var(--words); font-weight: 600; }
-.dl-needs summary::-webkit-details-marker { display: none; }
-.dl-needs summary svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; transition: transform .15s; }
-.dl-needs summary:hover { color: var(--accent); }
-.dl-needs[open] summary svg { transform: rotate(180deg); }
-.dl-needs ul { margin-top: 4px; }
+/* every card's steps fold out under it (closed at first), like the Mac's "what the first start needs" */
+.dl-needs, .dl-fold { margin: 0 4px; font-size: 13px; line-height: 1.45; color: var(--mute); }
+.dl-needs summary, .dl-fold summary { list-style: none; display: inline-flex; align-items: center; gap: 4px; cursor: pointer; color: var(--words); font-weight: 600; }
+.dl-needs summary::-webkit-details-marker, .dl-fold summary::-webkit-details-marker { display: none; }
+.dl-needs summary svg, .dl-fold summary svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; transition: transform .15s; }
+.dl-needs summary:hover, .dl-fold summary:hover { color: var(--accent); }
+.dl-needs[open] summary svg, .dl-fold[open] summary svg { transform: rotate(180deg); }
+.dl-needs ul, .dl-fold .dl-how { margin: 4px 0 0; }
+.dl.is-later .dl-fold summary { color: var(--meta); font-weight: 500; }
+.dl.is-later .dl-fold summary:hover { color: var(--mute); }
 
 /* the arrow on each button's right, and its menu */
 .more { flex: none; display: flex; }
@@ -120,14 +125,17 @@ a.dl-btn:active { transform: translateY(0); }
 .news-old[open] summary svg { transform: rotate(180deg); }
 
 /* ---------- the picture, and the brain under it, on the green band */
-.band { margin-top: 56px; padding-bottom: 48px; background: linear-gradient(to bottom, transparent 0, transparent 22%, var(--rail) 22%, var(--rail) 100%); }
-@media (min-width: 720px) { .band { margin-top: 72px; padding-bottom: 56px; } }
+.band { margin-top: 56px; padding: 36px 0 48px; background: var(--rail); }
+@media (min-width: 720px) { .band { margin-top: 72px; padding: 44px 0 56px; } }
+/* the chat picture right under the headline, before the downloads */
+.hero .hero-shot { max-width: none; margin: 36px 0 0; padding: 0; }
+@media (min-width: 720px) { .hero .hero-shot { margin-top: 44px; } }
 .shot { max-width: 1080px; margin: 0 auto; padding: 0 16px; }
 @media (min-width: 720px) { .shot { padding: 0 32px; } }
 .shot img { display: block; width: 100%; height: auto; border-radius: 12px; border: 1px solid var(--line2); box-shadow: var(--shot-shadow); background: var(--card); }
 @media (min-width: 720px) { .shot img { border-radius: 16px; } }
 
-.brain { margin-top: 32px; color: var(--rail-words); display: grid; gap: 10px; }
+.brain { margin-top: 0; color: var(--rail-words); display: grid; gap: 10px; }
 @media (min-width: 820px) { .brain { grid-template-columns: minmax(0, 1fr) 340px; grid-template-rows: auto auto auto 1fr; column-gap: 48px; align-items: start; }
   .brain > :not(.brain-shot) { grid-column: 1; } .brain-shot { grid-column: 2; grid-row: 1 / span 4; } }
 @media (min-width: 1000px) { .brain { grid-template-columns: minmax(0, 1fr) 380px; } }
