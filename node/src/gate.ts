@@ -8,11 +8,12 @@
 // in app/modules/kula-llama (Gate.kt); docs/GATE.md describes both protocols.
 import net from 'node:net';
 import tls from 'node:tls';
-import { Duplex } from 'node:stream';
+import { Duplex, type Transform } from 'node:stream';
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import { ReplayCheck, clockCheck } from './audit/checks.js';
 import { fingerprint, type GateIdentity, type Paired } from './tls.js';
 import { isLoopback, plainIp } from './policy.js';
+import { RpcGuard } from './rpcguard.js';
 
 export type Channel = 'rpc' | 'api';
 export const CHANNELS: Channel[] = ['rpc', 'api'];
@@ -185,8 +186,9 @@ function writeLine(socket: Duplex, line: string) {
 
 // Pipes a <-> b after the handshake. `fromA` is what the line reader on `a`
 // had already buffered: it goes to b first. Resolves with byte counts when
-// either side closes.
-export function pipeBoth(a: Duplex, b: Duplex, fromA: Buffer, fromB: Buffer = Buffer.alloc(0)): Promise<{ aToB: number; bToA: number }> {
+// either side closes. `guard` (the rpc guard) sits between a and b: what a sends passes
+// through it, and its error closes both sides.
+export function pipeBoth(a: Duplex, b: Duplex, fromA: Buffer, fromB: Buffer = Buffer.alloc(0), guard?: Transform): Promise<{ aToB: number; bToA: number }> {
   return new Promise((resolve) => {
     let aToB = fromA.length;
     let bToA = fromB.length;
@@ -204,9 +206,14 @@ export function pipeBoth(a: Duplex, b: Duplex, fromA: Buffer, fromB: Buffer = Bu
     b.on('error', finish);
     a.on('close', finish);
     b.on('close', finish);
-    if (fromA.length) b.write(fromA);
+    const into: NodeJS.WritableStream = guard ?? b;
+    if (guard) {
+      guard.on('error', finish);
+      guard.pipe(b);
+    }
+    if (fromA.length) into.write(fromA);
     if (fromB.length) a.write(fromB);
-    a.pipe(b);
+    a.pipe(into);
     b.pipe(a);
   });
 }
@@ -255,6 +262,9 @@ export interface GateServerOptions {
   admit?: Admit;
   // with this the port also speaks v2 (tls); without it a tls client is told "NO no tls"
   tls?: TlsServer;
+  // read what a remote client sends on the rpc channel and cut it before a graph with a code
+  // op reaches ggml-rpc-server (rpcguard.ts); kula-node share turns it on
+  rpcGuard?: boolean;
 }
 
 // A duplex over a socket whose first bytes were already read: the TLS wrapper
@@ -361,7 +371,8 @@ export async function startGateServer(opts: GateServerOptions): Promise<GateServ
       // removed between its handshake and here: the drop for it may already have run
       if (opts.tls && !opts.tls.paired.has(fp)) drop(fp);
     }
-    const counts = await pipeBoth(socket, target, rest);
+    const guard = channel === 'rpc' && opts.rpcGuard ? new RpcGuard((why) => emit({ type: 'reject', channel, peer, at: Date.now(), reason: `rpc guard: ${why}`, v, fp })) : undefined;
+    const counts = await pipeBoth(socket, target, rest, Buffer.alloc(0), guard);
     live.delete(socket);
     if (kept && apiPeers.get(leg!) === plainIp(peer)) apiPeers.delete(leg!);
     if (channel === 'api' && leg !== undefined) gateLegs.delete(leg);

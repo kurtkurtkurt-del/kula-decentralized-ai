@@ -26,7 +26,9 @@ Design boundary: **a paired master gets trusted access to the worker's processor
 is ggml RPC). Until 15.11.2026 that was more than processor and memory: llama.cpp's rpc server ran
 the "custom" ops, which carry a function pointer, so a paired master could run code in the worker
 process (the app's UID). The phone's build now refuses those ops (`tools/patches/kula-rpc-no-code-ops.patch`),
-and a computer whose llama.cpp has no GPU does not serve rpc until its server is patched. The rest
+and since 16.11.2026 a computer's gate reads every rpc connection and cuts a graph with such an op
+before the (unpatched, downloaded) server sees it (`node/src/rpcguard.ts`); from 15.11 to 16.11 a
+computer whose llama.cpp had no GPU did not serve rpc at all. The rest
 of the rpc protocol is still not hardened upstream: pairing stays a trust decision.
 
 ## findings
@@ -123,7 +125,7 @@ without the fix:
 | what | where |
 |---|---|
 | a device that said "paired" was pinned without the code (wi-fi, a typed code, a relay) | `node/src/gate.ts` `handshake()` |
-| llama.cpp's rpc server ran code-carrying "custom" ops from a paired device | `tools/patches/kula-rpc-no-code-ops.patch`; CPU-only computers stop serving rpc |
+| llama.cpp's rpc server ran code-carrying "custom" ops from a paired device | `tools/patches/kula-rpc-no-code-ops.patch` on the phone; on a computer the gate's rpc guard (`node/src/rpcguard.ts`, 16.11.2026; CPU-only computers had stopped serving rpc on 15.11) |
 | a paired device could delete or replace a model already on disk, and leave half downloads | `node/src/api.ts`, `ApiServer.kt` |
 | talk mode sent what the secretary read aloud to another device | `app/src/voice/prompt.ts` `routeTalk` |
 | 32 silent connections locked the gate; one code could pair two devices | `gate.ts`, `Gate.kt` |

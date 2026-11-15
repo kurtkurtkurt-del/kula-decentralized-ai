@@ -33,6 +33,7 @@ import { simModelOf } from '../gguf.js';
 import { publicName } from '../devicenames.js';
 import { freeRamMB, measureBandwidth, sourceAddressTo, lanIPv4 } from '../sysinfo.js';
 import { serveModel } from '../modelserve.js';
+import type { KeepAwake } from '../awake.js';
 import { modelUrl, type UiModel } from './catalog.js';
 import { readHeads, writeHeads, startOf, nextHead } from './trust-heads.js';
 import { FULL_CATALOG, lineupView, type LineupView } from './lineup.js';
@@ -264,6 +265,8 @@ export type LoadEvent =
 export type CatalogEntry = UiModel & { url?: string; mmprojUrl?: string };
 
 export interface EngineOptions {
+  // keeps this computer awake while a model is loaded (awake.ts; kula-node ui hands it in, tests do not)
+  awake?: () => KeepAwake;
   peersFile?: string;
   measureLink?: typeof measureLink;     // the network test (link.ts); tests hand in a fake
   catalog?: CatalogEntry[];
@@ -351,6 +354,7 @@ const HOST_PORT = /^(\[[^\]]+\]|[A-Za-z0-9.-]+):(\d{1,5})$/;
 
 export class Engine {
   private cluster: Cluster | null = null;
+  private awakeHold: KeepAwake | null = null;
   private loaded: Loaded | null = null;
   private loading: Status['loading'] = null;
   private loadAbort: AbortController | null = null;
@@ -584,12 +588,50 @@ export class Engine {
         // its busy, tokensUsed, ctx and ramFreeMb for god's eye (scan D M2 M1): observed, nothing acts on them
         const w = workerLook(st, Date.now());
         if (w) this.workers.set(p.id, w);
+        this.learnFacts(p.id, st);
         if (st && st.loaded === true && typeof st.model === 'string' && st.model) held = path.basename(st.model).slice(0, 200);
       } catch {}
       // the same tunnel carries the device's security report
       await this.askTrust(p, dev.apiPort, ms);
       return held;
     } catch { return mine; } finally { await dev?.close().catch(() => {}); }
+  }
+
+  // GET /status through a tunnel, only for what the device says it is (learnFacts)
+  private async askFacts(p: Peer): Promise<void> {
+    const ms = this.opts.statusMs ?? 2500;
+    const open = openPeerDevice(p, this.identity());
+    const dev = await Promise.race([open, sleep(ms).then(() => { open.then((d) => d.close()).catch(() => {}); return null; })]);
+    if (!dev) return;
+    try {
+      const r = await fetch(`http://127.0.0.1:${dev.apiPort}/status`, { signal: AbortSignal.timeout(ms) });
+      this.learnFacts(p.id, await r.json());
+    } catch {} finally { await dev.close().catch(() => {}); }
+  }
+
+  // A sharing computer says what it is in GET /status (16.11.2026): memory, memory speed, graphics
+  // card. A computer paired by its typed address was never heard on mdns and was kept as a phone
+  // with no memory known, so the planner gave it a phone's 2 GB and no card. Kept on its record
+  // when something changed; a name the person chose is never replaced.
+  private learnFacts(id: string, st: unknown): void {
+    const d = st && typeof st === 'object' ? (st as { device?: unknown }).device : null;
+    if (!d || typeof d !== 'object') return;
+    const o = d as Record<string, unknown>;
+    if (o.kind !== 'pc') return;
+    const num = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) && v >= 0 ? Math.round(v * 100) / 100 : null);
+    const ram = num(o.ram);
+    const bw = num(o.bw);
+    const vram = num(o.vram);
+    const gpu = typeof o.gpu === 'string' && o.gpu.trim() ? o.gpu.trim().slice(0, 60) : null;
+    const file = this.file();
+    const list = readPeers(file);
+    const p = findPeer(list, id);
+    if (!p) return;
+    const name = !p.named && typeof o.name === 'string' && o.name.trim() && /^(phone|tablet|computer) /.test(p.name) ? o.name.trim().slice(0, 60) : p.name;
+    const next = { ...p, kind: 'pc' as const, name, ram: ram ?? p.ram, bw: bw ?? p.bw, gpu: gpu ?? p.gpu ?? null, vram: vram ?? p.vram ?? null };
+    if (next.kind === p.kind && next.name === p.name && next.ram === p.ram && next.bw === p.bw && next.gpu === (p.gpu ?? null) && next.vram === (p.vram ?? null)) return;
+    writePeers(upsertPeer(list, next).list, file);
+    if (p.kind !== 'pc') this.note(`${name}: a computer${gpu ? ` with ${gpu}` : ''}${ram ? `, ${Math.round(ram / 1024)} GB free` : ''} (it said so itself)`);
   }
 
   // GET /trust through a tunnel already open: only the ledger lines after the last one received,
@@ -725,6 +767,8 @@ export class Engine {
     writePeers(list, file);
     this.reach.set(peer.id, { r: { ok: true }, at: Date.now() });
     this.note(`paired with ${peer.name} at ${host}:${port}`);
+    // what it is, from itself when mdns did not say (a computer answers with its memory and card)
+    if (!heard) await this.askFacts(peer).catch(() => {});
     // measured right away: the planner needs its network before a split (a phone answers GET /blob too)
     await this.measure(peer.id).catch(() => {});
     return this.rowOf(peer.id);
@@ -1656,6 +1700,8 @@ export class Engine {
       this.learnCtx = null;
       if (mode !== 'phone') { try { this.learnCtx = { sim: simModelOf(file), bw: learnBw, key: learnKey }; } catch {} }
       this.note(`${modelName} ready on ${cluster.devices.map((d) => d.name).join(', ')} (${mode})`);
+      // a main computer that sleeps ends the answer on every device (16.11.2026): awake until unload
+      if (!this.awakeHold && this.opts.awake) { try { this.awakeHold = this.opts.awake(); } catch {} }
       const st = this.status();
       emit({ done: true, status: st });
       return st;
@@ -1677,6 +1723,8 @@ export class Engine {
     const was = this.loaded;
     this.cluster = null;
     this.loaded = null;
+    this.awakeHold?.stop();
+    this.awakeHold = null;
     if (c) await c.close().catch(() => {});
     for (const x of this.extraClose.splice(0)) await x().catch(() => {});
     if (was && !quiet) { this.plan = []; this.note(`unloaded ${was.model.name}`); }

@@ -9,6 +9,22 @@ import { share as startShare, type ShareHandle, type ShareOptions } from '../sha
 import { home } from '../paths.js';
 import { WINDOWS_FIREWALL_NOTE } from '../llama.js';
 import { keepAwake, type KeepAwake } from '../awake.js';
+import { execFile } from 'node:child_process';
+
+// Windows lets kula in only on networks it calls Private (the firewall prompt's "private
+// networks"); a friend's wi-fi joined for the first time is often Public, and then no device
+// reaches this computer. What Windows calls the connected networks, or null when unknown.
+export function windowsNetworkCategories(run: typeof execFile = execFile): Promise<string[] | null> {
+  if (process.platform !== 'win32') return Promise.resolve(null);
+  return new Promise((resolve) => {
+    run('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', 'Get-NetConnectionProfile | ForEach-Object { $_.NetworkCategory.ToString() }'], { timeout: 10000, windowsHide: true }, (err, stdout) => {
+      if (err) return resolve(null);
+      resolve(String(stdout).split(/\r?\n/).map((x) => x.trim()).filter(Boolean));
+    });
+  });
+}
+
+export const WINDOWS_PUBLIC_NOTE = 'windows calls this wi-fi a public network, so other devices cannot reach kula here. in windows settings → network & internet → wi-fi → this network, choose "private network", then stop and start sharing again.';
 
 export const SHARE_PORT = 50551;
 
@@ -32,8 +48,9 @@ export class ShareHere {
   private starting: Promise<void> | null = null;
   private error: string | null = null;
   private awake: KeepAwake | null = null;
+  private publicNet = false;
 
-  constructor(private opts: { port?: number; models?: string; name?: string; start?: ShareStarter; log?: (s: string) => void; awake?: () => KeepAwake } = {}) {}
+  constructor(private opts: { port?: number; models?: string; name?: string; start?: ShareStarter; log?: (s: string) => void; awake?: () => KeepAwake; netCategories?: () => Promise<string[] | null> } = {}) {}
 
   view(): ShareView {
     const h = this.handle;
@@ -41,7 +58,7 @@ export class ShareHere {
     return {
       on: !!h, starting: !!this.starting, name: h?.deviceName ?? null, host: h?.host ?? null, port: h?.gatePort ?? null,
       code: c?.pin ?? null, codeExpiresAt: c?.exp ?? null, error: this.error,
-      note: process.platform === 'win32' ? WINDOWS_FIREWALL_NOTE : null,
+      note: process.platform === 'win32' ? (this.publicNet ? `${WINDOWS_PUBLIC_NOTE}\n\n${WINDOWS_FIREWALL_NOTE}` : WINDOWS_FIREWALL_NOTE) : null,
       paired: h?.paired() ?? 0,
     };
   }
@@ -71,6 +88,9 @@ export class ShareHere {
           this.opts.log?.(`sharing this computer on port ${this.handle.gatePort}`);
           // no sleep while it lends itself: a sleeping worker drops out mid-answer (awake.ts)
           this.awake = (this.opts.awake ?? (() => keepAwake(this.opts.log)))();
+          const cats = await (this.opts.netCategories ?? windowsNetworkCategories)();
+          this.publicNet = !!cats?.length && cats.includes('Public');
+          if (this.publicNet) this.opts.log?.(WINDOWS_PUBLIC_NOTE);
         } catch (e) {
           const m = (e as Error).message;
           this.error = /EADDRINUSE/.test(m) ? 'the share port is taken: is kula-node share already running in a terminal? stop it there first' : m;

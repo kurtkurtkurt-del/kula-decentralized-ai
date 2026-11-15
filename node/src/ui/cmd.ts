@@ -16,6 +16,7 @@ import { startUi, loadOrCreateToken, loadOrCreatePrefix, readPrefix, UI_PORT, PR
 import { installMac, uninstallMac, macPaths, type Run } from './macapp.js';
 import { home, packageRoot } from '../paths.js';
 import { isPacked, version } from '../build.js';
+import { keepAwake } from '../awake.js';
 
 type Flags = Record<string, string | boolean>;
 const stamp = () => new Date().toISOString().slice(11, 19);
@@ -168,7 +169,7 @@ export async function uiCommand(flags: Flags, deps: UiDeps = {}): Promise<number
   const userHome = deps.userHome ?? os.homedir();
   const legacy = legacyLauncher(userHome);
 
-  const engine = new Engine({ peersFile: typeof flags.file === 'string' ? flags.file : undefined, log, watch: true });
+  const engine = new Engine({ peersFile: typeof flags.file === 'string' ? flags.file : undefined, log, watch: true, awake: () => keepAwake(log) });
   const token = loadOrCreateToken(flags['new-token'] === true);
   let ui;
   try {

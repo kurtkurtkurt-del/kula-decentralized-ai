@@ -22,6 +22,7 @@ const { ChatStore, titleOf } = await import('../src/ui/store.ts');
 const { UI_CATALOG } = await import('../src/ui/catalog.ts');
 const { uiRows } = await import('../tools/ui-catalog.ts');
 const { startApiServer } = await import('../src/api.ts');
+import type { DeviceFacts } from '../src/api.ts';
 const { startGateServer } = await import('../src/gate.ts');
 const { createIdentity, Paired } = await import('../src/tls.ts');
 const { serveModel } = await import('../src/modelserve.ts');
@@ -59,11 +60,11 @@ function fakeLlamaServer(delayMs: number, pieces: string[]): Promise<{ port: num
 }
 
 // a phone as "share this phone" makes it: worker api behind a tls gate with a one-time code
-async function fakePhone(pieces = ['<think>', 'hmm', '</think>', 'Hel', 'lo', ' **there**', '!'], delayMs = 3) {
+async function fakePhone(pieces = ['<think>', 'hmm', '</think>', 'Hel', 'lo', ' **there**', '!'], delayMs = 3, device?: DeviceFacts) {
   const models = fs.mkdtempSync(path.join(os.tmpdir(), 'kula-ui-phone-'));
   const llama = await fakeLlamaServer(delayMs, pieces);
   const loads: string[] = [];
-  const api = await startApiServer({ fromGate: () => true, models, llama: null, allowPrivateUrls: true, startBackend: async (file, ctx) => { loads.push(`${path.basename(file)}:${ctx}`); return { port: llama.port, stop: async () => {} }; } });
+  const api = await startApiServer({ fromGate: () => true, models, llama: null, allowPrivateUrls: true, startBackend: async (file, ctx) => { loads.push(`${path.basename(file)}:${ctx}`); return { port: llama.port, stop: async () => {} }; }, device });
   const identity = createIdentity('phone');
   const tls = { identity, paired: new Paired(null), pin: PIN as string | null };
   const gate = await startGateServer({ port: 0, host: '127.0.0.1', secret: null, targets: (ch) => (ch === 'api' ? api.port : null), tls });
@@ -363,6 +364,45 @@ test('mode phone end to end: pair by hand through a real tls gate, the phone fet
     await model.close();
     await phone.close();
   }
+});
+
+test('a computer paired by its typed address (no mdns) says what it is: kept as a computer with its memory and card', async () => {
+  const pc = await fakePhone(undefined, undefined, { kind: 'pc', name: 'big-pc', ram: 30000, bw: 40, gpu: 'NVIDIA GeForce RTX 4070', vram: 12282 });
+  const phone = await fakePhone();
+  const { engine, peersFile } = newEngine({ measureLink: async () => ({ mbps: 50, rttMs: 3, at: Date.now() }) });
+  try {
+    await engine.pairByHand({ address: `127.0.0.1:${pc.port}`, pin: PIN });
+    const p = readPeers(peersFile).find((x) => x.port === pc.port)!;
+    assert.equal(p.kind, 'pc');
+    assert.equal(p.name, 'big-pc', 'its own name replaces "phone 127.0.0.1"');
+    assert.equal(p.ram, 30000);
+    assert.equal(p.bw, 40);
+    assert.equal(p.gpu, 'NVIDIA GeForce RTX 4070');
+    assert.equal(p.vram, 12282);
+    // a name the person typed stays; a phone (no device in its status) stays a phone
+    await engine.pairByHand({ address: `127.0.0.1:${phone.port}`, pin: PIN, name: 'pixel' });
+    const q = readPeers(peersFile).find((x) => x.port === phone.port)!;
+    assert.equal(q.kind, 'phone');
+    assert.equal(q.name, 'pixel');
+  } finally { await engine.close(); await pc.close(); await phone.close(); }
+});
+
+test('the main computer is kept awake while a model is loaded, and let go on unload', async () => {
+  const phone = await fakePhone();
+  const model = await tinyModel();
+  let held = 0;
+  let stopped = 0;
+  const { engine } = newEngine({ catalog: [model.entry], awake: () => { held++; return { how: 'fake', stop: () => { stopped++; } }; } });
+  const ui = await startUi({ port: 0, engine, store: new ChatStore(path.join(HOME, 'chats-awake')), token: 'kula-' + 'ab'.repeat(20) });
+  try {
+    await engine.pairByHand({ address: `127.0.0.1:${phone.port}`, pin: PIN, name: 'pixel' });
+    assert.equal(held, 0, 'nothing loaded: free to sleep');
+    const loaded = await sseAll(await post(`${ui.url}api/load`, ui.port, { model: 'tiny', mode: 'phone' }));
+    assert.equal(loaded.at(-1).done, true, JSON.stringify(loaded.at(-1)));
+    assert.equal(held, 1);
+    await engine.unload();
+    assert.equal(stopped, 1);
+  } finally { await ui.close(); await engine.close(); await model.close(); await phone.close(); }
 });
 
 test('stop: closing the page\'s stream stops the phone, keeps what came, and the next prompt works', async () => {

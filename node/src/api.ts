@@ -48,7 +48,13 @@ export interface ApiOptions {
   fromGate?: (remotePort: number | undefined) => boolean;
   // what GET /trust tells (trust.ts); without it /trust is not found
   trust?: TrustSource;
+  // what this device is, for GET /status (16.11.2026): a computer paired by its typed address
+  // was never heard on mdns, so its master learns its memory and graphics card here
+  device?: DeviceFacts;
 }
+
+// the same facts a sharing computer puts in its mdns record and qr
+export interface DeviceFacts { kind: 'pc'; name: string; ram: number; bw: number; gpu: string | null; vram: number | null }
 
 export interface ApiServer {
   port: number;
@@ -337,7 +343,7 @@ export async function startApiServer(opts: ApiOptions): Promise<ApiServer> {
     // process) is served (security review 2.6/1.4)
     if (!isFromGate(req.socket.remotePort) && !keyOk(req.headers.authorization, key)) return json(res, 401, { error: 'not through the gate' });
     try {
-      if (req.method === 'GET' && url === '/status') return json(res, 200, state);
+      if (req.method === 'GET' && url === '/status') return json(res, 200, opts.device ? { ...state, device: opts.device } : state);
       if (req.method === 'GET' && url === '/trust' && opts.trust) {
         const q = new URLSearchParams((req.url ?? '').split('?')[1] ?? '');
         const since = q.get('since');

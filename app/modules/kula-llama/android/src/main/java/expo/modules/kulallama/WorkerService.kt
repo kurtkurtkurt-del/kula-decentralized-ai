@@ -385,7 +385,8 @@ class WorkerService : Service() {
       setAttribute("ram", ramMb.toString())
       setAttribute("bw", "%.1f".format(java.util.Locale.US, bandwidth))
       setAttribute("name", name.take(40))
-      setAttribute("kind", "phone")
+      // a tablet says so (16.11.2026): the same test as Android's own layouts, 600 dp and wider
+      setAttribute("kind", if (resources.configuration.smallestScreenWidthDp >= 600) "tablet" else "phone")
       setAttribute("v", "rpc7")
       // the gate's certificate (public: it is in every qr) and, while a scanned computer's
       // code is open, that computer's id, so its chat page knows which phone to pair with

@@ -27,6 +27,23 @@ and says when a device alone would be faster. Rule of thumb: jobs are split, mod
 iOS is out of scope for now: the app opens on iOS but runs no models (a Swift module is written
 on a branch, never built).
 
+## what's new in 0.5.1 · 16 November 2026
+
+- **Computers without a graphics card help in a split again.** Since 0.5.0 a Windows or Linux
+  computer whose llama.cpp runs on the processor (no NVIDIA card; AMD and Intel graphics count as
+  none here) only ran models on its own. Now it takes part of a split model too: kula's door reads
+  what another device sends to that computer's model connection and stops anything that would run
+  code on it, the same rule the phone has had since 0.5.0. Checked with the real llama.cpp on a Mac
+  (a model answering through the door on the processor) and in tests; not yet between two real computers.
+- **A computer added by typing its address is seen for what it is.** When the wi-fi hides devices
+  from each other and you add a computer with "type it", it used to be counted as a phone with
+  2 GB. Now it tells kula its memory and graphics card itself, so the bigger computer gets the bigger part.
+- **The main computer stays awake while a model is loaded.** A sleeping main computer ended the
+  answer on every device; the screen may still turn off.
+- **Tablets show as tablets** on the computer's list (needs the new Android app).
+- **Windows says when a wi-fi is "public".** On a network Windows calls public (often a friend's
+  wi-fi the first time), no other device can reach kula; sharing now says so and how to change it.
+
 ## what's new in 0.5.0 · 15 November 2026
 
 - **Safer between devices.** A security review of all of kula found 138 problems; one was serious
@@ -39,9 +56,8 @@ on a branch, never built).
   the rest of the app. Messages, calendar entries and notes it reads to you stay on the phone.
   Checked in code and tests, not yet on a real phone.
 - **A split model is placed the way llama.cpp really places it.** Before, a helping computer could
-  get twice its planned share. The strongest computer takes the heaviest part. A computer whose
-  llama.cpp has no graphics card to use (many Windows and Linux laptops) does not join a split for
-  now; it still runs models on its own.
+  get twice its planned share. The strongest computer takes the heaviest part. (In 0.5.0 a computer whose llama.cpp had no
+  graphics card to use did not join a split; 0.5.1 lets it join again.)
 - **kula learns each device's real speed** from its answers and plans the next split with it.
 - **A cut-off answer goes on.** When a device leaves a split in the middle of an answer, kula goes on
   from where it stopped.

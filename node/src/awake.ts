@@ -28,7 +28,7 @@ export function keepAwake(log: (s: string) => void = () => {}, start: typeof spa
   let child: ChildProcess | null = null;
   try {
     child = start(c.cmd, c.args, { stdio: 'ignore', windowsHide: true });
-    child.on('error', (e) => { log(`keep awake: ${c.cmd} did not start (${e.message}); this computer may sleep while it shares`); child = null; });
+    child.on('error', (e) => { log(`keep awake: ${c.cmd} did not start (${e.message}); this computer may sleep`); child = null; });
     child.on('exit', () => { child = null; });
   } catch (e) {
     log(`keep awake: ${(e as Error).message}`);
