@@ -54,6 +54,9 @@ async function mount() {
 }
 
 describe('share?start=1', () => {
+  // real timers (the screen polls every 2 s): a slow CI runner needs more than jest's 5 s, and every
+  // unmount is awaited so no act() of one test is still open when the next mounts (13.11.2026: hung on GitHub)
+  jest.setTimeout(20000);
   beforeEach(() => { mockStartWorker.mockClear(); mockWorkerStatus.mockClear(); mockOpenPairing.mockClear(); mockState = 'stopped'; mockMode = null; mockParams = {}; });
 
   it('starts sharing once when it is not on', async () => {
@@ -64,7 +67,7 @@ describe('share?start=1', () => {
     // the next polls do not press it again
     await act(async () => { await new Promise((res) => setTimeout(res, 2100)); });
     expect(mockStartWorker).toHaveBeenCalledTimes(1);
-    act(() => r.unmount());
+    await act(async () => { r.unmount(); });
   });
 
   it('leaves a running worker alone', async () => {
@@ -72,14 +75,14 @@ describe('share?start=1', () => {
     mockState = 'running';
     const r = await mount();
     expect(mockStartWorker).not.toHaveBeenCalled();
-    act(() => r.unmount());
+    await act(async () => { r.unmount(); });
   });
 
   it('waits for the button without start=1', async () => {
     const r = await mount();
     expect(mockWorkerStatus).toHaveBeenCalled();
     expect(mockStartWorker).not.toHaveBeenCalled();
-    act(() => r.unmount());
+    await act(async () => { r.unmount(); });
   });
 
   // "let my computers use this phone" (8.11.2026): a worker that started by itself on the home
@@ -100,6 +103,6 @@ describe('share?start=1', () => {
     const btn = r.root.findAll((n) => n.props.accessibilityLabel === 'code for a new device' && typeof n.props.onPress === 'function')[0];
     await act(async () => { btn.props.onPress(); });
     expect(mockOpenPairing).toHaveBeenCalledTimes(1);
-    act(() => r.unmount());
+    await act(async () => { r.unmount(); });
   });
 });

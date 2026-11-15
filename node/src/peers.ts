@@ -357,11 +357,13 @@ export function discover(ms = 3000, bonjour: { find: Bonjour['find']; destroy: B
     };
     browser.on('up', onUp);
     for (const s of browser.services ?? []) onUp(s);
+    // not unref'd: whoever awaits this needs the process alive until it answers (an unref'd
+    // timer let node end a test run with the promise still pending, on GitHub's runners)
     setTimeout(() => {
       try { browser.stop(); } catch {}
       bonjour.destroy();
       resolve([...seen.values()]);
-    }, ms).unref();
+    }, ms);
   });
 }
 
