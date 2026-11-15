@@ -1,35 +1,41 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Animated, Easing, Linking, Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { router } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import Svg, { Path, Rect } from 'react-native-svg';
 import { EdgeBack } from '@/components/BackButton';
+import EmptyState from '@/components/EmptyState';
+import PillAction from '@/components/PillAction';
 import TalkSettings from '@/components/TalkSettings';
 import { langNames, useLang } from '@/i18n';
 import { tapLight } from '@/lib/haptics';
 import { useEngine } from '@/llm/engine';
 import { voiceNative } from '@/voice/native';
 import { saveVoiceSettings } from '@/voice/settings';
+import { noticeOf } from '@/voice/notice';
 import { useTalk, type Banner } from '@/voice/useTalk';
-import { colors, fonts, night, radius } from '@/theme/tokens';
+import { colors, fonts, radius } from '@/theme/tokens';
 import { brand, MAX_WIDTH } from '@/theme/layout';
 
-// Talk mode (5.11.2026): speak with the phone's own model, hands-free, through the phone or
-// any headset (later the glasses clip). A calm dark screen: one large circle that breathes
-// while it listens and pulses while it speaks, the words heard and the reply under it, and
-// stop · type · settings at the bottom. The loop and the tools are in src/voice/.
-const PHASE_COLOR = { idle: night.edge, listening: colors.green, thinking: night.sky2, speaking: colors.gold } as const;
+// Talk mode (5.11.2026; laid out like the chat 15.11.2026): speak with the model and the
+// phone's secretary, hands-free, through the phone or any headset. The same page as the chat:
+// the title band, the conversation as bubbles, and at the bottom the one round button that
+// listens (it breathes while listening, pulses while speaking), new conversation · type ·
+// settings, and the line that says what stays on this phone. The loop and the tools are in
+// src/voice/.
+const PHASE_COLOR = { idle: colors.paper, listening: colors.spot, thinking: colors.paper2, speaking: colors.gold } as const;
 
 export default function TalkScreen() {
   const { t, up } = useLang();
   const insets = useSafeAreaInsets();
   const engine = useEngine();
   const talk = useTalk();
-  const { loop, reply, question, banner, route, settings } = talk;
+  const { loop, turns, question, banner, route, settings } = talk;
   const [sheet, setSheet] = useState(false);
-  const [downloading, setDownloading] = useState(false);
+  const scroll = useRef<ScrollView>(null);
 
-  // the circle: breathes while listening, pulses while speaking, rests otherwise
+  // the button: breathes while listening, pulses while speaking, rests otherwise
   const [pulse] = useState(() => new Animated.Value(0));
   useEffect(() => {
     pulse.stopAnimation();
@@ -43,66 +49,91 @@ export default function TalkScreen() {
     anim.start();
     return () => anim.stop();
   }, [loop.phase, pulse]);
-  const scale = pulse.interpolate({ inputRange: [0, 1], outputRange: [1, loop.phase === 'speaking' ? 1.1 : 1.06] });
-  const ring = pulse.interpolate({ inputRange: [0, 1], outputRange: [0.15, 0.45] });
+  const halo = pulse.interpolate({ inputRange: [0, 1], outputRange: [1, loop.phase === 'speaking' ? 1.35 : 1.22] });
+  const haloOpacity = pulse.interpolate({ inputRange: [0, 1], outputRange: [0.35, 0] });
 
   const press = () => {
     tapLight();
     talk.press();
   };
-  const heard = loop.phase === 'listening' ? loop.partial : loop.heard;
+  const active = loop.phase !== 'idle';
   const phaseText = t(`voice.phase.${loop.phase}`);
   const color = PHASE_COLOR[loop.phase];
   const n = voiceNative();
   const headset = route?.connected && route.name ? t('voice.route.headset', { name: route.name.toLowerCase() }) + (route.micRouted ? ` · ${t('voice.route.micOn')}` : '') : t('voice.route.phone');
+  const sub = [engine.model?.name.toLowerCase(), n ? headset : null].filter(Boolean).join('  ·  ');
+  const partial = loop.phase === 'listening' ? loop.partial : '';
 
   return (
-    <View style={[styles.root, { paddingTop: insets.top + 12, paddingBottom: insets.bottom + 12 }]}>
-      <StatusBar style="light" />
+    <View style={styles.root}>
+      <StatusBar style="dark" />
       <EdgeBack />
-      <View style={styles.top}>
-        <Text style={styles.title}>{t('voice.title')}</Text>
-        <Text style={styles.meta} numberOfLines={1}>{engine.model ? engine.model.name.toLowerCase() : ''}{n ? `  ·  ${headset}` : ''}</Text>
-        {/* the language you speak, in sight: it is often not the app's (an english app, a turkish voice) */}
-        <View style={styles.langs} accessibilityRole="radiogroup">
-          {(['tr', 'en', 'de'] as const).map((l) => (
-            <Pressable key={l} onPress={() => { tapLight(); talk.close(); saveVoiceSettings({ lang: l }); }} accessibilityRole="radio" accessibilityState={{ checked: talk.lang === l }} accessibilityLabel={langNames[l]} hitSlop={6} style={[styles.lang, talk.lang === l && styles.langOn]}>
-              <Text style={[styles.langText, talk.lang === l && styles.langTextOn]}>{l}</Text>
-            </Pressable>
-          ))}
+      <View style={styles.band}>
+        <View style={styles.titleRow}>
+          <Text style={styles.title}>{t('voice.title')}</Text>
+          {/* the language you speak, in sight: it is often not the app's (an english app, a turkish voice) */}
+          <View style={styles.langs} accessibilityRole="radiogroup">
+            {(['tr', 'en', 'de'] as const).map((l) => (
+              <Pressable key={l} onPress={() => { tapLight(); talk.close(); saveVoiceSettings({ lang: l }); }} accessibilityRole="radio" accessibilityState={{ checked: talk.lang === l }} accessibilityLabel={langNames[l]} hitSlop={6} style={({ pressed }) => [styles.lang, talk.lang === l && styles.langOn, pressed && styles.pressed]}>
+                <Text style={[styles.langText, talk.lang === l && styles.langTextOn]}>{l}</Text>
+              </Pressable>
+            ))}
+          </View>
         </View>
+        {sub ? <Text style={styles.sub} numberOfLines={1}>{sub}</Text> : null}
       </View>
 
-      {!engine.load ? (
-        <Pressable onPress={() => router.push('/models')} accessibilityRole="link" style={styles.note}>
-          <Text style={styles.noteText}>{t('voice.noEngine')} <Text style={styles.link}>{t('voice.noEngine.go')} ›</Text></Text>
-        </Pressable>
-      ) : null}
-
-      <View style={styles.middle}>
-        <Pressable onPress={press} accessibilityRole="button" accessibilityLabel={phaseText} accessibilityHint={t('voice.hands')} testID="talk-circle" style={styles.circleHit}>
-          <Animated.View style={[styles.halo, { borderColor: color, opacity: ring, transform: [{ scale: Animated.multiply(scale, 1.12) }] }]} />
-          <Animated.View style={[styles.circle, { backgroundColor: color, transform: [{ scale }] }]} />
-        </Pressable>
-        <Text style={styles.phase} accessibilityLiveRegion="polite">{phaseText}</Text>
-        {question ? <Text style={styles.question}>{up(t('voice.question'))}</Text> : null}
-      </View>
-
-      <ScrollView style={styles.words} contentContainerStyle={styles.wordsIn}>
-        {heard ? <Text style={styles.heard}><Text style={styles.who}>{t('voice.you')}  </Text>{heard}</Text> : null}
-        {reply ? <Text style={styles.reply} selectable><Text style={styles.who}>{t('voice.kula')}  </Text>{reply}</Text> : null}
-        {!heard && !reply && loop.phase === 'idle' ? <Text style={styles.hands}>{t('voice.hands')}</Text> : null}
+      <ScrollView ref={scroll} style={styles.flex} contentContainerStyle={styles.body} onContentSizeChange={() => scroll.current?.scrollToEnd({ animated: true })} testID="talk-turns">
+        {!engine.load ? (
+          <EmptyState text={t('voice.noEngine')} action={t('voice.noEngine.go')} onAction={() => router.push('/models')} testID="talk-no-engine" />
+        ) : turns.length === 0 && !partial ? (
+          <EmptyState text={t('voice.hands')} />
+        ) : null}
+        {turns.map((x) => {
+          const me = x.who === 'you';
+          return (
+            <View key={x.id} style={[styles.turn, me ? styles.me : styles.them]} accessible accessibilityLabel={`${me ? t('voice.you') : t('voice.kula')}: ${x.text || t('voice.phase.thinking')}`}>
+              <Text style={[styles.text, me && styles.textMe, x.error && styles.err]} selectable>{x.text || '…'}</Text>
+            </View>
+          );
+        })}
+        {partial ? (
+          <View style={[styles.turn, styles.me, styles.live]}>
+            <Text style={[styles.text, styles.textMe]}>{partial}</Text>
+          </View>
+        ) : null}
       </ScrollView>
 
-      {banner ? <BannerBox kind={banner} lang={talk.lang} downloading={downloading} onDismiss={talk.dismiss} onAllowMic={talk.allowMic} onOnline={talk.allowOnline} onDownload={async () => { setDownloading(true); await talk.downloadModel(); }} onSettings={() => setSheet(true)} /> : null}
+      <View style={[styles.bottom, { paddingBottom: insets.bottom + 12 }]}>
+        {banner ? <Notice kind={banner} lang={talk.lang} onDismiss={talk.dismiss} onAllowMic={talk.allowMic} onOnline={talk.allowOnline} onDownload={() => void talk.downloadModel()} onRetry={talk.retry} onSettings={() => setSheet(true)} /> : null}
 
-      <Text style={[styles.private, !settings.onDeviceOnly && styles.privateWarn]}>{settings.onDeviceOnly ? t('voice.private.on') : t('voice.private.online')}</Text>
+        <View style={styles.control}>
+          <Pressable onPress={press} accessibilityRole="button" accessibilityLabel={phaseText} accessibilityHint={t('voice.hands')} testID="talk-circle" style={({ pressed }) => [styles.hit, pressed && styles.pressedBtn]}>
+            <Animated.View pointerEvents="none" style={[styles.halo, { backgroundColor: color, opacity: active ? haloOpacity : 0, transform: [{ scale: halo }] }]} />
+            <View style={[styles.circle, { backgroundColor: color }]}>
+              {loop.phase === 'idle' || loop.phase === 'listening' ? <Mic /> : <StopGlyph />}
+            </View>
+          </Pressable>
+          <View style={styles.phaseBox}>
+            <Text style={styles.phase} accessibilityLiveRegion="polite">{phaseText}</Text>
+            {question ? <Text style={styles.question}>{up(t('voice.question'))}</Text> : null}
+          </View>
+        </View>
 
-      <View style={styles.bar}>
-        <BarButton label={t('voice.stop')} onPress={() => { tapLight(); talk.close(); }} disabled={loop.phase === 'idle'} />
-        <BarButton label={t('voice.keyboard')} onPress={() => { talk.close(); router.push('/chat'); }} />
-        <BarButton label={t('voice.forget')} onPress={() => { talk.close(); talk.forget(); }} />
-        <BarButton label={t('voice.settings')} onPress={() => setSheet(true)} />
+        {active || question ? (
+          <Pressable onPress={() => { tapLight(); talk.close(); }} accessibilityRole="button" accessibilityLabel={t('voice.stop')} style={({ pressed }) => [styles.stopBar, pressed && styles.pressed]} testID="talk-stop">
+            <Text style={styles.stopText}>■  {t('voice.stop')}</Text>
+          </Pressable>
+        ) : (
+          <View style={styles.tools}>
+            <Pressable onPress={() => { tapLight(); talk.forget(); }} disabled={!turns.length} hitSlop={8} accessibilityRole="button" accessibilityLabel={t('voice.forget')} accessibilityState={{ disabled: !turns.length }} style={styles.toolHit} testID="talk-forget"><Text style={[styles.tool, !turns.length && styles.off]}>{t('voice.forget')}</Text></Pressable>
+            {/* the chat this page was opened from, not a second one on top of it */}
+            <Pressable onPress={() => router.dismissTo('/chat')} hitSlop={8} accessibilityRole="button" accessibilityLabel={t('voice.keyboard')} style={styles.toolHit} testID="talk-type"><Text style={styles.tool}>{t('voice.keyboard')}</Text></Pressable>
+            <Pressable onPress={() => setSheet(true)} hitSlop={8} accessibilityRole="button" accessibilityLabel={t('voice.settings')} style={styles.toolHit} testID="talk-settings"><Text style={styles.tool}>{t('voice.settings')}</Text></Pressable>
+          </View>
+        )}
+
+        <Text style={[styles.private, !settings.onDeviceOnly && styles.privateWarn]} testID="talk-private">{settings.onDeviceOnly ? t('voice.private.on') : t('voice.private.online')}</Text>
       </View>
 
       <Modal visible={sheet} transparent animationType="slide" onRequestClose={() => setSheet(false)}>
@@ -118,114 +149,99 @@ export default function TalkScreen() {
   );
 }
 
-function BarButton({ label, onPress, disabled }: { label: string; onPress: () => void; disabled?: boolean }) {
+function Mic() {
   return (
-    <Pressable onPress={onPress} disabled={disabled} hitSlop={8} accessibilityRole="button" accessibilityLabel={label} accessibilityState={{ disabled: !!disabled }} style={({ pressed }) => [styles.barBtn, pressed && styles.pressed, disabled && styles.off]}>
-      <Text style={styles.barText}>{label}</Text>
-    </Pressable>
+    <Svg width={28} height={28} viewBox="0 0 24 24">
+      <Rect x={9} y={3} width={6} height={11} rx={3} fill={colors.ink} />
+      <Path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21M8.5 21h7" stroke={colors.ink} strokeWidth={1.8} strokeLinecap="round" fill="none" />
+    </Svg>
+  );
+}
+function StopGlyph() {
+  return (
+    <Svg width={22} height={22} viewBox="0 0 24 24">
+      <Rect x={6} y={6} width={12} height={12} rx={2} fill={colors.ink} />
+    </Svg>
   );
 }
 
-type BannerProps = { kind: Banner; lang: 'en' | 'de' | 'tr'; downloading: boolean; onDismiss: () => void; onAllowMic: () => void; onOnline: () => void; onDownload: () => void; onSettings: () => void };
+type NoticeProps = { kind: Banner; lang: 'en' | 'de' | 'tr'; onDismiss: () => void; onAllowMic: () => void; onOnline: () => void; onDownload: () => void; onRetry: () => void; onSettings: () => void };
 
-// What stands between the user and talking, in one line, with the one or two ways out.
-function BannerBox({ kind, lang, downloading, onDismiss, onAllowMic, onOnline, onDownload, onSettings }: BannerProps) {
+function Notice({ kind, lang, onDismiss, onAllowMic, onOnline, onDownload, onRetry, onSettings }: NoticeProps) {
   const { t } = useLang();
   const n = voiceNative();
-  let text = '';
-  const actions: { label: string; onPress: () => void }[] = [];
-  switch (kind) {
-    case 'permission':
-      text = t('voice.banner.permission');
-      actions.push({ label: t('voice.banner.allow'), onPress: onAllowMic });
-      break;
-    case 'blocked':
-      text = t('voice.banner.blocked');
-      actions.push({ label: t('voice.banner.openSettings'), onPress: () => Linking.openSettings() });
-      break;
-    case 'unavailable':
-      text = t('voice.banner.unavailable');
-      break;
-    case 'noOnDevice':
-      text = t('voice.banner.noOnDevice');
-      actions.push({ label: t('voice.banner.useOnline'), onPress: onOnline });
-      break;
-    case 'noModel':
-      text = downloading ? t('voice.banner.downloading') : t('voice.banner.noModel', { lang: langNames[lang] });
-      if (!downloading) actions.push({ label: t('voice.banner.download'), onPress: onDownload });
-      actions.push({ label: t('voice.banner.useOnline'), onPress: onOnline });
-      break;
-    case 'notificationAccess':
-      text = t('voice.banner.notificationAccess');
-      if (n) actions.push({ label: t('voice.banner.openAccess'), onPress: () => n.openNotificationAccess() });
-      actions.push({ label: t('voice.settings'), onPress: onSettings });
-      break;
-    case 'calendarPermission':
-      text = t('voice.banner.calendarPermission');
-      actions.push({ label: t('voice.banner.openSettings'), onPress: () => Linking.openSettings() });
-      break;
-    case 'noEngine':
-      text = t('voice.noEngine');
-      actions.push({ label: t('voice.noEngine.go'), onPress: () => router.push('/models') });
-      break;
-  }
+  const { text, actions } = noticeOf(kind);
+  const run = {
+    allowMic: onAllowMic,
+    openSettings: () => void Linking.openSettings(),
+    online: onOnline,
+    download: onDownload,
+    retry: onRetry,
+    openAccess: () => n?.openNotificationAccess(),
+    settings: onSettings,
+  } as const;
+  const shown = actions.filter((a) => a.go !== 'openAccess' || n);
   return (
-    <View style={styles.banner}>
-      <Text style={styles.bannerText}>{text}</Text>
-      <View style={styles.bannerRow}>
-        {actions.map((a) => (
-          <Pressable key={a.label} onPress={a.onPress} accessibilityRole="button" style={({ pressed }) => [styles.bannerBtn, pressed && styles.pressed]}>
-            <Text style={styles.bannerBtnText}>{a.label}</Text>
+    <View style={styles.notice} accessibilityRole="alert" testID={`talk-banner-${kind}`}>
+      <Text style={styles.noticeText}>{t(text, { lang: langNames[lang] })}</Text>
+      <View style={styles.noticeRow}>
+        {shown.map((a, i) => (
+          <Pressable key={a.go} onPress={run[a.go]} accessibilityRole="button" accessibilityLabel={t(a.label)} style={({ pressed }) => [styles.noticeBtn, i > 0 && styles.noticeBtnQuiet, pressed && styles.pressed]}>
+            <Text style={[styles.noticeBtnText, i > 0 && styles.noticeBtnTextQuiet]}>{t(a.label)}</Text>
           </Pressable>
         ))}
-        <Pressable onPress={onDismiss} accessibilityRole="button" style={({ pressed }) => [styles.bannerBtn, styles.bannerQuiet, pressed && styles.pressed]}>
-          <Text style={styles.bannerQuietText}>{t('word.close')}</Text>
-        </Pressable>
+        <PillAction label={t('word.close')} icon="close" small onPress={onDismiss} />
       </View>
     </View>
   );
 }
 
-const CIRCLE = 190;
+const SIZE = 64;
 const styles = StyleSheet.create({
-  langs: { flexDirection: 'row', gap: 8, marginTop: 10 },
-  lang: { minWidth: 44, height: 32, paddingHorizontal: 12, borderRadius: radius.pill, borderWidth: 1, borderColor: night.edge, alignItems: 'center', justifyContent: 'center' },
+  root: { flex: 1, backgroundColor: colors.ink },
+  flex: { flex: 1 },
+  band: { paddingTop: brand.top - 8, paddingHorizontal: brand.left, paddingBottom: 10, gap: 2 },
+  titleRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 },
+  title: { fontFamily: fonts.semibold, fontSize: 30, lineHeight: 32, letterSpacing: -0.9, color: colors.paper },
+  sub: { fontFamily: fonts.regular, fontSize: 11.5, color: colors.mute },
+  langs: { flexDirection: 'row', gap: 6 },
+  lang: { minWidth: 40, height: 32, paddingHorizontal: 10, borderRadius: radius.pill, borderWidth: 1, borderColor: colors.ink3, alignItems: 'center', justifyContent: 'center' },
   langOn: { backgroundColor: colors.paper, borderColor: colors.paper },
   langText: { fontFamily: fonts.medium, fontSize: 13, color: colors.paper },
   langTextOn: { color: colors.ink },
-  root: { flex: 1, backgroundColor: night.sky0, paddingHorizontal: brand.left },
-  top: { gap: 2 },
-  title: { fontFamily: fonts.semibold, fontSize: 30, lineHeight: 32, letterSpacing: -0.9, color: night.star },
-  meta: { fontFamily: fonts.regular, fontSize: 11.5, color: '#9C8C78' },
-  note: { marginTop: 12, padding: 12, borderRadius: radius.md, borderWidth: 1, borderColor: night.edge },
-  noteText: { fontFamily: fonts.regular, fontSize: 12.5, lineHeight: 18, color: '#C9BBA6' },
-  link: { fontFamily: fonts.medium, color: colors.gold },
-  middle: { alignItems: 'center', justifyContent: 'center', paddingTop: 28, paddingBottom: 12, gap: 18 },
-  circleHit: { width: CIRCLE * 1.3, height: CIRCLE * 1.3, alignItems: 'center', justifyContent: 'center' },
-  halo: { position: 'absolute', width: CIRCLE, height: CIRCLE, borderRadius: CIRCLE / 2, borderWidth: 2 },
-  circle: { width: CIRCLE, height: CIRCLE, borderRadius: CIRCLE / 2, opacity: 0.92 },
-  phase: { fontFamily: fonts.medium, fontSize: 15, color: night.star, letterSpacing: 0.2 },
-  question: { fontFamily: fonts.regular, fontSize: 10.5, letterSpacing: 1.4, color: colors.gold },
-  words: { flex: 1 },
-  wordsIn: { gap: 12, paddingVertical: 8 },
-  who: { fontFamily: fonts.regular, fontSize: 10.5, letterSpacing: 1.2, color: '#8A7B68' },
-  heard: { fontFamily: fonts.regular, fontSize: 15, lineHeight: 21, color: '#B9AA95' },
-  reply: { fontFamily: fonts.regular, fontSize: 18, lineHeight: 26, color: night.star },
-  hands: { fontFamily: fonts.regular, fontSize: 13, lineHeight: 19, color: '#8A7B68', textAlign: 'center' },
-  banner: { padding: 12, borderRadius: radius.md, backgroundColor: night.phone, gap: 10, marginBottom: 8 },
-  bannerText: { fontFamily: fonts.regular, fontSize: 13, lineHeight: 19, color: night.star },
-  bannerRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
-  bannerBtn: { minHeight: 36, paddingHorizontal: 12, borderRadius: radius.pill, backgroundColor: night.star, justifyContent: 'center' },
-  bannerBtnText: { fontFamily: fonts.medium, fontSize: 12.5, color: night.sky0 },
-  bannerQuiet: { backgroundColor: 'transparent', borderWidth: 1, borderColor: night.edge },
-  bannerQuietText: { fontFamily: fonts.medium, fontSize: 12.5, color: night.star },
-  private: { fontFamily: fonts.regular, fontSize: 11, lineHeight: 15, color: '#8A7B68', textAlign: 'center', marginBottom: 10 },
-  privateWarn: { color: colors.gold },
-  bar: { flexDirection: 'row', justifyContent: 'space-between', gap: 8 },
-  barBtn: { flex: 1, minHeight: 44, borderRadius: radius.pill, borderWidth: 1, borderColor: night.edge, alignItems: 'center', justifyContent: 'center' },
-  barText: { fontFamily: fonts.medium, fontSize: 12.5, color: night.star },
+  body: { paddingHorizontal: brand.left, paddingVertical: 8, gap: 10 },
+  turn: { maxWidth: '88%', padding: 12, borderRadius: radius.md },
+  me: { alignSelf: 'flex-end', backgroundColor: colors.paper },
+  them: { alignSelf: 'flex-start', backgroundColor: colors.ink2 },
+  live: { opacity: 0.6 },
+  text: { fontFamily: fonts.regular, fontSize: 15, lineHeight: 21, color: colors.paper },
+  textMe: { color: colors.ink },
+  err: { color: colors.violet },
+  bottom: { paddingHorizontal: brand.left, paddingTop: 12, borderTopWidth: 1, borderTopColor: colors.ink3, gap: 10 },
+  notice: { padding: 14, borderRadius: radius.md, backgroundColor: colors.ink2, gap: 10 },
+  noticeText: { fontFamily: fonts.regular, fontSize: 14, lineHeight: 20, color: colors.paper2 },
+  noticeRow: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 8 },
+  noticeBtn: { minHeight: 44, justifyContent: 'center', paddingHorizontal: 14, borderRadius: radius.pill, backgroundColor: colors.paper },
+  noticeBtnQuiet: { backgroundColor: 'transparent', borderWidth: 1, borderColor: colors.paper },
+  noticeBtnText: { fontFamily: fonts.medium, fontSize: 13.5, color: colors.ink },
+  noticeBtnTextQuiet: { color: colors.paper },
+  control: { flexDirection: 'row', alignItems: 'center', gap: 16 },
+  hit: { width: SIZE + 16, height: SIZE + 16, alignItems: 'center', justifyContent: 'center' },
+  halo: { position: 'absolute', width: SIZE, height: SIZE, borderRadius: SIZE / 2 },
+  circle: { width: SIZE, height: SIZE, borderRadius: SIZE / 2, alignItems: 'center', justifyContent: 'center' },
+  phaseBox: { flex: 1, gap: 4 },
+  phase: { fontFamily: fonts.medium, fontSize: 15, lineHeight: 20, color: colors.paper },
+  question: { fontFamily: fonts.regular, fontSize: 10.5, letterSpacing: 1.4, color: colors.spotText },
+  stopBar: { minHeight: 44, borderRadius: radius.md, backgroundColor: colors.violet, alignItems: 'center', justifyContent: 'center' },
+  stopText: { fontFamily: fonts.semibold, fontSize: 14, color: '#fff', letterSpacing: 0.3 },
+  tools: { flexDirection: 'row', gap: 18, minHeight: 44, alignItems: 'center' },
+  toolHit: { minHeight: 36, justifyContent: 'center' },
+  tool: { fontFamily: fonts.medium, fontSize: 12.5, color: colors.spotText },
+  private: { fontFamily: fonts.regular, fontSize: 11, lineHeight: 15, color: colors.mute },
+  privateWarn: { color: colors.violet },
   off: { opacity: 0.35 },
   pressed: { opacity: 0.7 },
+  pressedBtn: { opacity: 0.85, transform: [{ scale: 0.97 }] },
   dim: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.45)' },
   sheet: { marginTop: 'auto', alignSelf: 'center', width: '100%', maxWidth: MAX_WIDTH, maxHeight: '82%', backgroundColor: colors.ink, borderTopLeftRadius: radius.lg, borderTopRightRadius: radius.lg, paddingHorizontal: brand.left, paddingTop: 18 },
   sheetHead: { fontFamily: fonts.regular, fontSize: 10.5, letterSpacing: 1.4, color: colors.meta, marginBottom: 4 },
