@@ -147,7 +147,9 @@ class ApiServer(private val context: Context, private val modelsDir: File, priva
       } else if (sha != null && loadedSha != sha) {
         sse(out, JSONObject().put("state", "checking"))
         val actual = ModelDownloader.sha256Of(dest)
-        if (actual != sha) { dest.delete(); return sse(out, JSONObject().put("error", "checksum mismatch; file deleted, load again")) }
+        // a model already on this phone is never deleted or replaced by a request (security review
+        // 2.1/8C.5): every /load here comes from another device, and the file may be the owner's own
+        if (actual != sha) return sse(out, JSONObject().put("error", "a different ${dest.name} is already on this phone; it is not replaced (remove it on the phone first)"))
       }
       if (loadedPath != dest.absolutePath) {
         if (Native.isLoaded()) Native.freeModel()

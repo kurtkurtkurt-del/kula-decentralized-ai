@@ -11,7 +11,7 @@ import { SHA256_RE, sizeProblem, urlProblem } from './policy.js';
 import { freePort, startChild, type Child } from './children.js';
 import type { LlamaBinaries } from './llama.js';
 import { blobMb } from './benchcore.js';
-import { apiPeerOf } from './gate.js';
+import { apiPeerOf, viaGate } from './gate.js';
 import { trustBody, SINCE_RE, type TrustSource } from './trust.js';
 import { CHALLENGE_RE } from './attest.js';
 
@@ -43,6 +43,8 @@ export interface ApiOptions {
   allowPrivateUrls?: boolean;
   // which master is behind a request, by the remote port of its socket; default: the gate's record
   masterOf?: (remotePort: number | undefined) => string | null;
+  // whether a request came through the gate from another device (gate.ts viaGate); tests hand one in
+  fromGate?: (remotePort: number | undefined) => boolean;
   // what GET /trust tells (trust.ts); without it /trust is not found
   trust?: TrustSource;
 }
@@ -108,6 +110,20 @@ function safeName(name: string): string {
   return base;
 }
 
+// Half downloads older than a day are not coming back: they go, so they cannot pile up (2.5)
+export const PART_MAX_AGE_MS = 24 * 3600_000;
+export function cleanStaleParts(dir: string, now = Date.now()): string[] {
+  const gone: string[] = [];
+  let names: string[] = [];
+  try { names = fs.readdirSync(dir); } catch { return gone; }
+  for (const n of names) {
+    if (!n.endsWith('.part')) continue;
+    const f = path.join(dir, n);
+    try { if (now - fs.statSync(f).mtimeMs > PART_MAX_AGE_MS) { fs.rmSync(f, { force: true }); gone.push(n); } } catch {}
+  }
+  return gone;
+}
+
 export async function startApiServer(opts: ApiOptions): Promise<ApiServer> {
   const log = opts.log ?? (() => {});
   fs.mkdirSync(opts.models, { recursive: true });
@@ -140,7 +156,7 @@ export async function startApiServer(opts: ApiOptions): Promise<ApiServer> {
     state.loaded = false; state.model = null; state.sha256 = null; state.ctx = 0;
   }
 
-  async function handleLoad(body: any, res: http.ServerResponse, masterIp: string | null) {
+  async function handleLoad(body: any, res: http.ServerResponse, masterIp: string | null, fromGate = false) {
     if (state.busy) return json(res, 409, { error: 'busy' });
     const { url, sha256, size, name } = body ?? {};
     if (typeof url !== 'string' || typeof sha256 !== 'string' || typeof name !== 'string') return json(res, 400, { error: 'need url, sha256, size, name' });
@@ -165,18 +181,31 @@ export async function startApiServer(opts: ApiOptions): Promise<ApiServer> {
     // /load and /chat from it would be 409 until the download and start ran their course
     res.on('close', () => { if (!res.writableFinished) ac.abort(); });
     try {
+      cleanStaleParts(opts.models);
       await unload();
       let have = fs.existsSync(file);
       if (have) {
         sse.send({ state: 'checking', got: 0, total: size ?? 0 });
         const sum = await sha256Of(file, (got, total) => sse.send({ state: 'checking', got, total }));
-        if (sum !== want) { log(`${name}: on disk but wrong sha256, fetching again`); fs.rmSync(file); have = false; }
+        if (sum !== want) {
+          // another device may not delete or replace a model on this computer (security review 2.1):
+          // only this computer's own engine replaces a file that differs (a broken download, say)
+          if (fromGate) throw new Error(`a different ${name} is already on this computer; it is not replaced (remove it there first)`);
+          log(`${name}: on disk but wrong sha256, fetching again`); fs.rmSync(file); have = false;
+        }
         else opts.onLoad?.(name, want, sum);
       }
       if (!have) {
         log(`downloading ${name} from ${url}`);
         sse.send({ state: 'running', got: 0, total: size ?? 0 });
-        await download(url, file, (got, total) => sse.send({ state: 'running', got, total: total || size || 0 }), ac.signal, { size: Number(size), allowPrivate: opts.allowPrivateUrls, masterIp });
+        try {
+          await download(url, file, (got, total) => sse.send({ state: 'running', got, total: total || size || 0 }), ac.signal, { size: Number(size), allowPrivate: opts.allowPrivateUrls, masterIp });
+        } catch (e) {
+          // a dropped connection keeps its .part to resume; any other failure (no space, too big,
+          // wrong size) removes it, so a device cannot leave the disk full (security review 2.5)
+          if (!ac.signal.aborted) fs.rmSync(`${file}.part`, { force: true });
+          throw e;
+        }
         sse.send({ state: 'checking', got: 0, total: size ?? 0 });
         const sum = await sha256Of(file, (got, total) => sse.send({ state: 'checking', got, total }));
         opts.onLoad?.(name, want, sum);
@@ -286,6 +315,7 @@ export async function startApiServer(opts: ApiOptions): Promise<ApiServer> {
   }
 
   const masterOf = opts.masterOf ?? apiPeerOf;
+  const isFromGate = opts.fromGate ?? viaGate;
   const server = http.createServer(async (req, res) => {
     const url = (req.url ?? '/').split('?')[0];
     try {
@@ -299,7 +329,7 @@ export async function startApiServer(opts: ApiOptions): Promise<ApiServer> {
         return json(res, 200, trustBody(opts.trust, since, challenge));
       }
       if (req.method === 'GET' && url === '/blob') return blob(new URLSearchParams((req.url ?? '').split('?')[1] ?? '').get('mb'), res);
-      if (req.method === 'POST' && url === '/load') return handleLoad(await readJson(req), res, masterOf(req.socket.remotePort));
+      if (req.method === 'POST' && url === '/load') return handleLoad(await readJson(req), res, masterOf(req.socket.remotePort), isFromGate(req.socket.remotePort));
       // a chat may carry up to three shrunk photos (ui/vision.ts) for this computer's own llama-server
       if (req.method === 'POST' && url === '/chat') return handleChat(await readJson(req, 4 << 20), res);
       if (req.method === 'POST' && url === '/stop') { current?.abort(); return json(res, 200, { ok: true, wasBusy: state.busy }); }

@@ -219,6 +219,12 @@ const apiPeers = new Map<number, string>();
 export function apiPeerOf(localPort: number | undefined): string | null {
   return localPort === undefined ? null : apiPeers.get(localPort) ?? null;
 }
+// Every api connection the gate pipes, a relayed one too: it came from another device, not from
+// this computer's own engine (security review 2.1: such a request may not replace a file here).
+const gateLegs = new Set<number>();
+export function viaGate(localPort: number | undefined): boolean {
+  return localPort !== undefined && gateLegs.has(localPort);
+}
 
 // Would a v1 hello be taken right now? Only with a secret, and only while nothing is paired:
 // v1 proves no identity, so once one certificate is trusted it is off for everyone.
@@ -342,6 +348,7 @@ export async function startGateServer(opts: GateServerOptions): Promise<GateServ
     const leg = target.localPort;
     const kept = channel === 'api' && leg !== undefined && !isLoopback(peer);
     if (kept) apiPeers.set(leg!, plainIp(peer));
+    if (channel === 'api' && leg !== undefined) gateLegs.add(leg);
     writeLine(socket, okLine);
     const at = Date.now();
     handshakeDone();
@@ -354,6 +361,7 @@ export async function startGateServer(opts: GateServerOptions): Promise<GateServ
     const counts = await pipeBoth(socket, target, rest);
     live.delete(socket);
     if (kept && apiPeers.get(leg!) === plainIp(peer)) apiPeers.delete(leg!);
+    if (channel === 'api' && leg !== undefined) gateLegs.delete(leg);
     letGo();
     emit({ type: 'close', channel, peer, at: Date.now(), ms: Date.now() - at, bytesIn: counts.aToB, bytesOut: counts.bToA, v, fp });
   };
