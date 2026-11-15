@@ -347,7 +347,7 @@ const normDigest = (s: string) => s.replace(/[:\s]/g, '').toLowerCase();
 
 export type Why =
   | 'ok' | 'computer' | 'old' | 'cannot' | 'malformed' | 'chain' | 'root' | 'expired' | 'revoked'
-  | 'challenge' | 'bound' | 'software' | 'unlocked' | 'boot' | 'app' | 'unofficial';
+  | 'challenge' | 'bound' | 'software' | 'unlocked' | 'boot' | 'app' | 'unofficial' | 'unchecked';
 
 export interface OwnerBlind {
   ok: boolean | null;
@@ -480,6 +480,9 @@ export function ownerBlind(input: AttestInput, policy: AttestPolicy): OwnerBlind
       ? `${hw}, but a debug build (signed with the public debug key): its owner could still read jobs`
       : `${hw}, but not an official kula build: its owner could still read jobs`);
   }
-  const extra = [facts.patch ? `security patch ${facts.patch}` : '', policy.status ? '' : 'revocation not checked'].filter(Boolean).join('; ');
+  // leaked factory keys forge exactly this; only Google's list of revoked keys tells, so without it
+  // the proof is shown but not counted (security review 5.4)
+  if (!policy.status) return out(null, 'unchecked', `${hw}, official kula build, but Google's list of revoked keys was not checked (kula-node attestation refresh): not counted yet`);
+  const extra = facts.patch ? `security patch ${facts.patch}` : '';
   return out(true, 'ok', `${hw}, official kula build: its owner cannot read jobs${extra ? ` (${extra})` : ''}`);
 }

@@ -230,6 +230,8 @@ export function ownerBlindCheck(d: Pick<EyeDevice, 'kind'>, t: EyeTrust, now: nu
   }
   const stale = now - x.at > ATTEST_STALE || x.at > now + HOUR;
   if (x.ok !== null && stale) return { k, ok: null, text: `its last proof is from ${day(x.at)}: not asked again since` };
+  // a proof that holds but whose keys were not checked against Google's revocation list: shown, not counted
+  if (x.ok === null && (a as { why?: unknown }).why === 'unchecked') return { k, ok: null, text: x.text };
   // a phone that answers as a computer would, or leaves the proof out, shows nothing (G3)
   if (x.ok === null && !stale && phone) {
     return { k, ok: false, text: d.kind === 'phone' ? 'it sent no proof (a phone can make one): nothing shows its owner cannot read jobs' : 'it sent no proof, though it has before: nothing shows its owner cannot read jobs' };

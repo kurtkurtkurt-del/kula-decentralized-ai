@@ -237,9 +237,10 @@ test('hardware key, locked, green, kula, but the public debug key: its owner cou
 
 test('an official signer: its owner cannot read jobs (said with what was not checked)', () => {
   const r = check(made({ digests: ['11'.repeat(32)], level: 2 }), ['11'.repeat(32)]);
-  assert.equal(r.ok, true);
-  assert.equal(r.why, 'ok');
-  assert.equal(r.text, 'StrongBox key, locked, verified boot, official kula build: its owner cannot read jobs (security patch 2025-10; revocation not checked)');
+  // without Google's revocation list a leaked factory key could have made it: shown, not counted (5.4)
+  assert.equal(r.ok, null);
+  assert.equal(r.why, 'unchecked');
+  assert.equal(r.text, "StrongBox key, locked, verified boot, official kula build, but Google's list of revoked keys was not checked (kula-node attestation refresh): not counted yet");
   const withList = ownerBlind(made({ digests: ['11'.repeat(32)] }), { now: NOW, roots: testRoots, signers: ['11'.repeat(32)], status: parseStatusList({ entries: {} }, NOW)! });
   assert.equal(withList.text, 'hardware key, locked, verified boot, official kula build: its owner cannot read jobs (security patch 2025-10)');
 });

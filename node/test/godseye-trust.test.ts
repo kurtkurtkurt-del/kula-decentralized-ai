@@ -373,12 +373,12 @@ test('the engine asks for a proof once an hour, and keeps only what the check fo
   assert.deepEqual(foldTrust(look, { ledger: {} }, 2).attest, look.attest);
   const policy = { signers: [], pkg: 'app.pasaport.android', status: null };
   const ch = 'ab'.repeat(32);
-  assert.deepEqual(foldAttest({ id: 'x' }, ch, 5, policy), { at: 5, ok: null, why: 'old', text: 'an older kula: it cannot prove this yet' });
-  assert.deepEqual(foldAttest({ id: 'x', attest: null }, ch, 5, policy), { at: 5, ok: null, why: 'computer', text: 'a computer cannot prove this' });
+  assert.deepEqual(foldAttest({ id: 'x' }, ch, 5, policy), { at: 5, ok: null, why: 'old', text: 'an older kula: it cannot prove this yet', for: 'x' });
+  assert.deepEqual(foldAttest({ id: 'x', attest: null }, ch, 5, policy), { at: 5, ok: null, why: 'computer', text: 'a computer cannot prove this', for: 'x' });
   const no = foldAttest({ attest: { v: 1, error: 'no keystore on this device' } }, ch, 5, policy);
   assert.equal(no.ok, false);
   assert.equal(no.why, 'cannot');
-  assert.deepEqual(Object.keys(no), ['at', 'ok', 'why', 'text'], 'no chain kept');
+  assert.deepEqual(Object.keys(no), ['at', 'ok', 'why', 'text', 'for'], 'no chain kept, only the id it was for');
 });
 
 // ---- G1 (13.11.2026): a rewritten ledger is never all clear --------------------------------------
@@ -681,3 +681,22 @@ function branchFrom(saved: unknown) {
   const b = create({ now: () => 9_000, load: <T>(f: T) => (structuredClone(notes) as T) ?? f, save: (x: unknown) => { notes = structuredClone(x); }, emit: (t: string) => events.push(t), peek: () => null, keys: nodeKeys });
   return { b, events, notes: () => notes as any };
 }
+
+test('security 6.1: a proof made for one phone does not stay with a device that answers as another', async () => {
+  const { foldTrust: fold } = await import('../src/ui/engine.ts');
+  const borrowed = { ...fold(null, { id: 'P' }, 1), attest: { at: 1, ok: true, why: 'ok' as const, text: 'its owner cannot read jobs', for: 'P' } };
+  // round 0 answered as phone P with P's proof; round 1 answers as itself, M
+  const next = fold(borrowed, { id: 'M', ledger: {} }, 2).attest!;
+  assert.equal(next.ok, false);
+  assert.equal(next.why, 'bound');
+  assert.match(next.text, /made for another device/);
+  // the same device keeps its own proof
+  assert.equal(fold(borrowed, { id: 'P', ledger: {} }, 2).attest!.ok, true);
+});
+
+test('security 5.4: a proof whose keys were not checked against the revocation list is shown, not counted', async () => {
+  const { ownerBlindCheck } = await import('../src/godseye/branches/trust.ts');
+  const r = ownerBlindCheck({ kind: 'phone' }, { attest: { at: 1000, ok: null, why: 'unchecked', text: 'official kula build, but not checked: not counted yet' } } as any, 2000);
+  assert.equal(r.ok, null);
+  assert.match(r.text, /not counted yet/);
+});

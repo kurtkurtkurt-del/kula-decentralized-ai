@@ -72,7 +72,8 @@ export const TRUST_ROUNDS = Math.floor((TRUST_WINDOW - 1) / TRUST_LINES);
 // Owner-blind (11.11.2026, attest.ts): once an hour a look asks the device to prove that its owner
 // cannot see the work (GET /trust?challenge=, a fresh random question each time); the proof is
 // checked here when it comes and only the outcome is kept, with when it was asked.
-export interface AttestLook { at: number; ok: boolean | null; why: Why; text: string }
+// for: the device id the proof was made for; kept only while later answers come from that id (6.1)
+export interface AttestLook { at: number; ok: boolean | null; why: Why; text: string; for?: string | null }
 export const ATTEST_EVERY = 3_600_000;
 export const attestDue = (look: TrustLook | null, now: number) => !look?.attest || now - look.attest.at >= ATTEST_EVERY || now < look.attest.at;
 
@@ -83,7 +84,7 @@ export function foldAttest(b: any, challenge: string, at: number, policy: Partia
     { attest: b && typeof b === 'object' && 'attest' in b ? b.attest : undefined, challenge, id: str(b?.id, 64), alg: str(b?.key?.alg, 16), pub: str(b?.key?.pub) },
     { now: at, signers: cfg.signers, pkg: cfg.pkg, ...policy, status: policy.status === undefined ? loadStatusList() : policy.status },
   );
-  return { at, ok: r.ok, why: r.why, text: r.text };
+  return { at, ok: r.ok, why: r.why, text: r.text, for: str(b?.id, 64) };
 }
 export const OLD_WORKER = 'an older kula without the security report: update it';
 const str = (v: unknown, max = 4096): string | null => (typeof v === 'string' && v.length <= max ? v : null);
@@ -128,7 +129,10 @@ export function foldTrust(was: TrustLook | null, b: any, at: number, pin: string
     // not the head: with `more` the answer stopped before it
     upTo: got.length ? sha256Hex(got[got.length - 1]) : lg.found === true ? was?.upTo ?? null : null,
     lines, restartedAt, rejectsDay: day, rejectsLast: last,
-    attest: was?.attest ?? null,
+    // a proof counts only for the id it was made for: a device that answered one round as another
+    // phone (with that phone's proof) and the next as itself does not keep it (security review 6.1)
+    attest: !was?.attest ? null : (was.attest.for ?? null) === str(b?.id, 64) ? was.attest
+      : { ...was.attest, ok: false, why: 'bound', text: 'its proof was made for another device: not counted' },
   };
 }
 
