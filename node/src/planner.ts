@@ -28,6 +28,8 @@ export interface Plan {
   needMb: number;
   est: Estimate;
   estAlone: Estimate | null;
+  learned?: string[];      // devices whose speed came from their answers ('me': this computer)
+  seenTps?: number | null; // this split's last real tok/s
 }
 
 export class TooBig extends Error {
@@ -51,6 +53,10 @@ export interface PlanInput {
   // measured decoding tok/s on this model (kula-node bench); they replace bw × eff
   localTps?: number | null;
   peerTps?: Record<string, number | null | undefined>;
+  // efficiencies learned from answers (learn.ts): they replace the guessed ones, per device
+  peerEff?: Record<string, number | undefined>;
+  localLearned?: boolean;  // localEff came from answers, not a guess
+  seenTps?: number | null; // what this very split (devices and model) last ran at
 }
 
 /**
@@ -71,7 +77,7 @@ export function planSplit(input: PlanInput): Plan {
     const sim = planShares({
       model: input.model, ctx: input.ctx, share: input.share, all: input.all, net,
       local: withMeasured({ id: 'me', capMb: input.localFreeMb * LOCAL_SHARE, bw: input.localBw || DEFAULT_BW, eff: input.localEff ?? DEFAULT_EFF }, input.model, input.localTps),
-      workers: input.peers.map((p) => { const w = workerSide(p); return withMeasured({ id: p.id, capMb: w.capMb, bw: w.bw, eff: w.eff }, input.model, input.peerTps?.[p.id]); }),
+      workers: input.peers.map((p) => { const w = workerSide(p); return withMeasured({ id: p.id, capMb: w.capMb, bw: w.bw, eff: input.peerEff?.[p.id] ?? w.eff }, input.model, input.peerTps?.[p.id]); }),
     });
     return {
       mode: 'split',
@@ -79,6 +85,7 @@ export function planSplit(input: PlanInput): Plan {
       skipped: input.skipped ?? [],
       notNeeded: input.peers.filter((p) => !sim.used.some((u) => u.id === p.id)),
       localMb: sim.localMb, localLayers: sim.localLayers, fitsAlone: sim.fitsAlone, aloneFaster: sim.aloneFaster, totalMb: sim.totalMb, needMb: sim.needMb, est: sim.est, estAlone: sim.estAlone,
+      learned: [...(input.localLearned ? ['me'] : []), ...input.peers.filter((p) => input.peerEff?.[p.id] !== undefined).map((p) => p.id)], seenTps: input.seenTps ?? null,
     };
   } catch (e) {
     if ((e as Error).message === 'toobig' || (e as Error).message === 'local') {
@@ -157,9 +164,10 @@ export function explainPlan(pl: Plan, model: string, nameOf: (p: Peer) => string
   const gb = (mb: number) => Math.round(mb / 102.4) / 10;
   const brings = (p: Peer) => {
     const w = workerSide(p);
+    const learned = pl.learned?.includes(p.id);
     return w.on === 'gpu'
-      ? `its graphics card (${p.gpu}, ${gb(p.vram ?? 0)} GB; its speed is guessed from the name)`
-      : `its memory (${p.bw != null ? `${Math.round(p.bw)} GB/s` : 'speed not known'})`;
+      ? `its graphics card (${p.gpu}, ${gb(p.vram ?? 0)} GB; ${learned ? 'its speed learned from its answers' : 'its speed is guessed from the name'})`
+      : `its memory (${p.bw != null ? `${Math.round(p.bw)} GB/s` : 'speed not known'}${learned ? ', speed learned from its answers' : ''})`;
   };
   const short = (p: Peer) => (workerSide(p).on === 'gpu' ? `${p.gpu}` : `memory ${p.bw != null ? `${Math.round(p.bw)} GB/s` : 'speed not known'}`);
   if (!pl.used.length) out.push(`${model} runs on this computer alone.`);
@@ -171,7 +179,10 @@ export function explainPlan(pl: Plan, model: string, nameOf: (p: Peer) => string
   }
   for (const p of pl.notNeeded) out.push(`${nameOf(p)} left out: the answers come faster without it (${short(p)}; ${net(p)}).`);
   for (const s of pl.skipped) out.push(`${nameOf(s.peer)} left out: ${s.why}.`);
-  if (pl.est && pl.used.length) out.push(`estimate: about ${tpsRange(pl.est.tps)} tok/s (worked out from memory speeds and the network, not measured yet).`);
+  if (pl.est && pl.used.length) {
+    const how = pl.learned?.length ? 'worked out from memory speeds, what the devices showed in earlier answers, and the network' : 'worked out from memory speeds and the network, not measured yet';
+    out.push(`estimate: about ${tpsRange(pl.est.tps)} tok/s (${how}).${pl.seenTps ? ` last time this split ran at ${pl.seenTps} tok/s.` : ''}`);
+  }
   if (pl.fitsAlone && pl.aloneFaster && pl.estAlone) {
     out.push(`suggestion: it fits on this computer alone and runs faster here (about ${tpsRange(pl.estAlone.tps)} tok/s): pick “here”, or “apart” to answer several chats at once.`);
   } else if (pl.fitsAlone && pl.estAlone && pl.est) {

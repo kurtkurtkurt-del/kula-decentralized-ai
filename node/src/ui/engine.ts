@@ -26,7 +26,9 @@ import { home, repoRoots } from '../paths.js';
 import { findLlama, sha256File, type LlamaBinaries } from '../llama.js';
 import { download, sha256Of } from '../download.js';
 import { hasLocalGpu, prepareSplit, startSplitServer } from '../split.js';
-import { explainPlan, TooBig } from '../planner.js';
+import { explainPlan, TooBig, workerSide } from '../planner.js';
+import { learnDevice, learnSplit, readSpeeds, splitKey, MIN_TOKENS } from '../learn.js';
+import { effFromTps, type SimModel } from '../sim.js';
 import { simModelOf } from '../gguf.js';
 import { publicName } from '../devicenames.js';
 import { freeRamMB, measureBandwidth, sourceAddressTo, lanIPv4 } from '../sysinfo.js';
@@ -371,6 +373,10 @@ export class Engine {
   // this computer's qr (kula-host v1): its one-time code, until when, and who paired with it
   // what the model was loaded with last: a split that lost a device loads again from it, without that device
   private lastLoad: Parameters<Engine['load']>[0] | null = null;
+  // what an answer teaches (learn.ts): the loaded model's shape, this computer's memory speed, the split's key
+  private localBw: number | null = null;
+  private localBwAsked = false;
+  private learnCtx: { sim: SimModel; bw: number | null; key: string | null } | null = null;
   private hostPin: { pin: string; exp: number; peerId: string | null; tried: Set<string> } | null = null;
   private hostIdCache: string | null = null;
   readonly catalog: CatalogEntry[];
@@ -1524,6 +1530,8 @@ export class Engine {
       const common = { probeMs: this.opts.probeMs ?? 2500, log: (s: string) => this.log(s), identity: this.identity(), onProgress, signal: ac.signal };
       let cluster: Cluster;
       let splitParts: Part[] | undefined;
+      let learnKey: string | null = null;
+      let learnBw: number | null = null;
       let file: string;
       let size: number;
       let mmproj: string | null = null;
@@ -1582,10 +1590,14 @@ export class Engine {
         } else {
           const bw = await (this.opts.bandwidth ?? (() => measureBandwidth().catch(() => 4)))();
           const near = peers.filter((p) => !p.relay);
+          learnBw = bw;
+          const modelKey = cat?.id ?? `local:${localOnly!.name}`;
+          learnKey = splitKey(modelKey, near.map((p) => p.id));
+          const known = readSpeeds();
           for (const p of peers.filter((p) => p.relay)) plan.push(`${p.name} is far away (relay): split needs the lan, so it is left out.`);
           let setup;
           try {
-            setup = await prepareSplit({ model: simModelOf(file), ctx, localFreeMb: freeRamMB(), localBw: bw, peers: near, net: netOf(near.map((p) => p.link)), localGpu: hasLocalGpu(llama), share: true, all: req.all === true, probeMs: common.probeMs, log: common.log, identity: common.identity });
+            setup = await prepareSplit({ model: simModelOf(file), ctx, localFreeMb: freeRamMB(), localBw: bw, peers: near, net: netOf(near.map((p) => p.link)), localGpu: hasLocalGpu(llama), localEff: known.devices.self?.eff, localLearned: known.devices.self !== undefined, peerEff: Object.fromEntries(near.map((p) => [p.id, known.devices[p.id]?.eff])), seenTps: known.splits[learnKey]?.tps ?? null, share: true, all: req.all === true, probeMs: common.probeMs, log: common.log, identity: common.identity });
           } catch (e) {
             if (e instanceof TooBig) throw new Error(`too big: the model needs about ${e.needMb} MB, these devices offer ${e.totalMb} MB`);
             throw e;
@@ -1607,6 +1619,7 @@ export class Engine {
       this.loaded = { mode, model: { id: cat?.id ?? `local:${localOnly!.name}`, name: modelName, file: path.basename(file), size }, ctx, devices: [], since: Date.now(), ...(splitParts ? { parts: splitParts } : {}), sees: mode === 'here' && !!mmproj };
       this.plan = plan;
       this.lastLoad = { ...req };
+      this.learnCtx = { sim: simModelOf(file), bw: learnBw, key: learnKey };
       this.note(`${modelName} ready on ${cluster.devices.map((d) => d.name).join(', ')} (${mode})`);
       const st = this.status();
       emit({ done: true, status: st });
@@ -1677,6 +1690,7 @@ export class Engine {
       }
       const r = await this.cluster.chat(wire, (t) => { if (!first) first = Date.now() - t0; pieces++; onToken(t); }, { maxTokens: o.maxTokens, temperature: o.temperature, signal: ac.signal });
       this.note(`${r.device}: ${r.tokens} tokens, ${r.tps} tok/s, first after ${r.firstMs} ms${r.stopped ? ' (stopped)' : ''}`);
+      this.learnFrom(loaded, r);
       this.usage.record({ ...count, device: r.device, promptTokens: r.promptTokens, completion: r.tokens || pieces, ms: r.ms, firstMs: r.firstMs, stopped: r.stopped === true });
       return note ? { ...r, photos: note } : r;
     } catch (e) {
@@ -1697,6 +1711,31 @@ export class Engine {
       this.chats.delete(ac);
       o.signal?.removeEventListener('abort', relay);
     }
+  }
+
+  // what this answer teaches about speed (learn.ts): in a split the split's tok/s; one device
+  // alone (apart, here) that device's efficiency, which carries over to other models
+  private learnFrom(loaded: NonNullable<Engine['loaded']>, r: Reply): void {
+    const c = this.learnCtx;
+    if (!c || r.tokens < MIN_TOKENS || !(r.tps > 0)) return;
+    try {
+      if (loaded.mode === 'split') { if (c.key) learnSplit(c.key, r.tps); return; }
+      if (loaded.mode !== 'apart' && loaded.mode !== 'here') return;
+      const d = this.cluster?.devices.find((x) => x.name === r.device);
+      if (!d) return;
+      if (d.local) {
+        const bw = c.bw ?? this.localBw;
+        if (bw) learnDevice('self', effFromTps(c.sim, bw, r.tps));
+        // this computer's memory speed, measured once in the background for the next answer
+        else if (!this.localBwAsked) {
+          this.localBwAsked = true;
+          (this.opts.bandwidth ?? (() => measureBandwidth()))().then((x) => { this.localBw = x; }).catch(() => {});
+        }
+        return;
+      }
+      const p = findPeer(readPeers(this.file()), d.id);
+      if (p) learnDevice(p.id, effFromTps(c.sim, workerSide(p).bw, r.tps));
+    } catch (e) { this.log(`learn: ${(e as Error).message}`); }
   }
 
   // The devices of a split that no longer answer on their rpc channel; when there are any,
