@@ -27,6 +27,29 @@ and says when a device alone would be faster. Rule of thumb: jobs are split, mod
 iOS is out of scope for now: the app opens on iOS but runs no models (a Swift module is written
 on a branch, never built).
 
+## what's new in 0.5.0 · 15 November 2026
+
+- **Safer between devices.** A security review of all of kula found 138 problems; one was serious
+  (a paired device could run its own code on a phone through the model connection). That one and
+  most others are fixed: a device joins only with its code or a typed certificate; another device
+  cannot run code on your phone, delete or replace your models, or reach the model server around
+  kula's door; the phone asks before a link or a QR code starts sharing or adds a computer; Android
+  no longer backs up kula's pairings. What is still open is listed in [docs/SECURITY.md](docs/SECURITY.md).
+- **Talk mode works.** On the phone you talk to kula and it answers aloud, on a screen that looks like
+  the rest of the app. Messages, calendar entries and notes it reads to you stay on the phone.
+  Checked in code and tests, not yet on a real phone.
+- **A split model is placed the way llama.cpp really places it.** Before, a helping computer could
+  get twice its planned share. The strongest computer takes the heaviest part. A computer whose
+  llama.cpp has no graphics card to use (many Windows and Linux laptops) does not join a split for
+  now; it still runs models on its own.
+- **kula learns each device's real speed** from its answers and plans the next split with it.
+- **A cut-off answer goes on.** When a device leaves a split in the middle of an answer, kula goes on
+  from where it stopped.
+- **Phones and computers in one split.** Devices not measured yet are measured before a split starts.
+- **Words that match the code.** This README, the site, the chat page and the phone app now promise
+  only what kula does.
+- **New apps (0.5.0)** for Android, Mac, Linux and Windows. The Android app installs over 0.4.0.
+
 ## what's new in 0.4.0 · 13 November 2026
 
 - **Computers help each other** (added 14 November 2026). In **devices**, one computer can **share
