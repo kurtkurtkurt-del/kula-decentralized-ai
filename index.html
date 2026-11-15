@@ -10,7 +10,7 @@
 <link rel="stylesheet" href="site.css">
 </head>
 <body>
-<!-- kula's download page (v0.5.0, 15.11.2026). Plain html + site.css, no build step, nothing
+<!-- kula's download page (v0.5.1, 16.11.2026). Plain html + site.css, no build step, nothing
      fetched from anywhere else.
 
      Downloads use the newest GitHub release by stable asset names, so the release must carry
@@ -38,7 +38,7 @@
 
 <main>
   <section class="hero wrap">
-    <p class="kicker"><span class="dot" aria-hidden="true"></span> open models · on your own devices · v0.5.0</p>
+    <p class="kicker"><span class="dot" aria-hidden="true"></span> open models · on your own devices · v0.5.1</p>
     <h1>Your devices,<br>one local AI.</h1>
     <p class="lede">kula joins your phones, tablets and computers into one AI cluster that runs open
       models. They talk to each other directly — nothing goes to a cloud.</p>
@@ -367,7 +367,21 @@
   </section>
 
   <section class="news wrap" aria-labelledby="news-h0">
-    <h2 id="news-h0">what's new in 0.5.0 <time class="news-date" datetime="2026-11-15">15 November 2026</time></h2>
+    <h2 id="news-h0">what's new in 0.5.1 <time class="news-date" datetime="2026-11-16">16 November 2026</time></h2>
+    <ul class="news-list">
+      <li><b>Computers without a graphics card help in a split again.</b> kula's door now stops
+        anything that would run code on them, as on the phone. Not yet tried between two real computers.</li>
+      <li><b>A computer added by typing its address</b> tells kula its memory and graphics card, so
+        the bigger computer gets the bigger part.</li>
+      <li><b>The main computer stays awake</b> while a model is loaded.</li>
+      <li><b>Tablets show as tablets.</b></li>
+      <li><b>Windows says when a wi-fi is "public"</b> and how to make it private, so other devices can reach it.</li>
+      <li><b>New apps.</b> Android, Mac, Linux and Windows, all 0.5.1.</li>
+    </ul>
+  </section>
+
+  <details class="news news-old wrap">
+    <summary><h2 id="news-h050">what's new in 0.5.0 <time class="news-date" datetime="2026-11-15">15 November 2026</time></h2><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 10 5 5 5-5"/></svg></summary>
     <ul class="news-list">
       <li><b>Safer between devices.</b> A security review found 138 problems, one serious; it and
         most others are fixed. Another device cannot run code on your phone or touch your models,
@@ -375,14 +389,14 @@
       <li><b>Talk mode works.</b> Talk to kula on the phone and it answers aloud. What it reads to
         you stays on the phone. Not yet tried on a real phone.</li>
       <li><b>A split model is placed the way llama.cpp really places it.</b> The strongest computer
-        takes the heaviest part. Computers without a usable graphics card run models alone for now.</li>
+        takes the heaviest part.</li>
       <li><b>kula learns each device's real speed</b> and plans the next split with it.</li>
       <li><b>A cut-off answer goes on</b> from where it stopped when a device leaves.</li>
       <li><b>Words that match the code.</b> The site, the chat page and the app promise only what
         kula does.</li>
       <li><b>New apps.</b> Android, Mac, Linux and Windows, all 0.5.0.</li>
     </ul>
-  </section>
+  </details>
 
   <details class="news news-old wrap">
     <summary><h2 id="news-h1">what's new in 0.4.0 <time class="news-date" datetime="2026-11-13">13 November 2026</time></h2><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 10 5 5 5-5"/></svg></summary>
@@ -493,7 +507,7 @@
     <a href="https://huggingface.co/bartowski/mistralai_Mistral-Small-3.2-24B-Instruct-2506-GGUF">Mistral Small</a>
     <a href="https://huggingface.co/unsloth/GLM-4.7-Flash-GGUF">GLM 4.7</a>
   </nav>
-  <p class="small">kula v0.5.0 · runs on <a href="https://github.com/ggml-org/llama.cpp">llama.cpp</a> · type: Inter Tight (SIL OFL)</p>
+  <p class="small">kula v0.5.1 · runs on <a href="https://github.com/ggml-org/llama.cpp">llama.cpp</a> · type: Inter Tight (SIL OFL)</p>
 </footer>
 
 <script>
