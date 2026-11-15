@@ -36,7 +36,10 @@ function main() {
     if (only !== undefined && only !== name) continue;
     const list = phases[name];
     const t = Date.now();
-    const r = spawnSync(process.execPath, ['--import', 'tsx', '--test', '--test-force-exit', '--test-timeout=120000', ...list], { stdio: 'inherit', cwd: root });
+    // heavy is the brain's long simulations: on GitHub's node 20 runner godseye-bench.test.ts took
+    // more than 120 s as a whole (15.11.2026), so heavy gets 5 minutes; light keeps 2
+    const timeout = name === 'heavy' ? 300000 : 120000;
+    const r = spawnSync(process.execPath, ['--import', 'tsx', '--test', '--test-force-exit', `--test-timeout=${timeout}`, ...list], { stdio: 'inherit', cwd: root });
     const code = r.status ?? 1;
     results.push({ name, n: list.length, code, ms: Date.now() - t });
   }
