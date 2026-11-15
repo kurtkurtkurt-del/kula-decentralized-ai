@@ -200,3 +200,23 @@ describe('yes / no', () => {
     expect(answer('what is the weather', 'en')).toBeNull();
   });
 });
+
+// how the phone's recognizer writes what people say (15.11.2026): numbers as words, a Turkish
+// case ending apart from its number, a polite question
+describe('as the recognizer writes it', () => {
+  it('numbers said in words', () => {
+    expect(findDuration(norm('set a timer for ten minutes', 'en'))?.seconds).toBe(600);
+    expect(findDuration(norm('on beş dakikalık zamanlayıcı kur', 'tr'))?.seconds).toBe(900);
+    expect(findDuration(norm('timer für fünf minuten', 'de'))?.seconds).toBe(300);
+    expect(findDuration(norm('a timer for an hour', 'en'))?.seconds).toBe(3600);
+    expect(p('on dakikalık zamanlayıcı kur', 'tr')).toMatchObject({ kind: 'timer.set', seconds: 600 });
+  });
+  it('a Turkish ending written apart: "sabah 7 de" is 7:00', () => {
+    expect(p('sabah 7 de alarm kur', 'tr')).toMatchObject({ kind: 'alarm.set', hour: 7, minute: 0 });
+    expect(p('yarın akşam 6 da spor ekle', 'tr')).toMatchObject({ kind: 'calendar.add', title: 'spor' });
+  });
+  it('polite and loose forms', () => {
+    expect(p('mesajlarımı okur musun', 'tr')).toEqual({ kind: 'messages.read', from: null });
+    expect(p('10 dakika sonra haber ver', 'tr')).toMatchObject({ kind: 'timer.set', seconds: 600 });
+  });
+});

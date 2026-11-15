@@ -3,7 +3,7 @@
 // brain tab's decisions log (brain.voice.*). Spoken lines are short: they are heard, not read.
 export const voice = {
   'voice.title': { en: 'talk', de: 'sprechen', tr: 'konuş' },
-  'voice.phase.idle': { en: 'tap the circle and speak', de: 'tipp auf den kreis und sprich', tr: 'daireye dokun ve konuş' },
+  'voice.phase.idle': { en: 'tap the microphone and speak', de: 'tipp auf das mikrofon und sprich', tr: 'mikrofona dokun ve konuş' },
   'voice.phase.listening': { en: 'listening…', de: 'hört zu…', tr: 'dinliyor…' },
   'voice.phase.thinking': { en: 'thinking…', de: 'denkt nach…', tr: 'düşünüyor…' },
   'voice.phase.speaking': { en: 'speaking · tap to interrupt', de: 'spricht · tippen unterbricht', tr: 'konuşuyor · dokunursan susar' },
@@ -32,6 +32,8 @@ export const voice = {
   'voice.banner.noModel': { en: 'the speech model for {lang} is not on this phone yet. download it once, or allow the online recognizer.', de: 'das sprachmodell für {lang} ist noch nicht auf diesem handy. lade es einmal herunter oder erlaube die online-erkennung.', tr: '{lang} konuşma modeli henüz bu telefonda değil. bir kez indir ya da çevrimiçi tanıyıcıya izin ver.' },
   'voice.banner.download': { en: 'download the model', de: 'modell laden', tr: 'modeli indir' },
   'voice.banner.downloading': { en: 'the phone is downloading it. try again in a minute.', de: 'das handy lädt es herunter. versuch es in einer minute nochmal.', tr: 'telefon indiriyor. bir dakika sonra tekrar dene.' },
+  'voice.banner.downloadFailed': { en: 'the phone could not download the speech model here. try again later, or allow the online recognizer.', de: 'das handy konnte das sprachmodell hier nicht laden. versuch es später nochmal oder erlaube die online-erkennung.', tr: 'telefon konuşma modelini burada indiremedi. sonra tekrar dene ya da çevrimiçi tanıyıcıya izin ver.' },
+  'voice.banner.retry': { en: 'try again', de: 'nochmal versuchen', tr: 'tekrar dene' },
   'voice.banner.useOnline': { en: 'allow the online recognizer', de: 'online-erkennung erlauben', tr: 'çevrimiçi tanıyıcıya izin ver' },
   'voice.banner.notificationAccess': { en: 'to read your messages aloud, turn on notification access for kula. it keeps the last 50 message notifications in memory; nothing leaves the phone.', de: 'um deine nachrichten vorzulesen, schalte den benachrichtigungszugriff für kula ein. es behält die letzten 50 nachrichten im speicher; nichts verlässt das handy.', tr: 'mesajlarını sesli okumak için kula’ya bildirim erişimi ver. son 50 mesaj bildirimini bellekte tutar; hiçbir şey telefondan çıkmaz.' },
   'voice.banner.openAccess': { en: 'open notification access', de: 'benachrichtigungszugriff öffnen', tr: 'bildirim erişimini aç' },
@@ -99,6 +101,7 @@ export const voice = {
   'voice.say.alarmSet': { en: 'alarm set for {time}.', de: 'wecker auf {time} gestellt.', tr: 'alarm {time} için kuruldu.' },
   'voice.say.timerSet': { en: 'timer for {len} started.', de: 'timer für {len} läuft.', tr: '{len} zamanlayıcı başladı.' },
   'voice.say.noClock': { en: 'the clock app didn’t take it.', de: 'die uhr-app hat es nicht angenommen.', tr: 'saat uygulaması kabul etmedi.' },
+  'voice.say.empty': { en: 'the model gave no answer. ask again, a little shorter.', de: 'das modell hat nicht geantwortet. frag nochmal, etwas kürzer.', tr: 'model cevap vermedi. biraz daha kısa sor.' },
   'voice.say.noEngine': { en: 'no model is loaded, so i can only do the calendar, messages, alarms and notes. load one in models to talk.', de: 'es ist kein modell geladen, also kann ich nur kalender, nachrichten, wecker und notizen. lade eines unter modelle, um zu reden.', tr: 'yüklü model yok, şimdilik yalnızca takvim, mesaj, alarm ve not yapabilirim. konuşmak için modellerden birini yükle.' },
 
   'voice.ask.calendar': { en: 'adding {title} {when}. okay?', de: 'ich trage {title} ein, {when}. okay?', tr: '{when} için {title} ekliyorum, tamam mı?' },

@@ -18,15 +18,15 @@ plug into.
 | the secretary | `app/src/voice/intents.ts`, `tools.ts` | rule-based intents in Turkish, English and German; calendar, messages, drafts, alarms, timers, time, notes |
 | the conversation | `app/src/voice/prompt.ts` | everything else goes to the loaded model as a concise secretary, last 6 turns of memory |
 | wiring | `app/src/voice/useTalk.ts` | the controller the screen uses |
-| the screen | `app/src/app/talk.tsx` | the dark screen with the circle; a **talk** button on the chat screen opens it |
+| the screen | `app/src/app/talk.tsx` | laid out like the chat: the conversation as bubbles, one round microphone button, new conversation · type · settings; a **talk** button on the chat screen opens it |
 | settings | `app/src/components/TalkSettings.tsx` | in settings → talk mode, and the talk screen's sheet |
 | native | `app/modules/kula-voice` | headset button, bluetooth mic, message notifications, alarm/timer/draft intents |
 
 ### Talking
 
-- Tap the circle once. From then on it is **hands-free**: after every reply it listens again.
+- Tap the microphone button once. From then on it is **hands-free**: after every reply it listens again.
   Two silent listens in a row and it rests (tap again).
-- **Barge-in**: tap the circle, or press the headset button, while it thinks or speaks — it
+- **Barge-in**: tap the button, or press the headset button, while it thinks or speaks — it
   stops and listens.
 - A long press on the headset button (or "bye", "görüşürüz", "tschüss") ends talk mode.
 - Errors are said in one short sentence; it never retries an error on its own.
@@ -131,7 +131,9 @@ planned custom accessory (BLE) adds:
 ## For developers
 
 - Tests: `app/src/__tests__/voice-*.test.ts` (loop, text, intents on a fixed clock, tools with
-  expo-calendar and the native module mocked, the speaker).
+  expo-calendar and the native module mocked, the speaker), `talk-privacy.test.ts` (routeTalk) and
+  `talk-flow.test.ts` (the controller end to end with the recognizer, the voice and the model
+  mocked; the recognizer's Android event order).
 - Native: `app/modules/kula-voice/android` — `KulaVoiceModule.kt` (the JS face),
   `Headset.kt` (MediaSession + audio route), `MessageListener.kt` (the notification
   listener). Permissions it adds: `MODIFY_AUDIO_SETTINGS`, `com.android.alarm.permission.SET_ALARM`,

@@ -90,38 +90,60 @@ export type Heard = {
   start: () => void;
 };
 
+// codes that only close a listen already reported: Android says "no match" twice (a nomatch
+// event, then the error no-speech), and abort() sends "aborted" before its end
+const AFTERMATH = new Set(['no-speech', 'nomatch', 'speech-timeout', 'aborted']);
+
 /**
- * The recognizer's events as the loop wants them: partial words, one final text, or silence
- * (nomatch, or an end with nothing final). Returns the unsubscribe.
+ * One listen's outcome, once (pure: the recognizer's events in, the loop's out). A listen ends
+ * in one final text, one silence or one error; whatever the recognizer sends after that for
+ * the same listen is dropped until the next start. Before 15.11.2026 a silent listen was
+ * reported twice (nomatch, then no-speech): the first listened again, the second put the loop
+ * to rest while the new listen kept the microphone open behind an idle screen.
  */
-export function onHeard(h: Heard): () => void {
+export function heardEvents(h: Heard) {
   let finished = false;
-  const subs = [
-    R.addListener('start', () => {
+  return {
+    start: () => {
       finished = false;
       h.start();
-    }),
-    R.addListener('result', (e) => {
-      const text = e.results[0]?.transcript ?? '';
-      if (e.isFinal) {
+    },
+    result: (text: string, isFinal: boolean) => {
+      if (finished) return;
+      if (isFinal) {
         finished = true;
         h.final(text);
       } else h.partial(text);
-    }),
-    R.addListener('nomatch', () => {
+    },
+    nomatch: () => {
       if (finished) return;
       finished = true;
       h.silence();
-    }),
-    R.addListener('error', (e) => {
+    },
+    error: (code: string, message: string) => {
+      // an error that is not the aftermath of a finished listen is a new listen failing before
+      // its start event (no microphone, busy): it must reach the loop
+      if (finished && AFTERMATH.has(code)) return;
       finished = true;
-      h.error(e.error, e.message);
-    }),
-    R.addListener('end', () => {
+      h.error(code, message);
+    },
+    end: () => {
       if (finished) return;
       finished = true;
       h.silence();
-    }),
+    },
+  };
+}
+
+/** The recognizer's events as the loop wants them (heardEvents). Returns the unsubscribe. */
+export function onHeard(h: Heard): () => void {
+  const on = heardEvents(h);
+  const subs = [
+    R.addListener('start', on.start),
+    R.addListener('result', (e) => on.result(e.results[0]?.transcript ?? '', e.isFinal)),
+    R.addListener('nomatch', on.nomatch),
+    R.addListener('error', (e) => on.error(e.error, e.message)),
+    R.addListener('end', on.end),
   ];
   return () => subs.forEach((s) => s.remove());
 }

@@ -38,6 +38,8 @@ export function norm(text: string, lang: VLang): string {
   s = s.replace(/\b([ap])\.m\.?/g, '$1m');
   s = s.replace(/[^\p{L}\p{N}:' ]+/gu, ' ').replace(/:(?!\d\d)/g, ' ');
   s = s.replace(/(^|\s)'+|'+(\s|$)/g, '$1$2'); // quotes, not suffix apostrophes
+  // the recognizer often writes a Turkish case ending apart: "sabah 7 de" is "7'de"
+  if (lang === 'tr') s = s.replace(/(\d) (da|de|ta|te|ya|ye)(?= |$)/g, "$1'$2");
   return ` ${s.replace(/\s+/g, ' ').trim()} `;
 }
 
@@ -173,14 +175,22 @@ const UNITS: [string, number][] = [
   ['hours?|hrs?|saat|saatlik|stunden?', 3600],
 ];
 
-/** A length of time ("10 minutes", "yarım saat", "eine stunde") in seconds, and its words. */
+// a length said in words: a recognizer writes "ten minutes" or "on dakika" as often as "10"
+const NUM_WORDS: Record<string, number> = {
+  a: 1, an: 1, one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10, fifteen: 15, twenty: 20, thirty: 30, 'forty five': 45, 'forty-five': 45, forty: 40, fifty: 50, sixty: 60, ninety: 90,
+  bir: 1, iki: 2, üç: 3, dört: 4, beş: 5, altı: 6, yedi: 7, sekiz: 8, dokuz: 9, on: 10, 'on beş': 15, yirmi: 20, 'yirmi beş': 25, otuz: 30, 'kırk beş': 45, kırk: 40, elli: 50, altmış: 60, doksan: 90,
+  ein: 1, eine: 1, einen: 1, zwei: 2, drei: 3, vier: 4, fünf: 5, sechs: 6, sieben: 7, acht: 8, neun: 9, zehn: 10, fünfzehn: 15, zwanzig: 20, dreißig: 30, fünfundvierzig: 45, vierzig: 40, fünfzig: 50, sechzig: 60, neunzig: 90,
+};
+const NUM_SRC = Object.keys(NUM_WORDS).sort((a, b) => b.length - a.length).join('|');
+
+/** A length of time ("10 minutes", "ten minutes", "yarım saat", "eine stunde") in seconds, and its words. */
 export function findDuration(s: string): { seconds: number; src: string } | null {
   const half = re(`half an hour|yarım saat|yarim saat|(?:eine )?halbe stunde`).exec(s);
   if (half) return { seconds: 1800, src: half[0].trim() };
   for (const [units, k] of UNITS) {
-    const x = re(`(?:in |for )?(\\d+|an?|one|bir|eine?n?) (?:${units})${SUF}(?: sonra| içinde| lang)?`).exec(s);
+    const x = re(`(?:in |for )?(\\d+|${NUM_SRC}) (?:${units})${SUF}(?: sonra| içinde| lang)?`).exec(s);
     if (x) {
-      const n = /^\d+$/.test(x[1]) ? +x[1] : 1;
+      const n = /^\d+$/.test(x[1]) ? +x[1] : NUM_WORDS[x[1]] ?? 1;
       return { seconds: n * k, src: x[0].trim() };
     }
   }
@@ -214,9 +224,9 @@ const DATE = "what's the date|whats the date|what is the date|what date is it|to
 
 const TIMER = 'timer|zamanlayıcı|zamanlayici|sayaç|sayac|geri sayım|kurzzeitwecker';
 const ALARM = 'alarm|alarmı|wake me|wake me up|uyandır|uyandir|wecker|weck mich|wecke mich';
-const REMIND = 'remind me|hatırlat|hatirlat|erinnere mich|erinner mich';
+const REMIND = 'remind me|hatırlat|hatirlat|haber ver|erinnere mich|erinner mich';
 
-const READ_MSG = "(?:read|check)(?: me)? (?:my |the )?(?:new |latest |recent |last )?(?:messages|texts|notifications)|any (?:new )?messages|do i have (?:any )?(?:new )?messages|new messages|mesajlarımı oku|mesajları oku|mesajlarım|yeni mesaj(?:ım|lar)?(?: var mı)?|mesaj var mı|(?:lies|lese)(?: mir)? (?:meine |die )?(?:neuen )?nachrichten|neue nachrichten|habe ich (?:neue )?nachrichten|meine nachrichten";
+const READ_MSG = "(?:read|check)(?: me)? (?:my |the )?(?:new |latest |recent |last )?(?:messages|texts|notifications)|any (?:new )?messages|do i have (?:any )?(?:new )?messages|new messages|mesajlarımı (?:oku|söyle)[a-zçğıöşü]*(?: musun| misin)?|mesajları oku|mesajlarım|yeni mesaj(?:ım|lar)?(?: var mı)?|mesaj var mı|(?:lies|lese)(?: mir)? (?:meine |die )?(?:neuen )?nachrichten|neue nachrichten|habe ich (?:neue )?nachrichten|meine nachrichten";
 
 const CAL_READ = "what's on my (?:calendar|schedule|agenda)|whats on my (?:calendar|schedule|agenda)|what is on my (?:calendar|schedule|agenda)|what do i have|my (?:schedule|calendar|agenda|appointments|events|meetings)|any (?:appointments|meetings|events)|ne var|programım|programımda|programim|takvimimde|takvimde|takvimim|randevularım|bugünkü program|yarınki program|was steht (?:heute |morgen |übermorgen )?an|was habe ich|was hab ich|meine termine|termine|was steht im kalender|was steht in meinem kalender";
 const CAL_ADD = 'add|put|schedule|create|book|plan|set up|ekle|koy|planla|kaydet|oluştur|olustur|takvime|takvimime|füge|füg|fuege|hinzu|hinzufügen|trag|trage|eintragen|plane|erstelle|setz|setze|termin';
