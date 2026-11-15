@@ -1619,7 +1619,9 @@ export class Engine {
       this.loaded = { mode, model: { id: cat?.id ?? `local:${localOnly!.name}`, name: modelName, file: path.basename(file), size }, ctx, devices: [], since: Date.now(), ...(splitParts ? { parts: splitParts } : {}), sees: mode === 'here' && !!mmproj };
       this.plan = plan;
       this.lastLoad = { ...req };
-      this.learnCtx = { sim: simModelOf(file), bw: learnBw, key: learnKey };
+      // only a model on this computer has a shape to learn from (mode phone: the file is on the phone)
+      this.learnCtx = null;
+      if (mode !== 'phone') { try { this.learnCtx = { sim: simModelOf(file), bw: learnBw, key: learnKey }; } catch {} }
       this.note(`${modelName} ready on ${cluster.devices.map((d) => d.name).join(', ')} (${mode})`);
       const st = this.status();
       emit({ done: true, status: st });
