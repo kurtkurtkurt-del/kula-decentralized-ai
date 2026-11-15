@@ -160,6 +160,8 @@ export function tpsRange(tps: number): string {
 // and the output layer on the last worker (split.ts llamaSplit)
 export function explainPlan(pl: Plan, model: string, nameOf: (p: Peer) => string = (p) => p.name, localGpu = true): string[] {
   const out: string[] = [];
+  const KIND: Record<string, string> = { pc: 'computer', phone: 'phone', tablet: 'tablet' };
+  const label = (p: Peer) => `${nameOf(p)} (${KIND[p.kind] ?? p.kind})`;
   const net = (p: Peer) => (p.link && p.link.mbps != null ? `network ${p.link.mbps} MB/s, ${p.link.rttMs} ms` : 'network not measured');
   const gb = (mb: number) => Math.round(mb / 102.4) / 10;
   const brings = (p: Peer) => {
@@ -175,9 +177,9 @@ export function explainPlan(pl: Plan, model: string, nameOf: (p: Peer) => string
     out.push(`${model} is split over ${pl.used.length + 1} devices; the strongest takes the most:`);
     if (localGpu) out.push(pl.localLayers ? `this computer: ${pl.localLayers} layers and the input and output layers (${pl.localMb} MB).` : `this computer: the input and output layers (${pl.localMb} MB).`);
     else out.push(`this computer: ${pl.localLayers ? `${pl.localLayers} layers on its processor and ` : ''}the input layer (${pl.localMb} MB); the output layer runs on ${nameOf(pl.used[pl.used.length - 1])}, the last in the chain.`);
-    for (const u of pl.used) out.push(`${nameOf(u)}: ${u.layers} layers (${u.assignedMb} MB) on ${brings(u)}; ${net(u)}.`);
+    for (const u of pl.used) out.push(`${label(u)}: ${u.layers} layers (${u.assignedMb} MB) on ${brings(u)}; ${net(u)}.`);
   }
-  for (const p of pl.notNeeded) out.push(`${nameOf(p)} left out: the answers come faster without it (${short(p)}; ${net(p)}).`);
+  for (const p of pl.notNeeded) out.push(`${label(p)} left out: the answers come faster without it (${short(p)}; ${net(p)}).`);
   for (const s of pl.skipped) out.push(`${nameOf(s.peer)} left out: ${s.why}.`);
   if (pl.est && pl.used.length) {
     const how = pl.learned?.length ? 'worked out from memory speeds, what the devices showed in earlier answers, and the network' : 'worked out from memory speeds and the network, not measured yet';

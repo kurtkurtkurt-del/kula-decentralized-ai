@@ -34,6 +34,13 @@ test('measureLink: a device that does not answer gives an error, not a number', 
   assert.equal(closed, 1);
 });
 
+test('measureLink: a device that never answers gives up after the time limit', async () => {
+  const t0 = Date.now();
+  const l = await measureLink({ host: 'x', port: 1, secret: '' }, null, { timeoutMs: 300, open: () => new Promise(() => {}) });
+  assert.match(l.error!, /no answer within/);
+  assert.ok(Date.now() - t0 < 2000);
+});
+
 test('netOf: the slowest link and the longest delay; unmeasured devices count as the guess', () => {
   const at = '2026-11-14T00:00:00Z';
   assert.deepEqual(netOf([]), { mbps: 30, rttMs: 3 });

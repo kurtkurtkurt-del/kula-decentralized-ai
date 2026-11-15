@@ -1354,7 +1354,8 @@ function renderDevices() {
       pen.addEventListener('click', () => startRename(g, who, name));
       tools.appendChild(pen);
     }
-    const pc = g.peers.find((p) => p.kind === 'pc' && !p.far);
+    // the network to any device on this lan, phone or computer (both answer GET /blob)
+    const pc = g.peers.find((p) => !p.far);
     if (pc) {
       const m = el('button', 'pill', 'measure');
       m.type = 'button';
@@ -1880,7 +1881,7 @@ function renderModes() {
   const notes = {
     phone: 'the phone downloads the model from huggingface itself (sha256-checked) the first time, then keeps it.',
     apart: 'every chosen device loads its own copy; a prompt goes to the fastest one that is free. this computer joins when it has the file.',
-    split: 'the model sits on this computer and its layers are spread over the chosen phones (lan only).',
+    split: 'the model sits on this computer and its layers are spread over the chosen phones and computers, the strongest taking the most (lan only).',
     here: 'llama-server on this computer; no phone needed.',
   };
   $('mode-note').textContent = notes[settings.mode] + (!llama ? ' split and here need llama.cpp on this computer: kula-node setup.' : '');

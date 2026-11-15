@@ -721,8 +721,8 @@ export class Engine {
     writePeers(list, file);
     this.reach.set(peer.id, { r: { ok: true }, at: Date.now() });
     this.note(`paired with ${peer.name} at ${host}:${port}`);
-    // a computer is measured right away: the planner needs its network before a split
-    if (kind === 'pc') await this.measure(peer.id).catch(() => {});
+    // measured right away: the planner needs its network before a split (a phone answers GET /blob too)
+    await this.measure(peer.id).catch(() => {});
     return this.rowOf(peer.id);
   }
 
@@ -1606,7 +1606,16 @@ export class Engine {
           cluster = await openApart({ ...common, model: ref, peers: [], localModelFile: file, localMmproj: mmproj, llama, startBackend: this.opts.startBackend });
         } else {
           const bw = await (this.opts.bandwidth ?? (() => measureBandwidth().catch(() => 4)))();
-          const near = peers.filter((p) => !p.relay);
+          let near = peers.filter((p) => !p.relay);
+          // a device never measured is measured now, all at once (a second or so): a split plans
+          // with each one's real network, phones and computers alike
+          const unmeasured = near.filter((p) => !p.link);
+          if (unmeasured.length) {
+            say({ phase: 'checking', device: 'the network', line: `measuring the network to ${unmeasured.length} device${unmeasured.length === 1 ? '' : 's'}` });
+            await Promise.all(unmeasured.map((p) => this.measure(p.id).catch(() => null)));
+            const book = readPeers(this.file());
+            near = near.map((p) => ({ ...p, link: findPeer(book, p.id)?.link ?? p.link }));
+          }
           learnBw = bw;
           const modelKey = cat?.id ?? `local:${localOnly!.name}`;
           learnKey = splitKey(modelKey, near.map((p) => p.id));

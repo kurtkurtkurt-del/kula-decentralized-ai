@@ -36,7 +36,7 @@ test('a device that would slow things down is left out, and the plan says why', 
   const pl = planSplit({ model: q14, ctx: 2048, localFreeMb: 5000, localBw: 60, peers: [fast, slow], net: { mbps: 3, rttMs: 40 }, share: true });
   assert.ok(pl.notNeeded.some((p) => p.id === 'slow'), `used ${pl.used.map((u) => u.id)} notNeeded ${pl.notNeeded.map((p) => p.id)}`);
   const lines = explainPlan(pl, 'Qwen2.5 14B');
-  assert.ok(lines.some((l) => /^slow left out: the answers come faster without it .*network 3 MB\/s, 40 ms/.test(l)), lines.join('\n'));
+  assert.ok(lines.some((l) => /^slow \(computer\) left out: the answers come faster without it .*network 3 MB\/s, 40 ms/.test(l)), lines.join('\n'));
   assert.ok(lines.some((l) => /^estimate: about [\d.]+–[\d.]+ tok\/s/.test(l)), lines.join('\n'));
 });
 
@@ -51,4 +51,18 @@ test('when this computer alone is faster, the plan says so and suggests "here"',
 test('tpsRange is a range, not one number', () => {
   assert.equal(tpsRange(10), '6–12');
   assert.equal(tpsRange(2), '1.2–2.3');
+});
+
+test('phones and computers in one split: each takes what it is good for, and the plan says which is which', () => {
+  const phone: Peer = { id: 'pixel', name: 'Pixel 8', host: 'p', port: 1, secret: '', kind: 'phone', ram: 7000, bw: 50, added_at: 't', link: link(40, 6) };
+  const card = pc('desk', 32000, 40, { gpu: 'NVIDIA GeForce RTX 3060', vram: 12288, link: link(60, 3) });
+  const lap = pc('laptop', 14000, 25, { link: link(50, 4) });
+  const pl = planSplit({ model: q14, ctx: 2048, localFreeMb: 6000, localBw: 60, peers: [phone, card, lap], net: { mbps: 40, rttMs: 6 }, share: true, all: true });
+  const by = Object.fromEntries(pl.used.map((u) => [u.id, u]));
+  assert.ok(by.pixel && by.desk && by.laptop, 'all asked for, all hold a part');
+  assert.ok(by.desk.layers > by.pixel.layers && by.desk.layers > by.laptop.layers, `desk ${by.desk.layers}, pixel ${by.pixel.layers}, laptop ${by.laptop.layers}`);
+  assert.ok(by.pixel.assignedMb <= 7000 * 0.75 + 1, 'a phone never past its share of free RAM');
+  const lines = explainPlan(pl, 'Qwen2.5 14B');
+  assert.ok(lines.some((l) => l.startsWith('Pixel 8 (phone): ')), lines.join('\n'));
+  assert.ok(lines.some((l) => l.startsWith('desk (computer): ') && /graphics card/.test(l)), lines.join('\n'));
 });

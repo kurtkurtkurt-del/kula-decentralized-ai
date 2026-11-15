@@ -20,19 +20,22 @@ const RTT_ROUNDS = 5;
 export async function measureLink(
   p: { host: string; port: number; secret: string },
   tls: TlsClient | null,
-  opts: { mb?: number; rounds?: number; open?: (p: { host: string; port: number; secret: string }, tls: TlsClient | null) => Promise<{ port: number; close(): Promise<void> }> } = {},
+  opts: { mb?: number; rounds?: number; timeoutMs?: number; open?: (p: { host: string; port: number; secret: string }, tls: TlsClient | null) => Promise<{ port: number; close(): Promise<void> }> } = {},
 ): Promise<Link> {
   const at = new Date().toISOString();
   const open = opts.open ?? (async (q, t) => { const tun = new Tunnel(q.host, q.port, q.secret, 'api', t); return { port: await tun.listen(), close: () => tun.close() }; });
   let tunnel: { port: number; close(): Promise<void> } | null = null;
+  // a device that does not answer must not hold up a load: the whole test gets 8 s
+  let timer: NodeJS.Timeout | undefined;
+  const late = new Promise<never>((_, no) => { timer = setTimeout(() => no(new Error(`no answer within ${Math.max(1, Math.round((opts.timeoutMs ?? 8000) / 1000))} s`)), opts.timeoutMs ?? 8000); });
   try {
-    tunnel = await open(p, tls);
-    const mbps = await tunnelSpeed(tunnel.port, opts.mb ?? LINK_MB);
+    tunnel = await Promise.race([open(p, tls), late]);
+    const mbps = await Promise.race([tunnelSpeed(tunnel.port, opts.mb ?? LINK_MB), late]);
     const ms: number[] = [];
     for (let i = 0; i < (opts.rounds ?? RTT_ROUNDS); i++) {
       const t0 = performance.now();
-      const r = await fetch(`http://127.0.0.1:${tunnel.port}/status`);
-      await r.arrayBuffer();
+      const r = await Promise.race([fetch(`http://127.0.0.1:${tunnel.port}/status`), late]);
+      await Promise.race([r.arrayBuffer(), late]);
       if (!r.ok) throw new Error(`status: http ${r.status}`);
       ms.push(performance.now() - t0);
     }
@@ -43,6 +46,8 @@ export async function measureLink(
   } catch (e) {
     return { mbps: null, rttMs: null, at, error: (e as Error).message };
   } finally {
+    clearTimeout(timer);
+    late.catch(() => {});
     await tunnel?.close().catch(() => {});
   }
 }
