@@ -82,9 +82,9 @@ kula-node's `share --lie-ram <MB>` exists to make this rule fire on purpose.
 - `Gate.Server(…, auditor)`: `onHello` on the client's hello (replay and clock; skipped for a
   three-field v1 hello), `onConnect` after the proof, `onReject` on every refusal, `onEnd`
   with bytes and seconds when the pipe closes, `onPair` in v2.
-- The auditor's hooks run inside `runCatching`, and a `NO` is sent **before** the record is
-  written: a ledger that cannot be written never takes the gate down and never lets anyone
-  through.
+- The auditor's hooks run inside `runCatching`; the record is written first and the `NO` goes
+  out even when writing fails: a ledger that cannot be written never takes the gate down and
+  never lets anyone through.
 - `WorkerService` (phone) and `share` (kula-node) build the key and the ledger, hand the
   auditor to the gate, write `health` from the status loop and `claim` while a master holds
   memory.
@@ -331,8 +331,8 @@ beyond rotation. (Hardware key attestation came on 11.11.2026: owner-blind, abov
 Fixed on 10.11.2026: a half last line (the process died mid-append) is cut off on open
 and before each append, and the cut is itself a signed `health` line `{"torn":<bytes>}`; a
 key file that is there but unreadable is moved aside as `<name>.broken.<ms>` (a `health`
-line `{"key":"replaced"}`) instead of being overwritten in silence; the phone's key lives in
-the Android KeyStore; the key and the lines leave the device through `GET /trust`, so the
+line `{"key":"replaced"}`) instead of being overwritten in silence; the phone's P-256 device key lives in
+the Android KeyStore (an older Ed25519 one stays a file); the key and the lines leave the device through `GET /trust`, so the
 computer verifies the phone's signatures (the security report above).
 
 Known gaps (noted, not fixed): after a key is replaced the old lines no longer verify with

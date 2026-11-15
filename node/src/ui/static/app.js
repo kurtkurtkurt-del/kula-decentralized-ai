@@ -2786,7 +2786,7 @@ function renderAbout() {
   add(dl, 'llama.cpp', `${i?.llamaTag ?? 'b11157'}${i ? (i.llama ? ', set up on this computer' : ', not set up here yet: kula-node setup (split and here need it)') : ''}`);
   if (i?.node) add(dl, 'node', i.node);
   if (i?.host) add(dl, 'this computer', i.host);
-  add(dl, 'privacy', 'chats, notes and counts stay on this computer; the page loads nothing from the internet.');
+  add(dl, 'privacy', 'saved chats, notes and counts stay on the computer that runs kula (a guest\'s chats too, sent to it over the wi-fi); what is typed goes to the devices that run the model; the page loads nothing from the internet.');
   const p = $('set-paths');
   p.replaceChildren();
   if (!i?.paths) return;

@@ -11,8 +11,8 @@ export const passportui = {
   'passportui.measured': { en: 'measured {at}', de: 'gemessen {at}', tr: 'ölçüm {at}' },
   'passportui.json.title': { en: 'the passport as a file', de: 'der pass als datei', tr: 'dosya olarak pasaport' },
   'passportui.json.text': {
-    en: 'the same passport, written for machines. it shares what this device measured (memory, speed, the model it can hold) so the cluster can plan who runs what. nothing private: no name, no account, no files.',
-    de: 'derselbe pass, für maschinen geschrieben. er teilt, was dieses gerät gemessen hat (speicher, tempo, welches modell passt), damit der verbund planen kann, wer was rechnet. nichts privates: kein name, kein konto, keine dateien.',
-    tr: 'aynı pasaport, makineler için yazılmış hali. bu cihazın ölçülen gücünü (bellek, hız, sığan model) paylaşır, böylece küme kimin neyi çalıştıracağını planlar. özel bir şey yok: isim, hesap, dosya yok.',
+    en: 'the same passport, written for machines. it shares what this device measured (memory, speed, the model it can hold) so the cluster can plan who runs what. no name and no files in it; it carries this install\'s id and the phone\'s model, and a copy is saved to your kula account.',
+    de: 'derselbe pass, für maschinen geschrieben. er teilt, was dieses gerät gemessen hat (speicher, tempo, welches modell passt), damit der verbund planen kann, wer was rechnet. kein name und keine dateien darin; er trägt die id dieser installation und das handymodell, und eine kopie wird in deinem kula-konto gespeichert.',
+    tr: 'aynı pasaport, makineler için yazılmış hali. bu cihazın ölçülen gücünü (bellek, hız, sığan model) paylaşır, böylece küme kimin neyi çalıştıracağını planlar. içinde isim ve dosya yok; bu kurulumun kimliğini ve telefonun modelini taşır, bir kopyası kula hesabına kaydedilir.',
   },
 } as const;

@@ -23,8 +23,11 @@ key, `kula_device_key`), the cluster secret (v1) and the pairing code (v2).
 | **A5 the model server** | HF or the host in `url` | redirects, a long body, a wrong size |
 
 Design boundary: **a paired master gets trusted access to the worker's processor and memory** (that
-is ggml RPC). This page pulls A3 to the boundary "it uses the worker only for the model, it cannot
-reach the rest of the phone"; it does not block it completely.
+is ggml RPC). Until 15.11.2026 that was more than processor and memory: llama.cpp's rpc server ran
+the "custom" ops, which carry a function pointer, so a paired master could run code in the worker
+process (the app's UID). The phone's build now refuses those ops (`tools/patches/kula-rpc-no-code-ops.patch`),
+and a computer whose llama.cpp has no GPU does not serve rpc until its server is patched. The rest
+of the rpc protocol is still not hardened upstream: pairing stays a trust decision.
 
 ## findings
 
@@ -49,7 +52,7 @@ Severity: **H** high, **M** medium, **L** low. Status: ✅ fixed, ⚠️ open (a
 | 15 | NSD TXT | `id` (a permanent UUID), `ram`, `bw`, `name` (Build.MODEL), `kind`, `v`. No secret. The permanent `id` allows tracking across networks. | **L** | `dns-sd -B _kula._tcp` | no change; `id` is already in the QR; an optional per-network derived id later. | ⚠️ |
 | 16 | release `network-security-config` | Cleartext only on `127.0.0.1`/`localhost`; attached in the release manifest. Raw sockets (gate v1) are not affected by NSC — v1 being plain text is by design (HMAC identity, no encryption). | ℹ️ | — | no change | ℹ️ |
 | 17 | `WorkerService` | `exported=false`; the secret Intent extra comes from the same app; the stop action is `PendingIntent.getService` + `FLAG_IMMUTABLE`, it can be stopped from the lock screen (no information leaks). The state file (`pin`, `fp`) is in the app's private directory. | ℹ️ | — | no change | ℹ️ |
-| 18 | `.part` races | Two downloaders for the same file name (ApiServer `load` + the app's own download) can write to the same `.part`; the `active` map is per id. Result: a broken file → the sha does not match → it is deleted (no data loss, wasted time). | **L** | download from both sides at the same time | no change | ⚠️ |
+| 18 | `.part` races | Two downloaders for the same file name (ApiServer `load` + the app's own download) can write to the same `.part`; the `active` map is per id. Result: a broken file → the sha does not match → it is deleted (no data loss, wasted time). Note (15.11.2026): until then a request with a wrong sha also deleted a model that was already on disk; now a file already there is never deleted or replaced by a request. | **L** | download from both sides at the same time | no change | ⚠️ |
 | 19 | JNI `ggml_backend_rpc_add_server` | If the endpoint does not answer the process **aborts** (the app crashes). Kotlin does a gate probe, but if the worker goes down or says `busy` between the probe and add_server, it aborts. | **L** | close the worker after the probe | no change; llama.cpp needs to return an error instead of aborting (upstream) | ⚠️ |
 | 20 | kv-store | `llm.peers` (secret, fp, pin) and `llm.share` (the phone's own secret) are in the expo-sqlite kv-store, unencrypted, in the app's private directory. `allowBackup` default → Android backups can carry this data. There is no secret in the logs (checked with `grep`: `console.*`, `Log.*` only the first 16 hex of the fp). | **L** | take a backup | no change; `secureStorage.ts` (Keystore) already exists, `llm.share.secret` can move there; `android:allowBackup=false` or backup rules | ⚠️ |
 
@@ -72,11 +75,14 @@ Severity: **H** high, **M** medium, **L** low. Status: ✅ fixed, ⚠️ open (a
   masters' v2 QR works. v1 is plain text: A1 on the same Wi-Fi **can read** the token stream and
   the RPC tensors (no encryption), A2 (who saw the v2 QR) becomes a master. Decision: should a
   worker that has paired over v3 once close v1? (`paired.size() > 0 → secret = null`). Closing it
-  at the cost of losing old masters is suggested; one line (`WorkerService`), not done in this branch.
+  at the cost of losing old masters is suggested. Since then the phone closes v1 once anything is
+  paired (`Gate.kt` `v1Open()`); it stays open on a hand-started phone until its first v2 pairing.
 - **A4 loopback.** On the master phone the tunnel is at `127.0.0.1:<port>`, on the worker phone
   ggml RPC is at `127.0.0.1:<rpcPort>`: any app on the same phone can connect. On the master side
-  this means an open door to the worker's RPC (memory writes). llama.cpp's RPC does not know Unix
-  sockets, so there is no cheap fix; it stays with the assumption "only a device without root/debug".
+  this means an open door to the worker's RPC (memory writes). No root is needed: any installed app
+  can reach these ports. Since 15.11.2026 the worker api serves only connections the gate opened
+  (`ApiPeers` legs) and the rpc server refuses the code-carrying ops; the rpc port and the master's
+  tunnels themselves still have no authentication on loopback (llama.cpp's RPC knows no Unix sockets).
 - **A3 a compromised master.** A paired master makes the worker download and load any GGUF it
   wants (the gguf parser with untrusted input), and writes the worker process's memory over RPC.
   The worker is a separate process (`:worker`), it can reach the app's data from the same UID. The
@@ -90,8 +96,8 @@ Severity: **H** high, **M** medium, **L** low. Status: ✅ fixed, ⚠️ open (a
 
 ### phone ↔ pc
 
-- `kula-node share` **without `--tls`** still defaults to v1: a secret in the QR, plain-text
-  traffic. `--tls` should be made the default (one flag), not changed in this branch.
+- `kula-node share` uses TLS by default since 10.11.2026; `--no-tls` is the old v1 (a secret in the
+  QR, plain-text traffic).
 - On the PC side the `paired` file is plain text under `~/.kula/`; another user/process on the PC
   can read it. The certificate key is the same (`gate_key`); there is no KeyStore equivalent.
 - `ggml-rpc-server` is bound to `127.0.0.1` on the PC but any process on the PC can connect (the
@@ -107,3 +113,25 @@ Severity: **H** high, **M** medium, **L** low. Status: ✅ fixed, ⚠️ open (a
   must be removed from `paired` by hand (`forget` exists, no interface).
 - The auditor's ledger (`ledger.jsonl`) is local; a fake worker writes its own ledger. This page
   does not count the ledger as proof.
+
+## The review of 15.11.2026
+
+A read-only review (18 reviewers, five rounds) found 138 entries and 36 promises the code did not
+keep; it is kept outside the public repository. Fixed the same day, each with a test that fails
+without the fix:
+
+| what | where |
+|---|---|
+| a device that said "paired" was pinned without the code (wi-fi, a typed code, a relay) | `node/src/gate.ts` `handshake()` |
+| llama.cpp's rpc server ran code-carrying "custom" ops from a paired device | `tools/patches/kula-rpc-no-code-ops.patch`; CPU-only computers stop serving rpc |
+| a paired device could delete or replace a model already on disk, and leave half downloads | `node/src/api.ts`, `ApiServer.kt` |
+| talk mode sent what the secretary read aloud to another device | `app/src/voice/prompt.ts` `routeTalk` |
+| 32 silent connections locked the gate; one code could pair two devices | `gate.ts`, `Gate.kt` |
+| a deep link or one QR started sharing, or swapped the signed-in account, without asking | `share.tsx`, `computers.tsx`, `PeerScan.tsx`, `auth/google.ts` |
+| the worker api on 127.0.0.1 served any local process or app | `api.ts` (`viaGate`, `apiAuth`), `ApiServer.kt` (`ApiPeers` legs) |
+| a borrowed or unchecked owner-blind proof counted | `ui/engine.ts`, `attest.ts` |
+
+Still open: the rpc port and the master's tunnels on loopback have no key; a trickled handshake on
+the phone has no overall deadline; the phone's trust check does not tie the ledger key to the
+certificate; releases are not signed with a key kept off GitHub; the nightly backup artifact and
+the shared demo account need the owner's hand on GitHub and Supabase.

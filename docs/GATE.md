@@ -362,7 +362,7 @@ Binaries come from `node tools/llama-src.mjs --host`.
 | reading prompts and answers on the wi-fi | **no** | yes, TLS 1.3 |
 | a photographed QR giving lasting access | **yes, it does** | no: the code is one-time, later access needs the paired certificate |
 | a device impersonating another | **no identity** | the certificate fingerprint, pinned both ways |
-| the worker's own memory abuse by a paired master | no (llama.cpp's protocol allows it; that is why pairing is a trust decision) | same |
+| the worker's own memory abuse by a paired master | no (llama.cpp's protocol allows it; that is why pairing is a trust decision) | the code-carrying ops are refused on the phone and CPU-only computers do not serve rpc (15.11.2026); the rest of the protocol is still trusted |
 | a paired master that should not be trusted any more (a lost laptop, an old phone) | only a new secret for everyone | remove it on the worker: refused at once, its open connections closed, a signed ledger line ([above](#remove-a-devices-access-10112026)) |
 
 A pairing does not expire by itself: a master stays trusted until it is removed on the

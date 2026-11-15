@@ -7,7 +7,8 @@
 kula runs a real language model (llama.cpp b11157) on an Android phone, and joins the phones,
 tablets and computers in the same room into one cluster: a phone joins by scanning a QR code, a
 computer joins with **kula-node** and its chat page. The devices talk to each other directly,
-through one gated port each; no cloud and no outside server sit in the middle. Every worker
+through one gated port each; no server of ours sits in the cluster's middle (the phone app's account
+and a relay, if you set one, are separate). Every worker
 keeps a signed ledger of what it did, and at night the devices can work on a project you planned
 while they charge.
 
@@ -71,15 +72,17 @@ on a branch, never built).
   looks again, the same as your own buttons. Cards come from real measurements, for example
   "Gemma 3 4B would run faster split over mac and tablet".
 - **Only your devices and your friends'.** Each device is marked *home* (yours) or *circle* (a
-  friend's); unknown devices take no part. Every request is sorted into private, friends-ok or
-  world-ok by named rules, so a key, a password or a hidden instruction cannot leave unseen.
+  friend's); a device takes part only after it proved the one-time code or the certificate you
+  typed from its screen. A night project's request is sorted into private, friends-ok or world-ok
+  by named rules, and kula warns when a key, a password or a hidden instruction is in it (it warns,
+  it does not stop it; plain chats are not scanned).
 - **The phone has the same brain as the computer.** All twelve parts run on the phone too, from the
   same code, with the cards on the brain tab.
 - **Last night in 30 seconds.** A replay shows which devices worked overnight, on what, and how many
   tokens (*replay* on the brain panel, or `kula-node brain replay`).
-- **Proof that a phone's owner cannot see the job.** The phone proves it with Android's hardware key
+- **A hint that a phone's owner cannot see the job.** The phone shows Android's hardware key
   attestation (locked bootloader, verified boot, the official kula build); the security report shows
-  it. 0.3.0 is the first apk signed with kula's own key: uninstall 0.2.0 first, because Android does
+  it, and counts it only after `kula-node attestation refresh` checked Google's list of revoked keys. 0.3.0 is the first apk signed with kula's own key: uninstall 0.2.0 first, because Android does
   not update an app signed with another key.
 - **Plan for friends lending devices to each other.** The design for friends sharing their devices'
   night hours (offers, requests, spot checks, signed receipts, no money):
@@ -213,7 +216,8 @@ xattr -d com.apple.quarantine kula-node-mac-arm64    # see below
 - `setup` says up front what it will fetch and how big it is. Everything lands in
   `~/.kula-node/`. On Linux and Windows it downloads llama.cpp's release build instead of
   compiling (the CUDA build when `nvidia-smi` answers).
-- The chat page lives at `http://127.0.0.1:50590/<random>/`, on this computer only. The address
+- The chat page lives at `http://127.0.0.1:50590/<random>/`, on this computer only (unless you
+  turn on invite: then devices on the wi-fi with its QR reach it, over plain http). The address
   stays the same across restarts, so you can bookmark it. `ui --stop` (or ctrl-c) stops it.
 - **settings** (bottom left) has the defaults, your custom instructions, **usage** (tokens per
   model, device and day, counted on this computer only), data controls and the `/v1` token
@@ -264,8 +268,9 @@ faster (then it suggests "here"). An NVIDIA card's speed is guessed from its nam
 measured. A computer that shares does not go to sleep (the screen still may). When a computer in a
 split goes away (closed, asleep, off the wi-fi), the next answer notices, the model is loaded again
 with the devices that are left (or on this computer alone), and the answer comes anyway; if part of
-the answer was already on screen, it goes on from the very word where it stopped. Sharing opens kula's gate on the local network only (IPv4: no global IPv6 address, so no way in
-from the internet), behind TLS and a one-time code; llama.cpp itself stays on 127.0.0.1 behind the
+the answer was already on screen, it goes on from the very word where it stopped. Sharing opens kula's gate on IPv4 only and asks the router for nothing (no global IPv6 address
+in its QR), behind TLS and a one-time code; it is reachable from outside only if this computer has a
+public address or the router forwards the port; llama.cpp itself stays on 127.0.0.1 behind the
 gate. A device that paired once may come back without a code: the share section says how many can,
 and "remove its access" on a device's row takes that back. So far this ran between two kula copies on one Mac only, not
 yet between two real computers.
