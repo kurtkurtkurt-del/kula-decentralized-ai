@@ -8,7 +8,7 @@ import os from 'node:os';
 import path from 'node:path';
 import net from 'node:net';
 import { startGateServer } from '../src/gate.ts';
-import { prepareSplit, splitServerArgs, startSplitServer } from '../src/split.ts';
+import { llamaSplit, prepareSplit, splitServerArgs, startSplitServer } from '../src/split.ts';
 import { TooBig, MB, simModel, tensorSplit } from '../src/planner.ts';
 
 const big = (gb: number) => simModel({ id: `m${gb}`, size: gb * 1024 * MB, layers: 28, hidden: 3584, vocab: 152064, quant: 'Q4_K_M', kv_mb_per_1k: 56 });
@@ -46,9 +46,10 @@ test('split: probe, plan, tunnels; a dead peer and a wrong secret drop out befor
     assert.ok(setup.plan.localMb <= 2800 && setup.plan.localMb > 300);
     assert.equal(setup.tunnels.length, 2);
     assert.match(setup.rpcArg, /^127\.0\.0\.1:\d+,127\.0\.0\.1:\d+$/);
-    assert.equal(setup.tensorSplitArg, tensorSplit(setup.plan).join(','));
+    // llama.cpp's order: the rpc workers first, this computer (and the output layer) last
+    assert.equal(setup.tensorSplitArg, llamaSplit(setup.plan, setup.plan.used.length ? (setup.plan.localLayers ?? 0) + setup.plan.used.reduce((a, u) => a + u.layers, 0) : 0, true).tensorSplit.join(','));
     const args = splitServerArgs('/m/x.gguf', 8080, 2048, setup);
-    assert.deepEqual(args.slice(0, 10), ['--host', '127.0.0.1', '--port', '8080', '-m', '/m/x.gguf', '-c', '2048', '-ngl', '99']);
+    assert.deepEqual(args.slice(0, 10), ['--host', '127.0.0.1', '--port', '8080', '-m', '/m/x.gguf', '-c', '2048', '-ngl', String(setup.ngl)]);
     assert.deepEqual(args.slice(-4), ['--rpc', setup.rpcArg, '--tensor-split', setup.tensorSplitArg]);
     // the tunnels really reach the workers' rpc ports (echo here)
     for (const t of setup.tunnels) {

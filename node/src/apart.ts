@@ -133,7 +133,7 @@ export type StartBackend = (file: string, ctx: number, o?: { mmproj?: string | n
 export async function startLlamaServer(llama: LlamaBinaries | null, file: string, ctx: number, log: Log, o: { mmproj?: string | null; extra?: string[] } = {}): Promise<{ port: number; stop(): Promise<void>; proc: import('node:child_process').ChildProcess }> {
   if (!llama) throw new Error('llama.cpp is not set up here (run: kula-node setup), or pass --no-local to use the peers only');
   const port = await freePort();
-  const args = ['--host', '127.0.0.1', '--port', String(port), '-m', file, '-c', String(ctx), '-ngl', '99', '--no-webui', ...(o.mmproj ? ['--mmproj', o.mmproj] : []), ...(o.extra ?? [])];
+  const args = ['--host', '127.0.0.1', '--port', String(port), '-m', file, '-c', String(ctx), '-ngl', '999', '--no-webui', ...(o.mmproj ? ['--mmproj', o.mmproj] : []), ...(o.extra ?? [])];
   const child = await startChild('llama-server', llama.llamaServer, args, port, log, 180000);
   const t0 = Date.now();
   for (;;) {

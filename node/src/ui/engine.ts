@@ -25,7 +25,7 @@ import { ownerBlind, loadAttestConfig, loadStatusList, type AttestPolicy, type W
 import { home, repoRoots } from '../paths.js';
 import { findLlama, sha256File, type LlamaBinaries } from '../llama.js';
 import { download, sha256Of } from '../download.js';
-import { prepareSplit, startSplitServer } from '../split.js';
+import { hasLocalGpu, prepareSplit, startSplitServer } from '../split.js';
 import { explainPlan, TooBig } from '../planner.js';
 import { simModelOf } from '../gguf.js';
 import { publicName } from '../devicenames.js';
@@ -1585,7 +1585,7 @@ export class Engine {
           for (const p of peers.filter((p) => p.relay)) plan.push(`${p.name} is far away (relay): split needs the lan, so it is left out.`);
           let setup;
           try {
-            setup = await prepareSplit({ model: simModelOf(file), ctx, localFreeMb: freeRamMB(), localBw: bw, peers: near, net: netOf(near.map((p) => p.link)), share: true, all: req.all === true, probeMs: common.probeMs, log: common.log, identity: common.identity });
+            setup = await prepareSplit({ model: simModelOf(file), ctx, localFreeMb: freeRamMB(), localBw: bw, peers: near, net: netOf(near.map((p) => p.link)), localGpu: hasLocalGpu(llama), share: true, all: req.all === true, probeMs: common.probeMs, log: common.log, identity: common.identity });
           } catch (e) {
             if (e instanceof TooBig) throw new Error(`too big: the model needs about ${e.needMb} MB, these devices offer ${e.totalMb} MB`);
             throw e;
@@ -1594,7 +1594,7 @@ export class Engine {
           const pl = setup.plan;
           splitParts = [{ id: 'local', name: 'this computer', local: true, mb: pl.localMb, layers: pl.localLayers ?? 0 }, ...pl.used.map((u) => ({ id: u.id, name: u.named ? u.name : publicName(u.name), local: false, mb: u.assignedMb, layers: u.layers }))];
           // who takes how much and on what, who is left out and why, the estimate as a range (planner.ts)
-          for (const l of explainPlan(pl, modelName, (p) => (p.named ? p.name : publicName(p.name)))) plan.push(l);
+          for (const l of explainPlan(pl, modelName, (p) => (p.named ? p.name : publicName(p.name)), setup.localGpu)) plan.push(l);
           if (!pl.used.length && pl.skipped.length) plan.push('no device answered on its rpc channel: the model runs here alone.');
           if (req.all === true) plan.push('every device you picked holds a part, even where fewer would be faster.');
           cluster = await openApart({ ...common, model: ref, peers: [], localModelFile: file, llama, startBackend: (f, c) => startSplitServer(llama, f, c, setup!, common.log) });

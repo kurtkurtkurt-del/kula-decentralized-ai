@@ -119,7 +119,7 @@ export async function startApiServer(opts: ApiOptions): Promise<ApiServer> {
     if (!opts.llama) throw new Error('llama.cpp is not set up (run: kula-node setup)');
     const port = await freePort();
     const child: Child = await startChild('llama-server', opts.llama.llamaServer,
-      ['--host', '127.0.0.1', '--port', String(port), '-m', modelFile, '-c', String(ctx), '-ngl', '99', '--no-webui'],
+      ['--host', '127.0.0.1', '--port', String(port), '-m', modelFile, '-c', String(ctx), '-ngl', '999', '--no-webui'],
       port, log, 180000);
     // the port opens before the model is in memory: wait for /health
     const t0 = Date.now();
