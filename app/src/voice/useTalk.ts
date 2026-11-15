@@ -8,7 +8,7 @@ import { abortListening, downloadModel, onHeard, ready, startListening } from '@
 import { initial, step, type Effect, type LoopEvent, type LoopState } from '@/voice/loop';
 import { voiceNative, type Route } from '@/voice/native';
 import { notesStore } from '@/voice/notes';
-import { buildMessages, type Turn } from '@/voice/prompt';
+import { buildMessages, type Turn, routeTalk } from '@/voice/prompt';
 import { LOCALES, saveVoiceSettings, useVoiceSettings, voiceLang } from '@/voice/settings';
 import { sayOnce, Speaker } from '@/voice/speak';
 import { Chunker, sentences } from '@/voice/text';
@@ -216,7 +216,7 @@ export class TalkController {
     if (my !== this.turn) return;
     this.set({ question: this.secretary.waiting() });
     if (out.kind === 'say') {
-      this.history.push({ role: 'user', text: heard }, { role: 'assistant', text: out.text });
+      this.history.push({ role: 'user', text: heard, private: true }, { role: 'assistant', text: out.text, private: true });
       this.set({ reply: out.text, ...(out.open ? { banner: out.open } : {}) });
       if (out.end) this.endAfter = true;
       this.speakAll(out.text);
@@ -231,12 +231,16 @@ export class TalkController {
     }
     const chunker = new Chunker();
     try {
-      const msgs = buildMessages(this.history, heard, this.cfg.lang, new Date(), { noThink: !!e.model?.id.startsWith('qwen3') });
+      // what the secretary read out (messages, calendar, notes) never leaves the phone (security
+      // review 8B.1): with it in the history the answer comes from this phone; with no device here
+      // at all it is left out of the prompt
+      const route = routeTalk(this.history, e.devices);
+      const msgs = buildMessages(route.past, heard, this.cfg.lang, new Date(), { noThink: !!e.model?.id.startsWith('qwen3'), where: route.where });
       const run = chat(msgs, (piece) => {
         if (my !== this.turn) return;
         for (const s of chunker.push(piece)) this.speaker.say(s);
         this.set({ reply: chunker.text() });
-      }, { maxTokens: MAX_TOKENS, temperature: 0.6 });
+      }, { maxTokens: MAX_TOKENS, temperature: 0.6, ...(route.device ? { device: route.device } : {}) });
       this.running = run;
       await run;
       if (my !== this.turn) return;

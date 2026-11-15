@@ -2,7 +2,7 @@ import { Platform } from 'react-native';
 import { ExpoSpeechRecognitionModule } from 'expo-speech-recognition';
 
 // Speech in: expo-speech-recognition around Android's SpeechRecognizer. On-device first: the
-// recognizer is asked for on-device recognition (Android 12+) and to prefer offline in any
+// recognizer is asked for on-device recognition (enforced from Android 13) and to prefer offline in any
 // case; only when the user allowed "the phone's online recognizer" may it fall back to
 // the recognizer service's servers. One utterance per start (continuous: false): it ends by
 // itself after a pause, which is what the loop wants.
@@ -38,7 +38,11 @@ export async function ready(locale: string, onDeviceOnly: boolean, ask: boolean)
   const mic = await micPermission(ask);
   if (mic !== 'granted') return { ok: false, why: mic === 'blocked' ? 'blocked' : 'permission' };
   if (!R.isRecognitionAvailable()) return { ok: false, why: 'unavailable' };
-  const device = Platform.OS === 'web' ? false : R.supportsOnDeviceRecognition();
+  // the library makes a true on-device recognizer only from Android 13 (API 33); below that it says
+  // "supported" but falls back to the default recognizer with only a preference for offline, which
+  // may send speech away (security review 8B.4): on-device only is not promised there
+  const android13 = Platform.OS !== 'android' || Number(Platform.Version) >= 33;
+  const device = Platform.OS === 'web' ? false : android13 && R.supportsOnDeviceRecognition();
   if (onDeviceOnly) {
     if (!device) return { ok: false, why: 'noOnDevice' };
     if (!(await hasModel(locale))) return { ok: false, why: 'noModel' };
