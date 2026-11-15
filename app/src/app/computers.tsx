@@ -121,18 +121,23 @@ export default function ComputersScreen() {
       setErr(t('comp.err.notHost'));
       return false;
     }
+    let host;
     try {
-      parseHostQr(text);
+      host = parseHostQr(text);
     } catch (e) {
       say(e);
       return false;
     }
     setScan(false);
-    run(async () => {
-      const name = await llama!.addHost(text);
-      tapDone();
-      setNote(t('comp.added', { name: name.toLowerCase() }));
-    });
+    // a scanned QR could be anyone's computer: lasting access is granted only on a yes (review 4.5)
+    Alert.alert(t('comp.allow.title', { name: host.name.toLowerCase() }), t('comp.allow.body'), [
+      { text: t('word.cancel'), style: 'cancel' },
+      { text: t('comp.allow.yes'), onPress: () => run(async () => {
+        const name = await llama!.addHost(text);
+        tapDone();
+        setNote(t('comp.added', { name: name.toLowerCase() }));
+      }) },
+    ]);
     return true;
   };
 

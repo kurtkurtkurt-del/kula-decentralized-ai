@@ -43,6 +43,14 @@ jest.mock('@/llm/native', () => ({
 }));
 
 import { act, create, type ReactTestRenderer } from 'react-test-renderer';
+import { Alert } from 'react-native';
+
+// the link asks first (security review 4.3): the test answers the question
+let answer: 'start' | 'cancel' = 'start';
+const alertSpy = jest.spyOn(Alert, 'alert').mockImplementation((_t, _b, buttons) => {
+  const b = buttons?.find((x) => (answer === 'start' ? x.style !== 'cancel' : x.style === 'cancel'));
+  b?.onPress?.();
+});
 import ShareScreen from '@/app/share';
 
 async function mount() {
@@ -57,16 +65,26 @@ describe('share?start=1', () => {
   // real timers (the screen polls every 2 s): a slow CI runner needs more than jest's 5 s, and every
   // unmount is awaited so no act() of one test is still open when the next mounts (13.11.2026: hung on GitHub)
   jest.setTimeout(20000);
-  beforeEach(() => { mockStartWorker.mockClear(); mockWorkerStatus.mockClear(); mockOpenPairing.mockClear(); mockState = 'stopped'; mockMode = null; mockParams = {}; });
+  beforeEach(() => { answer = 'start'; alertSpy.mockClear(); mockStartWorker.mockClear(); mockWorkerStatus.mockClear(); mockOpenPairing.mockClear(); mockState = 'stopped'; mockMode = null; mockParams = {}; });
 
-  it('starts sharing once when it is not on', async () => {
+  it('asks first, then starts sharing once when it is not on', async () => {
     mockParams = { start: '1' };
     const r = await mount();
+    expect(alertSpy).toHaveBeenCalledTimes(1);
     expect(mockStartWorker).toHaveBeenCalledTimes(1);
     expect(mockStartWorker.mock.calls[0][0]).toBe(50551);
     // the next polls do not press it again
     await act(async () => { await new Promise((res) => setTimeout(res, 2100)); });
     expect(mockStartWorker).toHaveBeenCalledTimes(1);
+    await act(async () => { r.unmount(); });
+  });
+
+  it('does not start when the person says no', async () => {
+    mockParams = { start: '1' };
+    answer = 'cancel';
+    const r = await mount();
+    expect(alertSpy).toHaveBeenCalledTimes(1);
+    expect(mockStartWorker).not.toHaveBeenCalled();
     await act(async () => { r.unmount(); });
   });
 

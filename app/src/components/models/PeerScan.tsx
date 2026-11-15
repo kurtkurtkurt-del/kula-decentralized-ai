@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Modal, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Alert, Modal, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import * as Clipboard from 'expo-clipboard';
 import { linkPassport } from '@/data/passport';
@@ -31,17 +31,23 @@ export function usePeerAdd(onAdded?: (p: Peer | null) => void) {
       // a computer's QR (its chat page, 8.11.2026): the phone keeps it as allowed and opens its
       // code for that computer; the computer then finds this phone and pairs (src/app/computers.tsx)
       if (isHostQr(text)) {
-        parseHostQr(text);
+        const host = parseHostQr(text);
         if (!hasNative()) throw new Error('nonative');
-        llama!.addHost(text).then((name) => {
-          setErr(null);
-          tapDone();
-          setNote(t('comp.added', { name: name.toLowerCase() }));
-        }, (e) => {
-          const k = hostErr(e);
-          setErr(k ? t(`comp.err.${k}` as never) : explain(e, tx));
-        });
-        onAdded?.(null);
+        // lasting access for a computer is granted only on a yes (security review 4.5)
+        Alert.alert(t('comp.allow.title', { name: host.name.toLowerCase() }), t('comp.allow.body'), [
+          { text: t('word.cancel'), style: 'cancel' },
+          { text: t('comp.allow.yes'), onPress: () => {
+            llama!.addHost(text).then((name) => {
+              setErr(null);
+              tapDone();
+              setNote(t('comp.added', { name: name.toLowerCase() }));
+            }, (e) => {
+              const k = hostErr(e);
+              setErr(k ? t(`comp.err.${k}` as never) : explain(e, tx));
+            });
+            onAdded?.(null);
+          } },
+        ]);
         return true;
       }
       if (isRelayCode(text)) {

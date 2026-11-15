@@ -34,13 +34,23 @@ export async function sessionFromUrl(url: string) {
   const access_token = h.get('access_token');
   const refresh_token = h.get('refresh_token');
   if (!access_token || !refresh_token) return false;
+  // tokens in a link are taken only right after this phone started a sign-in: any app or web page
+  // can open pasaport://auth-callback with its own tokens and swap the account (security review 4.4)
+  if (Date.now() > signInPendingUntil) return false;
+  signInPendingUntil = 0;
   const { error } = await supabase.auth.setSession({ access_token, refresh_token });
   if (error) throw error;
   return true;
 }
 
+// a sign-in this phone started, and until when its returning link is taken
+let signInPendingUntil = 0;
+export const SIGN_IN_WINDOW_MS = 10 * 60_000;
+export function markSignInPending(now = Date.now()): void { signInPendingUntil = now + SIGN_IN_WINDOW_MS; }
+
 // true: signed in · false: cancelled · throws with a message on error
 export async function signInWithGoogle(): Promise<boolean> {
+  markSignInPending();
   if (Platform.OS === 'web') return signInWithGoogleWeb();
   const options = { redirectTo: REDIRECT, skipBrowserRedirect: true, queryParams: { prompt: 'select_account' } };
   const { data: current } = await supabase.auth.getSession();

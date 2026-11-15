@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Alert, Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import * as Brightness from 'expo-brightness';
 import { router, useLocalSearchParams } from 'expo-router';
 import QRCode from 'react-native-qrcode-svg';
@@ -39,6 +39,9 @@ export default function ShareScreen() {
   const autoStart = useRef(params.start === '1');
   const startRef = useRef<() => Promise<void>>(async () => {});
   const { t, tx, up } = useLang();
+  // the polling effect below asks with the current words without restarting on a language change
+  const tRef = useRef(t);
+  useEffect(() => { tRef.current = t; }, [t]);
   const { width } = useAppSize();
   const mine = useShare();
   const [qr, setQr] = useState<string | null>(null);
@@ -59,7 +62,13 @@ export default function ShareScreen() {
       const running = s.state === 'running' || s.state === 'starting';
       if (autoStart.current) {
         autoStart.current = false;
-        if (!running) startRef.current().catch(() => {});
+        // the link can come from any app or a web page, not only the computer on the cable: it asks
+        // first (security review 4.3)
+        const tt = tRef.current;
+        if (!running) Alert.alert(tt('share.cable.title'), tt('share.cable.body'), [
+          { text: tt('word.cancel'), style: 'cancel' },
+          { text: tt('share.start'), onPress: () => { startRef.current().catch(() => {}); } },
+        ]);
       }
       llama!.keepScreenOn(running).catch(() => {});
       if (running && (share() || s.mode === 'auto')) myPeerQr().then((r) => on && setQr(r.qr)).catch(() => {});

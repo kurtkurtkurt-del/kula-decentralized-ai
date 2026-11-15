@@ -124,6 +124,8 @@ export const models = {
   'chat.busy': { en: 'busy', de: 'beschäftigt', tr: 'meşgul' },
   'chat.thinking': { en: '…', de: '…', tr: '…' },
 
+  'share.cable.title': { en: 'start sharing this phone?', de: 'teilen dieses telefons starten?', tr: 'bu telefon paylaşılsın mı?' },
+  'share.cable.body': { en: 'a computer on the usb cable (or another app) asked to start sharing. start only if you plugged this phone into your own computer.', de: 'ein computer am usb-kabel (oder eine andere app) möchte das teilen starten. nur starten, wenn du das telefon an deinen eigenen computer angeschlossen hast.', tr: 'usb kablosundaki bir bilgisayar (ya da başka bir uygulama) paylaşımı başlatmak istedi. yalnızca bu telefonu kendi bilgisayarına taktıysan başlat.' },
   'share.title': { en: 'share this phone', de: 'dieses telefon teilen', tr: 'bu telefonu paylaş' },
   'share.lede': { en: 'another device scans this code and can use this phone’s processor and memory. nothing leaves without the code.', de: 'ein anderes gerät scannt diesen code und kann prozessor und speicher dieses telefons nutzen. ohne den code geht nichts.', tr: 'başka bir cihaz bu kodu okutur ve bu telefonun işlemcisini ve belleğini kullanabilir. kod olmadan hiçbir şey olmaz.' },
   'share.start': { en: 'start sharing', de: 'teilen starten', tr: 'paylaşmaya başla' },
