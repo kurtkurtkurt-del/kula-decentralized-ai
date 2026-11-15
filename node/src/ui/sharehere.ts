@@ -22,6 +22,7 @@ export interface ShareView {
   codeExpiresAt: number | null;
   error: string | null;
   note: string | null;        // windows: what the firewall will ask
+  paired: number;             // devices that may already use this computer without a code
 }
 
 export type ShareStarter = (opts: ShareOptions) => Promise<ShareHandle>;
@@ -41,6 +42,7 @@ export class ShareHere {
       on: !!h, starting: !!this.starting, name: h?.deviceName ?? null, host: h?.host ?? null, port: h?.gatePort ?? null,
       code: c?.pin ?? null, codeExpiresAt: c?.exp ?? null, error: this.error,
       note: process.platform === 'win32' ? WINDOWS_FIREWALL_NOTE : null,
+      paired: h?.paired() ?? 0,
     };
   }
 
@@ -62,6 +64,9 @@ export class ShareHere {
             name: this.opts.name,
             noQr: true,
             dashboard: false,
+            // the local network only: no ipv6 socket, so no global ipv6 address in the qr and no
+            // way in from the internet where a router lets ipv6 through (the button says wi-fi)
+            dualStack: false,
           });
           this.opts.log?.(`sharing this computer on port ${this.handle.gatePort}`);
           // no sleep while it lends itself: a sleeping worker drops out mid-answer (awake.ts)

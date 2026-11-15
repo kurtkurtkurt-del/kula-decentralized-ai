@@ -1718,7 +1718,8 @@ function renderShare(v) {
     if (shareCode !== v.code) { shareCode = v.code; img.src = `${apiUrl('share.svg')}?t=${encodeURIComponent(v.code)}`; }
     img.hidden = false;
     const until = v.codeExpiresAt ? new Date(v.codeExpiresAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : null;
-    line.textContent = `sharing as ${v.name} at ${v.host ?? 'no wi-fi address'}:${v.port} · code ${v.code} (works once${until ? `, until ${until}` : ''}; a new one follows)` + (v.note ? `\n\n${v.note}` : '');
+    const known = v.paired ? `\n\n${v.paired} device${v.paired === 1 ? '' : 's'} can already use this computer without a code; to take that back: its row above → remove its access.` : '';
+    line.textContent = `sharing on this wi-fi as ${v.name} at ${v.host ?? 'no wi-fi address'}:${v.port} · code ${v.code} (works once${until ? `, until ${until}` : ''}; a new one follows)` + known + (v.note ? `\n\n${v.note}` : '');
   } else {
     img.hidden = true; shareCode = null;
     line.textContent = v.error ? `could not start: ${v.error}` : v.on ? `sharing as ${v.name}` : '';

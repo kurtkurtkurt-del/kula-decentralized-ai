@@ -264,7 +264,10 @@ faster (then it suggests "here"). An NVIDIA card's speed is guessed from its nam
 measured. A computer that shares does not go to sleep (the screen still may). When a computer in a
 split goes away (closed, asleep, off the wi-fi), the next answer notices, the model is loaded again
 with the devices that are left (or on this computer alone), and the answer comes anyway; if part of
-the answer was already on screen, it goes on from the very word where it stopped. So far this ran between two kula copies on one Mac only, not
+the answer was already on screen, it goes on from the very word where it stopped. Sharing opens kula's gate on the local network only (IPv4: no global IPv6 address, so no way in
+from the internet), behind TLS and a one-time code; llama.cpp itself stays on 127.0.0.1 behind the
+gate. A device that paired once may come back without a code: the share section says how many can,
+and "remove its access" on a device's row takes that back. So far this ran between two kula copies on one Mac only, not
 yet between two real computers.
 
 **A guest network keeps devices apart.** Guest, hotel, office, campus and many home wi-fis stop

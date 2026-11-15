@@ -11,6 +11,7 @@ function fakeStarter(seen: ShareOptions[], stops: { n: number }) {
       gatePort: opts.port, dashboard: null, deviceName: 'test-pc', host: '192.168.1.5',
       qr: () => JSON.stringify({ k: 'kula-peer', v: 3, pin }),
       code: () => ({ pin, exp: 1_000 }),
+      paired: () => 2,
     });
   };
 }
@@ -26,12 +27,14 @@ test('ShareHere starts the worker once, shows its code and qr, and stops it', as
   assert.equal(seen[0].port, 50999);
   assert.equal(seen[0].noQr, true);
   assert.equal(seen[0].dashboard, false);
+  assert.equal(seen[0].dualStack, false, 'the local network only, never a global ipv6 address');
   for (const v of [a, b]) {
     assert.equal(v.on, true);
     assert.equal(v.starting, false);
     assert.equal(v.code, '123456');
     assert.equal(v.host, '192.168.1.5');
     assert.equal(v.port, 50999);
+    assert.equal(v.paired, 2);
   }
   assert.match(s.qr()!, /"pin":"123456"/);
   const off = await s.stop();

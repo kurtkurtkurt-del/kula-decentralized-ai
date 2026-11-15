@@ -98,6 +98,7 @@ export const log = (s: string) => { console.log(`${stamp()}  ${s}`); for (const 
 export type ShareHandle = (() => Promise<void>) & {
   gatePort: number; dashboard: Dashboard | null; deviceName: string; host: string | null;
   qr(): string; code(): { pin: string; exp: number } | null;
+  paired(): number;   // devices that may come in without a code (~/.kula-node/paired)
 };
 
 export async function share(opts: ShareOptions): Promise<ShareHandle> {
@@ -361,6 +362,7 @@ export async function share(opts: ShareOptions): Promise<ShareHandle> {
   }, {
     gatePort: gate.port, dashboard, deviceName: name, host,
     qr: () => qrText,
+    paired: () => tlsServer?.paired.size ?? 0,
     // a code that ran out by time is renewed here, so whoever asks never shows a dead one
     code: () => {
       if (!tlsServer) return null;
