@@ -17,6 +17,7 @@
     },
     "android": {
       "package": "app.pasaport.android",
+      "allowBackup": false,
       "adaptiveIcon": {
         "backgroundColor": "#FFFFFF",
         "foregroundImage": "./assets/android-icon-foreground.png",
