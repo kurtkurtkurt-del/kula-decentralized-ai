@@ -17,6 +17,9 @@ import { isLoopback, plainIp } from './policy.js';
 export type Channel = 'rpc' | 'api';
 export const CHANNELS: Channel[] = ['rpc', 'api'];
 export const HANDSHAKE_MS = 5000;
+// a whole handshake (every stage) and how many one address may hold at once (security review 1.2)
+export const HANDSHAKE_TOTAL_MS = 20_000;
+export const MAX_HANDSHAKES_PER_ADDRESS = 8;
 export const FP_MISMATCH = 'fingerprint mismatch';
 // Connections allowed to sit in a handshake at once; the next one is told "NO overloaded"
 // and dropped at once, so a flood of half-open connections cannot pin memory or threads.
@@ -462,6 +465,9 @@ export async function startGateServer(opts: GateServerOptions): Promise<GateServ
       okLine = 'OK -';
     } else {
       if (!sameHex(proof, pinProofClient(pin!, nonceC, nonceS, channel, fpS, fpC))) return refuse('wrong pin');
+      // the code must still be the open one now: a second handshake that waited with the same
+      // code while the first paired (or the code ran out or was replaced) is refused (review 1.5)
+      if (t.pin !== pin || (t.pinExpiresAt != null && Date.now() > t.pinExpiresAt)) return refuse('pin used');
       // the first connection with the right code pairs the client and spends the code
       t.paired.add(fpC);
       t.pin = null;
@@ -476,8 +482,9 @@ export async function startGateServer(opts: GateServerOptions): Promise<GateServ
   // answer (llama.cpp's tunnels and the phone's Tunnel shut their write side first). The
   // open sockets are kept so close() can end them; net.Server.close() only stops listening.
   const open = new Set<net.Socket>();
-  // connections between accept and the end of their handshake
+  // connections between accept and the end of their handshake, in all and per address
   let inHandshake = 0;
+  const perAddress = new Map<string, number>();
   const server = net.createServer({ allowHalfOpen: true }, (socket) => {
     open.add(socket);
     socket.once('close', () => open.delete(socket));
@@ -486,7 +493,9 @@ export async function startGateServer(opts: GateServerOptions): Promise<GateServ
     // the ledger, the busy check and the events keep seeing "10.0.0.5"
     const peer = plainIp(socket.remoteAddress ?? '?');
     socket.on('error', () => {});
-    if (inHandshake >= MAX_HANDSHAKES) {
+    // per address, except loopback: every relayed stream arrives from 127.0.0.1, many devices at once
+    const fromHere = isLoopback(peer) ? 0 : perAddress.get(peer) ?? 0;
+    if (inHandshake >= MAX_HANDSHAKES || fromHere >= MAX_HANDSHAKES_PER_ADDRESS) {
       emit({ type: 'reject', channel: null, peer, at: Date.now(), reason: 'overloaded', v: 1 });
       // read and drop the hello: closing with unread input sends a reset, and the
       // client would see "connection reset" instead of the reason (Gate.kt b60c257)
@@ -496,8 +505,15 @@ export async function startGateServer(opts: GateServerOptions): Promise<GateServ
       return;
     }
     inHandshake++;
+    if (!isLoopback(peer)) perAddress.set(peer, fromHere + 1);
     let counted = true;
-    const uncount = () => { if (counted) { counted = false; inHandshake--; } };
+    // a handshake has HANDSHAKE_TOTAL_MS in all, however its bytes trickle in (review 1.2)
+    const deadline = setTimeout(() => { if (counted) socket.destroy(); }, HANDSHAKE_TOTAL_MS);
+    const uncount = () => {
+      if (!counted) return;
+      counted = false; inHandshake--; clearTimeout(deadline);
+      if (!isLoopback(peer)) { const n = (perAddress.get(peer) ?? 1) - 1; if (n > 0) perAddress.set(peer, n); else perAddress.delete(peer); }
+    };
     // the slot is given back when the pipe starts (open event) or the socket is gone
     socket.once('close', uncount);
     (async () => {
@@ -505,12 +521,15 @@ export async function startGateServer(opts: GateServerOptions): Promise<GateServ
       if (!first) {
         emit({ type: 'reject', channel: null, peer, at: Date.now(), reason: 'no hello', v: 1 });
         try { socket.end('NO no hello\n'); } catch {}
+        // ended is not closed on an allowHalfOpen server: a silent peer kept its slot for good (1.2)
+        setTimeout(() => socket.destroy(), 200);
         return;
       }
       if (first[0] === 0x16) {
         if (!opts.tls) {
           emit({ type: 'reject', channel: null, peer, at: Date.now(), reason: 'no tls', v: 2 });
           socket.end('NO no tls\n');
+          setTimeout(() => socket.destroy(), 200);
           return;
         }
         return serveTls(socket, peer, first, opts.tls, uncount);

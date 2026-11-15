@@ -299,3 +299,49 @@ test('learning a certificate: a gate that says "paired" instead of asking for th
     server.close();
   }
 });
+
+test('security 1.2: silent connections give their slot back (the gate is not locked by 32 of them)', async () => {
+  const worker = createIdentity('worker');
+  const t: TlsServer = { identity: worker, paired: new Paired(path.join(tmp(), 'paired')), pin: newPin() };
+  const gate = await startGateServer({ port: 0, host: '127.0.0.1', secret: null, targets: () => null, tls: t });
+  const silent: net.Socket[] = [];
+  try {
+    for (let i = 0; i < 32; i++) { const s = net.connect(gate.port, '127.0.0.1'); s.on('error', () => {}); silent.push(s); }
+    await new Promise((r) => setTimeout(r, 300));
+    // the 33rd is turned away at once
+    const ninth = await new Promise<string>((resolve) => {
+      const s = net.connect(gate.port, '127.0.0.1'); let got = '';
+      s.on('data', (d) => { got += d.toString(); }); s.on('close', () => resolve(got)); s.on('error', () => resolve(got));
+      s.write('hello\n');
+    });
+    assert.match(ninth, /NO overloaded/);
+    // after the 5 s first-byte wait the gate closes the silent ones (not just ends them; they never
+    // read, so they keep their own side open) and their slots are free for a new connection
+    await new Promise((r) => setTimeout(r, 5800));
+    const r = await probe('127.0.0.1', gate.port, '', 'api', 3000, { identity: createIdentity('m'), fp: worker.fp, pin: null });
+    // it gets into the handshake (it is not paired, so the gate's answer is "not paired"), where a
+    // full gate answers in plain text before TLS and the client sees a TLS error instead
+    assert.deepEqual(r, { ok: false, reason: 'not paired' });
+  } finally {
+    for (const s of silent) s.destroy();
+    await gate.close();
+  }
+});
+
+test('security 1.5: one code pairs one device, even when two handshakes race with it', async () => {
+  const worker = createIdentity('worker');
+  const pin = newPin();
+  const t: TlsServer = { identity: worker, paired: new Paired(path.join(tmp(), 'paired')), pin };
+  const echo = await echoServer();
+  const gate = await startGateServer({ port: 0, host: '127.0.0.1', secret: null, targets: () => echo.port, tls: t });
+  try {
+    const a = createIdentity('a'), b = createIdentity('b');
+    const go = (id: ReturnType<typeof createIdentity>) => probe('127.0.0.1', gate.port, '', 'api', 3000, { identity: id, fp: worker.fp, pin });
+    const [ra, rb] = await Promise.all([go(a), go(b)]);
+    const oks = [ra, rb].filter((r) => r.ok).length;
+    assert.equal(oks, 1, `exactly one pairs: ${JSON.stringify([ra, rb])}`);
+    assert.equal(t.paired.size, 1);
+  } finally {
+    await gate.close(); echo.close();
+  }
+});

@@ -294,9 +294,13 @@ object Gate {
       } else {
         val code = pin!!
         if (!constantEquals(proof, pinProofClient(code, nonceC, nonceS, channel, fpS, fpC))) return refuse2(channel, "wrong pin")
-        // the first connection with the right code pairs the client and spends the code
-        t.paired.add(fpC)
-        t.spend()
+        // the first connection with the right code pairs the client and spends the code. Check and
+        // spend in one step: a second handshake that waited with the same code (or a code that ran
+        // out or was replaced meanwhile) is refused (security review 8C.2)
+        val won = synchronized(t) {
+          if (t.pin == code && !t.expired(System.currentTimeMillis())) { t.paired.add(fpC); t.spend(); true } else false
+        }
+        if (!won) return refuse2(channel, "pin used")
         onEvent(Event("pair", peer, channel, null, fpC, 2))
         audit { it.onPair(peer, linkedMapOf("fp" to fpC, "channel" to channel)) }
         reply = "OK ${pinProofServer(code, nonceC, nonceS, channel, fpS, fpC)}"
