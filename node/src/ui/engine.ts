@@ -306,6 +306,23 @@ export function defaultModelDirs(): string[] {
   return [...new Set(dirs)];
 }
 
+// Passes on the tokens after `prefix`: while the stream repeats the prefix (in pieces or at once)
+// nothing goes out; once it is past, or the stream turns out not to repeat it, everything does.
+export function prefixSkipper(prefix: string, out: (t: string) => void): { push: (t: string) => void; passed: () => number } {
+  let left = prefix;
+  let n = 0;
+  const push = (t: string) => {
+    if (left) {
+      if (left.startsWith(t)) { left = left.slice(t.length); return; }
+      if (t.startsWith(left)) { t = t.slice(left.length); left = ''; if (!t) return; }
+      else left = '';
+    }
+    n++;
+    out(t);
+  };
+  return { push, passed: () => n };
+}
+
 export function peerRow(p: Peer, probe?: Reach | null, probedAt: number | null = null, plugged: boolean | null = null, holds: string | null = null): PeerRow {
   return {
     id: p.id, name: p.named ? p.name : publicName(p.name), kind: p.kind, where: whereIs(p), far: !!p.relay, tls: !!p.fp, waitingPair: !p.fp && !!p.pin,
@@ -1673,6 +1690,7 @@ export class Engine {
     this.chats.add(ac);
     const t0 = Date.now();
     let pieces = 0, first = 0;
+    let shown = '';   // what reached the page, to go on from if a split loses a device mid-answer
     const count = { model: loaded.model.name, mode: loaded.mode, use: o.use ?? 'chat', promptChars: messages.reduce((a, m) => a + String(m.content ?? '').length, 0) };
     try {
       let wire: WireMessage[] = messages;
@@ -1690,7 +1708,7 @@ export class Engine {
         count.promptChars += text.length;
         note = { how: 'describe', by: seen.by, n: seen.n, text: seen.text, ...(seen.tight ? { tight: true } : {}) };
       }
-      const r = await this.cluster.chat(wire, (t) => { if (!first) first = Date.now() - t0; pieces++; onToken(t); }, { maxTokens: o.maxTokens, temperature: o.temperature, signal: ac.signal });
+      const r = await this.cluster.chat(wire, (t) => { if (!first) first = Date.now() - t0; pieces++; shown += t; onToken(t); }, { maxTokens: o.maxTokens, temperature: o.temperature, signal: ac.signal });
       this.note(`${r.device}: ${r.tokens} tokens, ${r.tps} tok/s, first after ${r.firstMs} ms${r.stopped ? ' (stopped)' : ''}`);
       this.learnFrom(loaded, r);
       this.usage.record({ ...count, device: r.device, promptTokens: r.promptTokens, completion: r.tokens || pieces, ms: r.ms, firstMs: r.firstMs, stopped: r.stopped === true });
@@ -1705,7 +1723,14 @@ export class Engine {
         const gone = await this.recoverSplit(loaded).catch(() => null);
         if (gone) {
           if (!pieces) return this.chat(messages, onToken, { ...o, retried: true });
-          throw new Error(`${gone} dropped out in the middle of the answer; kula loaded the model again without it: ask again.`);
+          // part of the answer is on the page: the model goes on from there (llama.cpp continues a
+          // trailing assistant message, prefill_assistant), the new tokens joining the same answer
+          this.note(`${gone} dropped out after ${pieces} tokens: going on from there`);
+          // llama.cpp b11157 streams the prefill once more before going on: that part is skipped
+          const skip = prefixSkipper(shown, onToken);
+          const more = await this.chat([...messages, { role: 'assistant', content: shown }], skip.push, { ...o, retried: true, photos: undefined });
+          const tail = more.text.startsWith(shown) ? more.text.slice(shown.length) : more.text;
+          return { ...more, text: shown + tail, tokens: pieces + skip.passed() };
         }
       }
       throw e;

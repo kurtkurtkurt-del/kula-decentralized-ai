@@ -263,8 +263,8 @@ answers come faster without it, the estimate as a range, and when this computer 
 faster (then it suggests "here"). An NVIDIA card's speed is guessed from its name until it is
 measured. A computer that shares does not go to sleep (the screen still may). When a computer in a
 split goes away (closed, asleep, off the wi-fi), the next answer notices, the model is loaded again
-with the devices that are left (or on this computer alone), and the answer comes anyway; if half an
-answer was already on screen, kula says so and asks you to ask again. So far this ran between two kula copies on one Mac only, not
+with the devices that are left (or on this computer alone), and the answer comes anyway; if part of
+the answer was already on screen, it goes on from the very word where it stopped. So far this ran between two kula copies on one Mac only, not
 yet between two real computers.
 
 **A guest network keeps devices apart.** Guest, hotel, office, campus and many home wi-fis stop
