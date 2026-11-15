@@ -56,7 +56,7 @@ function fakeLlama(genTps: number[]): Promise<Srv & { calls: () => number }> {
 async function worker(name: string, secret: string) {
   const llama = await fakeLlama([50]);
   const models = fs.mkdtempSync(path.join(os.tmpdir(), `kula-bench-${name}-`));
-  const api = await startApiServer({ models, llama: null, allowPrivateUrls: true, startBackend: async () => ({ port: llama.port, stop: async () => {} }) });
+  const api = await startApiServer({ fromGate: () => true, models, llama: null, allowPrivateUrls: true, startBackend: async () => ({ port: llama.port, stop: async () => {} }) });
   const echo = await listen(net.createServer((c) => c.pipe(c)));
   const gate = await startGateServer({ port: 0, host: '127.0.0.1', secret, targets: (ch) => (ch === 'api' ? api.port : echo.port) });
   const peer: Peer = { id: `id-${name}`, name, host: '127.0.0.1', port: gate.port, secret, kind: 'pc', ram: 6000, bw: 60, added_at: 't' };

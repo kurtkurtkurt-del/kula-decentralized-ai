@@ -16,7 +16,7 @@ import { lanIPv4, globalIPv6, freeRamMB, measureBandwidth, detectGpu } from './s
 import { startPortMapper, mapLine, type PortMapper } from './portmap.js';
 import type { PeerAddr } from './peers.js';
 import { freePort, startChild, type Child, exited } from './children.js';
-import { startApiServer, type ApiServer } from './api.js';
+import { startApiServer, type ApiServer, apiAuth } from './api.js';
 import { loadOrCreateKey } from './audit/key.js';
 import { Ledger } from './audit/ledger.js';
 import { Auditor } from './audit/auditor.js';
@@ -389,7 +389,7 @@ export function localChatSource(apiPort: () => Promise<number | null>, models: s
   const device = async (): Promise<Device> => {
     const port = await apiPort();
     if (!port) throw new Error('the api did not start: run kula-node setup, then load a model');
-    const st = await fetch(`http://127.0.0.1:${port}/status`).then((r) => r.json()).catch(() => null) as { loaded?: boolean } | null;
+    const st = await fetch(`http://127.0.0.1:${port}/status`, { headers: apiAuth(port) }).then((r) => r.json()).catch(() => null) as { loaded?: boolean } | null;
     if (!st?.loaded) throw new Error('no model loaded here yet: pick one above (' + models + ')');
     return { id: 'self', name, local: true, apiPort: port, bw: 0, busy: false, tps: null, done: 0, close: async () => {} };
   };

@@ -4,6 +4,7 @@
 // /blob is the bench's tunnel speed test: N MB (1024²) of zeros, N capped at 64
 // (BLOB_MAX_MB), the same bytes and headers as ApiServer.kt on a phone.
 import http from 'node:http';
+import { randomBytes, timingSafeEqual } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { download, sha256Of } from './download.js';
@@ -122,6 +123,18 @@ export function cleanStaleParts(dir: string, now = Date.now()): string[] {
     try { if (now - fs.statSync(f).mtimeMs > PART_MAX_AGE_MS) { fs.rmSync(f, { force: true }); gone.push(n); } } catch {}
   }
   return gone;
+}
+
+// The keys of the worker apis this process runs, by port: code here that talks to its own api
+// (the owner's own device in apart mode, the worker's dashboard) adds apiAuth(port) to its request.
+const keys = new Map<number, string>();
+export function apiAuth(port: number): Record<string, string> {
+  const k = keys.get(port);
+  return k ? { authorization: `Bearer ${k}` } : {};
+}
+function keyOk(header: string | undefined, key: string): boolean {
+  const got = /^Bearer ([0-9a-f]{48})$/.exec(header ?? '')?.[1];
+  return !!got && timingSafeEqual(Buffer.from(got), Buffer.from(key));
 }
 
 export async function startApiServer(opts: ApiOptions): Promise<ApiServer> {
@@ -316,8 +329,13 @@ export async function startApiServer(opts: ApiOptions): Promise<ApiServer> {
 
   const masterOf = opts.masterOf ?? apiPeerOf;
   const isFromGate = opts.fromGate ?? viaGate;
+  const key = randomBytes(24).toString('hex');
   const server = http.createServer(async (req, res) => {
     const url = (req.url ?? '/').split('?')[0];
+    // 127.0.0.1 is not a boundary: any process or user on this machine, or a web page, reaches it.
+    // Only what came through the gate (a paired device) or carries this server's key (code in this
+    // process) is served (security review 2.6/1.4)
+    if (!isFromGate(req.socket.remotePort) && !keyOk(req.headers.authorization, key)) return json(res, 401, { error: 'not through the gate' });
     try {
       if (req.method === 'GET' && url === '/status') return json(res, 200, state);
       if (req.method === 'GET' && url === '/trust' && opts.trust) {
@@ -345,12 +363,14 @@ export async function startApiServer(opts: ApiOptions): Promise<ApiServer> {
     server.listen(0, '127.0.0.1', () => { server.off('error', reject); resolve(); });
   });
   const port = (server.address() as { port: number }).port;
+  keys.set(port, key);
   return {
     port,
     status: () => state,
     close: async () => {
       current?.abort();
       await unload();
+      keys.delete(port);
       await new Promise<void>((r) => server.close(() => r()));
     },
   };

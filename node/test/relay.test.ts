@@ -45,7 +45,7 @@ function fakeLlamaServer(): Promise<{ port: number; close: () => void }> {
 async function fakeWorker(pin: string | null, events: GateEvent[] = []) {
   const models = fs.mkdtempSync(path.join(os.tmpdir(), 'kula-relay-w-'));
   const llama = await fakeLlamaServer();
-  const api = await startApiServer({ models, llama: null, allowPrivateUrls: true, startBackend: async () => ({ port: llama.port, stop: async () => {} }) });
+  const api = await startApiServer({ fromGate: () => true, models, llama: null, allowPrivateUrls: true, startBackend: async () => ({ port: llama.port, stop: async () => {} }) });
   const identity = createIdentity('worker-berlin');
   const tls = { identity, paired: new Paired(null), pin, onPinUsed: () => {} };
   const gate = await startGateServer({ port: 0, host: '127.0.0.1', secret: 'unused-v1-secret', targets: (ch) => (ch === 'api' ? api.port : null), tls, onEvent: (e) => events.push(e) });

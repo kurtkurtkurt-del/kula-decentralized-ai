@@ -3,6 +3,7 @@
 // computer's own llama-server (optional) and each peer's api channel, reached
 // through a local tunnel (gate client on 127.0.0.1). The wire is the worker
 // api: POST /load (sse) once, then POST /chat (sse) per prompt.
+import { apiAuth } from './api.js';
 import { Tunnel } from './gate.js';
 import { RelayTunnel } from './relay.js';
 import { probePeers, reachable, peerTls, dialOf, type Peer } from './peers.js';
@@ -68,7 +69,8 @@ export async function readSse(res: Response, onEvent: (o: any) => void): Promise
 
 export async function apiLoad(apiPort: number, model: ModelRef, onProgress?: (state: string, got: number, total: number) => void, signal?: AbortSignal): Promise<void> {
   const res = await fetch(`http://127.0.0.1:${apiPort}/load`, {
-    method: 'POST', headers: { 'content-type': 'application/json' }, signal,
+    // this process's own api wants its key; a tunnel to another device does not (gate.ts viaGate)
+    method: 'POST', headers: { 'content-type': 'application/json', ...apiAuth(apiPort) }, signal,
     body: JSON.stringify({ url: model.url, sha256: model.sha256, size: model.size, name: model.name, ctx: model.ctx }),
   });
   let last: any = null;
@@ -86,7 +88,7 @@ export function apiChat(dev: Device, messages: WireMessage[], onToken: (t: strin
   const ac = new AbortController();
   const p = (async (): Promise<Reply> => {
     const res = await fetch(`http://127.0.0.1:${dev.apiPort}/chat`, {
-      method: 'POST', headers: { 'content-type': 'application/json' }, signal: ac.signal,
+      method: 'POST', headers: { 'content-type': 'application/json', ...apiAuth(dev.apiPort) }, signal: ac.signal,
       body: JSON.stringify({ messages, maxTokens: opts.maxTokens, temperature: opts.temperature, reset: !!opts.reset }),
     });
     let text = '';
@@ -102,7 +104,7 @@ export function apiChat(dev: Device, messages: WireMessage[], onToken: (t: strin
     return { text, tokens: last.tokens ?? 0, ms: last.ms ?? 0, firstMs: last.firstMs ?? 0, tps: last.tps ?? 0, device: dev.name, ...(Number(last.promptTokens) > 0 ? { promptTokens: Math.round(Number(last.promptTokens)) } : {}) };
   })() as Promise<Reply> & { stop: () => void };
   p.stop = () => {
-    fetch(`http://127.0.0.1:${dev.apiPort}/stop`, { method: 'POST' }).catch(() => {});
+    fetch(`http://127.0.0.1:${dev.apiPort}/stop`, { method: 'POST', headers: apiAuth(dev.apiPort) }).catch(() => {});
     ac.abort();
   };
   return p;
@@ -267,7 +269,7 @@ export async function openApart(opts: ApartOptions): Promise<Cluster> {
       if (o.signal?.aborted) return { text: '', tokens: 0, ms: 0, firstMs: 0, tps: 0, device: dev.name, stopped: true };
       const p = apiChat(dev, messages, (t) => { if (!firstMs) firstMs = Date.now() - t0; n++; text += t; onToken(t); }, { maxTokens: o.maxTokens ?? 256, temperature: o.temperature ?? 0.7, reset: o.reset });
       const onAbort = () => {
-        fetch(`http://127.0.0.1:${dev.apiPort}/stop`, { method: 'POST' }).catch(() => {});
+        fetch(`http://127.0.0.1:${dev.apiPort}/stop`, { method: 'POST', headers: apiAuth(dev.apiPort) }).catch(() => {});
         cut = setTimeout(() => p.stop(), 4000);
       };
       o.signal?.addEventListener('abort', onAbort, { once: true });

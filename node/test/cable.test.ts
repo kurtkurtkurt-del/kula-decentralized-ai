@@ -168,7 +168,7 @@ function fakeLlama(): Promise<{ port: number; close: () => void }> {
 async function fakePhone() {
   const models = fs.mkdtempSync(path.join(HOME, 'phone-'));
   const llama = await fakeLlama();
-  const api = await startApiServer({ models, llama: null, allowPrivateUrls: true, startBackend: async () => ({ port: llama.port, stop: async () => {} }) });
+  const api = await startApiServer({ fromGate: () => true, models, llama: null, allowPrivateUrls: true, startBackend: async () => ({ port: llama.port, stop: async () => {} }) });
   const identity = createIdentity('phone');
   const tls = { identity, paired: new Paired(null), pin: PIN as string | null, onPinUsed: () => { tls.pin = 'fedcba9876543210'; } };
   const gate = await startGateServer({ port: 0, host: '127.0.0.1', secret: null, targets: (ch) => (ch === 'api' ? api.port : null), tls });

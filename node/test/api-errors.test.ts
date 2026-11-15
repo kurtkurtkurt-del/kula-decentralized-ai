@@ -29,7 +29,7 @@ async function call(base: string, method: string, p: string, body?: string) {
 
 async function withApi(fn: (api: ApiServer, base: string, models: string) => Promise<void>, opts: Partial<Parameters<typeof startApiServer>[0]> = {}) {
   const models = fs.mkdtempSync(path.join(os.tmpdir(), 'kula-err-'));
-  const api = await startApiServer({ models, llama: null, allowPrivateUrls: true, startBackend: async () => { throw new Error('must not start'); }, ...opts });
+  const api = await startApiServer({ fromGate: () => true, models, llama: null, allowPrivateUrls: true, startBackend: async () => { throw new Error('must not start'); }, ...opts });
   try { await fn(api, `http://127.0.0.1:${api.port}`, models); } finally { await api.close(); fs.rmSync(models, { recursive: true, force: true }); }
 }
 

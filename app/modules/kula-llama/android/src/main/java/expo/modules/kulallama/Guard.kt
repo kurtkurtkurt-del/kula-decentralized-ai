@@ -188,6 +188,13 @@ object ApiPeers {
 
   /** The master's address for the api connection that came from 127.0.0.1:[remotePort]; null when none. */
   fun get(remotePort: Int): String? = byPort[remotePort]
+
+  // Every api leg the gate opens, a relayed one too. 127.0.0.1 is no boundary on a phone: any app
+  // can connect there, so the api server serves only these (security review 4.1).
+  private val legs = java.util.concurrent.ConcurrentHashMap.newKeySet<Int>()
+  fun openLeg(localPort: Int) { if (localPort > 0) legs.add(localPort) }
+  fun closeLeg(localPort: Int) { legs.remove(localPort) }
+  fun isLeg(remotePort: Int): Boolean = legs.contains(remotePort)
 }
 
 object Endpoints {

@@ -53,7 +53,7 @@ test('/status, /load and /chat produce the exact sse lines', async () => {
   const sha = createHash('sha256').update(model).digest('hex');
   const files = await fileServer(model);
   const fake = await fakeLlama(['Hel', 'lo', ' there', '!']);
-  const api = await startApiServer({ models, llama: null, allowPrivateUrls: true, startBackend: async () => ({ port: fake.port, stop: async () => {} }) });
+  const api = await startApiServer({ fromGate: () => true, models, llama: null, allowPrivateUrls: true, startBackend: async () => ({ port: fake.port, stop: async () => {} }) });
   const base = `http://127.0.0.1:${api.port}`;
   try {
     assert.equal(await (await fetch(`${base}/status`)).text(), '{"loaded":false,"model":null,"sha256":null,"tokensUsed":0,"ctx":0,"busy":false}');
@@ -96,7 +96,7 @@ test('/status, /load and /chat produce the exact sse lines', async () => {
 test('/load with a wrong sha256 ends with the checksum error and leaves no file', async () => {
   const models = fs.mkdtempSync(path.join(os.tmpdir(), 'kula-conf-'));
   const files = await fileServer(randomBytes(1000));
-  const api = await startApiServer({ models, llama: null, allowPrivateUrls: true, startBackend: async () => { throw new Error('must not start'); } });
+  const api = await startApiServer({ fromGate: () => true, models, llama: null, allowPrivateUrls: true, startBackend: async () => { throw new Error('must not start'); } });
   try {
     const r = await post(`http://127.0.0.1:${api.port}`, '/load', { url: `http://127.0.0.1:${files.port}/m.gguf`, sha256: 'ab'.repeat(32), size: 1000, name: 'm.gguf' });
     assert.equal(r.text.split('\n\n').at(-2), 'data: {"error":"checksum mismatch; file deleted, load again"}');
@@ -113,7 +113,7 @@ test('/stop cancels a chat in flight', async () => {
   const model = randomBytes(10);
   const files = await fileServer(model);
   const fake = await fakeLlama(['a', 'b'], 5, true);
-  const api = await startApiServer({ models, llama: null, allowPrivateUrls: true, startBackend: async () => ({ port: fake.port, stop: async () => {} }) });
+  const api = await startApiServer({ fromGate: () => true, models, llama: null, allowPrivateUrls: true, startBackend: async () => ({ port: fake.port, stop: async () => {} }) });
   const base = `http://127.0.0.1:${api.port}`;
   try {
     await post(base, '/load', { url: `http://127.0.0.1:${files.port}/m`, sha256: createHash('sha256').update(model).digest('hex'), size: 10, name: 'm' });
@@ -187,7 +187,7 @@ function rawGet(port: number, p: string): Promise<{ head: string; body: Buffer }
 
 test('/blob?mb=N sends N MB of zeros with a fixed length; bad N is a json 400; N is capped at 64', async () => {
   const models = fs.mkdtempSync(path.join(os.tmpdir(), 'kula-conf-'));
-  const api = await startApiServer({ models, llama: null, startBackend: async () => { throw new Error('must not start'); } });
+  const api = await startApiServer({ fromGate: () => true, models, llama: null, startBackend: async () => { throw new Error('must not start'); } });
   try {
     const r = await rawGet(api.port, '/blob?mb=2');
     assert.match(r.head, /^HTTP\/1\.1 200 OK\r\n/);
@@ -215,7 +215,7 @@ test('/blob?mb=N sends N MB of zeros with a fixed length; bad N is a json 400; N
 
 test("/blob through the gate's api channel arrives whole (what the bench times)", async () => {
   const models = fs.mkdtempSync(path.join(os.tmpdir(), 'kula-conf-'));
-  const api = await startApiServer({ models, llama: null });
+  const api = await startApiServer({ fromGate: () => true, models, llama: null });
   const gate = await startGateServer({ port: 0, host: '127.0.0.1', secret: 'sb', targets: (ch) => (ch === 'api' ? api.port : null) });
   const tunnel = new Tunnel('127.0.0.1', gate.port, 'sb', 'api');
   const port = await tunnel.listen();
@@ -237,7 +237,7 @@ test('/trust over the audit vectors gives these exact bytes', async () => {
   const ledgerFile = path.join(dir, 'ledger.jsonl');
   fs.writeFileSync(ledgerFile, vectors.lines.map((v: any) => v.line + '\n').join(''));
   const key = fromSeed(Buffer.from(vectors.key.seed, 'hex'));
-  const api = await startApiServer({ models: dir, llama: null, trust: { key, ledgerFile, cert: () => null, gate: () => ({ v1: false, tls: true, paired: 1 }), now: () => 1700000042000 } });
+  const api = await startApiServer({ fromGate: () => true, models: dir, llama: null, trust: { key, ledgerFile, cert: () => null, gate: () => ({ v1: false, tls: true, paired: 1 }), now: () => 1700000042000 } });
   const pub = Buffer.from(vectors.key.public, 'hex').toString('base64');
   const [l1, l2] = vectors.lines;
   const head = `{"v":1,"id":"${vectors.key.id}","key":{"alg":"ed25519","pub":"${pub}","store":"file"},"cert":null,"gate":{"v1":false,"tls":true,"paired":1},`;

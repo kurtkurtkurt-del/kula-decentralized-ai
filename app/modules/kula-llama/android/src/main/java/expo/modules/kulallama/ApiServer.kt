@@ -92,6 +92,8 @@ class ApiServer(private val context: Context, private val modelsDir: File, priva
     val body = if (length > 0) { val buf = ByteArray(length); var n = 0; while (n < length) { val r = inp.read(buf, n, length - n); if (r < 0) break; n += r }; String(buf, 0, n, Charsets.UTF_8) } else ""
     val json = try { if (body.isNotBlank()) JSONObject(body) else JSONObject() } catch (e: Exception) { return json(out, 400, JSONObject().put("error", "bad json")) }
     s.soTimeout = 0
+    // only what came through the gate: on a phone every app can reach 127.0.0.1 (security review 4.1)
+    if (!ApiPeers.isLeg(s.port)) return json(out, 401, JSONObject().put("error", "not through the gate"))
     when {
       method == "GET" && path == "/status" -> json(out, 200, status())
       method == "GET" && path == "/blob" -> blob(out, query)

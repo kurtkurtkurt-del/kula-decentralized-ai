@@ -181,7 +181,7 @@ test('download: a redirect into the lan, a redirect loop, a body past the given 
 
 test('/load refuses a bad sha256, a negative size and a lan url with 400 before anything is fetched', async () => {
   const models = tmp();
-  const api = await startApiServer({ models, llama: null, startBackend: async () => ({ port: 1, stop: async () => {} }) });
+  const api = await startApiServer({ fromGate: () => true, models, llama: null, startBackend: async () => ({ port: 1, stop: async () => {} }) });
   const base = `http://127.0.0.1:${api.port}`;
   const post = async (body: unknown) => { const r = await fetch(`${base}/load`, { method: 'POST', body: JSON.stringify(body) }); return { status: r.status, body: await r.json() }; };
   try {
@@ -245,7 +245,7 @@ test('/load through the gate: the master\'s own lan address is fetched; another 
   });
   const fport = (files.address() as net.AddressInfo).port;
   const models = tmp();
-  const api = await startApiServer({ models, llama: null, startBackend: async () => ({ port: 1, stop: async () => {} }) });
+  const api = await startApiServer({ fromGate: () => true, models, llama: null, startBackend: async () => ({ port: 1, stop: async () => {} }) });
   const gate = await startGateServer({ port: 0, host: lan, secret: 'lan-secret', targets: (ch) => (ch === 'api' ? api.port : null) });
   const loGate = await startGateServer({ port: 0, host: '127.0.0.1', secret: 'lan-secret', targets: (ch) => (ch === 'api' ? api.port : null) });
   const tunnel = new Tunnel(lan, gate.port, 'lan-secret', 'api');

@@ -323,10 +323,12 @@ object Gate {
       // stream arrives from 127.0.0.1 and is not recorded: its peer is the relay, not a master.
       val localPort = local.localPort
       val linked = channel == "api" && ApiPeers.put(localPort, peer)
+      if (channel == "api") ApiPeers.openLeg(localPort)
       try {
         out.write("$okLine\n".toByteArray()); out.flush()
       } catch (e: Exception) {
         if (linked) ApiPeers.remove(localPort)
+        if (channel == "api") ApiPeers.closeLeg(localPort)
         if (channel == "rpc") slot.release()
         runCatching { local.close() }
         throw e
@@ -341,7 +343,7 @@ object Gate {
         // removed between the handshake and here: the drop() for it may already have run
         if (tls?.paired?.contains(fp) == false) drop(fp)
       }
-      val bytes = try { pipe(s, inp, local, ByteArray(0)) } finally { if (linked) ApiPeers.remove(localPort); live.remove(s) }
+      val bytes = try { pipe(s, inp, local, ByteArray(0)) } finally { if (linked) ApiPeers.remove(localPort); if (channel == "api") ApiPeers.closeLeg(localPort); live.remove(s) }
       if (channel == "rpc") slot.release()
       onEvent(Event("end", peer, channel, null, fp, v))
       audit { it.onEnd(peer, channel, bytes, (System.currentTimeMillis() - started) / 1000) }

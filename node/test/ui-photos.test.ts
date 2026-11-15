@@ -269,7 +269,7 @@ test('a model on a phone: the photo is read on this computer, only text goes to 
   // the phone: the real worker api behind a tls gate with a one-time code, a fake llama-server
   const llama = await fakeLlama(['Main St']);
   const pmodels = fs.mkdtempSync(path.join(os.tmpdir(), 'kula-photos-phone-'));
-  const api = await startApiServer({ models: pmodels, llama: null, allowPrivateUrls: true, startBackend: async () => ({ port: llama.port, stop: async () => {} }) });
+  const api = await startApiServer({ fromGate: () => true, models: pmodels, llama: null, allowPrivateUrls: true, startBackend: async () => ({ port: llama.port, stop: async () => {} }) });
   const identity = createIdentity('phone');
   const gate = await startGateServer({ port: 0, host: '127.0.0.1', secret: null, targets: (ch) => (ch === 'api' ? api.port : null), tls: { identity, paired: new Paired(null), pin: PIN as string | null } });
   const { engine, put } = newEngine({ catalog: [{ ...textModel(model.size, model.sha256), url: model.url }, visionModel()], startVision: vis.start });

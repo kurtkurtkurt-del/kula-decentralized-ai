@@ -66,7 +66,7 @@ test('status, load (download + sha256 + backend start) and chat through the gate
   const files = await fileServer(model);
   const fake = await fakeLlamaServer();
   const started: string[] = [];
-  const api = await startApiServer({
+  const api = await startApiServer({ fromGate: () => true,
     models, llama: null, allowPrivateUrls: true,
     startBackend: async (file, ctx) => { started.push(`${path.basename(file)}:${ctx}`); return { port: fake.port, stop: async () => {} }; },
   });
@@ -130,7 +130,7 @@ test('status, load (download + sha256 + backend start) and chat through the gate
 test('a client that drops mid-chat frees busy and aborts the upstream request', async () => {
   const models = fs.mkdtempSync(path.join(os.tmpdir(), 'kula-models-'));
   const fake = await fakeLlamaServer();
-  const api = await startApiServer({ models, llama: null, allowPrivateUrls: true, startBackend: async () => ({ port: fake.port, stop: async () => {} }) });
+  const api = await startApiServer({ fromGate: () => true, models, llama: null, allowPrivateUrls: true, startBackend: async () => ({ port: fake.port, stop: async () => {} }) });
   const base = `http://127.0.0.1:${api.port}`;
   try {
     // put a model in place without a download: a zero byte file with its own sha

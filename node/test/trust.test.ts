@@ -37,7 +37,7 @@ test('/trust: key, id, certificate, gate state, the ledger by since, the rejects
     cert: () => tlsServer.identity.certDer,
     gate: () => ({ v1: v1Open(secret, tlsServer), tls: true, paired: tlsServer.paired.size }),
   };
-  const api = await startApiServer({ models: dir, llama: null, trust: src });
+  const api = await startApiServer({ fromGate: () => true, models: dir, llama: null, trust: src });
   const get = async (q = '') => { const r = await fetch(`http://127.0.0.1:${api.port}/trust${q}`); return { status: r.status, type: r.headers.get('content-type'), text: await r.text() }; };
   try {
     const all = chainFiles(ledgerFile).flatMap(readLines);
@@ -116,8 +116,8 @@ test('/trust: key, id, certificate, gate state, the ledger by since, the rejects
 test('/trust on an empty ledger and without tls; no trust source: not found', async () => {
   const dir = tmp();
   const key = generate();
-  const api = await startApiServer({ models: dir, llama: null, trust: { key, ledgerFile: path.join(dir, 'ledger.jsonl'), cert: () => null, gate: () => ({ v1: true, tls: false, paired: 0 }) } });
-  const bare = await startApiServer({ models: dir, llama: null });
+  const api = await startApiServer({ fromGate: () => true, models: dir, llama: null, trust: { key, ledgerFile: path.join(dir, 'ledger.jsonl'), cert: () => null, gate: () => ({ v1: true, tls: false, paired: 0 }) } });
+  const bare = await startApiServer({ fromGate: () => true, models: dir, llama: null });
   try {
     const b = await (await fetch(`http://127.0.0.1:${api.port}/trust`)).json();
     assert.equal(b.cert, null);
@@ -134,7 +134,7 @@ test('/trust on an empty ledger and without tls; no trust source: not found', as
 test('/trust?challenge: a computer has no hardware to vouch for it, so "attest" is null; asked badly, 400', async () => {
   const dir = tmp();
   const key = generate();
-  const api = await startApiServer({ models: dir, llama: null, trust: { key, ledgerFile: path.join(dir, 'ledger.jsonl'), cert: () => null, gate: () => ({ v1: false, tls: true, paired: 1 }) } });
+  const api = await startApiServer({ fromGate: () => true, models: dir, llama: null, trust: { key, ledgerFile: path.join(dir, 'ledger.jsonl'), cert: () => null, gate: () => ({ v1: false, tls: true, paired: 1 }) } });
   try {
     const plain = await (await fetch(`http://127.0.0.1:${api.port}/trust`)).text();
     assert.ok(!plain.includes('"attest"'), 'not asked: no field, the bytes as before');

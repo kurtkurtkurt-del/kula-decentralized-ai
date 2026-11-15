@@ -137,6 +137,17 @@ class GuardTest {
   }
 
   @Test
+  fun apiLegsAreEveryGatePipeAndNothingElse() {
+    assertFalse(ApiPeers.isLeg(40101))
+    ApiPeers.openLeg(40101)
+    assertTrue(ApiPeers.isLeg(40101))
+    ApiPeers.openLeg(0)
+    assertFalse(ApiPeers.isLeg(0))
+    ApiPeers.closeLeg(40101)
+    assertFalse(ApiPeers.isLeg(40101))
+  }
+
+  @Test
   fun sizesAndEndpoints() {
     assertFalse(SizePolicy.overSize(1000, 1000))
     assertTrue(SizePolicy.overSize(1000 + 1024 + 21, 1000))

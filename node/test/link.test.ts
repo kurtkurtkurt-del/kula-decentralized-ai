@@ -7,7 +7,7 @@ import { measureLink, netOf } from '../src/link.ts';
 import { startApiServer } from '../src/api.ts';
 
 test('measureLink pulls the blob and times /status on the open connection', async () => {
-  const api = await startApiServer({ models: fs.mkdtempSync(path.join(os.tmpdir(), 'kula-link-')), llama: null });
+  const api = await startApiServer({ fromGate: () => true, models: fs.mkdtempSync(path.join(os.tmpdir(), 'kula-link-')), llama: null });
   let closed = 0;
   try {
     const l = await measureLink({ host: 'x', port: 1, secret: '' }, null, {

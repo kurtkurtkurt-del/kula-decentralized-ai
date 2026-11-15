@@ -139,7 +139,7 @@ async function fakePhone() {
   ledger.append('health', 'self', { throttled: false, batteryC: 30.5, batteryPct: 90 });
   let asked = 0;
   const trust = { key, ledgerFile, cert: () => identity.certDer, gate: () => { asked++; return { v1: false, tls: true, paired: tls.paired.size }; } };
-  const api = await startApiServer({ models: dir, llama: null, allowPrivateUrls: true, trust, startBackend: async () => ({ port: llama.port, stop: async () => {} }) });
+  const api = await startApiServer({ fromGate: () => true, models: dir, llama: null, allowPrivateUrls: true, trust, startBackend: async () => ({ port: llama.port, stop: async () => {} }) });
   const gate = await startGateServer({ port: 0, host: '127.0.0.1', secret: null, targets: (ch) => (ch === 'api' ? api.port : null), tls });
   return {
     port: gate.port, ledger, asked: () => asked,
