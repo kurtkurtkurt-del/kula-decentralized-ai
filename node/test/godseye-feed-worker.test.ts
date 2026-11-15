@@ -33,7 +33,7 @@ async function fakePhone(status: () => unknown) {
   const apiPort = (api.address() as any).port as number;
   const tls = { identity: createIdentity('phone'), paired: new Paired(null), pin: PIN as string | null };
   const gate = await startGateServer({ port: 0, host: '127.0.0.1', secret: null, targets: (ch) => (ch === 'api' ? apiPort : null), tls });
-  return { port: gate.port, close: async () => { await gate.close(); api.close(); } };
+  return { port: gate.port, fp: tls.identity.fp, close: async () => { await gate.close(); api.close(); } };
 }
 
 function engineIn(dir: string) {
@@ -93,8 +93,10 @@ test('a /status that is not json or not an object keeps no worker; forgetting th
     row = (await e.probe([p.id])).find((r) => r.id === p.id)!;
     assert.deepEqual({ ...row.worker!, at: 0 }, { at: 0, busy: null, tokensUsed: null, ctx: null, ramFreeMb: null });
     assert.equal(e.removePeer(p.id), true);
-    // paired again at the same address: the old reading is gone
-    const p2 = await e.pairByHand({ address: `127.0.0.1:${phone.port}`, pin: PIN, name: 'pixel' });
+    // paired again at the same address: the old reading is gone. The phone still knows this
+    // computer and answers "paired", which is taken only with the certificate start typed from its
+    // screen (security review 1.1: never on its word alone)
+    const p2 = await e.pairByHand({ address: `127.0.0.1:${phone.port}`, pin: PIN, name: 'pixel', fp: phone.fp.slice(0, 16) });
     assert.equal('worker' in p2, false);
   } finally {
     await e.close();

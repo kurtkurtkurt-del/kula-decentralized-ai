@@ -256,3 +256,46 @@ test('v1 works before pairing and is told "no v1" after a v2 pairing on the same
     echo.close();
   }
 });
+
+test('learning a certificate: a gate that says "paired" instead of asking for the code is refused, not pinned', async () => {
+  const fake = createIdentity('fake');
+  const me = createIdentity('me');
+  const server = tls.createServer({ key: fake.keyPem, cert: fake.certPem, minVersion: 'TLSv1.3', requestCert: true, rejectUnauthorized: false }, (s) => {
+    let buf = '';
+    s.on('data', (d) => {
+      buf += d.toString();
+      if (buf.includes('KULA2') && !buf.includes('-')) s.write(`${'ab'.repeat(16)} paired\n`);
+      if (/\n-\n|\n-$/.test(buf) || buf.endsWith('-\n')) s.write('OK -\n');
+    });
+    s.on('error', () => {});
+  });
+  await new Promise<void>((r) => server.listen(0, '127.0.0.1', () => r()));
+  const port = (server.address() as net.AddressInfo).port;
+  try {
+    const sock = net.connect(port, '127.0.0.1');
+    await new Promise((r) => sock.once('connect', r));
+    await assert.rejects(
+      handshake(sock, '', 'api', 3000, undefined, { identity: me, fp: '', pin: '0123456789abcdef' }),
+      (e: unknown) => e instanceof GateRefused && /not paired/.test(e.reason),
+    );
+    sock.destroy();
+    // a certificate start of 8 typed: still not enough to take "paired" on its word
+    const s2 = net.connect(port, '127.0.0.1');
+    await new Promise((r) => s2.once('connect', r));
+    await assert.rejects(handshake(s2, '', 'api', 3000, undefined, { identity: me, fp: '', pin: '0123456789abcdef', fpPrefix: fake.fp.slice(0, 8) }), GateRefused);
+    s2.destroy();
+    // 16 typed from the device's screen and matching at TLS: it is that device, "paired" is fine
+    const s3 = net.connect(port, '127.0.0.1');
+    await new Promise((r) => s3.once('connect', r));
+    const h = await handshake(s3, '', 'api', 3000, undefined, { identity: me, fp: '', pin: '0123456789abcdef', fpPrefix: fake.fp.slice(0, 16) });
+    assert.equal(h.fp, fake.fp);
+    h.socket.destroy(); s3.destroy();
+    // a typed start that does not match is refused at TLS, before anything is sent
+    const s4 = net.connect(port, '127.0.0.1');
+    await new Promise((r) => s4.once('connect', r));
+    await assert.rejects(handshake(s4, '', 'api', 3000, undefined, { identity: me, fp: '', pin: '0123456789abcdef', fpPrefix: '0'.repeat(16) }), new RegExp(FP_MISMATCH));
+    s4.destroy();
+  } finally {
+    server.close();
+  }
+});

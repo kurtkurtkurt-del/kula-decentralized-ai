@@ -54,7 +54,13 @@ export interface TlsClient {
   identity: GateIdentity;
   fp: string;
   pin?: string | null;
+  // while learning (fp ''): the start of the certificate fingerprint the person typed from the
+  // device's screen; checked at TLS, and with 16 hex or more it is identity enough to accept
+  // a gate that already knows us ("paired") without a pin proof
+  fpPrefix?: string | null;
 }
+
+export const FP_PREFIX_MIN = 16;
 
 export function nonce(): string {
   return randomBytes(16).toString('hex');
@@ -553,6 +559,7 @@ export function wrapClient(socket: Duplex, t: TlsClient, timeoutMs = HANDSHAKE_M
       const fp = peerFingerprint(s);
       if (!fp) { s.destroy(); return reject(new Error(FP_MISMATCH)); }
       if (t.fp && !sameHex(fp, t.fp)) { s.destroy(); return reject(new Error(FP_MISMATCH)); }
+      if (!t.fp && t.fpPrefix && !fp.toLowerCase().startsWith(t.fpPrefix.toLowerCase())) { s.destroy(); return reject(new Error(FP_MISMATCH)); }
       if (!t.fp && !t.pin) { s.destroy(); return reject(new GateRefused('not paired')); }
       resolve(s);
     });
@@ -580,6 +587,10 @@ export async function handshake(socket: Duplex, secret: string, channel: Channel
       if (!isNonce(nonceS) || (state !== 'paired' && state !== 'pin')) throw new Error(`bad server nonce: ${JSON.stringify(first)}`);
       const pairing = state === 'pin';
       if (pairing && !tlsOpts.pin) throw new GateRefused('not paired');
+      // learning (no pinned fingerprint): only the pin proof below says who this is, so a gate
+      // that answers "paired" instead is refused, never pinned on its word (security review 1.1,
+      // 15.11.2026; Gate.kt:462 has done the same on the phone)
+      if (!pairing && !tlsOpts.fp && (tlsOpts.fpPrefix ?? '').length < FP_PREFIX_MIN) throw new GateRefused('not paired');
       const fpC = tlsOpts.identity.fp;
       writeLine(s, pairing ? pinProofClient(tlsOpts.pin!, nonceC, nonceS, channel, fpS, fpC) : '-');
       const answer = await reader.line(timeoutMs);

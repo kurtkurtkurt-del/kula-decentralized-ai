@@ -15,7 +15,7 @@ import { randomBytes } from 'node:crypto';
 import { openApart, openPeerDevice, startLlamaServer, type Cluster, type Message, type ModelRef, type Reply, type StartBackend, type WireMessage } from '../apart.js';
 import { measureLink, netOf, type Link } from '../link.js';
 import { peerTls, readPeers, writePeers, parsePeerText, upsertPeer, findPeer, probePeers, peersFile, whereIs, discover, reachedBy, isRing, ringOf, widestRing, WORLD_CLOSED, type AddrVia, type Peer, type PeerProbe, type Found, type PeerKind, type Ring } from '../peers.js';
-import { connectRemote, handshake, peekGate, GateRefused, type GatePeek } from '../gate.js';
+import { connectRemote, handshake, peekGate, GateRefused, type GatePeek, FP_MISMATCH } from '../gate.js';
 import { Adb, isSerial, stateHelp, NO_ADB_HELP, type CableDevice } from './cable.js';
 import { loadOrCreateIdentity, fingerprint, Paired, type GateIdentity } from '../tls.js';
 import { Ledger, sha256Hex } from '../audit/ledger.js';
@@ -706,7 +706,7 @@ export class Engine {
     if (!/^[0-9a-f]{8,64}$/.test(pin)) throw new Error('the code is the 16 letters and digits after "code" on the phone');
     const fpStart = String(input.fp ?? '').replace(/[\s-]/g, '').toLowerCase();
     if (fpStart && !/^[0-9a-f]{4,64}$/.test(fpStart)) throw new Error('the certificate is hex (0-9, a-f)');
-    const fp = await this.pinPair(host, port, pin);
+    const fp = await this.pinPair(host, port, pin, fpStart || null);
     if (fpStart && !fp.startsWith(fpStart)) throw new Error('the certificate does not match what the phone shows: not pairing');
     const now = new Date().toISOString();
     // what mdns heard at this address names it and says what it is (a computer that shares is 'pc')
@@ -741,14 +741,17 @@ export class Engine {
 
   // One handshake with the one-time code: learns the phone's certificate (the code's proof
   // covers both certificates, so a device in the middle fails it) and the phone keeps ours.
-  private async pinPair(host: string, port: number, pin: string): Promise<string> {
+  private async pinPair(host: string, port: number, pin: string, fpPrefix: string | null = null): Promise<string> {
     let fp: string | null = null;
     const socket = await connectRemote(host, port, 4000).catch((e) => { throw new Error(`cannot reach ${host}:${port}: ${(e as Error).message}`); });
     try {
-      const h = await handshake(socket, '', 'api', 6000, undefined, { identity: this.identity(), fp: '', pin });
+      const h = await handshake(socket, '', 'api', 6000, undefined, { identity: this.identity(), fp: '', pin, fpPrefix });
       fp = h.fp;
       h.socket.destroy();
     } catch (e) {
+      // a typed certificate start that does not match is refused at TLS, before the code is spent
+      if ((e as Error).message === FP_MISMATCH && fpPrefix) throw new Error('the certificate does not match what the phone shows: not pairing');
+      if (e instanceof GateRefused && e.reason === 'not paired') throw new Error('that device says it already knows this computer, but it did not prove who it is: type the start of the certificate it shows (16 letters and digits or more), or on the device remove this computer and use a new code');
       throw new Error(e instanceof GateRefused ? `the phone said no: ${e.reason}` : (e as Error).message);
     } finally { socket.destroy(); }
     if (!fp) throw new Error('the phone did not show a certificate');
