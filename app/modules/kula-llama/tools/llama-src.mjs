@@ -36,15 +36,20 @@ function current() {
   return existsSync(stamp) ? readFileSync(stamp, 'utf8').trim() : null;
 }
 
+// The patches applied on top of the release, in order. The stamp names the tag and each patch's
+// sha256, so a new or changed patch unpacks the tree again instead of being skipped.
+const PATCHES = ['privatelm-rpc-log.patch', 'kula-rpc-no-code-ops.patch'];
+const WANT = [TAG, ...PATCHES.map((p) => `${p} ${sha(join(here, 'patches', p))}`)].join('\n');
+
 if (args.has('--check')) {
-  if (current() !== TAG) {
-    console.error(`kula-llama: llama.cpp is ${current() ?? 'missing'}, need ${TAG} (node tools/llama-src.mjs)`);
+  if (current() !== WANT) {
+    console.error(`kula-llama: llama.cpp is ${current()?.split('\n')[0] ?? 'missing'}${current() ? ' with other patches' : ''}, need ${TAG} with ${PATCHES.join(', ')} (node tools/llama-src.mjs)`);
     process.exit(1);
   }
   process.exit(0);
 }
 
-if (current() !== TAG) {
+if (current() !== WANT) {
   mkdirSync(cache, { recursive: true });
   if (!existsSync(tarball) || sha(tarball) !== SHA256) {
     console.log(`kula-llama: downloading llama.cpp ${TAG}`);
@@ -63,10 +68,10 @@ if (current() !== TAG) {
   sh('tar', ['xzf', tarball, '-C', tmp]);
   sh('mv', [join(tmp, `llama.cpp-${TAG}`), dest]);
   rmSync(tmp, { recursive: true, force: true });
-  for (const p of ['privatelm-rpc-log.patch']) {
+  for (const p of PATCHES) {
     sh('patch', ['-p1', '-s', '-i', join(here, 'patches', p)], { cwd: dest });
   }
-  writeFileSync(stamp, `${TAG}\n`);
+  writeFileSync(stamp, `${WANT}\n`);
   console.log(`kula-llama: llama.cpp ${TAG} ready at ${dest}`);
 } else {
   console.log(`kula-llama: llama.cpp ${TAG} already in place`);

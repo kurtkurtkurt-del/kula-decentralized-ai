@@ -10,6 +10,7 @@ import qrcode from 'qrcode-terminal';
 import { startGateServer, v1Open, PIN_TTL_MS, type GateEvent, type GateServer, type Channel, type TlsServer } from './gate.js';
 import { loadOrCreateIdentity, newPin, Paired } from './tls.js';
 import { findLlama, TAG } from './llama.js';
+import { hasLocalGpu } from './split.js';
 import { home, expandHome } from './paths.js';
 import { lanIPv4, globalIPv6, freeRamMB, measureBandwidth, detectGpu } from './sysinfo.js';
 import { startPortMapper, mapLine, type PortMapper } from './portmap.js';
@@ -173,9 +174,18 @@ export async function share(opts: ShareOptions): Promise<ShareHandle> {
     return startChild('ggml-rpc-server', llama.rpcServer, ['-H', '127.0.0.1', '-p', String(port), '-c'], port, log, 30000);
   };
 
+  let cpuRpcWarned = false;
   const targets = async (channel: Channel): Promise<number | null> => {
     if (channel === 'rpc') {
       if (!llama) return null;
+      // llama.cpp's rpc server on the CPU backend lets a client run code of its choosing (custom ops,
+      // security review 8A.1). kula's phone build is patched; the prebuilt server a desktop downloads
+      // is not. A computer whose llama.cpp has no GPU device therefore does not serve split until it
+      // runs a patched server (apart mode still works); Metal and CUDA refuse those ops themselves.
+      if (!hasLocalGpu(llama)) {
+        if (!cpuRpcWarned) { cpuRpcWarned = true; log('split refused: this llama.cpp runs on the processor, and its rpc server is not safe to share there yet (apart mode still works)'); }
+        return null;
+      }
       if (rpc && !exited(rpc.proc)) return rpc.port;
       rpc = null;
       rpcStarting ??= startRpc().finally(() => { rpcStarting = null; });
