@@ -238,8 +238,8 @@ describe('the anchor’s invite', () => {
   });
   it('joins natively and keeps the anchor as a pinned, paired peer reached at the address that answered', async () => {
     mockNative.joinAnswer = { fp: FP_A, name: 'Berlin Mac', host: '2001:db8::5', port: 50551, via: 'ipv6', again: false, sharing: false };
-    const r = await joinInvite(JSON.stringify(invite));
-    expect(mockNative.joins).toEqual([{ fp: FP_A, fpPrefix: null, pin: '0123456789abcdef', hpin: 'fedcba9876543210', name: 'Berlin Mac', ways: invite.addrs }]);
+    const r = await joinInvite(JSON.stringify(invite), 'mine');
+    expect(mockNative.joins).toEqual([{ fp: FP_A, fpPrefix: null, pin: '0123456789abcdef', hpin: 'fedcba9876543210', name: 'Berlin Mac', ways: invite.addrs, whose: 'mine' }]);
     expect(r).toEqual(expect.objectContaining({ name: 'Berlin Mac', again: false, sharing: false }));
     const kept = peers()[0];
     expect(kept).toEqual(expect.objectContaining({ id: 'id-berlin', fp: FP_A, pin: null, anchor: true, kind: 'pc', route: { host: '2001:db8::5', port: 50551, via: 'ipv6' } }));
@@ -247,13 +247,13 @@ describe('the anchor’s invite', () => {
   });
   it('a typed invite joins with the certificate start and learns the full certificate', async () => {
     mockNative.joinAnswer = { fp: FP_A, name: 'anchor a1a1a1a1', host: '203.0.113.5', port: 50551, via: 'mapped', again: false, sharing: true };
-    await joinInvite('203.0.113.5:50551 0123456789abcdef a1a1a1a1a1a1a1a1');
-    expect(mockNative.joins[0]).toEqual(expect.objectContaining({ fp: '', fpPrefix: 'a1a1a1a1a1a1a1a1', hpin: null }));
+    await joinInvite('203.0.113.5:50551 0123456789abcdef a1a1a1a1a1a1a1a1', 'friend');
+    expect(mockNative.joins[0]).toEqual(expect.objectContaining({ fp: '', fpPrefix: 'a1a1a1a1a1a1a1a1', hpin: null, whose: 'friend' }));
     expect(peers()[0]).toEqual(expect.objectContaining({ fp: FP_A, anchor: true, host: '203.0.113.5' }));
     expect(peers()[0].route).toBeUndefined(); // it answered at its first address: no route kept
   });
   it('the anchor’s refusal comes back in its plain words, nothing is kept', async () => {
-    await expect(joinInvite(JSON.stringify(invite))).rejects.toThrow('this invite was used already');
+    await expect(joinInvite(JSON.stringify(invite), 'friend')).rejects.toThrow('this invite was used already');
     expect(peers()).toEqual([]);
   });
 });

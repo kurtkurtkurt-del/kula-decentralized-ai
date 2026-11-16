@@ -47,6 +47,81 @@ class GateSecurityTest {
   }
 
   @Test
+  fun aHandshakeTricklingOneByteEvery4sIsClosedBy20s() {
+    // security review D4 #9: every read is under HANDSHAKE_MS, so only a total deadline ends it
+    val echo = echo()
+    val port = freePort()
+    val gate = Gate.Server(port, "s", { echo.localPort })
+    gate.start()
+    val s = Socket("127.0.0.1", port)
+    try {
+      s.soTimeout = 30_000
+      val hello = "KULA1 rpc ${"ab".repeat(16)}" // never the newline
+      val t0 = System.currentTimeMillis()
+      val writer = Thread {
+        try { var i = 0; while (true) { s.getOutputStream().write(hello[i % hello.length].code); s.getOutputStream().flush(); i++; Thread.sleep(4000) } } catch (_: Exception) {}
+      }.apply { isDaemon = true; start() }
+      // -1 (or a reset) once the gate closes it; a read timeout at 30 s when nothing does
+      val r = runCatching { s.getInputStream().read() }
+      val took = System.currentTimeMillis() - t0
+      writer.interrupt()
+      assertTrue("closed after $took ms (${r.exceptionOrNull()?.javaClass?.simpleName ?: r.getOrNull()})", r.exceptionOrNull() !is java.net.SocketTimeoutException && took in 18_000..22_500)
+      // the slot came back: a real client is served
+      assertNull(Gate.probe("127.0.0.1", port, "s", "rpc"))
+    } finally { runCatching { s.close() }; gate.stop(); echo.close() }
+  }
+
+  @Test
+  fun anOwnDeviceTakesTheRpcSeatFromAFriendsAfterAMinuteIdle() {
+    // security review D4 #10 (the user's choice): a friend's device holding the seat with nothing
+    // passed for 60 s gives it to the person's own device; friend against friend, own against own stay busy
+    val echo = echo()
+    val port = freePort()
+    val phone = GateIdentity.create("phone")
+    val friendA = GateIdentity.create("friend-a")
+    val friendB = GateIdentity.create("friend-b")
+    val ownA = GateIdentity.create("own-a")
+    val ownB = GateIdentity.create("own-b")
+    val paired = Paired(null).also { p -> listOf(friendA, friendB, ownA, ownB).forEach { p.add(it.fp) } }
+    val friends = setOf(friendA.fp, friendB.fp)
+    // the gate's threads read it: an atomic, not a captured var
+    val clock = java.util.concurrent.atomic.AtomicLong(1_000_000L)
+    val gate = Gate.Server(port, null, { echo.localPort }, null, Gate.TlsServer(phone, paired, null), friend = { it in friends }, now = { clock.get() })
+    gate.start()
+    val rpc = { id: GateIdentity -> Gate.probe("127.0.0.1", port, "", "rpc", tls = Gate.TlsClient(id, phone.fp)) }
+    val hold = { id: GateIdentity -> Gate.handshake(Socket("127.0.0.1", port), "", "rpc", Gate.TlsClient(id, phone.fp)) }
+    try {
+      // a friend's device loads a model and then sits idle
+      var held = hold(friendA)
+      clock.addAndGet(59_000)
+      assertEquals("gate: NO busy", rpc(ownA))
+      // another friend never takes it, however long it sat
+      clock.addAndGet(2_000)
+      assertEquals("gate: NO busy", rpc(friendB))
+      // 61 s: the own device takes it, and the friend's connection is closed
+      assertNull(rpc(ownA))
+      held.soTimeout = 3000
+      assertEquals(-1, runCatching { held.getInputStream().read() }.getOrDefault(-1))
+      held.close()
+      Thread.sleep(200)
+      // bytes keep a friend's seat: an echo every so often is use, not idle
+      held = hold(friendA)
+      val out = held.getOutputStream(); val inp = held.getInputStream()
+      clock.addAndGet(50_000)
+      out.write(1); out.flush(); assertEquals(1, inp.read())
+      clock.addAndGet(30_000)
+      assertEquals("gate: NO busy", rpc(ownA))
+      held.close()
+      Thread.sleep(200)
+      // own against own: busy, idle or not
+      held = hold(ownA)
+      clock.addAndGet(10 * 60_000L)
+      assertEquals("gate: NO busy", rpc(ownB))
+      held.close()
+    } finally { gate.stop(); echo.close() }
+  }
+
+  @Test
   fun aServerWithoutASecretSpeaksNoV1ButStillTls() {
     val echo = echo()
     val port = freePort()

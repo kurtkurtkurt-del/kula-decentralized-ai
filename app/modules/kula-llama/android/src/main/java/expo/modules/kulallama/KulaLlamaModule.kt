@@ -55,7 +55,7 @@ class KulaLlamaModule : Module() {
     return Anchor.readJoined(WorkerService.anchorsFile(context)).map { j ->
       mapOf("fp" to j.fp, "name" to j.name, "host" to j.host, "port" to j.port,
         "addrs" to j.addrs.map { mapOf("host" to it.host, "port" to it.port, "via" to it.via) },
-        "joinedAt" to j.joinedAt.toDouble(), "waitingBack" to (j.hpin != null && (j.hpinExp ?: 0L) > now))
+        "joinedAt" to j.joinedAt.toDouble(), "waitingBack" to (j.hpin != null && (j.hpinExp ?: 0L) > now), "whose" to j.whose)
     }
   }
   /** The worker reads the store of joined anchors again (only when it runs: an intent must not start it). */
@@ -292,7 +292,7 @@ class KulaLlamaModule : Module() {
         Anchor.Addr(h, p, (w["via"] as? String) ?: "mapped")
       }
       val inv = Anchor.Invite((invite["fp"] as? String ?: "").lowercase(), invite["fpPrefix"] as? String, (invite["pin"] as? String ?: "").lowercase(),
-        (invite["hpin"] as? String)?.lowercase(), invite["name"] as? String ?: "", ways)
+        (invite["hpin"] as? String)?.lowercase(), invite["name"] as? String ?: "", ways, Anchor.whoseOf(invite["whose"] as? String))
       if (inv.pin.isEmpty()) throw CodedException("this is not an invite: it has no one-time code")
       val r = try { Anchor.join(inv, identity, WorkerService.anchorsFile(context)) } catch (e: Exception) { throw CodedException(e.message ?: "join failed") }
       tellWorkerAnchors()

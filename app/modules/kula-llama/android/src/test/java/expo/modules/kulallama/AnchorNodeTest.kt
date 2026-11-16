@@ -208,7 +208,7 @@ class AnchorNodeTest {
     assertEquals(inv.hpin, Anchor.readJoined(store).single().hpin)
     // an invite works once
     val again = runCatching { Anchor.join(inv, GateIdentity.create("someone-else"), File(dir, "other.json")) }.exceptionOrNull()
-    assertEquals("this invite was used already: each invite works once. ask for a new one.", again?.message)
+    assertEquals("this invite was used already: each invite works once. ask for a new one. if it was not you, tell the anchor's owner to remove the device that used it.", again?.message)
     // sharing: the phone registers, its gate opens the pair-back code for the anchor only, the anchor pairs back
     val g = PhoneGate(phone, null, emptyList())
     val links = Anchor.Links(store, phone, "pixel", "phone", g.port, g.tls.codes, retryMs = 100)

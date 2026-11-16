@@ -147,4 +147,118 @@ class AnchorTest {
     assertTrue(Anchor.removeJoined(f, "A".repeat(64)))
     assertEquals(emptyList<Anchor.Joined>(), Anchor.readJoined(f))
   }
+
+  @Test
+  fun twoProcessesChangingTheStoreLoseNoUpdate() {
+    // security review D4 #15: the app and the worker are two processes; @Synchronized holds in one
+    val dir = java.nio.file.Files.createTempDirectory("kula-anchors").toFile()
+    val f = File(dir, "anchors.json")
+    Anchor.writeJoined(f, listOf(Anchor.Joined("c".repeat(64), "count", "10.0.0.1", 50551, emptyList(), 0L)))
+    val go = File(dir, "go")
+    val jvm = File(System.getProperty("java.home"), "bin/java").path
+    val cp = System.getProperty("java.class.path")
+    val procs = List(2) {
+      ProcessBuilder(jvm, "-cp", cp, StoreHammer::class.java.name, f.path, "200", go.path).redirectErrorStream(true).start()
+    }
+    // both JVMs are up and waiting before either starts, so their updates overlap
+    Thread.sleep(1500)
+    go.writeText("go")
+    for (p in procs) {
+      assertTrue("a hammer took too long", p.waitFor(60, java.util.concurrent.TimeUnit.SECONDS))
+      assertEquals(p.inputStream.readBytes().toString(Charsets.UTF_8), 0, p.exitValue())
+    }
+    assertEquals(400L, Anchor.readJoined(f).single().joinedAt)
+  }
+
+  @Test
+  fun aFifthAnchorIsRefusedAndNoneIsDropped() {
+    // security review D4 #22: the store keeps four; the fifth used to push the oldest out silently
+    val phone = GateIdentity.create("phone")
+    val known = GateIdentity.create("known")
+    val fifth = GateIdentity.create("fifth")
+    val dir = java.nio.file.Files.createTempDirectory("kula-anchors").toFile()
+    val f = File(dir, "anchors.json")
+    val four = listOf("1", "2", "3").map { Anchor.Joined(it.repeat(64), "anchor $it", "10.0.0.$it", 50551, emptyList(), 1L) } +
+      Anchor.Joined(known.fp, "known", "127.0.0.1", 1, emptyList(), 1L)
+    Anchor.writeJoined(f, four)
+    val p1 = freePort(); val p2 = freePort()
+    val t1 = Gate.TlsServer(known, Paired(null), Gate.newPin())
+    val t2 = Gate.TlsServer(fifth, Paired(null), Gate.newPin())
+    val g1 = Gate.Server(p1, null, { null }, null, t1).also { it.start() }
+    val g2 = Gate.Server(p2, null, { null }, null, t2).also { it.start() }
+    try {
+      val pin2 = t2.pin!!
+      val e = runCatching { Anchor.join(Anchor.Invite(fifth.fp, null, pin2, null, "fifth", listOf(Anchor.Addr("127.0.0.1", p2, "lan"))), phone, f) }.exceptionOrNull()
+      assertEquals(Anchor.FULL_WORDS, e?.message)
+      // refused before the invite was spent, and nothing was dropped
+      assertEquals(pin2, t2.pin)
+      assertEquals(four.map { it.fp }, Anchor.readJoined(f).map { it.fp })
+      // an anchor already in the store may come again with a new invite, typed or scanned
+      val r = Anchor.join(Anchor.Invite("", known.fp.take(16), t1.pin!!, null, "known", listOf(Anchor.Addr("127.0.0.1", p1, "lan"))), phone, f)
+      assertTrue(r.again)
+      assertEquals(4, Anchor.readJoined(f).size)
+    } finally { g1.stop(); g2.stop() }
+  }
+
+  @Test
+  fun theStoreKeepsWhoseComputerAnAnchorIsAndTheGateCountsFriendsByIt() {
+    // security review D4 #10: the person's answer when joining decides who is a friend's device
+    val dir = java.nio.file.Files.createTempDirectory("kula-anchors").toFile()
+    val f = File(dir, "anchors.json")
+    val (old, mine, odd) = listOf("a", "b", "c").map { it.repeat(64) }
+    f.writeText("""[
+      {"fp":"$old","name":"before the question","host":"10.0.0.1","port":50551,"joined_at":1},
+      {"fp":"$mine","name":"home","host":"10.0.0.2","port":50551,"joined_at":1,"whose":"mine"},
+      {"fp":"$odd","name":"odd","host":"10.0.0.3","port":50551,"joined_at":1,"whose":"MINE "}
+    ]""")
+    val list = Anchor.readJoined(f)
+    // written before this change, or anything but "mine": a friend's, the safe side
+    assertEquals(listOf(Anchor.FRIEND, Anchor.MINE, Anchor.FRIEND), list.map { it.whose })
+    // and it survives a write
+    Anchor.writeJoined(f, list)
+    assertEquals(listOf(Anchor.FRIEND, Anchor.MINE, Anchor.FRIEND), Anchor.readJoined(f).map { it.whose })
+    // the gate's friend test: a friend's anchor is a friend's, my anchor and every other paired computer are mine
+    assertTrue(Anchor.friendOf(list, old))
+    assertFalse(Anchor.friendOf(list, mine))
+    assertTrue(Anchor.friendOf(list, odd.uppercase()))
+    assertFalse(Anchor.friendOf(list, "d".repeat(64)))
+
+    // joining keeps the answer given, and joining again keeps the newer answer
+    val anchor = GateIdentity.create("anchor")
+    val phone = GateIdentity.create("phone")
+    val port = freePort()
+    val tls = Gate.TlsServer(anchor, Paired(null), Gate.newPin())
+    val gate = Gate.Server(port, null, { null }, null, tls).also { it.start() }
+    val store = File(dir, "joined.json")
+    val way = listOf(Anchor.Addr("127.0.0.1", port, "lan"))
+    try {
+      Anchor.join(Anchor.Invite(anchor.fp, null, tls.pin!!, null, "home mac", way, Anchor.MINE), phone, store)
+      assertEquals(Anchor.MINE, Anchor.readJoined(store).single().whose)
+      assertFalse(Anchor.friendOf(Anchor.readJoined(store), anchor.fp))
+      tls.open(Gate.newPin(), null, null)
+      Anchor.join(Anchor.Invite(anchor.fp, null, tls.pin!!, null, "home mac", way, Anchor.FRIEND), phone, store)
+      assertEquals(Anchor.FRIEND, Anchor.readJoined(store).single().whose)
+      assertTrue(Anchor.friendOf(Anchor.readJoined(store), anchor.fp))
+    } finally { gate.stop() }
+  }
+
+  @Test
+  fun aUsedInviteNamesTheOwnersRemedy() {
+    // security review D4 #17: a stolen invite used first; the real joiner learns what to do
+    val w = Anchor.inviteWords("gate: NO pin used", false)
+    assertTrue(w, w.startsWith("this invite was used already"))
+    assertTrue(w, w.contains("if it was not you, tell the anchor's owner to remove the device that used it"))
+  }
+}
+
+/** The other process of [AnchorTest.twoProcessesChangingTheStoreLoseNoUpdate]: waits for "go", then n read-change-writes. */
+object StoreHammer {
+  @JvmStatic fun main(args: Array<String>) {
+    val f = File(args[0])
+    val n = args[1].toInt()
+    val go = File(args[2])
+    val until = System.currentTimeMillis() + 30_000
+    while (!go.exists() && System.currentTimeMillis() < until) Thread.sleep(5)
+    repeat(n) { Anchor.updateJoined(f) { l -> l.map { it.copy(joinedAt = it.joinedAt + 1) } } }
+  }
 }

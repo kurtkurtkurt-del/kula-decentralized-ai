@@ -13,11 +13,13 @@ export type WorkerStatus = { state: 'stopped' | 'starting' | 'running' | 'error'
 /** How the shared phone stands with one anchor it joined (Anchor.kt Links): registered, or why not. */
 export type AnchorLink = { fp: string; name: string; at: string; state: 'registering' | 'registered' | 'lost' | 'replaced' | 'refused'; why: string | null; waitingBack: boolean };
 /** An anchor this phone joined (the store, gate/anchors.json). waitingBack: the anchor has not paired back yet and its code is still open. */
-export type JoinedAnchor = { fp: string; name: string; host: string; port: number; addrs: { host: string; port: number; via: string }[]; joinedAt: number; waitingBack: boolean };
+/** Whose computer an anchor is, as the person said when joining it (security review D4 #10). */
+export type AnchorWhose = 'mine' | 'friend';
+export type JoinedAnchor = { fp: string; name: string; host: string; port: number; addrs: { host: string; port: number; via: string }[]; joinedAt: number; waitingBack: boolean; whose?: AnchorWhose };
 /** The anchor a road goes through (docs/ANCHOR.md): its own address and its certificate; null for a direct road. */
 export type PeerAnchorArg = { host: string; port: number; fp: string } | null;
 /** An anchor's invite for the native join (src/llm/peers.ts parseInvite). */
-export type InviteArg = { fp: string; fpPrefix: string | null; pin: string; hpin: string | null; name: string; ways: { host: string; port: number; via: string }[] };
+export type InviteArg = { fp: string; fpPrefix: string | null; pin: string; hpin: string | null; name: string; ways: { host: string; port: number; via: string }[]; whose: AnchorWhose };
 /**
  * `{fp, pin?}` picks protocol v2 (tls, pinned certificate); null means protocol v1 with the secret.
  * An empty fp means "learn it": a peer added by a relay code alone shows its certificate on

@@ -59,8 +59,24 @@ object Gate {
   const val VERSION2 = "KULA2"
   const val DEFAULT_PORT = 50551
   const val HANDSHAKE_MS = 5000
+  /**
+   * A handshake has this long in all, however its bytes trickle in: [HANDSHAKE_MS] is per read, so
+   * without it a byte every 4 s would hold a slot for good (node/src/gate.ts HANDSHAKE_TOTAL_MS,
+   * security review D4 #9). Past it the socket is closed.
+   */
+  const val HANDSHAKE_TOTAL_MS = 20_000L
   /** Connections allowed to sit in a handshake at once; the next is told "NO overloaded" and dropped. */
   const val MAX_HANDSHAKES = 32
+  /**
+   * A friend's device holding the rpc seat with no byte either way for this long gives it up to one
+   * of the person's own devices that asks (security review D4 #10, the user's choice: 1 minute).
+   */
+  const val SEAT_IDLE_MS = 60_000L
+  /** One thread for every server's handshake deadlines. */
+  private val deadlines: java.util.concurrent.ScheduledThreadPoolExecutor by lazy {
+    java.util.concurrent.ScheduledThreadPoolExecutor(1) { r -> Thread(r, "gate-deadline").apply { isDaemon = true } }
+      .apply { removeOnCancelPolicy = true }
+  }
   /** A pairing code lives this long after it was made; then "NO pin expired" and a fresh one. */
   const val PIN_TTL_MS = 10 * 60_000L
   private val random = SecureRandom()
@@ -176,11 +192,41 @@ object Gate {
     private val targets: (String) -> Int?,
     private val auditor: Auditor? = null,
     private val tls: TlsServer? = null,
+    /**
+     * Is this paired client certificate a friend's device rather than the person's own? A friend's
+     * rpc connection that passed no bytes for [SEAT_IDLE_MS] gives the seat up to an own device
+     * (security review D4 #10). Default: every device is the person's own.
+     */
+    private val friend: (String) -> Boolean = { false },
+    /** The clock for the idle seat (tests set it). */
+    private val now: () -> Long = System::currentTimeMillis,
     private val onEvent: (Event) -> Unit = {},
   ) {
     @Volatile private var running = false
     private var listener: ServerSocket? = null
     private val slot = RpcSlot()
+    /** An rpc connection that holds (part of) the seat, and when it last passed a byte either way. */
+    private class Rpc(val key: String, val friend: Boolean, val s: Socket, @Volatile var last: Long) { @Volatile var local: Socket? = null }
+    private val rpcs = java.util.concurrent.ConcurrentHashMap.newKeySet<Rpc>()
+
+    /**
+     * The seat is busy for [key]: an own device (v2, not a friend's) takes it when everything that
+     * holds it is a friend's device whose connections all passed nothing for [SEAT_IDLE_MS]. The
+     * friend's rpc connections are closed (its loaded model ends). Friend against friend and own
+     * against own stay "busy".
+     */
+    private fun takeIdleSeat(key: String, peer: String, fp: String?): List<Rpc>? {
+      if (fp == null || runCatching { friend(fp) }.getOrDefault(true)) return null
+      synchronized(rpcs) {
+        val held = rpcs.filter { it.key != key }
+        val from = held.firstOrNull()?.key ?: return null
+        val t = now()
+        if (held.any { it.key != from || !it.friend || t - it.last < SEAT_IDLE_MS }) return null
+        if (!slot.takeOver(from, key, peer)) return null
+        rpcs.removeAll(held.toSet())
+        return held
+      }
+    }
     private val inHandshake = java.util.concurrent.atomic.AtomicInteger(0)
     private val ring = ReplayRing()
     val currentPeer: String? get() = slot.peer
@@ -241,8 +287,14 @@ object Gate {
         runCatching { raw.close() }
         return
       }
+      val lock = Any()
       var counted = true
-      val done = { if (counted) { counted = false; inHandshake.decrementAndGet() } }
+      // the whole handshake, not each read: past the deadline the socket is closed and the
+      // handler's blocked read ends (a pipe that started has cancelled it)
+      val deadline = deadlines.schedule(Runnable {
+        synchronized(lock) { if (counted) { Log.w(TAG, "handshake from $peer took too long"); runCatching { raw.close() } } }
+      }, HANDSHAKE_TOTAL_MS, java.util.concurrent.TimeUnit.MILLISECONDS)
+      val done = { synchronized(lock) { if (counted) { counted = false; inHandshake.decrementAndGet(); deadline.cancel(false) } } }
       try {
         handle(raw, peer, done)
       } finally { done() }
@@ -381,11 +433,28 @@ object Gate {
       // local connect, so two masters arriving together cannot both get it. It is held by the
       // client certificate (v2), not the address: every stream through an anchor or a relay
       // arrives from 127.0.0.1, and two far masters must not share it (docs/ANCHOR.md)
-      if (channel == "rpc" && !slot.take(fp ?: peer, peer)) return refuse(s, out, peer, channel, "busy", fp, v)
+      val key = fp ?: peer
+      var rpc: Rpc? = null
+      if (channel == "rpc") {
+        var taken: List<Rpc>? = null
+        // registered under the same lock as the takeover's look, so a fresh connection is never taken as idle
+        val seated = synchronized(rpcs) {
+          val ok = slot.take(key, peer) || takeIdleSeat(key, peer, fp)?.also { taken = it } != null
+          if (ok) rpc = Rpc(key, fp != null && runCatching { friend(fp) }.getOrDefault(true), s, now()).also { rpcs.add(it) }
+          ok
+        }
+        if (!seated) return refuse(s, out, peer, channel, "busy", fp, v)
+        taken?.let { held ->
+          // the friend's rpc legs end: its pipes close, its loaded model with them
+          for (r in held) { runCatching { r.local?.close() }; runCatching { r.s.close() } }
+          Log.i(TAG, "rpc seat: ${key.take(16)}… (own) took it from ${held.first().key.take(16)}… (a friend's, idle ${SEAT_IDLE_MS / 1000} s)")
+        }
+      }
       val local = try { Socket("127.0.0.1", target) } catch (e: Exception) {
-        if (channel == "rpc") slot.release()
+        if (channel == "rpc") { rpc?.let { rpcs.remove(it) }; slot.release(key) }
         return refuse(s, out, peer, channel, "target down", fp, v)
       }
+      rpc?.local = local
       // the api server sees only 127.0.0.1: it learns which master sent a request from the
       // local port of this pipe (a /load may fetch from that master's own address). A relayed
       // stream arrives from 127.0.0.1 and is not recorded: its peer is the relay, not a master.
@@ -397,7 +466,7 @@ object Gate {
       } catch (e: Exception) {
         if (linked) ApiPeers.remove(localPort)
         if (channel == "api") ApiPeers.closeLeg(localPort)
-        if (channel == "rpc") slot.release()
+        if (channel == "rpc") { rpc?.let { rpcs.remove(it) }; slot.release(key) }
         runCatching { local.close() }
         throw e
       }
@@ -411,8 +480,12 @@ object Gate {
         // removed between the handshake and here: the drop() for it may already have run
         if (tls?.paired?.contains(fp) == false) drop(fp)
       }
-      val bytes = try { pipe(s, inp, local, ByteArray(0)) } finally { if (linked) ApiPeers.remove(localPort); if (channel == "api") ApiPeers.closeLeg(localPort); live.remove(s) }
-      if (channel == "rpc") slot.release()
+      val seat = rpc
+      // every chunk either way marks the rpc connection as in use (the idle seat, D4 #10)
+      val onBytes: (() -> Unit)? = seat?.let { r -> { r.last = now() } }
+      val bytes = try { pipe(s, inp, local, ByteArray(0), onBytes) } finally { if (linked) ApiPeers.remove(localPort); if (channel == "api") ApiPeers.closeLeg(localPort); live.remove(s); seat?.let { rpcs.remove(it) } }
+      // a seat taken over meanwhile is the new holder's: this release does not count then
+      if (channel == "rpc") slot.release(key)
       onEvent(Event("end", peer, channel, null, fp, v))
       audit { it.onEnd(peer, channel, bytes, (System.currentTimeMillis() - started) / 1000) }
     }
@@ -686,21 +759,21 @@ object Gate {
    * Bidirectional copy until either side closes; [aIn] is a's input (it may wrap bytes read
    * ahead), [aLeftover] is written to b first. A TLS socket cannot half-close, so when one
    * direction ends a TLS side is closed outright (close_notify) instead of shutdownOutput.
-   * Returns bytes moved both ways.
+   * Returns bytes moved both ways. [onBytes] runs after every chunk, either way.
    */
-  internal fun pipe(a: Socket, aIn: InputStream, b: Socket, aLeftover: ByteArray): Long {
+  internal fun pipe(a: Socket, aIn: InputStream, b: Socket, aLeftover: ByteArray, onBytes: (() -> Unit)? = null): Long {
     a.tcpNoDelay = true; b.tcpNoDelay = true
     val up = java.util.concurrent.atomic.AtomicLong(aLeftover.size.toLong())
     val t1 = thread(isDaemon = true) {
       try {
         val o = b.getOutputStream()
         if (aLeftover.isNotEmpty()) { o.write(aLeftover); o.flush() }
-        copy(aIn, o, up)
+        copy(aIn, o, up, onBytes)
       } catch (_: Exception) {}
       halfClose(b)
     }
     val down = java.util.concurrent.atomic.AtomicLong(0)
-    try { copy(b.getInputStream(), a.getOutputStream(), down) } catch (_: Exception) {}
+    try { copy(b.getInputStream(), a.getOutputStream(), down, onBytes) } catch (_: Exception) {}
     halfClose(a)
     t1.join()
     runCatching { a.close() }; runCatching { b.close() }
@@ -711,13 +784,14 @@ object Gate {
     if (s is SSLSocket) runCatching { s.close() } else runCatching { s.shutdownOutput() }
   }
 
-  private fun copy(i: InputStream, o: OutputStream, count: java.util.concurrent.atomic.AtomicLong) {
+  private fun copy(i: InputStream, o: OutputStream, count: java.util.concurrent.atomic.AtomicLong, onBytes: (() -> Unit)? = null) {
     val buf = ByteArray(64 * 1024)
     while (true) {
       val n = i.read(buf)
       if (n < 0) break
       o.write(buf, 0, n); o.flush()
       count.addAndGet(n.toLong())
+      onBytes?.invoke()
     }
   }
 }

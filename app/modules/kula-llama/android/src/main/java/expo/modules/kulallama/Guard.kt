@@ -159,8 +159,22 @@ class RpcSlot {
     return true
   }
 
+  /**
+   * Gives the seat to [key] while [from] holds it (an own device taking it from a friend's idle one,
+   * security review D4 #10): [key] has one connection, and the old holder's connections, which the
+   * caller closes, no longer count when they [release]. False when [from] no longer holds it.
+   */
   @Synchronized
-  fun release() {
+  fun takeOver(from: String, key: String, shown: String = key): Boolean {
+    if (holder != from || open == 0) return false
+    holder = key; peer = shown; open = 1
+    return true
+  }
+
+  /** One connection of [key] ended (null: whoever holds it); a holder whose seat was taken over is not counted. */
+  @Synchronized
+  fun release(key: String? = null) {
+    if (key != null && key != holder) return
     if (open > 0) open--
     if (open == 0) { peer = null; holder = null }
   }

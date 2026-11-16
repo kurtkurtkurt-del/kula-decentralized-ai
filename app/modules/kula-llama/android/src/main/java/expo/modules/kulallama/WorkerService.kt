@@ -218,7 +218,13 @@ class WorkerService : Service() {
         // a computer scanned before the worker started: its code now
         tls?.let { t -> hosts?.pending(System.currentTimeMillis())?.let { h -> t.open(h.pin, h.exp, h.fp) } }
         pairedSeen = tls?.paired?.list()?.map { it.fp }?.toSet() ?: emptySet()
-        gate = Gate.Server(port, secret, { ch -> if (ch == "rpc") rpcPort else api?.port }, auditor, tls) { ev ->
+        // a friend's device (security review D4 #10): the person said, when joining an anchor, whether
+        // it is their own computer or a friend's (kept in anchors.json); an anchor joined as a
+        // friend's counts as a friend's, every other paired computer as the person's own. A friend's
+        // idle rpc seat goes to an own device after a minute
+        val anchorsAt = anchorsFile(this)
+        gate = Gate.Server(port, secret, { ch -> if (ch == "rpc") rpcPort else api?.port }, auditor, tls,
+          friend = { fp -> Anchor.friendOf(Anchor.readJoined(anchorsAt), fp) }) { ev ->
           when (ev.kind) {
             "connect" -> { connects++; ev.fp?.let { fp -> runCatching { seen?.saw(fp, ev.peer, System.currentTimeMillis()) } } }
             "reject" -> rejects++

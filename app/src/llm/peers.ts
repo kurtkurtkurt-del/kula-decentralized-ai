@@ -1,6 +1,6 @@
 import { deviceId, lastPassport, linkPassport } from '@/data/passport';
 import type { Passport } from '@/passport/contract';
-import { GATE_PORT, llama } from '@/llm/native';
+import { GATE_PORT, llama, type AnchorWhose } from '@/llm/native';
 import { cleanName } from '@/llm/peerName';
 import { randomHex } from '@/llm/random';
 import { addrKind, cleanAddrs, cleanAnchors, ipOf } from '@/llm/roads';
@@ -249,13 +249,15 @@ export type Joined = { name: string; again: boolean; sharing: boolean; peer: Pee
 /**
  * Joins the anchor of an invite: pairs with it (native), keeps it in the store of joined anchors
  * and as a peer (pinned, paired, an anchor, reached at the address that answered). Throws the
- * anchor's refusal in plain words, or 'nonative' | 'notPeer'.
+ * anchor's refusal in plain words, or 'nonative' | 'notPeer'. [whose]: the person's answer before
+ * joining, their own computer or a friend's; kept with the anchor, it decides whether that computer
+ * may lose an idle rpc seat to the person's own devices (security review D4 #10).
  */
-export async function joinInvite(text: string): Promise<Joined> {
+export async function joinInvite(text: string, whose: AnchorWhose): Promise<Joined> {
   const inv = parseInvite(text);
   if (!inv) throw new Error('notPeer');
   if (!llama?.joinAnchor) throw new Error('nonative');
-  const r = await llama.joinAnchor({ fp: inv.fp, fpPrefix: inv.fpPrefix, pin: inv.pin, hpin: inv.hpin, name: inv.name, ways: inv.ways });
+  const r = await llama.joinAnchor({ fp: inv.fp, fpPrefix: inv.fpPrefix, pin: inv.pin, hpin: inv.hpin, name: inv.name, ways: inv.ways, whose });
   const first = inv.ways[0];
   const at: PeerAddr = { host: r.host, port: r.port, via: (r.via as PeerAddr['via']) ?? addrKind(r.host) };
   const now = new Date().toISOString();

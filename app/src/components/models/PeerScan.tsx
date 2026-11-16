@@ -7,8 +7,8 @@ import { useLang } from '@/i18n';
 import { classify, explain } from '@/llm/errors';
 import { tapDone } from '@/lib/haptics';
 import { hostErr, isHostQr, parseHostQr } from '@/llm/hosts';
-import { hasNative, llama } from '@/llm/native';
-import { isInvite, isPeerQr, isRelayCode, isRemote, joinInvite, parseRelayCode, takePeerQr } from '@/llm/peers';
+import { hasNative, llama, type AnchorWhose } from '@/llm/native';
+import { isInvite, isPeerQr, isRelayCode, isRemote, joinInvite, parseInvite, parseRelayCode, takePeerQr } from '@/llm/peers';
 import { anchorName, reachedBy, roadOf } from '@/llm/roads';
 import { rememberPeer, type Peer } from '@/llm/store';
 import { fonts, radius } from '@/theme/tokens';
@@ -55,18 +55,30 @@ export function usePeerAdd(onAdded?: (p: Peer | null) => void) {
       // certificate's start. Joining pairs with the anchor natively, so the answer comes later
       if (isInvite(text)) {
         if (!hasNative()) throw new Error('nonative');
-        setErr(null);
-        setNote(t('peers.joining'));
-        joinInvite(text).then((r) => {
-          tapDone();
-          const name = r.name.toLowerCase();
-          setNote([t(r.again ? 'peers.joinedAgain' : 'peers.joined', { name }), !r.sharing && !r.again ? t('peers.joinShare', { name }) : ''].filter(Boolean).join('. '));
-          onAdded?.(r.peer);
-        }, (e: Error) => {
-          setNote(null);
-          // the anchor's refusal comes in plain words from the native join (Anchor.inviteWords)
-          setErr(e?.message && e.message !== 'notPeer' ? e.message : t('peers.err.notPeer'));
-        });
+        const invName = (parseInvite(text)?.name ?? '').toLowerCase();
+        const join = (whose: AnchorWhose) => {
+          setErr(null);
+          setNote(t('peers.joining'));
+          joinInvite(text, whose).then((r) => {
+            tapDone();
+            const name = r.name.toLowerCase();
+            setNote([t(r.again ? 'peers.joinedAgain' : 'peers.joined', { name }), !r.sharing && !r.again ? t('peers.joinShare', { name }) : ''].filter(Boolean).join('. '));
+            onAdded?.(r.peer);
+          }, (e: Error) => {
+            setNote(null);
+            // the anchor's refusal comes in plain words from the native join (Anchor.inviteWords)
+            setErr(e?.message && e.message !== 'notPeer' ? e.message : t('peers.err.notPeer'));
+          });
+        };
+        // an invite is a pairing both ways: after the pair-back the anchor's computer may use this
+        // phone for good, so it is joined only on an answer, as a computer's QR (security review D4
+        // #8). The answer says whose computer it is: a friend's computer gives its idle rpc seat up
+        // to the person's own devices after a minute (D4 #10)
+        Alert.alert(t('peers.join.title', { name: invName }), t('peers.join.body', { name: invName }), [
+          { text: t('word.cancel'), style: 'cancel' },
+          { text: t('peers.join.mine'), onPress: () => join('mine') },
+          { text: t('peers.join.friend'), onPress: () => join('friend') },
+        ]);
         return true;
       }
       if (isRelayCode(text)) {

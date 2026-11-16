@@ -51,6 +51,8 @@ object Anchor {
   const val INVITE_TTL_MS = Gate.PIN_TTL_MS
   /** At most this many anchors are kept (node/src/road.ts MAX_ANCHORS). */
   const val MAX_ANCHORS = 4
+  /** A fifth anchor's refusal, in plain words. */
+  const val FULL_WORDS = "this phone is in $MAX_ANCHORS anchors already, the most it keeps: forget one of them first, then use the invite again"
   private val FP = Regex("[0-9a-f]{64}")
   fun isFp(s: String) = FP.matches(s)
 
@@ -272,10 +274,19 @@ object Anchor {
 
   data class Addr(val host: String, val port: Int, val via: String)
 
-  /** An anchor this phone joined (node/src/join.ts JoinedAnchor). hpin: the pair-back code, until the anchor used it or it ran out. */
+  /** Whose computer an anchor is, as the person said when joining: [MINE] or [FRIEND]. */
+  const val MINE = "mine"
+  const val FRIEND = "friend"
+  /** Anything but "mine" is a friend's: an entry written before the question was asked, or a bad value. */
+  fun whoseOf(v: String?): String = if (v == MINE) MINE else FRIEND
+
+  /**
+   * An anchor this phone joined (node/src/join.ts JoinedAnchor). hpin: the pair-back code, until the
+   * anchor used it or it ran out. [whose]: the person's answer when joining (security review D4 #10).
+   */
   data class Joined(
     val fp: String, val name: String, val host: String, val port: Int, val addrs: List<Addr>, val joinedAt: Long,
-    val hpin: String? = null, val hpinExp: Long? = null,
+    val hpin: String? = null, val hpinExp: Long? = null, val whose: String = FRIEND,
   ) {
     /** Every way to the anchor: the one that answered last first, then the invite's in order. */
     fun ways(): List<Ref> {
@@ -285,8 +296,15 @@ object Anchor {
     }
     fun toJson(): JSONObject = JSONObject().put("fp", fp).put("name", name).put("host", host).put("port", port)
       .put("addrs", JSONArray().also { arr -> addrs.forEach { arr.put(JSONObject().put("host", it.host).put("port", it.port).put("via", it.via)) } })
-      .put("joined_at", joinedAt).put("hpin", hpin ?: JSONObject.NULL).put("hpinExp", hpinExp ?: JSONObject.NULL)
+      .put("joined_at", joinedAt).put("hpin", hpin ?: JSONObject.NULL).put("hpinExp", hpinExp ?: JSONObject.NULL).put("whose", whose)
   }
+
+  /**
+   * The gate's friend test (Gate.Server `friend`, D4 #10): a paired certificate is a friend's device
+   * when it is an anchor joined as "a friend's computer"; an anchor joined as "my computer" and every
+   * other paired computer are the person's own.
+   */
+  fun friendOf(list: List<Joined>, fp: String): Boolean = list.firstOrNull { it.fp == fp.lowercase() }?.let { it.whose != MINE } ?: false
 
   private val VIAS = setOf("lan", "ipv6", "mapped")
   private val IP = Regex("^[0-9a-fA-F:.]+$")
@@ -318,7 +336,8 @@ object Anchor {
       val port = o.optInt("port", 0)
       if (!isFp(fp) || !goodHost(host) || port !in 1..65535 || out.any { it.fp == fp }) continue
       out.add(Joined(fp, o.optString("name").take(40).ifEmpty { "anchor ${fp.take(8)}" }, host, port, addrsOf(o.optJSONArray("addrs")), o.optLong("joined_at", 0L),
-        o.optString("hpin").takeIf { !o.isNull("hpin") && it.matches(Regex("[0-9a-f]{8,64}")) }, if (o.isNull("hpinExp")) null else o.optLong("hpinExp").takeIf { it > 0 }))
+        o.optString("hpin").takeIf { !o.isNull("hpin") && it.matches(Regex("[0-9a-f]{8,64}")) }, if (o.isNull("hpinExp")) null else o.optLong("hpinExp").takeIf { it > 0 },
+        whoseOf(o.optString("whose").takeIf { !o.isNull("whose") })))
     }
     return out
   }
@@ -332,7 +351,18 @@ object Anchor {
     if (!tmp.renameTo(file)) { file.writeText(tmp.readText()); tmp.delete() }
   }
 
-  @Synchronized fun updateJoined(file: File, f: (List<Joined>) -> List<Joined>) = writeJoined(file, f(readJoined(file)))
+  /**
+   * Read, change, write as one step. @Synchronized holds within one process only, and both the app
+   * and the worker change the store: a lock on `anchors.json.lock` keeps the other process out
+   * meanwhile, so a join or a cleared pair-back code is never lost (security review D4 #15).
+   */
+  @Synchronized fun updateJoined(file: File, f: (List<Joined>) -> List<Joined>) {
+    file.parentFile?.mkdirs()
+    java.io.RandomAccessFile(File(file.parentFile, file.name + ".lock"), "rw").use { raf ->
+      val lock = raf.channel.lock()
+      try { writeJoined(file, f(readJoined(file))) } finally { runCatching { lock.release() } }
+    }
+  }
 
   fun removeJoined(file: File, fp: String): Boolean {
     var hit = false
@@ -348,14 +378,18 @@ object Anchor {
    */
   fun pairBackCode(pin: String): String = Gate.hmac(pin.lowercase(), "kula anchor pair-back").take(16)
 
-  /** An anchor's invite as the app read it (src/llm/peers.ts parseInvite): fp "" with [fpPrefix] for a typed one. */
-  data class Invite(val fp: String, val fpPrefix: String?, val pin: String, val hpin: String?, val name: String, val ways: List<Addr>)
+  /**
+   * An anchor's invite as the app read it (src/llm/peers.ts parseInvite): fp "" with [fpPrefix] for a
+   * typed one. [whose]: the person's answer before joining, "my computer" or "a friend's computer".
+   */
+  data class Invite(val fp: String, val fpPrefix: String?, val pin: String, val hpin: String?, val name: String, val ways: List<Addr>, val whose: String = FRIEND)
 
   data class JoinResult(val anchor: Joined, val at: Addr, val again: Boolean)
 
   /** A gate's refusal of an invite, in plain words (node/src/join.ts inviteWords). */
   fun inviteWords(m: String, typed: Boolean): String = when (m) {
-    "gate: NO pin used" -> "this invite was used already: each invite works once. ask for a new one."
+    // used before this phone came: someone else may hold the anchor's access now (security review D4 #17)
+    "gate: NO pin used" -> "this invite was used already: each invite works once. ask for a new one. if it was not you, tell the anchor's owner to remove the device that used it."
     "gate: NO pin expired" -> "this invite ran out (it works for 10 minutes). ask for a new one."
     "gate: NO wrong pin" -> "the code does not match the anchor's invite: check it, or ask for a new invite."
     "gate: NO not paired" -> "the anchor has no invite open: ask for a new one."
@@ -373,6 +407,12 @@ object Anchor {
     if (prefix != null && !prefix.matches(Regex("[0-9a-f]+"))) throw IllegalArgumentException("the certificate is hex (0-9, a-f)")
     if (inv.fp.isEmpty() && (prefix?.length ?: 0) < Gate.FP_PREFIX_MIN) throw IllegalArgumentException("type the start of the anchor's certificate too (${Gate.FP_PREFIX_MIN} letters and digits or more)")
     if (inv.ways.isEmpty()) throw IllegalArgumentException("the invite has no address")
+    // a fifth anchor is refused before the invite is spent: the store keeps [MAX_ANCHORS], and
+    // dropping the oldest silently would leave the app listing an anchor this phone left (D4 #22).
+    // An anchor joined before (by its certificate, or the typed start of it) may come again
+    val known = readJoined(file)
+    val invFp = inv.fp.lowercase()
+    if (known.size >= MAX_ANCHORS && known.none { if (invFp.isNotEmpty()) it.fp == invFp else prefix != null && it.fp.startsWith(prefix) }) throw IllegalStateException(FULL_WORDS)
     var fp: String? = null
     var at: Addr? = null
     val missed = mutableListOf<String>()
@@ -403,12 +443,16 @@ object Anchor {
     updateJoined(file) { list ->
       val before = list.firstOrNull { it.fp == got }
       again = before != null
+      // full meanwhile (another join while this one was dialling): still no silent drop
+      if (before == null && list.size >= MAX_ANCHORS) throw IllegalStateException(FULL_WORDS)
       val j = Joined(got, inv.name.take(40).ifEmpty { "anchor ${got.take(8)}" }, where.host, where.port, inv.ways, now(),
         // joined before: the anchor paired back then (or still may with the code kept)
         if (before != null) before.hpin else inv.hpin ?: pairBackCode(inv.pin),
-        if (before != null) before.hpinExp else now() + INVITE_TTL_MS)
+        if (before != null) before.hpinExp else now() + INVITE_TTL_MS,
+        // the answer just given, also when joining again: the person may have changed their mind
+        whoseOf(inv.whose))
       stored = j
-      (list.filter { it.fp != got } + j).takeLast(MAX_ANCHORS)
+      list.filter { it.fp != got } + j
     }
     return JoinResult(stored!!, where, again)
   }
