@@ -347,7 +347,14 @@ export function inviteWords(e: unknown, typedCert = false): string {
   return m;
 }
 
-export interface JoinResult { peer: Peer; anchor: JoinedAnchor; at: PeerAddr }
+// again: this computer had joined that anchor before (the same certificate is in the store); the
+// page then says so instead of "joined" a second time
+export interface JoinResult { peer: Peer; anchor: JoinedAnchor; at: PeerAddr; again: boolean }
+
+// The page's words after an invite was pasted on a computer that had joined that anchor already.
+export function joinedAgainWords(name: string): string {
+  return `already joined: this computer joined ${name} before and stays linked to it. an invite works once, so this one is not needed here.`;
+}
 
 // Pairs with the anchor's gate using the invite's `pin`, along its addresses in order; keeps the
 // anchor in the peer book (paired, pinned, `anchor: true`) and in the store of joined anchors with
@@ -388,6 +395,8 @@ export async function joinWithInvite(o: {
   }
   if (!fp || !at) throw new Error(`the anchor does not answer at ${missed.join(', ')}: is it on, and is its door open from where you are?`);
   fp = fp.toLowerCase();
+  const before = readJoined(o.joinedFile).find((a) => a.fp.toLowerCase() === fp) ?? null;
+  const again = !!before;
   const now = new Date().toISOString();
   const rest: Peer = { ...p };
   delete rest.hpin;
@@ -401,10 +410,14 @@ export async function joinWithInvite(o: {
   writePeers(upsertPeer(readPeers(o.peersFile), peer).list, o.peersFile);
   const anchor: JoinedAnchor = {
     fp, name: peer.name, host: at.host, port: at.port, addrs: ways, joined_at: now,
-    hpin: p.hpin ?? pairBackCode(pin), hpinExp: Date.now() + (o.ttlMs ?? INVITE_TTL_MS),
+    // joined before: the anchor paired back then (or still may with the code kept), so no new
+    // pair-back code is opened and the page does not say "waiting for it to pair back" again
+    ...(before
+      ? { hpin: before.hpin ?? null, hpinExp: before.hpinExp ?? null }
+      : { hpin: p.hpin ?? pairBackCode(pin), hpinExp: Date.now() + (o.ttlMs ?? INVITE_TTL_MS) }),
   };
   upsertJoined(o.joinedFile, anchor);
-  return { peer, anchor, at };
+  return { peer, anchor, at, again };
 }
 
 // ---- the control connections to the joined anchors (the member's side) ---------------------

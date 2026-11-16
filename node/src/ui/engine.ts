@@ -168,6 +168,8 @@ export interface PeerRow {
   throughName?: string | null;
   // this device offers the anchor role (its code said so, or a record names it as an anchor)
   anchor?: boolean;
+  // only in the answer to an anchor's invite: this computer had joined that anchor before
+  joinedBefore?: boolean;
   // how far the person trusts it (11.11.2026): home (their own), circle (a friend's), world (a
   // stranger's); the widest over its records. God's eye's request review reads it.
   ring: Ring;
@@ -882,9 +884,9 @@ export class Engine {
     const j = await joinWithInvite({ peer, fpPrefix, identity: this.identity(), peersFile: this.file(), joinedFile: this.joinedFile() });
     this.reach.set(j.peer.id, { r: { ok: true }, at: Date.now() });
     const at = `${j.at.host.includes(':') ? `[${j.at.host}]` : j.at.host}:${j.at.port}`;
-    this.note(`joined the anchor ${j.peer.name} at ${at}: this computer registers there while it shares, and the anchor pairs back`);
+    this.note(j.again ? `the invite of ${j.peer.name} was pasted again: this computer had joined it already` : `joined the anchor ${j.peer.name} at ${at}: this computer registers there while it shares, and the anchor pairs back`);
     try { this.onJoin?.(j.anchor); } catch {}
-    return this.rowOf(j.peer.id);
+    return { ...this.rowOf(j.peer.id), ...(j.again ? { joinedBefore: true } : {}) };
   }
 
   /** The anchors this computer joined (the store, join.ts): name, where, whether the pair-back is still to come. */
@@ -1209,13 +1211,16 @@ export class Engine {
 
     const rows: NearbyRow[] = [];
     const toProbe = new Set<string>();
+    // this computer's own gate (its share) answers on mdns too: it is never "nearby"
+    const own = this.identity().fp.toLowerCase();
     for (const f of found) {
+      const pk = peeked.get(f);
+      if (pk?.up && pk.fp.toLowerCase() === own) continue;
       const list = readPeers(this.file());
       const gs = groupPeers(list);
       const m = this.matchFound(list, f);
       let g = m ? groupOf(gs, m.id) : null;
       let state: NearState = 'new';
-      const pk = peeked.get(f);
       if (pk?.up) {
         const same = gs.find((x) => x.some((p) => !!p.fp && p.fp === pk.fp)) ?? null;
         if (same) { this.learnWifi(same, f, pk); g = groupOf(groupPeers(readPeers(this.file())), same[0].id); }

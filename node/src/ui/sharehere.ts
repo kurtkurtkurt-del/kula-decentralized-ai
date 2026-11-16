@@ -84,11 +84,12 @@ export interface AnchorWordsInput {
 
 // The anchor's state in plain words, for every state the switch can be in.
 export function anchorWords(a: AnchorWordsInput): string {
-  if (!a.on) return 'off. turned on, your devices that are away from home (a phone on mobile data, a laptop at a friend\'s) reach each other through this computer.';
+  // the switch's own description says what it does: off is just off
+  if (!a.on) return 'off.';
   if (!a.live) return 'starting: sharing this computer and asking the router for a door…';
   const port = a.port ?? SHARE_PORT;
-  const lan = a.lan ? ` (${a.lan.replace(/:\d+$/, '')})` : '';
-  const byHand = `open TCP port ${port} to this computer${lan} by hand in the router's settings (often called "port forwarding"), then make an invite.`;
+  const lan = a.lan ? ` (address ${a.lan.replace(/:\d+$/, '').replace(/^\[|\]$/g, '')})` : '';
+  const byHand = `open port ${port} for this computer${lan} in your router's settings, called port forwarding. then make an invite.`;
   const parts: string[] = [];
   if (a.map === 'mapped') parts.push(a.external ? `the router opened the door: from the internet this computer answers at ${a.external}.` : `the router opened port ${port}, but did not say its address on the internet.`);
   else if (a.map === 'cgnat') parts.push(CGNAT_WORDS);
@@ -97,13 +98,13 @@ export function anchorWords(a: AnchorWordsInput): string {
   if (a.ipv6.length) parts.push(`over ipv6 it may also answer at ${a.ipv6[0]}, if the router lets it in.`);
   if (a.reachable) parts.push('reached from outside: a device came in from the internet.');
   else if (a.map !== 'cgnat' || a.ipv6.length) parts.push('not confirmed from outside yet: that shows once a device registers here from away from this network.');
-  if (a.members) parts.push(`${a.members} device${a.members === 1 ? ' holds its' : 's hold their'} link to it now.`);
+  if (a.members) parts.push(a.members === 1 ? '1 device is connected through it now.' : `${a.members} devices are connected through it now.`);
   return parts.join(' ');
 }
 
 export interface InviteView {
   whose: Whose;
-  code: string;               // the text to copy (kula-node peers add <code>, or "paste a code")
+  code: string;               // the text to copy ("paste a code" on the page; kula-node peers add <code> in a terminal)
   exp: number;
   lanOnly: boolean;            // no address from outside: works on this network only
   typed: { address: string; code: string; certificate: string };
@@ -114,8 +115,8 @@ export function inviteView(inv: Invite): InviteView {
   const until = new Date(inv.exp).toTimeString().slice(0, 5);
   return {
     whose: inv.whose, code: inv.code, exp: inv.exp, lanOnly: inv.lanOnly, typed: inv.typed,
-    words: `for ${inv.whose === 'mine' ? 'a computer of yours (no daily limit)' : 'a friend\'s computer (its bytes through here are limited a day)'}; works once, until ${until}. on the other computer: devices → add a device → paste a code (or kula-node peers add <code>). to type it instead: address ${inv.typed.address}, code ${inv.typed.code}, certificate ${inv.typed.certificate}, and tick "an anchor's invite".`
-      + (inv.lanOnly ? ' it carries only this network\'s address: no door from the internet yet.' : ''),
+    words: `for ${inv.whose === 'mine' ? 'a computer of yours (no daily limit)' : 'a friend\'s computer (what it passes through here is limited each day)'}. it works once, until ${until}. on the other computer: devices → add a device → paste a code, and paste it there. or type it: devices → add a device → type it, with address ${inv.typed.address}, code ${inv.typed.code}, certificate ${inv.typed.certificate}, and turn on "an invite from an anchor".`
+      + (inv.lanOnly ? ' it works only on this network for now: no door from the internet yet.' : ''),
   };
 }
 
@@ -158,7 +159,15 @@ export function anchorShareView(h: ShareHandle | null, setting: AnchorSetting): 
   };
 }
 
-export interface JoinedView { name: string; state: LinkView['state']; words: string }
+export interface JoinedView { name: string; state: LinkView['state'] | 'off'; words: string }
+
+// A joined anchor the running share does not list (yet): while sharing starts, or in the moment
+// after a join before the share reads the store, it is being linked; only without sharing is it
+// not linked at all.
+export function joinedWithoutLink(name: string, share: { on: boolean; starting: boolean }): JoinedView {
+  if (share.on || share.starting) return { name, state: 'registering', words: `${name}: linking…` };
+  return { name, state: 'off', words: `${name}: not linked while this computer does not share. press "start sharing" above to link to it.` };
+}
 
 export interface ShareView {
   on: boolean;
@@ -244,7 +253,7 @@ export class ShareHere {
           if (this.publicNet) this.opts.log?.(WINDOWS_PUBLIC_NOTE);
         } catch (e) {
           const m = (e as Error).message;
-          this.error = /EADDRINUSE/.test(m) ? 'the share port is taken: is kula-node share already running in a terminal? stop it there first' : m;
+          this.error = /EADDRINUSE/.test(m) ? 'another program already uses the port for sharing: is kula already sharing in a terminal window? stop it there first' : m;
         } finally {
           this.starting = null;
         }

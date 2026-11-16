@@ -1313,29 +1313,36 @@ function renderDevices() {
     if (g.role) name.appendChild(el('small', 'active-tag', 'active'));
     who.appendChild(name);
     if (g.role) who.appendChild(el('span', 'role', g.role));
-    // its ways side by side, lit when they work now
+    // its ways side by side, lit when they work now; one badge for the road it takes over the
+    // network (wi-fi, the internet, or through an anchor), never "wi-fi" for a road through an anchor
     const w = g.ways;
+    const p0 = g.peers[0];
+    const viaAnchor = p0?.via === 'anchor';
+    const wayLabel = viaAnchor ? 'anchor' : p0?.reachedBy === 'ipv6' || p0?.reachedBy === 'mapped' ? 'internet' : 'wi-fi';
     const badges = el('i', 'ways');
     if (g.cable || w.cable) badges.appendChild(el('i', `way cable${g.cableOn ? ' on' : ''}`, 'cable'));
-    if (w.wifi) badges.appendChild(el('i', `way wifi${g.wifiOn ? ' on' : ''}`, 'wi-fi'));
+    if (w.wifi) badges.appendChild(el('i', `way wifi${g.wifiOn ? ' on' : ''}`, wayLabel));
     if (w.relay) badges.appendChild(el('i', `way relay${g.relayOn ? ' on' : ''}`, 'relay'));
     if (badges.childNodes.length) name.appendChild(badges);
     const lines = [];
-    const fresh = g.peers[0]?.heardAt && Date.now() - g.peers[0].heardAt < 60000;
+    const fresh = p0?.heardAt && Date.now() - p0.heardAt < 60000;
     if (g.cable || w.cable) {
       const st = g.cable ? (STATE_WORDS[g.cable.state] || g.cable.state) : 'unplugged';
       const reach = w.cable?.ok ? ` · reachable${w.cable.ms ? ` (${w.cable.ms} ms)` : ''}` : '';
       const paired = w.cable ? '' : g.cable?.installed === false ? ' · kula is not installed' : ' · not paired yet';
       lines.push(`cable · ${st}${reach}${paired}`);
     }
-    // how it is reached now, in plain words: on this wi-fi, over the internet, through an anchor
-    const rw = g.cable || w.cable ? null : reachWords(g.peers[0]);
-    if (rw) lines.push(rw);
-    const wayLabel = g.peers[0]?.via === 'anchor' ? 'anchor' : g.peers[0]?.reachedBy === 'ipv6' || g.peers[0]?.reachedBy === 'mapped' ? 'internet' : 'wi-fi';
-    if (w.wifi) lines.push(`${wayLabel} · ${w.wifi.where} · ${w.wifi.ok ? `ready${w.wifi.ms ? ` (${w.wifi.ms} ms)` : ''}` : w.wifi.ok === false ? (fresh ? 'heard here, not answering' : 'not reachable') : fresh ? 'heard on this wi-fi' : 'not checked'}`);
+    // how it is reached now, in plain words (on this wi-fi, over the internet, through an anchor),
+    // said once: with its state when it has a network way, alone when it has none
+    const rw = g.cable || w.cable ? null : reachWords(p0);
+    if (w.wifi) {
+      const state = w.wifi.ok ? `ready${w.wifi.ms ? ` (${w.wifi.ms} ms)` : ''}` : w.wifi.ok === false ? (fresh ? 'heard here, not answering' : 'not reachable') : fresh ? 'heard on this wi-fi' : 'not checked';
+      lines.push(viaAnchor ? `${rw ?? reachWords(p0)} · ${state}` : `${rw ?? wayLabel} · ${w.wifi.where} · ${state}`);
+    } else if (rw) lines.push(rw);
+    // this device is an anchor: this computer reaches the others through it when away from home
+    if (p0?.anchor && !viaAnchor) lines.push('the anchor of this computer: away from home, your devices reach each other through it');
     if (w.relay) lines.push(`relay · ${w.relay.where} · ${w.relay.ok ? 'reachable' : w.relay.ok === false ? 'not reachable' : 'not checked'}`);
     if ([g.cableOn, g.wifiOn, g.relayOn].filter(Boolean).length > 1) lines.push(`talks over ${g.via === 'cable' ? 'the cable' : 'wi-fi'} now`);
-    const p0 = g.peers[0];
     const extra = [];
     if (p0?.kind) extra.push(KIND_WORD[p0.kind] || p0.kind);
     if (p0?.ram) extra.push(`${(p0.ram / 1024).toFixed(1)} GB free`);
@@ -1381,13 +1388,13 @@ function renderDevices() {
     // (this computer's own gate, kula-node share). The second shows only when it applies.
     const usesMe = g.peers.some((p) => p.usesThisComputer);
     if (usesMe) {
-      who.appendChild(el('span', '', 'can use this computer too (kula-node share)'));
+      who.appendChild(el('span', '', 'can use this computer too'));
       const cut = el('button', 'pill unpair', 'remove its access');
       cut.type = 'button';
       cut.setAttribute('aria-label', `remove ${g.name}'s access to this computer`);
       cut.title = `${g.name} can no longer use this computer`;
       cut.addEventListener('click', async () => {
-        if (!confirm(`remove ${g.name}'s access to this computer?\n\nit can no longer use this computer: a running kula-node share refuses it and closes what it has open. this computer can still use ${g.name} (that is "forget"). to let it back in, pair it again with a new code.`)) return;
+        if (!confirm(`remove ${g.name}'s access to this computer?\n\nit can no longer use this computer: this computer refuses it and closes what it has open. this computer can still use ${g.name} (that is "forget"). to let it back in, pair it again with a new code.`)) return;
         const id = g.peers.find((p) => p.usesThisComputer).id;
         try { await postJson('peers/unpair', { id }); toast(`${g.name} can no longer use this computer`); } catch (err) { toast(err.message); }
         refreshPeers(false);
@@ -1536,7 +1543,7 @@ function viaTag(p) {
 function reachWords(p) {
   if (!p || p.cable) return null;
   if (p.far) return 'through the relay';
-  if (p.via === 'anchor') return p.through === 'self' ? 'through this computer (its anchor)' : `through anchor ${p.throughName || 'of the circle'}`;
+  if (p.via === 'anchor') return p.through === 'self' ? 'through this computer, its anchor' : `through the anchor ${p.throughName || 'of your circle'}`;
   if (p.reachedBy === 'ipv6' || p.reachedBy === 'mapped') return 'over the internet';
   return 'on this wi-fi';
 }
@@ -1799,7 +1806,18 @@ $('anchor-copy').addEventListener('click', async () => {
   catch { $('anchor-code').select(); $('anchor-invite-line').textContent = 'select the text above and copy it (ctrl/cmd + c).'; }
 });
 async function refreshShare() {
-  try { renderShare(await getJson('share')); } catch (e) { $('share-line').textContent = e.message; }
+  try { const v = await getJson('share'); renderShare(v); return v; } catch (e) { $('share-line').textContent = e.message; return null; }
+}
+// after a join the share starts (or reads its anchors again) and links there within seconds: the
+// view is asked again until every joined anchor is linked (or 30 s passed), the share section
+// open or not, so it never keeps saying what was true a moment before the join
+let followTimer = null;
+function followShare(left = 20) {
+  clearTimeout(followTimer);
+  refreshShare().then((v) => {
+    const settled = v && !v.starting && (v.joined || []).every((j) => j.state === 'registered' || j.state === 'refused');
+    if (!settled && left > 0) followTimer = setTimeout(() => followShare(left - 1), 1500);
+  });
 }
 $('share-me').addEventListener('toggle', () => {
   clearInterval(shareTimer); shareTimer = null;
@@ -1868,10 +1886,13 @@ async function added(row) {
   $('add').open = false;
   if (row.anchor) {
     // an anchor's invite: this computer joined it; its share registers there and the anchor pairs back
-    addMsg(`joined the anchor ${row.name}. this computer shares itself now and registers there; the anchor pairs back within a few seconds. away from home, your devices reach each other through it.`, 'ok');
-    feed('connections', `joined the anchor ${row.name}`);
+    if (row.joinedBefore) addMsg(`already joined: this computer joined ${row.name} before and stays linked to it. an invite works once, so this one is not needed here.`, 'ok');
+    else {
+      addMsg(`joined the anchor ${row.name}. this computer shares itself now and links to it; the anchor connects back within a few seconds. away from home, your devices reach each other through it.`, 'ok');
+      feed('connections', `joined the anchor ${row.name}`);
+    }
     await refreshPeers(false);
-    refreshShare();
+    followShare();
     return;
   }
   addMsg(`added ${row.name}${row.reach ? (row.reach.ok ? ', reachable' : `, but not reachable now: ${row.reach.reason}`) : ''}.`, row.reach && !row.reach.ok ? 'bad' : 'ok');
@@ -1899,7 +1920,8 @@ $('add-paste').addEventListener('click', async () => {
   if (!text) return addMsg('paste what the phone shows first', 'bad');
   addMsg('adding…');
   try {
-    const row = await postJson('peers/add', { text, relay: $('add-relay').value.trim() || undefined });
+    // a hosted relay's six digit code is for the terminal (kula-node peers add --relay): the anchor replaced it here
+    const row = await postJson('peers/add', { text });
     $('add-text').value = '';
     await added(row);
   } catch (e) { addMsg(e.message, 'bad'); }

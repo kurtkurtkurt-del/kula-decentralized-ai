@@ -25,14 +25,14 @@ type TlsServer = import('../src/gate.ts').TlsServer;
 const { createIdentity, newPin, Paired } = await import('../src/tls.ts');
 type GateIdentity = import('../src/tls.ts').GateIdentity;
 const { AnchorHub, circleMembers } = await import('../src/anchor.ts');
-const { OneTimeCodes, AnchorHost, AnchorLinks, joinWithInvite, readJoined, joinedRoads, pairBackCode, reachableFromOutside, ringCapped } = await import('../src/join.ts');
+const { OneTimeCodes, AnchorHost, AnchorLinks, joinWithInvite, joinedAgainWords, readJoined, joinedRoads, pairBackCode, reachableFromOutside, ringCapped } = await import('../src/join.ts');
 const { parsePeerText, readPeers, writePeers, probePeers, setRing } = await import('../src/peers.ts');
 const { joinAnchor, dialAnchor } = await import('../src/anchor.ts');
 type Peer = import('../src/peers.ts').Peer;
 type PeerAddr = import('../src/peers.ts').PeerAddr;
 const { pickRoute, openRoad } = await import('../src/road.ts');
 const { startPortMapper, pcpAddr } = await import('../src/portmap.ts');
-const { ShareHere, anchorShareView, anchorWords, mapState, readAnchorSetting, CGNAT_WORDS } = await import('../src/ui/sharehere.ts');
+const { ShareHere, anchorShareView, anchorWords, mapState, readAnchorSetting, inviteView, joinedWithoutLink, CGNAT_WORDS } = await import('../src/ui/sharehere.ts');
 type ShareHandle = import('../src/share.ts').ShareHandle;
 type ShareOptions = import('../src/share.ts').ShareOptions;
 const { Engine } = await import('../src/ui/engine.ts');
@@ -135,6 +135,7 @@ test('the invite round trip across three homes: B and C join A, A pairs back wit
     // B joins: pairs with A's gate with `pin`, keeps A in its peer book and among its joined anchors
     const jB = await joinWithInvite({ peer: pB, identity: B.identity, peersFile: B.peersFile, joinedFile: B.joinedFile });
     assert.equal(jB.peer.fp, A.identity.fp);
+    assert.equal(jB.again, false, 'a first join');
     assert.ok(A.paired.has(B.identity.fp), 'A paired B with the invite');
     assert.equal(A.host!.current(), null, 'the invite is spent');
     const bookB = readPeers(B.peersFile);
@@ -159,6 +160,12 @@ test('the invite round trip across three homes: B and C join A, A pairs back wit
     await until(() => lB.view()[0]?.state === 'registered', 3000, 'B registered');
     assert.equal(lB.view()[0].waitingBack, false);
     assert.ok(!B.codes.has(pB.hpin!), 'the pair-back code is spent');
+    // the same invite pasted again on B, which joined already: said as "already joined" (T2)
+    const jB2 = await joinWithInvite({ peer: parsePeerText(inviteB.code), identity: B.identity, peersFile: B.peersFile, joinedFile: B.joinedFile });
+    assert.equal(jB2.again, true);
+    assert.match(joinedAgainWords(jB2.peer.name), /^already joined: this computer joined .+ before and stays linked to it\./);
+    assert.equal(readJoined(B.joinedFile).length, 1, 'still one joined anchor');
+    assert.equal(readJoined(B.joinedFile)[0].hpin, null, 'no new pair-back code: A paired back already');
 
     // C joins with a second invite
     const inviteC = A.host!.invite(mapped(A));
@@ -415,25 +422,41 @@ test('the router\'s answer in plain words: mapped with the outside address, sile
     assert.match(CGNAT_WORDS, /cannot be an anchor from outside; it can still be a member of another anchor/);
     const c = words(m3);
     assert.equal(c.map, 'silent');
-    assert.match(c.words, /^no answer from the router: open TCP port 50551 to this computer \(192\.168\.1\.5\) by hand/);
+    assert.match(c.words, /^no answer from the router: open port 50551 for this computer \(address 192\.168\.1\.5\) in your router's settings, called port forwarding\./);
+    assert.doesNotMatch(c.words, /TCP/);
     // ipv6, and "reached from outside" only from a member that registered from a public address
     const d = words(m3, { ipv6: ['2001:db8::5'], members: [{ peer: '192.168.1.9' }] });
     assert.match(d.words, /over ipv6 it may also answer at \[2001:db8::5\]:50551/);
     assert.equal(d.reachable, null);
-    assert.match(d.words, /1 device holds its link to it now/);
+    assert.match(d.words, /1 device is connected through it now\./);
     const e = words(m1, { members: [{ peer: '198.51.100.7' }, { peer: '10.0.0.2' }] });
     assert.equal(e.reachable, true);
     assert.match(e.words, /reached from outside: a device came in from the internet/);
     // the router said no; the switch off; starting
     assert.equal(mapState({ asked: true, mapping: null, why: 'pcp: not authorized' }), 'refused');
     assert.equal(mapState({ asked: false, mapping: null, why: null }), null);
-    assert.match(anchorWords({ on: true, live: true, map: 'refused', why: 'pcp: not authorized', external: null, ipv6: [], lan: '192.168.1.5:50551', port: 50551, reachable: null, members: 0 }), /^the router said no \(pcp: not authorized\): open TCP port 50551/);
-    assert.match(anchorShareView(null, { on: false }).words, /^off\./);
+    assert.match(anchorWords({ on: true, live: true, map: 'refused', why: 'pcp: not authorized', external: null, ipv6: [], lan: '192.168.1.5:50551', port: 50551, reachable: null, members: 0 }), /^the router said no \(pcp: not authorized\): open port 50551 for this computer/);
+    // off is just off: the switch's own description says what it does (T2)
+    assert.equal(anchorShareView(null, { on: false }).words, 'off.');
     assert.match(anchorShareView(null, { on: true }).words, /^starting/);
   } finally {
     for (const m of [m1, m2, m3]) await m.mapper?.stop();
     opened.close(); shared.close(); silent.close();
   }
+});
+
+test('the invite and a joined anchor are said in plain words, without terminal commands (T2)', () => {
+  const v = inviteView({ whose: 'friend', code: 'abc', text: 'abc', exp: Date.now() + 600_000, lanOnly: true, typed: { address: '192.168.1.5:50551', code: '0123456789abcdef', certificate: 'f70398b2bdf60afd' } } as Parameters<typeof inviteView>[0]);
+  assert.match(v.words, /devices → add a device → paste a code/);
+  assert.match(v.words, /address 192\.168\.1\.5:50551, code 0123456789abcdef, certificate f70398b2bdf60afd/);
+  assert.doesNotMatch(v.words, /kula-node|<code>/);
+  assert.match(v.words, /works only on this network for now/);
+  // right after a join the share is starting or reading its anchors again: linking, not "not linked"
+  assert.deepEqual(joinedWithoutLink('anchor-a', { on: true, starting: false }), { name: 'anchor-a', state: 'registering', words: 'anchor-a: linking…' });
+  assert.equal(joinedWithoutLink('anchor-a', { on: false, starting: true }).state, 'registering');
+  const off = joinedWithoutLink('anchor-a', { on: false, starting: false });
+  assert.equal(off.state, 'off');
+  assert.match(off.words, /^anchor-a: not linked while this computer does not share/);
 });
 
 // ---- the switch, kept across restarts; and the page's routes

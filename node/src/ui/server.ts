@@ -33,7 +33,7 @@ import { openBox } from '../godseye/box.js';
 import { replayBox } from '../godseye/replay.js';
 import { Invite, INVITE_TTL_MS, type Guest } from './invite.js';
 import { qrSvg } from '../dashboard/qr.js';
-import { ShareHere } from './sharehere.js';
+import { ShareHere, joinedWithoutLink } from './sharehere.js';
 import { lanIPv4 } from '../sysinfo.js';
 import { splitPhotos, PHOTO_MAX_CHARS } from './vision.js';
 
@@ -205,7 +205,7 @@ export async function startUi(opts: UiOptions): Promise<UiServer> {
   const shareView = () => {
     const v = shareHere.view();
     if (v.joined?.length || typeof engine.joinedAnchors !== 'function') return v;
-    return { ...v, joined: engine.joinedAnchors().map((a) => ({ name: a.name, state: 'off', words: `${a.name}: not linked while this computer does not share (share this computer to register there)` })) };
+    return { ...v, joined: engine.joinedAnchors().map((a) => joinedWithoutLink(a.name, v)) };
   };
   const token = opts.token ?? loadOrCreateToken();
   if (opts.prefix !== undefined && !PREFIX_RE.test(opts.prefix)) throw new Error('the prefix must be 24 hex characters');

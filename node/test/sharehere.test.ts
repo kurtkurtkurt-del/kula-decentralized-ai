@@ -58,7 +58,7 @@ test('ShareHere: a taken port says so in plain words and can be tried again', as
   });
   const v = await s.start();
   assert.equal(v.on, false);
-  assert.match(v.error!, /share port is taken/);
+  assert.match(v.error!, /already uses the port for sharing/);
   fail = false;
   const w = await s.start();
   assert.equal(w.on, true);
