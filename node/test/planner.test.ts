@@ -51,7 +51,9 @@ test('does not fit alone: the fastest worker first, the slow one stays out, the 
 });
 
 test('a mac as the master and a phone as the worker: the phone gets nothing it should not', () => {
-  const plan = planSplit({ model: q06, ctx: 2048, localFreeMb: 4000, localBw: 68, localEff: 0.3, peers: [peer('s25', 6500, 65.9)], share: true });
+  // wi-fi at 5 ms: the default 3 ms case assumed 3 round trips per hop; 16.11.2026 measured ~1.1,
+  // which puts the margin for this pair between 3 and 5 ms
+  const plan = planSplit({ model: q06, ctx: 2048, localFreeMb: 4000, localBw: 68, localEff: 0.3, peers: [peer('s25', 6500, 65.9)], share: true, net: { mbps: 30, rttMs: 5 } });
   assert.equal(plan.fitsAlone, true);
   assert.equal(plan.aloneFaster, true); // one hop over wi-fi costs more than a 0.6b saves
 });

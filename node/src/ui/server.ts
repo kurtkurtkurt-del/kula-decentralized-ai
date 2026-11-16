@@ -195,6 +195,8 @@ export async function startUi(opts: UiOptions): Promise<UiServer> {
   const eye = opts.eye === false ? null : opts.eye ?? new GodsEye({ snapshot: () => kulaSnapshot(engine, projects), dir: path.join(home(), 'godseye'), log, box: { dir: path.join(home(), 'godseye', 'box') } });
   eye?.start();
   const shareHere = opts.share ?? new ShareHere({ log });
+  // a device registered with this computer's anchor (sharing with the anchor on) is one hop away
+  if (typeof engine.attachAnchor === 'function') engine.attachAnchor(() => (typeof shareHere.anchorHub === 'function' ? shareHere.anchorHub() : null));
   const token = opts.token ?? loadOrCreateToken();
   if (opts.prefix !== undefined && !PREFIX_RE.test(opts.prefix)) throw new Error('the prefix must be 24 hex characters');
   const prefix = opts.prefix ?? randomBytes(12).toString('hex');

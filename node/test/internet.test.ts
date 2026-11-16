@@ -134,11 +134,12 @@ test('the client keeps the first address whose pinned certificate answers: a sil
   try {
     const a = await pickRoute(peer, master, 1000);
     assert.deepEqual(a, { host: '127.0.0.1', port: right.port, via: 'mapped' });
-    // the probe keeps it as the route, and the api channel answers there; rpc stays on host/port
+    // the probe keeps it as the route, and both channels follow it (far split is allowed since
+    // 16.11.2026: the planner decides): rpc reaches that gate, which has no rpc program here
     const [r] = await probePeers([peer], 1000, ['rpc', 'api'], undefined, master);
     assert.deepEqual(r.peer.route, { host: '127.0.0.1', port: right.port, via: 'mapped' });
     assert.equal(r.api.ok, true);
-    assert.equal(r.rpc.ok, false, 'split mode never goes over the internet route');
+    assert.deepEqual(r.rpc, { ok: false, reason: 'channel closed' }, 'rpc went along the route, not to the silent host/port');
     // apart mode opens its tunnel there
     const dev = await openPeerDevice(r.peer, master);
     try {

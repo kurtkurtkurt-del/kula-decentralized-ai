@@ -5,10 +5,11 @@
 // below does the 2 s probe first, because llama.cpp's ggml_backend_rpc_add_server
 // aborts the whole process on a worker that does not answer, so only peers that
 // answered are handed to it.
-import { REMOTE_NO_SPLIT, peerTls, type Peer } from './peers.js';
-import { probe as gateProbe, type ProbeResult, type TlsClient } from './gate.js';
+import { REMOTE_NO_SPLIT, peerTls, dialOf, candidates, type Peer } from './peers.js';
+import { probe as gateProbe, probeOver, type ProbeResult, type TlsClient } from './gate.js';
 import type { GateIdentity } from './tls.js';
-import { DEFAULT_BW, DEFAULT_EFF, LOCAL_SHARE, MB, planShares, withMeasured, WORKER_SHARE, type Estimate, type SimModel, type SimNet } from './sim.js';
+import { isAnchorRoad, openRoad, pickRoute, roadContext, roads, roadWords, type RoadContext } from './road.js';
+import { DEFAULT_BW, DEFAULT_EFF, LOCAL_SHARE, MB, planShares, RPC_ROUND_TRIPS, withMeasured, WORKER_SHARE, type Estimate, type SimModel, type SimNet } from './sim.js';
 
 export { LOCAL_SHARE, WORKER_SHARE, MB };
 export type { Peer };
@@ -71,13 +72,26 @@ export function simModel(m: { id: string; size: number; layers: number; hidden: 
   return { id: m.id, fileMb: m.size / MB, layers: m.layers, hidden: m.hidden, vocab: m.vocab, bytesPerParam: bpp, kvMbPer1k: m.kv_mb_per_1k, ...(share < 1 ? { activeShare: share } : {}) };
 }
 
+// A worker's own link for the estimate (sim.ts SimDevice.net): what was measured to it along its
+// road (link.ts: through an anchor that is both legs), the plan's net for what was not measured.
+export function workerNet(p: Pick<Peer, 'link'>, net: SimNet): SimNet | undefined {
+  const l = p.link;
+  if (!l || (l.mbps == null && l.rttMs == null)) return undefined;
+  return { mbps: l.mbps != null && l.mbps > 0 ? l.mbps : net.mbps, rttMs: l.rttMs ?? net.rttMs };
+}
+
 export function planSplit(input: PlanInput): Plan {
+  // the network of a worker that was never measured (the old guess); a measured one brings its own
   const net = input.net ?? { mbps: 30, rttMs: 3 };
   try {
     const sim = planShares({
       model: input.model, ctx: input.ctx, share: input.share, all: input.all, net,
       local: withMeasured({ id: 'me', capMb: input.localFreeMb * LOCAL_SHARE, bw: input.localBw || DEFAULT_BW, eff: input.localEff ?? DEFAULT_EFF }, input.model, input.localTps),
-      workers: input.peers.map((p) => { const w = workerSide(p); return withMeasured({ id: p.id, capMb: w.capMb, bw: w.bw, eff: input.peerEff?.[p.id] ?? w.eff }, input.model, input.peerTps?.[p.id]); }),
+      workers: input.peers.map((p) => {
+        const w = workerSide(p);
+        const own = workerNet(p, net);
+        return { ...withMeasured({ id: p.id, capMb: w.capMb, bw: w.bw, eff: input.peerEff?.[p.id] ?? w.eff }, input.model, input.peerTps?.[p.id]), ...(own ? { net: own } : {}) };
+      }),
     });
     return {
       mode: 'split',
@@ -98,17 +112,33 @@ export function planSplit(input: PlanInput): Plan {
 
 export type ProbeFn = (host: string, port: number, secret: string, channel: 'rpc' | 'api', timeoutMs: number, tls?: TlsClient | null) => Promise<ProbeResult>;
 
-// Probes every wanted peer on the rpc channel (2 s) and plans with the ones
-// that answered. Unreachable peers are in `skipped` with the gate's reason. A
-// peer far away (relay) is skipped before any probe: every token of a split
-// would cross the internet, and only the api channel is relayed anyway.
-export async function planWithProbe(opts: Omit<PlanInput, 'peers' | 'skipped'> & { wanted: Peer[]; timeoutMs?: number; probe?: ProbeFn; identity?: GateIdentity }): Promise<Plan> {
+// Probes every wanted peer on the rpc channel (2 s) along its road (road.ts: its lan address, an
+// internet address, or through an anchor) and plans with the ones that answered. Unreachable
+// peers are in `skipped` with the gate's reason. A peer behind the hosted relay is skipped before
+// any probe: only the api channel crosses that relay. A far peer (internet, anchor) is planned
+// like any other, with its own measured link: the planner says whether it is worth it.
+export async function planWithProbe(opts: Omit<PlanInput, 'peers' | 'skipped'> & { wanted: Peer[]; timeoutMs?: number; probe?: ProbeFn; identity?: GateIdentity; roads?: RoadContext }): Promise<Plan> {
   const probe = opts.probe ?? gateProbe;
-  const results = await Promise.all(opts.wanted.map(async (peer): Promise<{ peer: Peer; r: ProbeResult }> => {
+  const ctx = opts.roads ?? (opts.identity ? roadContext(opts.identity) : null);
+  const results = await Promise.all(opts.wanted.map(async (peer0): Promise<{ peer: Peer; r: ProbeResult }> => {
+    let peer = peer0;
     if (peer.relay) return { peer, r: { ok: false, reason: REMOTE_NO_SPLIT } };
     const tls = opts.identity ? peerTls(peer, opts.identity) : null;
     if (peer.fp && !tls) return { peer, r: { ok: false, reason: 'no identity for tls' } };
-    return { peer, r: await probe(peer.host, peer.port, peer.secret, 'rpc', opts.timeoutMs ?? 2000, tls) };
+    const ms = opts.timeoutMs ?? 2000;
+    // the road as it is now (the lan answers first when it is home again)
+    if (ctx && peer.fp && !peer.cable && roads(peer, ctx).length > 1) {
+      const a = await pickRoute(peer, ctx, ms);
+      const first = candidates(peer)[0];
+      if (a) peer = { ...peer, route: !isAnchorRoad(a) && a.host === first.host && a.port === first.port ? null : a };
+    }
+    const road = peer.route;
+    if (isAnchorRoad(road)) {
+      if (!ctx) return { peer, r: { ok: false, reason: 'no identity for an anchor' } };
+      return { peer, r: await probeOver(() => openRoad(road, peer, ctx, ms), peer.secret, 'rpc', ms, tls) };
+    }
+    const d = dialOf(peer);
+    return { peer, r: await probe(d.host, d.port, peer.secret, 'rpc', ms, tls) };
   }));
   const peers = results.filter((x) => x.r.ok).map((x) => x.peer);
   const skipped = results.filter((x) => !x.r.ok).map((x) => ({ peer: x.peer, why: (x.r as { reason: string }).reason }));
@@ -158,11 +188,18 @@ export function tpsRange(tps: number): string {
 // estimate as a range, and the honest advice when this computer alone would do better.
 // localGpu false: this computer's llama.cpp has no gpu device, so its layers run on the processor
 // and the output layer on the last worker (split.ts llamaSplit)
-export function explainPlan(pl: Plan, model: string, nameOf: (p: Peer) => string = (p) => p.name, localGpu = true): string[] {
+// anchorName: an anchor's name by its certificate (the peer book), for "through anchor <name>"
+export function explainPlan(pl: Plan, model: string, nameOf: (p: Peer) => string = (p) => p.name, localGpu = true, anchorName?: (fp: string) => string | null | undefined): string[] {
   const out: string[] = [];
   const KIND: Record<string, string> = { pc: 'computer', phone: 'phone', tablet: 'tablet' };
   const label = (p: Peer) => `${nameOf(p)} (${KIND[p.kind] ?? p.kind})`;
-  const net = (p: Peer) => (p.link && p.link.mbps != null ? `network ${p.link.mbps} MB/s, ${p.link.rttMs} ms` : 'network not measured');
+  // how it is reached (same wi-fi, the internet, an anchor) and what its link costs each token
+  const net = (p: Peer) => {
+    const how = roadWords(p, anchorName);
+    if (!p.link || p.link.mbps == null) return `${how}, network not measured`;
+    const hop = p.link.rttMs != null ? `; about ${Math.round(RPC_ROUND_TRIPS * p.link.rttMs * 10) / 10} ms of each token on the way` : '';
+    return `${how}, network ${p.link.mbps} MB/s, ${p.link.rttMs} ms${hop}`;
+  };
   const gb = (mb: number) => Math.round(mb / 102.4) / 10;
   const brings = (p: Peer) => {
     const w = workerSide(p);

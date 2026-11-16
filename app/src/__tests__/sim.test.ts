@@ -107,8 +107,9 @@ describe('the split planner', () => {
     const p = planShares({ model: modelById('qwen2.5-1.5b-q4')!, ctx: 2048, local, workers: [twin], net: { mbps: 1000, rttMs: 0.1 }, share: true });
     expect(p.aloneFaster).toBe(false);
     expect(p.est.perTokenMs * GAIN_TO_SHARE).toBeLessThanOrEqual(p.estAlone!.perTokenMs);
-    // the same twin over 2.4 ghz wi-fi: the hops eat the gain
-    const w = planShares({ model: modelById('qwen2.5-1.5b-q4')!, ctx: 2048, local, workers: [twin], net: NETWORKS.wifi24, share: true });
+    // the same twin over a busy 2.4 ghz wi-fi (10 ms): the hops eat the gain. The old case (8 ms)
+    // assumed 3 round trips per hop; 16.11.2026 measured ~1.1, which puts the margin between 8 and 10 ms
+    const w = planShares({ model: modelById('qwen2.5-1.5b-q4')!, ctx: 2048, local, workers: [twin], net: { ...NETWORKS.wifi24, rttMs: 10 }, share: true });
     expect(w.aloneFaster).toBe(true);
   });
   it('refuses what cannot fit: too big together, or a master too small for the output layer', () => {

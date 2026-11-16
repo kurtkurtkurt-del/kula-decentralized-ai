@@ -14,7 +14,11 @@ export const LOCAL_SHARE = 0.7;      // of this device's free RAM a model may ta
 export const WORKER_SHARE = 0.75;    // of a worker's advertised free RAM
 export const DEFAULT_BW = 4;         // GB/s for a device that never measured itself
 export const DEFAULT_EFF = 0.6;      // tok/s = bw × eff / model_gb (passport COMBINE.efficiency)
-export const RPC_ROUND_TRIPS = 3;    // per worker per token: set input, compute, get output
+// per worker per token, over that worker's own link. Measured 16.11.2026 (one Mac, Qwen3 0.6B,
+// one worker behind a delay proxy: 0/10/30/50/100 ms gave 46.3/32.1/17.7/12.9/7.7 tok/s): the
+// points fit 0.95-1.16 round trips per token, not the three calls one might count (llama.cpp
+// sends set-input, compute and get-output without waiting between them)
+export const RPC_ROUND_TRIPS = 1.1;
 export const ACT_BYTES = 4;          // activations cross as f32
 export const DISK_MBPS = 300;        // reading the local part of the file
 export const LOAD_FIXED_S = 5;       // opening the file, building the graph
@@ -39,6 +43,9 @@ export type SimDevice = {
   capMb: number;         // what the planner may give this device (already × share)
   bw: number;            // GB/s memory bandwidth
   eff: number;           // fraction of bw a decode step really streams (measured: mac m1 0.3)
+  // a worker's own link to the master (measured, or what its road is known to cost); absent:
+  // the plan's net. A split over a near and a far worker pays each one's own round trips.
+  net?: SimNet;
 };
 export type SimNet = {
   mbps: number;          // MB/s between the master and a worker
@@ -128,8 +135,9 @@ export function estimateAlone(m: SimModel, d: SimDevice): Estimate {
  * Decoding over a chain (rows[0] is the master; `mb` are the planner's shares, only their
  * proportions matter here): the master keeps the first layers and the output layer, each
  * worker a run of layers. Per token every device streams its own bytes once; every worker
- * costs RPC_ROUND_TRIPS round trips plus the activation there and back. The upload is the
- * workers' bytes over the network, the local part from disk.
+ * costs RPC_ROUND_TRIPS round trips plus the activation there and back, over its own link
+ * (SimDevice.net, else `net`). The upload is the workers' bytes over their links, the local
+ * part from disk.
  *
  * A mixture of experts: each device reads only the active share of its blocks per token
  * (blockShareOf), so the compute part shrinks; the network part does not. What crosses
@@ -149,9 +157,12 @@ export function estimateSplit(m: SimModel, rows: { dev: SimDevice; mb: number }[
     if (gb > 0) computeMs += 1000 / tpsOf(r.dev, gb);
   }
   const workers = rows.slice(1).filter((r) => r.mb > 0);
-  const actMs = ((2 * m.hidden * ACT_BYTES) / (net.mbps * 1e6)) * 1000;
-  const netMsPerToken = workers.length * (RPC_ROUND_TRIPS * net.rttMs + actMs);
-  const uploadS = workers.reduce((a, r) => a + (weightMb * (r.mb / total)) / net.mbps, 0);
+  // each worker over its own link: the master talks to every worker itself, so the round trips
+  // add up worker by worker (a near one costs its near rtt, a far one its far rtt)
+  const linkOf = (d: SimDevice): SimNet => d.net ?? net;
+  const actMs = (n: SimNet) => ((2 * m.hidden * ACT_BYTES) / (n.mbps * 1e6)) * 1000;
+  const netMsPerToken = workers.reduce((a, r) => a + RPC_ROUND_TRIPS * linkOf(r.dev).rttMs + actMs(linkOf(r.dev)), 0);
+  const uploadS = workers.reduce((a, r) => a + (weightMb * (r.mb / total)) / linkOf(r.dev).mbps, 0);
   const localS = (embedMb(m) + weightMb * (rows[0].mb / total)) / DISK_MBPS;
   return fin({ perTokenMs: computeMs + netMsPerToken, loadS: LOAD_FIXED_S + uploadS + localS, hops: workers.length, netMsPerToken });
 }

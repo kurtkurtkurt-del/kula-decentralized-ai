@@ -6,6 +6,7 @@
 // on 127.0.0.1 behind it, as with the terminal command.
 import path from 'node:path';
 import { share as startShare, type ShareHandle, type ShareOptions } from '../share.js';
+import type { AnchorHub } from '../anchor.js';
 import { home } from '../paths.js';
 import { WINDOWS_FIREWALL_NOTE } from '../llama.js';
 import { keepAwake, type KeepAwake } from '../awake.js';
@@ -61,6 +62,12 @@ export class ShareHere {
       note: process.platform === 'win32' ? (this.publicNet ? `${WINDOWS_PUBLIC_NOTE}\n\n${WINDOWS_FIREWALL_NOTE}` : WINDOWS_FIREWALL_NOTE) : null,
       paired: h?.paired() ?? 0,
     };
+  }
+
+  // this computer's anchor while sharing runs with one (docs/ANCHOR.md); null otherwise. The
+  // engine reaches devices registered here in one hop and reads its counters (engine.anchor)
+  anchorHub(): AnchorHub | null {
+    return this.handle?.anchor ?? null;
   }
 
   // the qr's json (kula-peer v3: name, address, certificate fingerprint, the open code)

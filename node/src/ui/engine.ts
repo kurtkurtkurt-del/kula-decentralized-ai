@@ -13,7 +13,10 @@ import os from 'node:os';
 import path from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { openApart, openPeerDevice, startLlamaServer, type Cluster, type Message, type ModelRef, type Reply, type StartBackend, type WireMessage } from '../apart.js';
-import { measureLink, netOf, type Link } from '../link.js';
+import { measureLink, type Link } from '../link.js';
+import { isAnchorRoad, roadDialer, type PeerAnchor, type RoadContext } from '../road.js';
+import type { AnchorHub } from '../anchor.js';
+import { isPrivateAddress, isLoopback } from '../policy.js';
 import { peerTls, readPeers, writePeers, parsePeerText, upsertPeer, findPeer, probePeers, peersFile, whereIs, discover, reachedBy, isRing, ringOf, widestRing, WORLD_CLOSED, type AddrVia, type Peer, type PeerProbe, type Found, type PeerKind, type Ring } from '../peers.js';
 import { connectRemote, handshake, peekGate, GateRefused, type GatePeek, FP_MISMATCH } from '../gate.js';
 import { Adb, isSerial, stateHelp, NO_ADB_HELP, type CableDevice } from './cable.js';
@@ -156,8 +159,15 @@ export interface PeerRow {
   // (removePeer) stops this computer using it; removing its access (unpairPeer) stops it using
   // this computer. Two different things, two buttons on the page.
   usesThisComputer: boolean;
-  // the kind of address the record in use answered at (peers.ts reachedBy); null: cable, relay
+  // the kind of address the record in use answered at (peers.ts reachedBy); null: cable, relay,
+  // an anchor
   reachedBy: AddrVia | null;
+  // via 'anchor' (16.11.2026, docs/ANCHOR.md): the anchor's row id, 'self' when this computer is
+  // the anchor, null when the anchor is not in the peer book; throughName is its name for the page
+  through?: string | null;
+  throughName?: string | null;
+  // this device offers the anchor role (its code said so, or a record names it as an anchor)
+  anchor?: boolean;
   // how far the person trusts it (11.11.2026): home (their own), circle (a friend's), world (a
   // stranger's); the widest over its records. God's eye's request review reads it.
   ring: Ring;
@@ -298,7 +308,19 @@ export interface EngineOptions {
   usage?: Usage;                         // where answers are counted; default: ~/.kula-node/usage.json
   pairedFile?: string;                   // this computer's own gate's paired list; default ~/.kula-node/paired (ledger and seen.json beside it)
   trustHeadsFile?: string;               // one ledger hash per device kept across restarts (trust-heads.ts); default trust-heads.json beside pairedFile
+  // this computer's own anchor while share runs with it on (docs/ANCHOR.md): devices registered
+  // there are reached in one hop ('self' roads), and engine.anchor() reads its counters
+  anchorHub?: () => AnchorHub | null;
+  // the anchors this computer is registered with: the last roads to every device
+  anchors?: () => PeerAnchor[];
 }
+
+// This computer as an anchor, its live counters (the brain reads them: godseye host.anchor):
+// on (it offers the role now), reachable (a member registered from an address that is not
+// private, so the gate answers from outside; null: not known), links (members holding their
+// link to it now), bytesDay (what it passed on today, ciphertext, every member together) and
+// capDay (the daily limit per dialing member in bytes).
+export interface AnchorView { on: boolean; reachable: boolean | null; links: number; bytesDay: number; capDay: number | null }
 
 // What a model takes in memory, run whole: the file, the kv cache for ctx, some slack.
 export function needMb(size: number, kvMbPer1k: number, ctx: number): number {
@@ -339,12 +361,14 @@ export function peerRow(p: Peer, probe?: Reach | null, probedAt: number | null =
     holds,
     via: viaOf(p), ways: { cable: null, wifi: null, relay: null }, routes: [p.id], heardAt: null, usesThisComputer: false,
     reachedBy: p.cable || p.relay ? null : reachedBy(p),
+    ...(isAnchorRoad(p.route) ? { through: p.route.anchor === 'self' ? 'self' : null, throughName: p.route.anchor === 'self' ? 'this computer' : null } : {}),
+    ...(p.anchor ? { anchor: true } : {}),
     ring: ringOf(p),
   };
 }
 
-const VIA_WORDS: Record<Via, string> = { cable: 'the usb cable', wifi: 'wi-fi', relay: 'the relay' };
-export const viaWords = (via: Via, where?: string | null): string => (via === 'cable' ? `on ${VIA_WORDS.cable}` : via === 'wifi' ? `over wi-fi${where ? ` (${where})` : ''}` : `through ${VIA_WORDS.relay}`);
+const VIA_WORDS: Record<Via, string> = { cable: 'the usb cable', wifi: 'wi-fi', relay: 'the relay', anchor: 'an anchor' };
+export const viaWords = (via: Via, where?: string | null): string => (via === 'cable' ? `on ${VIA_WORDS.cable}` : via === 'wifi' ? `over wi-fi${where ? ` (${where})` : ''}` : via === 'anchor' ? (where || `through ${VIA_WORDS.anchor}`) : `through ${VIA_WORDS.relay}`);
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 export const UNPLUGGED = 'unplugged: plug the cable in';
@@ -452,7 +476,42 @@ export class Engine {
   // ---- peers: one row per device (devices.ts), its ways side by side
 
   peers(): PeerRow[] {
-    return groupPeers(readPeers(this.file())).map((g) => this.deviceRow(g));
+    const all = readPeers(this.file());
+    const groups = groupPeers(all);
+    return groups.map((g) => this.deviceRow(g, groups));
+  }
+
+  // The roads this computer has besides addresses: its own anchor (share with the anchor on) and
+  // the anchors it is registered with (road.ts).
+  private roads(): RoadContext {
+    let hub: AnchorHub | null = null;
+    try { hub = this.opts.anchorHub?.() ?? this.hub?.() ?? null; } catch {}
+    let anchors: PeerAnchor[] = [];
+    try { anchors = this.opts.anchors?.() ?? []; } catch {}
+    return { identity: this.identity(), hub, anchors };
+  }
+  private hub: (() => AnchorHub | null) | null = null;
+
+  /** The page's share (ui/sharehere.ts) hands in its anchor here when it runs with one. */
+  attachAnchor(get: () => AnchorHub | null): void { this.hub = get; }
+
+  /** This computer as an anchor of the circle: its live counters (AnchorView). */
+  anchor(): AnchorView {
+    const hub = this.roads().hub as AnchorHub | null;
+    if (!hub || typeof hub.stats !== 'function') return { on: false, reachable: null, links: 0, bytesDay: 0, capDay: null };
+    const members = hub.members();
+    const st = hub.stats();
+    // reached from outside is said only when a member came in from an address that is not private
+    const outside = members.some((m) => m.peer !== 'self' && !isLoopback(m.peer) && !isPrivateAddress(m.peer));
+    return { on: true, reachable: outside ? true : null, links: members.length, bytesDay: Object.values(st.bytesToday).reduce((a, b) => a + b, 0), capDay: hub.caps.bytesPerDay ?? null };
+  }
+
+  // the device a certificate belongs to in the peer book: its row id and name
+  private deviceByFp(groups: Peer[][], fp: string): { id: string; name: string } | null {
+    const g = groups.find((x) => x.some((p) => p.fp?.toLowerCase() === fp));
+    if (!g) return null;
+    const named = g.find((p) => p.named);
+    return { id: g[0].id, name: named ? named.name : g[0].named ? g[0].name : publicName(g[0].name) };
   }
 
   private routeState = (p: Peer): RouteState => {
@@ -466,8 +525,23 @@ export class Engine {
     return g ? g[0].id : id;
   }
 
-  private deviceRow(g: Peer[]): PeerRow {
+  private deviceRow(g: Peer[], groups: Peer[][] = [g]): PeerRow {
     const best = bestRoute(g, this.routeState);
+    // the anchor network: through which anchor its road goes, and whether it offers the role itself
+    const anchorFps = new Set<string>([...groups.flat().flatMap((p) => (p.anchors ?? []).map((a) => a.fp.toLowerCase())), ...(this.roads().anchors ?? []).map((a) => a.fp.toLowerCase())]);
+    const offers = g.some((p) => p.anchor === true || (!!p.fp && anchorFps.has(p.fp.toLowerCase())));
+    let through: Pick<PeerRow, 'through' | 'throughName'> = {};
+    if (isAnchorRoad(best.route)) {
+      const fp = best.route.anchor;
+      if (fp === 'self') through = { through: 'self', throughName: 'this computer' };
+      else {
+        const d = this.deviceByFp(groups, fp);
+        const named = [...(best.anchors ?? []), ...(this.roads().anchors ?? [])].find((a) => a.fp === fp)?.name ?? null;
+        through = { through: d?.id ?? null, throughName: d?.name ?? named ?? `${fp.slice(0, 8)}…` };
+      }
+    }
+    // a device reached through an anchor has no address of its own to show; a direct one keeps its address
+    const where = through.throughName ? (through.through === 'self' ? 'through this computer (its anchor)' : `through anchor ${through.throughName}`) : null;
     const x = this.reach.get(best.id);
     const pick = (list: Peer[]) => (list.length ? bestRoute(list, this.routeState) : null);
     const cab = pick(g.filter((p) => p.cable));
@@ -487,6 +561,7 @@ export class Engine {
     const worker = g.map((p) => this.workers.get(p.id)).reduce<WorkerLook | undefined>((a, w) => (w && (!a || w.at > a.at) ? w : a), undefined);
     return {
       ...row,
+      ...(where ? { where } : {}),
       id: first.id,
       name: named ? named.name : first.named ? first.name : publicName(first.name),
       kind: first.kind,
@@ -504,6 +579,8 @@ export class Engine {
       },
       routes: g.map((p) => p.id),
       heardAt,
+      ...through,
+      ...(offers ? { anchor: true } : {}),
       usesThisComputer: g.some((p) => !!p.fp && this.paired().has(p.fp)),
       ring: widestRing(g),
       ...(worker ? { worker: { ...worker } } : {}),
@@ -543,14 +620,14 @@ export class Engine {
     if (all.some((p) => p.cable && asked(p))) all = await this.refreshCables(all.filter(asked));
     const wanted = all.filter((p) => asked(p) && !(p.cable && this.reach.get(p.id)?.r.reason === UNPLUGGED));
     if (wanted.length) {
-      const results: PeerProbe[] = await probePeers(wanted, this.opts.probeMs ?? 2000, ['api'], undefined, this.identity());
+      const results: PeerProbe[] = await probePeers(wanted, this.opts.probeMs ?? 2000, ['api'], undefined, this.roads());
       // the saved address is silent but mdns heard the phone elsewhere: the handshake there
       // (its pinned certificate or the shared secret) decides whether the new address is kept
       const moved = results.filter((r) => !r.api.ok && this.heard.has(r.peer.id))
         .map((r) => ({ ...r.peer, ...this.heard.get(r.peer.id)! }));
       for (const p of moved) this.heard.delete(p.id);
       if (moved.length) {
-        const again = await probePeers(moved, this.opts.probeMs ?? 2000, ['api'], undefined, this.identity());
+        const again = await probePeers(moved, this.opts.probeMs ?? 2000, ['api'], undefined, this.roads());
         for (const r of again) {
           if (!r.api.ok) continue;
           const i = results.findIndex((x) => x.peer.id === r.peer.id);
@@ -578,7 +655,7 @@ export class Engine {
     let dev: Awaited<ReturnType<typeof openPeerDevice>> | null = null;
     const ms = this.opts.statusMs ?? 2500;
     try {
-      const open = openPeerDevice(p, this.identity());
+      const open = openPeerDevice(p, this.roads());
       dev = await Promise.race([open, sleep(ms).then(() => { open.then((d) => d.close()).catch(() => {}); return null; })]);
       if (!dev) return mine;
       let held = mine;
@@ -600,7 +677,7 @@ export class Engine {
   // GET /status through a tunnel, only for what the device says it is (learnFacts)
   private async askFacts(p: Peer): Promise<void> {
     const ms = this.opts.statusMs ?? 2500;
-    const open = openPeerDevice(p, this.identity());
+    const open = openPeerDevice(p, this.roads());
     const dev = await Promise.race([open, sleep(ms).then(() => { open.then((d) => d.close()).catch(() => {}); return null; })]);
     if (!dev) return;
     try {
@@ -780,7 +857,8 @@ export class Engine {
     const p = findPeer(readPeers(file), id);
     if (!p) throw new Error('no such device');
     if (p.relay) throw new Error('a device far away (relay) is not measured: split needs the lan');
-    const link = await (this.opts.measureLink ?? measureLink)(p, peerTls(p, this.identity()));
+    // along its road: through an anchor the numbers are both legs together, what a split pays
+    const link = await (this.opts.measureLink ?? measureLink)({ ...p, dial: roadDialer(p, this.roads()) }, peerTls(p, this.identity()));
     const { list } = upsertPeer(readPeers(file), { ...p, link });
     writePeers(list, file);
     this.note(link.error ? `${p.name}: the network could not be measured: ${link.error}` : `${p.name}: ${link.mbps} MB/s, ${link.rttMs} ms over the network`);
@@ -888,9 +966,10 @@ export class Engine {
 
   // the row of the device a record belongs to
   private rowOf(id: string): PeerRow {
-    const g = groupOf(groupPeers(readPeers(this.file())), id);
+    const groups = groupPeers(readPeers(this.file()));
+    const g = groupOf(groups, id);
     if (!g) throw new Error(`no such device: ${id}`);
-    return this.deviceRow(g);
+    return this.deviceRow(g, groups);
   }
 
   private now(): number { return this.opts.now ? this.opts.now() : Date.now(); }
@@ -1195,7 +1274,8 @@ export class Engine {
         if (!listened && Date.now() - (this.heardAt.get(w.id) ?? 0) > 60_000) { listened = true; await this.hear().catch(() => []); }
         await this.probeExact([w.id]).catch(() => {});
         const r = this.reach.get(w.id)?.r;
-        if (r?.ok) { const fresh = readPeers(this.file()).find((p) => p.id === w.id) ?? w; got = { id: row.id, name: row.name, via: 'wifi', where: whereIs(fresh), why: null }; }
+        // its road may now go through an anchor of the circle (it answered there)
+        if (r?.ok) { const fresh = readPeers(this.file()).find((p) => p.id === w.id) ?? w; got = { id: row.id, name: row.name, via: viaOf(fresh), where: whereIs(fresh), why: null }; }
         else tried.push(`wi-fi: ${r?.reason ?? 'no answer'}`);
       }
       const rl = g.find((p) => p.relay);
@@ -1570,7 +1650,8 @@ export class Engine {
     // (a worker takes a private address only from the master it is talking to, Guard.kt /
     // policy.ts): so only over the wi-fi. A cable's forward and a relay both reach the worker's
     // gate from 127.0.0.1, where nothing private is let through.
-    if (localOnly && (mode === 'phone' || mode === 'apart') && (!peers.length || peers.some((p) => p.cable || p.relay))) throw new Error(PRIVATE_URL_NOTE);
+    // A device reached over the internet or through an anchor is not on this wi-fi either.
+    if (localOnly && (mode === 'phone' || mode === 'apart') && (!peers.length || peers.some((p) => p.cable || p.relay || (p.route && p.route.via !== 'lan')))) throw new Error(PRIVATE_URL_NOTE);
     // apart: this computer runs its own copy unless the page left it out
     const hereToo = !(mode === 'apart' && req.here === false);
     if (exact && mode === 'apart' && !peers.length && !hereToo) throw new Error('pick at least one device');
@@ -1595,7 +1676,7 @@ export class Engine {
         const line = state === 'running' ? 'downloading' : state === 'checking' ? 'checking the file' : state === 'loading' ? 'loading into memory' : state;
         say({ phase: state, device, got, total, line });
       };
-      const common = { probeMs: this.opts.probeMs ?? 2500, log: (s: string) => this.log(s), identity: this.identity(), onProgress, signal: ac.signal };
+      const common = { probeMs: this.opts.probeMs ?? 2500, log: (s: string) => this.log(s), identity: this.identity(), roads: this.roads(), onProgress, signal: ac.signal };
       let cluster: Cluster;
       let splitParts: Part[] | undefined;
       let learnKey: string | null = null;
@@ -1657,6 +1738,9 @@ export class Engine {
           cluster = await openApart({ ...common, model: ref, peers: [], localModelFile: file, localMmproj: mmproj, llama, startBackend: this.opts.startBackend });
         } else {
           const bw = await (this.opts.bandwidth ?? (() => measureBandwidth().catch(() => 4)))();
+          // only the hosted relay is left out (it carries the api channel only); a device over the
+          // internet or through an anchor is measured along its road and planned like any other,
+          // and the plan says how each is reached and what its link costs (far split, 16.11.2026)
           let near = peers.filter((p) => !p.relay);
           // a device never measured is measured now, all at once (a second or so): a split plans
           // with each one's real network, phones and computers alike
@@ -1674,7 +1758,9 @@ export class Engine {
           for (const p of peers.filter((p) => p.relay)) plan.push(`${p.name} is far away (relay): split needs the lan, so it is left out.`);
           let setup;
           try {
-            setup = await prepareSplit({ model: simModelOf(file), ctx, localFreeMb: freeRamMB(), localBw: bw, peers: near, net: netOf(near.map((p) => p.link)), localGpu: hasLocalGpu(llama), localEff: known.devices.self?.eff, localLearned: known.devices.self !== undefined, peerEff: Object.fromEntries(near.map((p) => [p.id, known.devices[p.id]?.eff])), seenTps: known.splits[learnKey]?.tps ?? null, share: true, all: req.all === true, probeMs: common.probeMs, log: common.log, identity: common.identity });
+            // each worker with its own measured link (planner.ts workerNet): a near and a far worker
+            // each pay their own round trips
+            setup = await prepareSplit({ model: simModelOf(file), ctx, localFreeMb: freeRamMB(), localBw: bw, peers: near, roads: common.roads, localGpu: hasLocalGpu(llama), localEff: known.devices.self?.eff, localLearned: known.devices.self !== undefined, peerEff: Object.fromEntries(near.map((p) => [p.id, known.devices[p.id]?.eff])), seenTps: known.splits[learnKey]?.tps ?? null, share: true, all: req.all === true, probeMs: common.probeMs, log: common.log, identity: common.identity });
           } catch (e) {
             if (e instanceof TooBig) throw new Error(`too big: the model needs about ${e.needMb} MB, these devices offer ${e.totalMb} MB`);
             throw e;
@@ -1683,7 +1769,9 @@ export class Engine {
           const pl = setup.plan;
           splitParts = [{ id: 'local', name: 'this computer', local: true, mb: pl.localMb, layers: pl.localLayers ?? 0 }, ...pl.used.map((u) => ({ id: u.id, name: u.named ? u.name : publicName(u.name), local: false, mb: u.assignedMb, layers: u.layers }))];
           // who takes how much and on what, who is left out and why, the estimate as a range (planner.ts)
-          for (const l of explainPlan(pl, modelName, (p) => (p.named ? p.name : publicName(p.name)), setup.localGpu)) plan.push(l);
+          const groups = groupPeers(readPeers(this.file()));
+          const anchorName = (fp: string) => this.deviceByFp(groups, fp)?.name ?? null;
+          for (const l of explainPlan(pl, modelName, (p) => (p.named ? p.name : publicName(p.name)), setup.localGpu, anchorName)) plan.push(l);
           if (!pl.used.length && pl.skipped.length) plan.push('no device answered on its rpc channel: the model runs here alone.');
           if (req.all === true) plan.push('every device you picked holds a part, even where fewer would be faster.');
           cluster = await openApart({ ...common, model: ref, peers: [], localModelFile: file, llama, startBackend: (f, c) => startSplitServer(llama, f, c, setup!, common.log) });
@@ -1836,7 +1924,7 @@ export class Engine {
     if (!ids.length || !this.lastLoad) return null;
     const file = this.file();
     const peers = ids.map((id) => findPeer(readPeers(file), id)).filter((p): p is Peer => !!p);
-    const probes = await probePeers(peers, this.opts.probeMs ?? 2000, ['rpc'], undefined, this.identity());
+    const probes = await probePeers(peers, this.opts.probeMs ?? 2000, ['rpc'], undefined, this.roads());
     const gone = probes.filter((r) => !r.rpc.ok);
     if (!gone.length) return null;
     const names = gone.map((r) => (r.peer.named ? r.peer.name : publicName(r.peer.name))).join(', ');

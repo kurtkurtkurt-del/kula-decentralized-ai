@@ -13,9 +13,11 @@
 import { randomBytes } from 'node:crypto';
 import type { Peer } from '../peers.js';
 
-export type Via = 'cable' | 'wifi' | 'relay';
+// anchor (16.11.2026): a network record whose road is through an anchor of the circle (road.ts);
+// it is the same record as its wi-fi one, only reached another way now
+export type Via = 'cable' | 'wifi' | 'relay' | 'anchor';
 
-export const viaOf = (p: Pick<Peer, 'cable' | 'relay'>): Via => (p.cable ? 'cable' : p.relay ? 'relay' : 'wifi');
+export const viaOf = (p: Pick<Peer, 'cable' | 'relay' | 'route'>): Via => (p.cable ? 'cable' : p.relay ? 'relay' : p.route?.via === 'anchor' ? 'anchor' : 'wifi');
 
 // The groups in peer book order; each group in peer book order too, so the first record
 // (the oldest way this device was added) gives the device its id and that id stays.

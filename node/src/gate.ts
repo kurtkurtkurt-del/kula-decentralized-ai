@@ -706,13 +706,24 @@ export function connectRemote(host: string, port: number, timeoutMs = 3000): Pro
 
 export type ProbeResult = { ok: true; ms: number } | { ok: false; reason: string };
 
+// One way to a gate, opened fresh for every connection: a tcp connect to an address, or a stream
+// through an anchor (road.ts openRoad). It resolves with a duplex ready for the gate handshake.
+// `failed` hears that a connection on it did not get through (Tunnel), so the next one may
+// look for another way first.
+export type Dialer = (() => Promise<Duplex>) & { failed?: (e: Error) => void };
+
 // Does one handshake and hangs up. `reason` is the server's NO reason or the
 // local error.
 export async function probe(host: string, port: number, secret: string, channel: Channel, timeoutMs = 2000, tlsOpts?: TlsClient | null): Promise<ProbeResult> {
+  return probeOver(() => connectRemote(host, port, timeoutMs), secret, channel, timeoutMs, tlsOpts);
+}
+
+// The same over any way in (a road through an anchor).
+export async function probeOver(dial: () => Promise<Duplex>, secret: string, channel: Channel, timeoutMs = 2000, tlsOpts?: TlsClient | null): Promise<ProbeResult> {
   const t0 = Date.now();
-  let socket: net.Socket | null = null;
+  let socket: Duplex | null = null;
   try {
-    socket = await connectRemote(host, port, timeoutMs);
+    socket = await dial();
     const h = await handshake(socket, secret, channel, timeoutMs, undefined, tlsOpts);
     h.socket.destroy();
     return { ok: true, ms: Date.now() - t0 };
@@ -733,10 +744,15 @@ export async function probe(host: string, port: number, secret: string, channel:
 // nothing is pinned or learned here, the caller decides.
 export type GatePeek = { up: false; reason: string } | { up: true; fp: string; state: 'paired' | 'pin' | 'refused'; reason?: string };
 export async function peekGate(host: string, port: number, identity: TlsClient['identity'], timeoutMs = 2000): Promise<GatePeek> {
-  let socket: net.Socket | null = null;
+  return peekOver(() => connectRemote(host, port, timeoutMs), identity, timeoutMs);
+}
+
+// The same over any way in (a road through an anchor: the anchor pipes it to the device's gate).
+export async function peekOver(dial: () => Promise<Duplex>, identity: TlsClient['identity'], timeoutMs = 2000): Promise<GatePeek> {
+  let socket: Duplex | null = null;
   let s: tls.TLSSocket | null = null;
   try {
-    socket = await connectRemote(host, port, timeoutMs);
+    socket = await dial();
     const raw = socket;
     const t = await new Promise<tls.TLSSocket>((resolve, reject) => {
       const c = tls.connect({ socket: raw, key: identity.keyPem, cert: identity.certPem, rejectUnauthorized: false, minVersion: 'TLSv1.3', checkServerIdentity: () => undefined });
@@ -766,19 +782,27 @@ export async function peekGate(host: string, port: number, identity: TlsClient['
 }
 
 // A local door to a remote channel: listens on 127.0.0.1 and pipes every
-// accepted connection through a freshly handshaken connection to the gate.
+// accepted connection through a freshly handshaken connection to the gate. The gate is reached
+// at host:port, or along a Dialer (a road: an address or an anchor, road.ts); then gatePort is
+// not used, and a connection that does not get through is told to the dialer (`failed`), which
+// may look for another road before the next one.
 export class Tunnel {
   private server: net.Server | null = null;
   private readonly open = new Set<net.Socket>();
   port = 0;
 
   constructor(
-    readonly host: string,
+    readonly host: string | Dialer,
     readonly gatePort: number,
     readonly secret: string,
     readonly channel: Channel,
     readonly tls: TlsClient | null = null,
   ) {}
+
+  // a tunnel along a road
+  static over(dial: Dialer, secret: string, channel: Channel, tls: TlsClient | null = null): Tunnel {
+    return new Tunnel(dial, 0, secret, channel, tls);
+  }
 
   async listen(localPort = 0): Promise<number> {
     const server = net.createServer({ allowHalfOpen: true }, async (local) => {
@@ -788,15 +812,18 @@ export class Tunnel {
       this.open.add(local);
       local.once('close', () => this.open.delete(local));
       local.setNoDelay(true);
-      let remote: net.Socket | null = null;
+      let remote: Duplex | null = null;
+      const dial = typeof this.host === 'function' ? this.host : null;
       try {
-        remote = await connectRemote(this.host, this.gatePort);
-        remote.setNoDelay(true);
+        remote = dial ? await dial() : await connectRemote(this.host as string, this.gatePort);
+        if (remote instanceof net.Socket) remote.setNoDelay(true);
         const { rest, socket } = await handshake(remote, this.secret, this.channel, HANDSHAKE_MS, undefined, this.tls);
         await pipeBoth(socket, local, rest);
-      } catch {
+      } catch (e) {
         local.destroy();
         remote?.destroy();
+        // the gate's own refusal ("busy", "not paired") is an answer, not a broken road
+        if (dial && !(e instanceof GateRefused)) dial.failed?.(e as Error);
       }
     });
     await new Promise<void>((resolve, reject) => {

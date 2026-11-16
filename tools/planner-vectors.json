@@ -99,11 +99,11 @@
     "needMb": 1052,
     "aloneFaster": true,
     "est": {
-     "perTokenMs": 28.9,
-     "tps": 34.6,
+     "perTokenMs": 23.2,
+     "tps": 43,
      "loadS": 11.2,
      "hops": 1,
-     "netMsPerToken": 9.3
+     "netMsPerToken": 3.6
     }
    }
   },
@@ -152,11 +152,11 @@
     "needMb": 1052,
     "aloneFaster": false,
     "est": {
-     "perTokenMs": 54.5,
-     "tps": 18.3,
+     "perTokenMs": 50.7,
+     "tps": 19.7,
      "loadS": 360.5,
      "hops": 1,
-     "netMsPerToken": 12.3
+     "netMsPerToken": 8.5
     }
    }
   },
@@ -217,11 +217,11 @@
     "needMb": 5101,
     "aloneFaster": false,
     "est": {
-     "perTokenMs": 137.3,
-     "tps": 7.3,
+     "perTokenMs": 131.6,
+     "tps": 7.6,
      "loadS": 35.2,
      "hops": 1,
-     "netMsPerToken": 10
+     "netMsPerToken": 4.3
     }
    }
   },
@@ -282,11 +282,11 @@
     "needMb": 5437,
     "aloneFaster": false,
     "est": {
-     "perTokenMs": 145.8,
-     "tps": 6.9,
+     "perTokenMs": 140.1,
+     "tps": 7.1,
      "loadS": 42.8,
      "hops": 1,
-     "netMsPerToken": 10
+     "netMsPerToken": 4.3
     }
    }
   },
@@ -363,11 +363,11 @@
     "needMb": 2546,
     "aloneFaster": false,
     "est": {
-     "perTokenMs": 115.3,
-     "tps": 8.7,
+     "perTokenMs": 112.5,
+     "tps": 8.9,
      "loadS": 22.9,
      "hops": 3,
-     "netMsPerToken": 5.2
+     "netMsPerToken": 2.4
     }
    }
   },
@@ -423,10 +423,15 @@
     "share": true
    },
    "expect": {
-    "localMb": 1646,
+    "localMb": 746,
     "used": [
      {
       "id": "a",
+      "assignedMb": 900,
+      "layers": 12
+     },
+     {
+      "id": "b",
       "assignedMb": 900,
       "layers": 12
      }
@@ -434,11 +439,11 @@
     "needMb": 2546,
     "aloneFaster": false,
     "est": {
-     "perTokenMs": 165.1,
-     "tps": 6.1,
-     "loadS": 160.6,
-     "hops": 1,
-     "netMsPerToken": 28.9
+     "perTokenMs": 143,
+     "tps": 7,
+     "loadS": 309.8,
+     "hops": 2,
+     "netMsPerToken": 27.4
     }
    }
   },
@@ -487,11 +492,11 @@
     "needMb": 1052,
     "aloneFaster": true,
     "est": {
-     "perTokenMs": 257.4,
-     "tps": 3.9,
+     "perTokenMs": 251.7,
+     "tps": 4,
      "loadS": 14,
      "hops": 1,
-     "netMsPerToken": 9.3
+     "netMsPerToken": 3.6
     }
    }
   },

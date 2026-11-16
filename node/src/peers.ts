@@ -7,7 +7,8 @@ import fs from 'node:fs';
 import net from 'node:net';
 import path from 'node:path';
 import { Bonjour } from 'bonjour-service';
-import { probe, peekGate, type Channel, type ProbeResult, type TlsClient } from './gate.js';
+import { probe, probeOver, type Channel, type ProbeResult, type TlsClient } from './gate.js';
+import { pickRoute, roads, isAnchorRoad, cleanAnchors, openRoad, roadContext, roadWords, type Road, type PeerAnchor, type RoadContext, type PeekFn } from './road.js';
 import { probeRelay, CODE_RE, normalizeRelayUrl, type RelayRef } from './relay.js';
 import type { GateIdentity } from './tls.js';
 import { home } from './paths.js';
@@ -48,11 +49,15 @@ export interface Peer {
   // only the api channel crosses a relay; split mode needs the lan.
   relay?: RelayRef | null;
   // more ways to the same gate, in the order the worker gave them (qr v3 `addrs`); host/port
-  // stay the first way (the lan) and are what split mode uses
+  // stay the first way (the lan)
   addrs?: PeerAddr[] | null;
-  // where it answered at the last probe when that was not host/port (null: host/port did);
-  // the api channel (apart mode) is opened there
-  route?: PeerAddr | null;
+  // the anchors of the circle it registers with (docs/ANCHOR.md): the last ways to try
+  anchors?: PeerAnchor[] | null;
+  // it offers the anchor role itself (its code said so)
+  anchor?: boolean;
+  // the road it answered on at the last probe when that was not host/port (null: host/port did):
+  // an address, or through an anchor (road.ts); both channels, api and rpc, follow it
+  route?: Road | null;
   kind: PeerKind;
   ram: number | null; // MB free when it advertised
   bw: number | null;  // GB/s
@@ -133,27 +138,18 @@ export function candidates(p: Pick<Peer, 'host' | 'port' | 'addrs' | 'cable' | '
   return out;
 }
 
-// Where the api channel is dialed: the address that answered last, else host/port.
+// The address a road by address dials: the one that answered last, else host/port (a road
+// through an anchor has no address of its own: road.ts openRoad).
 export function dialOf(p: Pick<Peer, 'host' | 'port' | 'route'>): { host: string; port: number } {
-  return p.route ? { host: p.route.host, port: p.route.port } : { host: p.host, port: p.port };
+  return p.route && !isAnchorRoad(p.route) ? { host: p.route.host, port: p.route.port } : { host: p.host, port: p.port };
 }
 
-// How the device was reached at the last probe: the kind of the address that answered.
-export const reachedBy = (p: Pick<Peer, 'host' | 'route'>): AddrVia => p.route?.via ?? addrKind(p.host);
+// How the device was reached at the last probe: the kind of the address that answered; null
+// through an anchor (the engine row says which anchor).
+export const reachedBy = (p: Pick<Peer, 'host' | 'route'>): AddrVia | null => (isAnchorRoad(p.route) ? null : p.route?.via ?? addrKind(p.host));
 
-export type PeekFn = typeof peekGate;
-
-// The first way, in order, whose gate shows the pinned certificate (a tls handshake, the hello,
-// then hang up: nothing is proven or spent). null: none did. Only for a peer with a pinned
-// fingerprint: without one there is nothing to tell this device from another at an address.
-export async function pickRoute(p: Peer, identity: GateIdentity, timeoutMs = 2000, peek: PeekFn = peekGate): Promise<PeerAddr | null> {
-  if (!p.fp) return null;
-  for (const a of candidates(p)) {
-    const r = await peek(a.host, a.port, identity, timeoutMs).catch(() => null);
-    if (r?.up && r.fp === p.fp) return a;
-  }
-  return null;
-}
+// the road choice lives in road.ts (staggered tries, anchors last)
+export { pickRoute, type PeekFn };
 
 // Accepts what a worker shows: the QR json (`{"k":"kula-peer","v":2,...}` with the
 // secret, or v3 with the certificate fingerprint, the pairing code and, for a worker
@@ -192,6 +188,8 @@ export function parsePeerText(text: string, relayUrl?: string): Peer {
     relay = { url: normalizeRelayUrl(obj.relay.url), code: String(obj.relay.code) };
   }
   const addrs = obj.v === 3 ? cleanAddrs(obj.addrs) : [];
+  // the anchors it registers with: v3 only (a stream through an anchor needs a pinned certificate)
+  const anchors = obj.v === 3 ? cleanAnchors(obj.anchors) : [];
   // a qr with addrs only: the first one is host/port
   if (addrs.length && (typeof obj.host !== 'string' || !obj.host)) { obj.host = addrs[0].host; obj.port = addrs[0].port; }
   const port = Number(obj.port);
@@ -225,6 +223,8 @@ export function parsePeerText(text: string, relayUrl?: string): Peer {
     paired_at: null,
     relay,
     ...(addrs.length ? { addrs } : {}),
+    ...(anchors.length ? { anchors } : {}),
+    ...(obj.v === 3 && obj.anchor === true ? { anchor: true } : {}),
     kind,
     ram: num(obj.ram),
     bw: num(obj.bw),
@@ -240,7 +240,7 @@ export function parsePeerText(text: string, relayUrl?: string): Peer {
 export function peerCode(p: Peer): string {
   const { id, name, host, port, secret, kind, ram, bw } = p;
   const o = p.fp
-    ? { k: 'kula-peer', v: 3, id, name, host, port, ...(p.addrs?.length ? { addrs: p.addrs } : {}), fp: p.fp, pin: p.pin ?? undefined, relay: p.relay ?? undefined, kind, ram, bw }
+    ? { k: 'kula-peer', v: 3, id, name, host, port, ...(p.addrs?.length ? { addrs: p.addrs } : {}), ...(p.anchors?.length ? { anchors: p.anchors } : {}), ...(p.anchor ? { anchor: true } : {}), fp: p.fp, pin: p.pin ?? undefined, relay: p.relay ?? undefined, kind, ram, bw }
     : { k: 'kula-peer', v: 2, id, name, host, port, secret, kind, ram, bw };
   return Buffer.from(JSON.stringify(o), 'utf8').toString('base64url');
 }
@@ -263,6 +263,8 @@ export function afterPaired(p: Peer, fp: string | null): Peer {
 export function whereIs(p: Peer): string {
   if (p.cable) return 'usb cable';
   if (p.relay) return `relay ${p.relay.code} via ${p.relay.url.replace(/^wss?:\/\//, '')}`;
+  // through an anchor: no address of its own to show (a device reached directly keeps its address)
+  if (isAnchorRoad(p.route)) return roadWords(p);
   const d = dialOf(p);
   const hp = `${d.host.includes(':') ? `[${d.host}]` : d.host}:${d.port}`;
   return p.route && p.route.via !== 'lan' ? `${hp} (${p.route.via === 'mapped' ? 'router port' : 'ipv6'}, over the internet)` : hp;
@@ -381,17 +383,21 @@ export const REMOTE_NO_SPLIT = 'remote peer: split mode needs the lan';
 // peers learn it here). `identity` is this computer's certificate, needed for v3
 // peers; a relayed peer is probed through its relay on the api channel only.
 //
-// A v3 peer with more than one way (qr addrs) is first asked, way by way in order, whether its
-// pinned certificate answers there (pickRoute); the first that does is kept as its route and
-// the api channel is probed there. The rpc channel (split mode) only ever goes to host/port.
-export async function probePeers(list: Peer[], timeoutMs = 2000, channels: Channel[] = ['rpc', 'api'], probeFn = probe, identity?: GateIdentity, peek: PeekFn = peekGate): Promise<PeerProbe[]> {
+// A v3 peer with more than one road (qr addrs, anchors: road.ts) is first asked, road by road
+// (staggered, in order), whether its pinned certificate answers there (pickRoute); the first that
+// does is kept as its route and both channels are probed along it: far split is allowed, the
+// planner decides whether it is worth it. `who` is this computer's identity, or with it its own
+// anchor and the anchors it is registered with (RoadContext).
+export async function probePeers(list: Peer[], timeoutMs = 2000, channels: Channel[] = ['rpc', 'api'], probeFn = probe, who?: GateIdentity | RoadContext, peek?: PeekFn): Promise<PeerProbe[]> {
+  const ctx = who ? roadContext(who) : null;
+  const identity = ctx?.identity;
   return Promise.all(list.map(async (peer0) => {
     let peer = peer0;
-    if (identity && peer.fp && !peer.relay && !peer.cable && candidates(peer).length > 1) {
-      const a = await pickRoute(peer, identity, timeoutMs, peek);
+    if (ctx && peer.fp && !peer.relay && !peer.cable && roads(peer, ctx).length > 1) {
+      const a = await pickRoute(peer, ctx, timeoutMs, peek);
       const first = candidates(peer)[0];
       // nobody answered: the old route is kept, the probe below says why
-      if (a) peer = { ...peer, route: a.host === first.host && a.port === first.port ? null : a };
+      if (a) peer = { ...peer, route: !isAnchorRoad(a) && a.host === first.host && a.port === first.port ? null : a };
     }
     let learned: string | null = null;
     let name: string | null = null;
@@ -405,8 +411,16 @@ export async function probePeers(list: Peer[], timeoutMs = 2000, channels: Chann
         return r;
       }
       if (peer.fp && !tls) return { ok: false, reason: 'no identity for tls' };
-      const d = c === 'api' ? dialOf(peer) : { host: peer.host, port: peer.port };
-      const r = await probeFn(d.host, d.port, peer.secret, c, timeoutMs, tls);
+      const road = peer.route;
+      let r: ProbeResult;
+      if (isAnchorRoad(road)) {
+        if (!ctx) return { ok: false, reason: 'no identity for an anchor' };
+        const at = peer;
+        r = await probeOver(() => openRoad(road, at, ctx, timeoutMs), peer.secret, c, timeoutMs, tls);
+      } else {
+        const d = dialOf(peer);
+        r = await probeFn(d.host, d.port, peer.secret, c, timeoutMs, tls);
+      }
       if (r.ok && tls) learned = peer.fp || learned;
       return r;
     };

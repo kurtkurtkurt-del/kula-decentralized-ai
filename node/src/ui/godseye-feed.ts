@@ -107,7 +107,7 @@ export function hostLedger(file = ledgerFile()): Snapshot['host']['ledger'] {
 // reached over the internet (peers.ts pickRoute)
 const via = (p: PeerRow): EyeDevice['via'] => {
   const v = p.via ?? (p.cable ? 'cable' : p.far ? 'relay' : 'wifi');
-  return v === 'wifi' && (p.reachedBy === 'ipv6' || p.reachedBy === 'mapped') ? 'internet' : v;
+  return v === 'anchor' || (v === 'wifi' && (p.reachedBy === 'ipv6' || p.reachedBy === 'mapped')) ? 'internet' : v;
 };
 
 // A phone's health from the ledger lines it sent (12.11.2026). Its worker writes a signed health

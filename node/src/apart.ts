@@ -8,6 +8,7 @@ import { Tunnel } from './gate.js';
 import { RelayTunnel } from './relay.js';
 import { probePeers, reachable, peerTls, dialOf, type Peer } from './peers.js';
 import type { GateIdentity } from './tls.js';
+import { roadContext, roadDialer, type RoadContext } from './road.js';
 import { freePort, startChild, exited } from './children.js';
 import type { LlamaBinaries } from './llama.js';
 
@@ -110,10 +111,13 @@ export function apiChat(dev: Device, messages: WireMessage[], onToken: (t: strin
   return p;
 }
 
-// A peer as a device: a tunnel to its api channel, over the lan or, for a peer far
-// away, through its relay (the only channel that crosses one). `identity` is this
-// computer's certificate for v3 peers.
-export async function openPeerDevice(peer: Peer, identity?: GateIdentity): Promise<Device> {
+// A peer as a device: a tunnel to its api channel along its road (road.ts: its lan address, an
+// internet address, or through an anchor of the circle) or, for a peer behind the hosted relay,
+// through that relay. `who` is this computer's certificate for v3 peers, or with it its own
+// anchor and the anchors it is registered with (RoadContext).
+export async function openPeerDevice(peer: Peer, who?: GateIdentity | RoadContext): Promise<Device> {
+  const ctx = who ? roadContext(who) : null;
+  const identity = ctx?.identity;
   const tls = identity ? peerTls(peer, identity) : null;
   if (peer.relay) {
     if (!tls) throw new Error('a relayed peer needs this computer\'s certificate');
@@ -121,9 +125,10 @@ export async function openPeerDevice(peer: Peer, identity?: GateIdentity): Promi
     const port = await tunnel.listen();
     return { id: peer.id, name: peer.name, local: false, apiPort: port, bw: peer.bw ?? 4, busy: false, tps: null, done: 0, close: () => tunnel.close() };
   }
-  // the address its pinned certificate last answered at (lan, ipv6 or a router's port)
+  // the road its pinned certificate last answered on (lan, ipv6, a router's port, an anchor); a
+  // road that stops working is picked again before the next connection
   const d = dialOf(peer);
-  const tunnel = new Tunnel(d.host, d.port, peer.secret, 'api', tls);
+  const tunnel = ctx ? Tunnel.over(roadDialer(peer, ctx), peer.secret, 'api', tls) : new Tunnel(d.host, d.port, peer.secret, 'api', tls);
   const port = await tunnel.listen();
   return { id: peer.id, name: peer.name, local: false, apiPort: port, bw: peer.bw ?? 4, busy: false, tps: null, done: 0, close: () => tunnel.close() };
 }
@@ -173,6 +178,7 @@ export interface ApartOptions {
   startBackend?: StartBackend;
   probe?: typeof probePeers;
   identity?: GateIdentity;  // this computer's certificate: v3 and relayed peers need it
+  roads?: RoadContext;      // with it: this computer's anchor and the anchors it is registered with
   measuredTps?: Record<string, number | null | undefined>; // by device id ('local' for this computer), from kula-node bench
   // every load event of every device (download bytes on a phone, checking, loading): for a page with a bar
   onProgress?: (device: string, state: string, got: number, total: number) => void;
@@ -196,7 +202,8 @@ export interface Cluster {
 // device is left.
 export async function openApart(opts: ApartOptions): Promise<Cluster> {
   const log = opts.log ?? (() => {});
-  const probed = await (opts.probe ?? probePeers)(opts.peers, opts.probeMs ?? 2000, ['api'], undefined, opts.identity);
+  const who = opts.roads ?? opts.identity;
+  const probed = await (opts.probe ?? probePeers)(opts.peers, opts.probeMs ?? 2000, ['api'], undefined, who);
   const skipped: { peer: Peer; why: string }[] = [];
   const live: Peer[] = [];
   for (const r of probed) {
@@ -209,7 +216,7 @@ export async function openApart(opts: ApartOptions): Promise<Cluster> {
     devices.push(dev);
   }
   for (const p of live) {
-    try { devices.push(await openPeerDevice(p, opts.identity)); } catch (e) { skipped.push({ peer: p, why: (e as Error).message }); }
+    try { devices.push(await openPeerDevice(p, who)); } catch (e) { skipped.push({ peer: p, why: (e as Error).message }); }
   }
   if (!devices.length) throw new Error('no device: every peer was unreachable and this computer did not join');
 

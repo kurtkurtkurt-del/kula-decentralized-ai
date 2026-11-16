@@ -1521,6 +1521,8 @@ refreshNearby();
 function viaTag(p) {
   if (p.cable) return el('small', `via cable${p.cable.plugged === false ? ' off' : ''}`, p.cable.plugged === false ? 'cable · unplugged' : 'cable');
   if (p.far) return el('small', 'via', 'relay');
+  // reached through an anchor of the circle (16.11.2026): its name, or this computer when it is the anchor
+  if (p.via === 'anchor') return el('small', 'via', `through ${p.throughName || 'an anchor'}`);
   return el('small', 'via', 'wi-fi');
 }
 

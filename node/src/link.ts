@@ -3,7 +3,7 @@
 // gate, tls and wi-fi are all in the number) and short GET /status requests on the
 // already open connection for the delay, without the handshake. The planner then uses
 // these instead of its fixed guess (planner.ts, 30 MB/s and 3 ms).
-import { Tunnel, type TlsClient } from './gate.js';
+import { Tunnel, type Dialer, type TlsClient } from './gate.js';
 import { tunnelSpeed } from './bench.js';
 import type { SimNet } from './sim.js';
 
@@ -17,13 +17,16 @@ export interface Link {
 export const LINK_MB = 8;
 const RTT_ROUNDS = 5;
 
+// `dial`: the device's road (road.ts roadDialer: an address or through an anchor); without it
+// host:port. Through an anchor the numbers are both legs together, which is what a split pays.
+type LinkTarget = { host: string; port: number; secret: string; dial?: Dialer };
 export async function measureLink(
-  p: { host: string; port: number; secret: string },
+  p: LinkTarget,
   tls: TlsClient | null,
-  opts: { mb?: number; rounds?: number; timeoutMs?: number; open?: (p: { host: string; port: number; secret: string }, tls: TlsClient | null) => Promise<{ port: number; close(): Promise<void> }> } = {},
+  opts: { mb?: number; rounds?: number; timeoutMs?: number; open?: (p: LinkTarget, tls: TlsClient | null) => Promise<{ port: number; close(): Promise<void> }> } = {},
 ): Promise<Link> {
   const at = new Date().toISOString();
-  const open = opts.open ?? (async (q, t) => { const tun = new Tunnel(q.host, q.port, q.secret, 'api', t); return { port: await tun.listen(), close: () => tun.close() }; });
+  const open = opts.open ?? (async (q, t) => { const tun = q.dial ? Tunnel.over(q.dial, q.secret, 'api', t) : new Tunnel(q.host, q.port, q.secret, 'api', t); return { port: await tun.listen(), close: () => tun.close() }; });
   let tunnel: { port: number; close(): Promise<void> } | null = null;
   // a device that does not answer must not hold up a load: the whole test gets 8 s
   let timer: NodeJS.Timeout | undefined;
@@ -52,8 +55,10 @@ export async function measureLink(
   }
 }
 
-// The network a split over these devices meets: its slowest link and its longest delay, since
-// every token waits for each of them; a device not measured yet counts as the old guess.
+// The worst of these links: the slowest and the longest delay; a device not measured yet counts
+// as the old guess. A one-line summary only: the planner no longer plans a split with it (that
+// charged every worker the worst link, wrong for a near and a far worker together); it gives each
+// worker its own link (planner.ts workerNet, sim.ts SimDevice.net) and sums the round trips.
 export function netOf(links: (Link | null | undefined)[], guess: SimNet = { mbps: 30, rttMs: 3 }): SimNet {
   if (!links.length) return guess;
   let mbps = Infinity, rttMs = 0;

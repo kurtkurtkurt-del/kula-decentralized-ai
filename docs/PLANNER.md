@@ -23,8 +23,13 @@ hatası.
 Mac M1 için ölçülen 0.3.
 
 **Bölünmüş modda token süresi**: bir token cihazlarda *sırayla* hesaplanır, bu yüzden
-`perTokenMs = Σ_i (cihazdaki_gb_i / (bw_i × eff_i)) + işçi_sayısı × (3 × rtt + 2 × hidden × 4 B / ağ)`.
-Üç gidiş-dönüş: girdiyi yaz, hesapla, çıktıyı oku (llama.cpp RPC). Aktivasyon f32 ve iki yönlü
+`perTokenMs = Σ_i (cihazdaki_gb_i / (bw_i × eff_i)) + Σ_işçi (1.1 × rtt_işçi + 2 × hidden × 4 B / ağ_işçi)`.
+1.1 gidiş-dönüş (`RPC_ROUND_TRIPS`, 16.11.2026'da ölçüldü: bir Mac, Qwen3 0.6B, gecikme vekilinin
+arkasında bir işçi; 0/10/30/50/100 ms → 46.3/32.1/17.7/12.9/7.7 tok/s, yani token başına
+0.95–1.16 gidiş-dönüş; llama.cpp RPC girdiyi yaz, hesapla, çıktıyı oku çağrılarını beklemeden
+ardı ardına gönderir; eski değer 3'tü). Her işçi kendi bağlantısıyla sayılır (`SimDevice.net`:
+ölçülen bağlantısı; ölçülmemişse planın ağı), yakın ve uzak işçi birlikte olunca uzak olanın
+gecikmesi yakına yazılmaz. Aktivasyon f32 ve iki yönlü
 (yöneticiden işçiye, işçiden yöneticiye; işçiler arası aktarım da yönetici üstünden geçer).
 Sonuç: eşit hızlı cihazlar arasında paylaşmak zaman kazandırmaz (toplam akan bayt aynı), yalnızca
 *daha hızlı* cihaza taşınan bayt kazandırır ve her işçi bir "hop" bedeli ekler.

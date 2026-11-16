@@ -155,14 +155,40 @@ Defaults, settable by the person (`share({ anchor: { … } })`, `AnchorHub.setCa
 | turning it on | `share({ anchor: true \| caps })` in `node/src/share.ts` (no CLI flag yet) |
 | events (register, leave, open, close, refuse) | the gate's `onAnchor`, apart from `GateEvent` |
 | tests | `node/test/anchor.test.ts`: three gates on 127.0.0.1 |
+| roads: an address or `{via:'anchor', anchor:<fp>\|'self'}`, the staggered pick, `openRoad`, `roadDialer` | `node/src/road.ts` |
+| a peer's anchors (`anchors` in its record and its v3 code), the route kept by the probe | `node/src/peers.ts` |
+| tunnels along a road (api and rpc), `probeOver`, `peekOver` | `node/src/gate.ts` |
+| far split: rpc along the road, each worker's own link in the estimate | `node/src/planner.ts`, `node/src/split.ts`, `node/src/sim.ts` |
+| roads tests: order, back to the lan, self, apart, network test, split | `node/test/roads.test.ts`, `node/test/sim-rtt.test.ts` |
+
+## roads (stage 3, 16.11.2026)
+
+- A **road** is an address (lan, ipv6, mapped) or a stream through an anchor:
+  `{via:'anchor', anchor:<fingerprint>}`, or `{via:'anchor', anchor:'self'}` when this computer is
+  the anchor and the device registered here (one hop, in-process). The peer record's `route` is
+  a road; `reachedBy` stays an address kind and is null on an anchor road.
+- **Where anchors come from:** the record's `anchors` (fingerprint, address, name; the device
+  registers there), then the anchors this computer is registered with (`EngineOptions.anchors`).
+  A device is never its own anchor; this computer as an anchor is `'self'`.
+- **The pick:** the tries start 250 ms apart in order (host/port, addrs, 'self', anchors); a try
+  that fails starts the next at once; the first that shows the pinned certificate wins. Back on
+  the lan the lan answers before the second try starts. A tunnel whose road stops working picks
+  again before its next connection.
+- **An anchor is reached at its own address**, never through another anchor.
+- **Far split:** the rpc channel follows the road like the api channel. Only the hosted relay is
+  still left out of a split. Each worker is measured along its road (both legs through an
+  anchor) and the estimate sums the round trips per worker over its own link
+  (`RPC_ROUND_TRIPS` 1.1, measured 16.11.2026). The plan says per device how it is reached and
+  what its link costs a token.
+- **Not wired yet:** `share` from the page does not turn the anchor on, and nothing records which
+  anchors this computer registered with: both come with stage 4 (join).
 
 The gate's `rpc` channel is now held by **certificate** in v2 (by address in v1): every stream
 through an anchor or a relay arrives from 127.0.0.1, and two far masters must not share the slot.
 
 ## next
 
-1. Routes: a road through an anchor next to the LAN and direct addresses, tried staggered; far
-   split with the estimate shown (`RPC_ROUND_TRIPS` 1.1, measured 16.11.2026).
+1. ~~Routes~~ (done 16.11.2026, "roads" above).
 2. Join: the anchor's invite (the `kula-peer` v3 code with `anchor: true` and a second code for the
    pair-back), "make this computer an anchor" in the app, carrier NAT said plainly.
 3. The phone: dials the anchor and keeps the control connection while sharing.

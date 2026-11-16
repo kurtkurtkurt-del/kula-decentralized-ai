@@ -49,8 +49,8 @@ export interface ProjectEngine {
   peers(): { id: string; name: string; cable: { serial: string } | null }[];
   useCable?(serial: unknown): unknown;
   cableSettled?(serial: string): Promise<{ step: string; error: string | null } | null>;
-  // each device by the way that works now (engine.wake): cable, wi-fi, relay, or why not
-  wake?(ids: string[]): Promise<{ id: string; name: string; via: 'cable' | 'wifi' | 'relay' | null; where: string | null; why: string | null }[]>;
+  // each device by the way that works now (engine.wake): cable, wi-fi, relay, an anchor, or why not
+  wake?(ids: string[]): Promise<{ id: string; name: string; via: 'cable' | 'wifi' | 'relay' | 'anchor' | null; where: string | null; why: string | null }[]>;
   status(): { loading: unknown };
 }
 
@@ -212,7 +212,7 @@ export class ProjectRunner {
         // every device by the way that works now: the cable if it is plugged in, else this wi-fi
         this.update(id, { line: 'reaching the devices' });
         const woke = await this.engine.wake(p.peers);
-        const way = (w: (typeof woke)[number]) => (w.via === 'cable' ? `${w.name} on the usb cable` : w.via === 'wifi' ? `${w.name} over wi-fi${w.where ? ` (${w.where})` : ''}` : w.via === 'relay' ? `${w.name} through the relay` : `${w.name} not reached (${w.why ?? 'no answer'})`);
+        const way = (w: (typeof woke)[number]) => (w.via === 'cable' ? `${w.name} on the usb cable` : w.via === 'wifi' ? `${w.name} over wi-fi${w.where ? ` (${w.where})` : ''}` : w.via === 'relay' ? `${w.name} through the relay` : w.via === 'anchor' ? `${w.name} ${w.where ?? 'through an anchor'}` : `${w.name} not reached (${w.why ?? 'no answer'})`);
         if (woke.length) this.say(p, `reached ${woke.map(way).join(', ')}.`);
       } else {
         // phones on a cable: their share screen opened again and connected (they may have slept)
