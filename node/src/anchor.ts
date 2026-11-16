@@ -26,12 +26,16 @@ import type { GateIdentity, Paired } from './tls.js';
 export interface AnchorCaps {
   streamsPerMember: number;  // open (and waiting) streams one member has dialed
   streamsTotal: number;      // every stream through this anchor
-  dialsPerMinute: number;    // dials one member may start in a minute
+  // a friend's device's dials (capped members only): a bucket of dialBurst dials, refilled at
+  // dialsPerMinute. llama.cpp opens ~13 short rpc connections per far worker per load, and one
+  // refused dial aborts llama-server, so a load must fit in the burst
+  dialsPerMinute: number;
+  dialBurst: number;
   bytesPerDay: number;       // both ways, per dialing member, per UTC day; then new streams are refused and running ones cut
 }
 
 // the defaults the person can change (share's `anchor` option, setCaps)
-export const ANCHOR_CAPS: AnchorCaps = { streamsPerMember: 16, streamsTotal: 128, dialsPerMinute: 30, bytesPerDay: 5_000_000_000 };
+export const ANCHOR_CAPS: AnchorCaps = { streamsPerMember: 16, streamsTotal: 128, dialsPerMinute: 30, dialBurst: 120, bytesPerDay: 5_000_000_000 };
 export const ANCHOR_PING_MS = 25_000;
 // how long the target has to accept a stream
 export const ANCHOR_ACCEPT_MS = 10_000;
@@ -94,13 +98,16 @@ export function circleMembers(paired: Paired, peersFile: string | null): (fp: st
   return (fp: string) => paired.has(fp) || book().has(fp);
 }
 
-class PerMinute {
-  private readonly hits = new Map<string, number[]>();
-  take(key: string, limit: number, now: number): boolean {
-    const list = (this.hits.get(key) ?? []).filter((t) => now - t < 60_000);
-    if (list.length >= limit) { this.hits.set(key, list); return false; }
-    list.push(now);
-    this.hits.set(key, list);
+// A token bucket per member: `burst` dials at once, then `perMinute` more a minute.
+class DialBucket {
+  private readonly buckets = new Map<string, { tokens: number; at: number }>();
+  take(key: string, burst: number, perMinute: number, now: number): boolean {
+    const b = this.buckets.get(key) ?? { tokens: burst, at: now };
+    b.tokens = Math.min(burst, b.tokens + (Math.max(0, now - b.at) * perMinute) / 60_000);
+    b.at = now;
+    this.buckets.set(key, b);
+    if (b.tokens < 1) return false;
+    b.tokens -= 1;
     return true;
   }
 }
@@ -151,7 +158,7 @@ export class AnchorHub {
   private readonly registry = new Map<string, Member>();
   private readonly streams = new Map<string, Stream>();
   private readonly listeners = new Set<(e: AnchorEvent) => void>();
-  private readonly dials = new PerMinute();
+  private readonly dials = new DialBucket();
   private readonly days = new Map<string, { day: number; bytes: number }>();
   private readonly now: () => number;
   private closed = false;
@@ -326,7 +333,8 @@ export class AnchorHub {
     const now = this.now();
     if (!FP_RE.test(to)) return refuse('bad dial');
     if (!d.self) {
-      if (!this.dials.take(d.fp, this.caps.dialsPerMinute, now)) return refuse('too many dials');
+      // the dial rate is a friend's device's cap; the person's own (ring home) have none
+      if (this.capped(d.fp) && !this.dials.take(d.fp, this.caps.dialBurst, this.caps.dialsPerMinute, now)) return refuse('too many dials');
       if (this.capped(d.fp) && this.dayBytes(d.fp).bytes >= this.caps.bytesPerDay) return refuse('byte limit');
       if (this.streamsOf(d.fp) >= this.caps.streamsPerMember) return refuse('too many streams');
     }

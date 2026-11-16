@@ -30,7 +30,7 @@ import { findLlama, sha256File, type LlamaBinaries } from '../llama.js';
 import { download, sha256Of } from '../download.js';
 import { hasLocalGpu, prepareSplit, startSplitServer } from '../split.js';
 import { explainPlan, TooBig, workerSide } from '../planner.js';
-import { learnDevice, learnSplit, readSpeeds, splitKey, MIN_TOKENS } from '../learn.js';
+import { learnDevice, learnSplit, readSpeeds, splitKey, splitScale, MIN_TOKENS } from '../learn.js';
 import { effFromTps, type SimModel } from '../sim.js';
 import { simModelOf } from '../gguf.js';
 import { publicName } from '../devicenames.js';
@@ -429,7 +429,8 @@ export class Engine {
   // what an answer teaches (learn.ts): the loaded model's shape, this computer's memory speed, the split's key
   private localBw: number | null = null;
   private localBwAsked = false;
-  private learnCtx: { sim: SimModel; bw: number | null; key: string | null } | null = null;
+  // split: the plan's estimate and the compute scale it used, for learn.ts splitScale
+  private learnCtx: { sim: SimModel; bw: number | null; key: string | null; split?: { perTokenMs: number; netMsPerToken: number; k: number } | null } | null = null;
   private hostPin: { pin: string; exp: number; peerId: string | null; tried: Set<string> } | null = null;
   private hostIdCache: string | null = null;
   readonly catalog: CatalogEntry[];
@@ -1723,6 +1724,7 @@ export class Engine {
       let splitParts: Part[] | undefined;
       let learnKey: string | null = null;
       let learnBw: number | null = null;
+      let learnSplitEst: { perTokenMs: number; netMsPerToken: number; k: number } | null = null;
       let file: string;
       let size: number;
       let mmproj: string | null = null;
@@ -1802,7 +1804,8 @@ export class Engine {
           try {
             // each worker with its own measured link (planner.ts workerNet): a near and a far worker
             // each pay their own round trips
-            setup = await prepareSplit({ model: simModelOf(file), ctx, localFreeMb: freeRamMB(), localBw: bw, peers: near, roads: common.roads, localGpu: hasLocalGpu(llama), localEff: known.devices.self?.eff, localLearned: known.devices.self !== undefined, peerEff: Object.fromEntries(near.map((p) => [p.id, known.devices[p.id]?.eff])), seenTps: known.splits[learnKey]?.tps ?? null, share: true, all: req.all === true, probeMs: common.probeMs, log: common.log, identity: common.identity });
+            setup = await prepareSplit({ model: simModelOf(file), ctx, localFreeMb: freeRamMB(), localBw: bw, peers: near, roads: common.roads, localGpu: hasLocalGpu(llama), localEff: known.devices.self?.eff, localLearned: known.devices.self !== undefined, peerEff: Object.fromEntries(near.map((p) => [p.id, known.devices[p.id]?.eff])), seenTps: known.splits[learnKey]?.tps ?? null, computeScale: known.splits[learnKey]?.k ?? null, share: true, all: req.all === true, probeMs: common.probeMs, log: common.log, identity: common.identity });
+            if (setup.plan.used.length) learnSplitEst = { perTokenMs: setup.plan.est.perTokenMs, netMsPerToken: setup.plan.est.netMsPerToken, k: setup.plan.computeScale ?? 1 };
           } catch (e) {
             if (e instanceof TooBig) throw new Error(`too big: the model needs about ${e.needMb} MB, these devices offer ${e.totalMb} MB`);
             throw e;
@@ -1828,7 +1831,7 @@ export class Engine {
       this.lastLoad = { ...req };
       // only a model on this computer has a shape to learn from (mode phone: the file is on the phone)
       this.learnCtx = null;
-      if (mode !== 'phone') { try { this.learnCtx = { sim: simModelOf(file), bw: learnBw, key: learnKey }; } catch {} }
+      if (mode !== 'phone') { try { this.learnCtx = { sim: simModelOf(file), bw: learnBw, key: learnKey, split: learnSplitEst }; } catch {} }
       this.note(`${modelName} ready on ${cluster.devices.map((d) => d.name).join(', ')} (${mode})`);
       // a main computer that sleeps ends the answer on every device (16.11.2026): awake until unload
       if (!this.awakeHold && this.opts.awake) { try { this.awakeHold = this.opts.awake(); } catch {} }
@@ -1940,7 +1943,9 @@ export class Engine {
     const c = this.learnCtx;
     if (!c || r.tokens < MIN_TOKENS || !(r.tps > 0)) return;
     try {
-      if (loaded.mode === 'split') { if (c.key) learnSplit(c.key, r.tps); return; }
+      // a split: its tok/s, and the compute scale its answer showed (measured compute = 1000/tps less
+      // the plan's network part; learn.ts splitScale says when that is worth learning)
+      if (loaded.mode === 'split') { if (c.key) learnSplit(c.key, r.tps, undefined, undefined, c.split ? splitScale(c.split, c.split.k, r.tps) : null); return; }
       if (loaded.mode !== 'apart' && loaded.mode !== 'here') return;
       const d = this.cluster?.devices.find((x) => x.name === r.device);
       if (!d) return;

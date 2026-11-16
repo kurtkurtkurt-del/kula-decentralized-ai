@@ -292,7 +292,7 @@ export async function share(opts: ShareOptions): Promise<ShareHandle> {
     // the daily bytes are capped for friends' devices only (ring circle); the person's own are not
     anchor = new AnchorHub({ self: tlsServer.identity.fp, isMember: circleMembers(tlsServer.paired, peersFile()), capped: ringCapped(peersFile()), caps: typeof opts.anchor === 'object' ? opts.anchor : undefined });
     const c = anchor.caps;
-    log(`anchor on: ${c.streamsPerMember} streams per member, ${c.streamsTotal} in all, ${c.dialsPerMinute} dials a minute; a friend's device ${Math.round(c.bytesPerDay / 1e9 * 10) / 10} GB a day, your own without limit`);
+    log(`anchor on: ${c.streamsPerMember} streams per member, ${c.streamsTotal} in all; a friend's device ${c.dialBurst} dials at once then ${c.dialsPerMinute} a minute and ${Math.round(c.bytesPerDay / 1e9 * 10) / 10} GB a day, your own without either limit`);
   }
   const short = (fp: string | null) => (fp ? `${fp.slice(0, 16)}…` : '?');
   const onAnchor = (e: AnchorEvent) => {

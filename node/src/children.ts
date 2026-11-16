@@ -47,6 +47,56 @@ export async function waitForPort(child: ChildProcess, port: number, timeoutMs: 
   throw new Error(`did not listen on ${port} within ${timeoutMs} ms`);
 }
 
+// kula-node going away takes its children along: an rpc server left behind holds model layers in
+// memory and listens on 127.0.0.1 with no gate in front of it (found 16 Nov: a SIGTERM to a sharing
+// kula-node left its ggml-rpc-servers re-parented to pid 1). 'exit' alone is not enough: a default
+// SIGTERM, SIGINT or SIGHUP ends the process without firing it. So while a child is guarded the guard
+// listens to those signals too, kills every guarded child, and then, when nothing else in kula
+// handles that signal (the share and ui commands do: they stop in order), raises it again so the
+// process ends as it would have without the guard.
+const guarded = new Set<ChildProcess>();
+const guardSignals: NodeJS.Signals[] = process.platform === 'win32' ? ['SIGTERM', 'SIGINT'] : ['SIGTERM', 'SIGINT', 'SIGHUP'];
+const killGuarded = () => {
+  for (const p of guarded) { try { if (!exited(p)) p.kill('SIGKILL'); } catch {} }
+  guarded.clear();
+};
+const onSignal = (sig: NodeJS.Signals) => {
+  killGuarded();
+  // asked when the signal comes, not when the child started: share and ui add their listener later
+  const others = process.listeners(sig).filter((l) => l !== signalHandlers[sig]).length;
+  if (others > 0) return;
+  unhook();
+  process.kill(process.pid, sig);
+};
+const signalHandlers: Partial<Record<NodeJS.Signals, () => void>> = {};
+for (const sig of guardSignals) signalHandlers[sig] = () => onSignal(sig);
+let hooked = false;
+function hook(): void {
+  if (hooked) return;
+  hooked = true;
+  process.once('exit', killGuarded);
+  // first in line, so a `once` listener elsewhere is still counted when this one runs
+  for (const sig of guardSignals) process.prependListener(sig, signalHandlers[sig]!);
+}
+function unhook(): void {
+  if (!hooked) return;
+  hooked = false;
+  process.off('exit', killGuarded);
+  for (const sig of guardSignals) process.off(sig, signalHandlers[sig]!);
+}
+
+/** kill this child when kula-node exits or gets SIGTERM, SIGINT or SIGHUP (no SIGHUP on Windows) */
+export function guardChild(proc: ChildProcess): void {
+  if (exited(proc)) return;
+  guarded.add(proc);
+  hook();
+  proc.once('exit', () => {
+    guarded.delete(proc);
+    // nothing left to guard: the process's signals behave as they did before
+    if (guarded.size === 0) unhook();
+  });
+}
+
 export interface Child {
   proc: ChildProcess;
   port: number;
@@ -66,10 +116,9 @@ export async function startChild(name: string, bin: string, args: string[], port
   };
   proc.stdout?.on('data', onLine);
   proc.stderr?.on('data', onLine);
-  // kula-node going away (an exception, a parent that relays no signal) takes its children along
-  const orphanGuard = () => { try { proc.kill('SIGKILL'); } catch {} };
-  process.once('exit', orphanGuard);
-  proc.on('exit', (code, sig) => { process.off('exit', orphanGuard); log(`${name} exited (${code ?? sig})`); });
+  // kula-node going away (an exception, a signal, a parent that relays no signal) takes its children along
+  guardChild(proc);
+  proc.on('exit', (code, sig) => { log(`${name} exited (${code ?? sig})`); });
   try {
     await waitForPort(proc, port, readyMs);
   } catch (e) {

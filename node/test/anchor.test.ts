@@ -41,21 +41,22 @@ function readAtLeast(s: Duplex, n: number, timeoutMs = 3000): Promise<Buffer> {
 
 interface Home { name: string; dir: string; identity: GateIdentity; paired: Paired; tls: TlsServer; gate: GateServer; hub: AnchorHub | null }
 
-async function home(name: string, echoPort: number, anchor?: { caps?: Partial<AnchorCaps>; tap?: (dir: 'd→t' | 't→d', b: Buffer) => void; events?: AnchorEvent[] }): Promise<Home> {
+async function home(name: string, echoPort: number, anchor?: { caps?: Partial<AnchorCaps>; tap?: (dir: 'd→t' | 't→d', b: Buffer) => void; events?: AnchorEvent[]; now?: () => number; capped?: (fp: string) => boolean }): Promise<Home> {
   const dir = tmp();
   const identity = createIdentity(name);
   const paired = new Paired(path.join(dir, 'paired'));
   const t: TlsServer = { identity, paired, pin: newPin(), onPinUsed: () => {} };
-  const hub = anchor ? new AnchorHub({ self: identity.fp, isMember: circleMembers(paired, path.join(dir, 'peers.json')), caps: anchor.caps, tap: anchor.tap }) : null;
+  const hub = anchor ? new AnchorHub({ self: identity.fp, isMember: circleMembers(paired, path.join(dir, 'peers.json')), caps: anchor.caps, tap: anchor.tap, now: anchor.now, capped: anchor.capped }) : null;
   const gate = await startGateServer({ port: 0, host: '127.0.0.1', secret: null, targets: () => echoPort, tls: t, anchor: hub ?? undefined, onAnchor: anchor?.events ? (e) => anchor.events!.push(e) : undefined });
   return { name, dir, identity, paired, tls: t, gate, hub };
 }
 
-async function world(caps?: Partial<AnchorCaps>) {
+// every member is a friend's device (capped) unless `capped` says otherwise
+async function world(caps?: Partial<AnchorCaps>, more: { now?: () => number; capped?: (fp: string) => boolean } = {}) {
   const echo = await echoServer();
   const taps: { dir: 'd→t' | 't→d'; b: Buffer }[] = [];
   const events: AnchorEvent[] = [];
-  const A = await home('anchor-berlin', echo.port, { caps, tap: (dir, b) => taps.push({ dir, b: Buffer.from(b) }), events });
+  const A = await home('anchor-berlin', echo.port, { caps, tap: (dir, b) => taps.push({ dir, b: Buffer.from(b) }), events, ...more });
   const B = await home('mac-home', echo.port);
   const C = await home('phone-far', echo.port);
   // B paired with A's code: in A's paired set. C was paired by A as a master (the host qr's
@@ -276,15 +277,24 @@ test('caps: streams per member, streams in all, dials a minute, bytes a day', as
       a.destroy(); b.destroy();
     } finally { await w.close(); }
   }
-  // dials a minute, per member
+  // dials, a friend's device: a burst of 120 (the default), then 30 a minute (a token bucket);
+  // the person's own device (not capped): no dial rate at all. Streams per member raised here so
+  // only the dial cap speaks.
   {
-    const w = await world({ dialsPerMinute: 3 });
+    let clock = 1_000_000;
+    const w = await world({ streamsPerMember: 1000, streamsTotal: 1000 }, { now: () => clock, capped: (fp) => fp !== w.B.identity.fp });
     try {
       await w.join(w.B, w.B.gate.port);
       await w.join(w.C, w.C.gate.port);
-      for (let i = 0; i < 3; i++) (await dialAnchor(w.ref, w.C.identity, w.B.identity.fp)).destroy();
+      for (let i = 0; i < 120; i++) (await dialAnchor(w.ref, w.C.identity, w.B.identity.fp)).destroy();
+      await assert.rejects(dialAnchor(w.ref, w.C.identity, w.B.identity.fp), refused('too many dials'), 'the 121st');
+      clock += 1_000;
+      await assert.rejects(dialAnchor(w.ref, w.C.identity, w.B.identity.fp), refused('too many dials'), 'half a dial refilled is not one');
+      clock += 1_000;
+      (await dialAnchor(w.ref, w.C.identity, w.B.identity.fp)).destroy();   // 2 s at 30 a minute: one more
       await assert.rejects(dialAnchor(w.ref, w.C.identity, w.B.identity.fp), refused('too many dials'));
-      (await dialAnchor(w.ref, w.B.identity, w.C.identity.fp)).destroy();
+      // B is the person's own: 200 in a row
+      for (let i = 0; i < 200; i++) (await dialAnchor(w.ref, w.B.identity, w.C.identity.fp)).destroy();
     } finally { await w.close(); }
   }
   // bytes a day, per dialing member: the running stream is cut, new ones are refused

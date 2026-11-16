@@ -31,6 +31,7 @@ export interface Plan {
   estAlone: Estimate | null;
   learned?: string[];      // devices whose speed came from their answers ('me': this computer)
   seenTps?: number | null; // this split's last real tok/s
+  computeScale?: number;   // the k this plan used, learned from this split's answers (learn.ts)
 }
 
 export class TooBig extends Error {
@@ -58,6 +59,10 @@ export interface PlanInput {
   peerEff?: Record<string, number | undefined>;
   localLearned?: boolean;  // localEff came from answers, not a guess
   seenTps?: number | null; // what this very split (devices and model) last ran at
+  // the compute scale this very split's answers showed (learn.ts splitScale): it multiplies the
+  // efficiency of this computer and of every worker alike, so the proportions and the layout stay
+  // and only the compute part of the estimate follows what was seen. Absent: nothing learned (1).
+  computeScale?: number | null;
 }
 
 /**
@@ -83,14 +88,16 @@ export function workerNet(p: Pick<Peer, 'link'>, net: SimNet): SimNet | undefine
 export function planSplit(input: PlanInput): Plan {
   // the network of a worker that was never measured (the old guess); a measured one brings its own
   const net = input.net ?? { mbps: 30, rttMs: 3 };
+  const k = input.computeScale != null && input.computeScale > 0 && Number.isFinite(input.computeScale) ? input.computeScale : null;
+  const scaled = <D extends { eff: number }>(d: D): D => (k === null ? d : { ...d, eff: (d.eff || DEFAULT_EFF) * k });
   try {
     const sim = planShares({
       model: input.model, ctx: input.ctx, share: input.share, all: input.all, net,
-      local: withMeasured({ id: 'me', capMb: input.localFreeMb * LOCAL_SHARE, bw: input.localBw || DEFAULT_BW, eff: input.localEff ?? DEFAULT_EFF }, input.model, input.localTps),
+      local: scaled(withMeasured({ id: 'me', capMb: input.localFreeMb * LOCAL_SHARE, bw: input.localBw || DEFAULT_BW, eff: input.localEff ?? DEFAULT_EFF }, input.model, input.localTps)),
       workers: input.peers.map((p) => {
         const w = workerSide(p);
         const own = workerNet(p, net);
-        return { ...withMeasured({ id: p.id, capMb: w.capMb, bw: w.bw, eff: input.peerEff?.[p.id] ?? w.eff }, input.model, input.peerTps?.[p.id]), ...(own ? { net: own } : {}) };
+        return { ...scaled(withMeasured({ id: p.id, capMb: w.capMb, bw: w.bw, eff: input.peerEff?.[p.id] ?? w.eff }, input.model, input.peerTps?.[p.id])), ...(own ? { net: own } : {}) };
       }),
     });
     return {
@@ -100,6 +107,7 @@ export function planSplit(input: PlanInput): Plan {
       notNeeded: input.peers.filter((p) => !sim.used.some((u) => u.id === p.id)),
       localMb: sim.localMb, localLayers: sim.localLayers, fitsAlone: sim.fitsAlone, aloneFaster: sim.aloneFaster, totalMb: sim.totalMb, needMb: sim.needMb, est: sim.est, estAlone: sim.estAlone,
       learned: [...(input.localLearned ? ['me'] : []), ...input.peers.filter((p) => input.peerEff?.[p.id] !== undefined).map((p) => p.id)], seenTps: input.seenTps ?? null,
+      ...(k !== null ? { computeScale: k } : {}),
     };
   } catch (e) {
     if ((e as Error).message === 'toobig' || (e as Error).message === 'local') {
@@ -219,7 +227,7 @@ export function explainPlan(pl: Plan, model: string, nameOf: (p: Peer) => string
   for (const p of pl.notNeeded) out.push(`${label(p)} left out: the answers come faster without it (${short(p)}; ${net(p)}).`);
   for (const s of pl.skipped) out.push(`${nameOf(s.peer)} left out: ${s.why}.`);
   if (pl.est && pl.used.length) {
-    const how = pl.learned?.length ? 'worked out from memory speeds, what the devices showed in earlier answers, and the network' : 'worked out from memory speeds and the network, not measured yet';
+    const how = pl.computeScale != null ? 'the speed learned from this split\'s earlier answers, and the network' : pl.learned?.length ? 'worked out from memory speeds, what the devices showed in earlier answers, and the network' : 'worked out from memory speeds and the network, not measured yet';
     out.push(`estimate: about ${tpsRange(pl.est.tps)} tok/s (${how}).${pl.seenTps ? ` last time this split ran at ${pl.seenTps} tok/s.` : ''}`);
   }
   if (pl.fitsAlone && pl.aloneFaster && pl.estAlone) {

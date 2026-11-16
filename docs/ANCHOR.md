@@ -119,7 +119,7 @@ Defaults, settable by the person (`share({ anchor: { … } })`, `AnchorHub.setCa
 |---|---|---|
 | streams per member (open and waiting) | 16 | `too many streams` |
 | streams in all | 128 | `full` (the anchor computer's own dials count here too) |
-| dials a minute, per member | 30 | `too many dials` |
+| dials, per **friend's** device: a token bucket | 120 at once (`dialBurst`), refilled at 30 a minute (`dialsPerMinute`) | `too many dials` |
 | bytes a day, per dialing **friend's** device, both ways | 5 GB (UTC day) | new streams `byte limit`, and the member's running streams are cut |
 
 - **The byte cap is for friends' devices only** (the person's decision, 16.11.2026). A dialing
@@ -128,7 +128,12 @@ Defaults, settable by the person (`share({ anchor: { … } })`, `AnchorHub.setCa
   an invite, the pair-back has not run) is capped until it has one. The ring is read again
   whenever the peer book changes, so `kula-node peers ring <device> home|circle` or the page's
   ring setting counts at the next check (`AnchorOptions.capped`, `ringCapped` in `node/src/join.ts`).
-- The stream and dial caps hold for everyone: they guard against a broken device, not a friend.
+- **The dial rate is a friend's cap too** (the same ring rule): a bucket of 120 dials that refills
+  at 30 a minute. llama.cpp opens about 13 short rpc connections per far worker for each load, and
+  one refused dial aborts llama-server, so a load has to fit in the burst; a window of 30 a
+  minute did not (16.11.2026, T1). The person's own devices have no dial rate cap.
+- The stream caps (per member, in all) hold for everyone: they guard against a broken device, not
+  a friend.
 - The page sets the friend cap next to the switch: "a friend's device may pass up to N GB a day
   through this computer". It is kept with the switch (`~/.kula-node/anchor.json`) and set on the
   running anchor at once.

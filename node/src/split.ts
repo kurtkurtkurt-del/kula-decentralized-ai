@@ -53,6 +53,8 @@ export interface SplitOptions {
   peerEff?: Record<string, number | undefined>;
   localLearned?: boolean;
   seenTps?: number | null;
+  // the compute scale this split's answers showed (learn.ts splitScale; planner.ts PlanInput)
+  computeScale?: number | null;
 }
 
 // ---- the plan in llama.cpp's terms (15.11.2026) -------------------------------------------
@@ -120,7 +122,7 @@ export async function prepareSplit(opts: SplitOptions): Promise<SplitSetup> {
   const log = opts.log ?? (() => {});
   if (!opts.model && !opts.modelBytes) throw new Error('prepareSplit: need model or modelBytes');
   const model = opts.model ?? (() => { const g = guessShape(opts.modelBytes!); return { id: 'model', fileMb: opts.modelBytes! / MB, layers: g.layers, hidden: g.hidden, vocab: g.vocab, bytesPerParam: g.bytesPerParam, kvMbPer1k: g.kvMbPer1k }; })();
-  const plan = await planWithProbe({ model, ctx: opts.ctx ?? 2048, localFreeMb: opts.localFreeMb, localBw: opts.localBw, localEff: opts.localEff, net: opts.net, localTps: opts.localTps, peerTps: opts.peerTps, peerEff: opts.peerEff, localLearned: opts.localLearned, seenTps: opts.seenTps, wanted: opts.peers, share: opts.share ?? true, all: opts.all, timeoutMs: opts.probeMs ?? 2000, probe: opts.probe, identity: opts.identity, roads: opts.roads });
+  const plan = await planWithProbe({ model, ctx: opts.ctx ?? 2048, localFreeMb: opts.localFreeMb, localBw: opts.localBw, localEff: opts.localEff, net: opts.net, localTps: opts.localTps, peerTps: opts.peerTps, peerEff: opts.peerEff, localLearned: opts.localLearned, seenTps: opts.seenTps, computeScale: opts.computeScale, wanted: opts.peers, share: opts.share ?? true, all: opts.all, timeoutMs: opts.probeMs ?? 2000, probe: opts.probe, identity: opts.identity, roads: opts.roads });
   for (const s of plan.skipped) log(`${s.peer.name}: skipped, ${s.why}`);
   log(`split plan: asked ${opts.peers.map((p) => p.name).join(', ') || 'none'}${opts.all ? ' (all of them)' : ''}; parts for ${plan.used.map((u) => `${u.name} ${u.assignedMb} MB`).join(', ') || 'nobody'}`);
   const tunnels: SplitSetup['tunnels'] = [];

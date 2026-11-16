@@ -13,7 +13,7 @@
 // own address, never through another anchor.
 import net from 'node:net';
 import type { Duplex } from 'node:stream';
-import { connectRemote, peekOver, GateRefused, HANDSHAKE_MS, type Dialer, type GatePeek } from './gate.js';
+import { connectRemote, peekOver, GateRefused, HANDSHAKE_MS, TOO_MANY_DIALS, type Dialer, type GatePeek } from './gate.js';
 import { dialAnchor, FP_RE } from './anchor.js';
 import { addrKind, candidates, type Peer, type PeerAddr } from './peers.js';
 import type { GateIdentity } from './tls.js';
@@ -196,6 +196,9 @@ export function roadDialer(p: Peer, who: GateIdentity | RoadContext, opts: { tim
     try {
       return await openRoad(road, p, ctx, timeoutMs);
     } catch (e) {
+      // the anchor's "too many dials" is a wait, not a broken road (Tunnel waits); a pick would
+      // only spend more dials on the same anchor
+      if (e instanceof GateRefused && e.reason === TOO_MANY_DIALS) throw e;
       if (!p.fp || !(await repick().catch(() => false))) throw e;
       return openRoad(road, p, ctx, timeoutMs);
     }

@@ -811,10 +811,43 @@ export async function peekOver(dial: () => Promise<Duplex>, identity: TlsClient[
 // at host:port, or along a Dialer (a road: an address or an anchor, road.ts); then gatePort is
 // not used, and a connection that does not get through is told to the dialer (`failed`), which
 // may look for another road before the next one.
+// An anchor that refuses a dial with TOO_MANY_DIALS (a friend's device over its dial bucket,
+// anchor.ts) is waited for: the local leg stays open and the dial is tried again after
+// TUNNEL_WAIT_FIRST_MS, doubling up to TUNNEL_WAIT_MAX_MS, for TUNNEL_WAIT_MS in all, while the
+// local leg lives. llama.cpp aborts the whole server on one dropped rpc connection, and a far
+// split opens ~13 of them per worker at once.
+export const TOO_MANY_DIALS = 'too many dials';
+export const TUNNEL_WAIT_FIRST_MS = 250;
+export const TUNNEL_WAIT_MAX_MS = 4000;
+export const TUNNEL_WAIT_MS = 60_000;
+const tooManyDials = (e: unknown): boolean => e instanceof Error && (e as { reason?: unknown }).reason === TOO_MANY_DIALS;
+// Waits ms on the local leg; true when it is still there. It is gone when it closes or ends (the
+// program hung up: allowHalfOpen keeps the socket open, and a paused socket would not show its
+// end). Whatever it sent meanwhile is held and put back for the pipe.
+const waitOnLocal = (s: net.Socket, ms: number): Promise<boolean> => new Promise((resolve) => {
+  const held: Buffer[] = [];
+  let ended = false;
+  const onData = (c: Buffer) => { held.push(c); };
+  const onEnd = () => { ended = true; done(); };
+  const done = () => {
+    clearTimeout(t);
+    s.off('data', onData); s.off('end', onEnd); s.off('close', done);
+    s.pause();
+    if (!ended && !s.destroyed && held.length) s.unshift(Buffer.concat(held));
+    resolve(!ended && !s.destroyed);
+  };
+  const t = setTimeout(done, ms);
+  s.on('data', onData); s.once('end', onEnd); s.once('close', done);
+  // a 'data' listener does not restart a socket the last wait paused
+  s.resume();
+});
+
 export class Tunnel {
   private server: net.Server | null = null;
   private readonly open = new Set<net.Socket>();
   port = 0;
+  // one line per wait for the anchor; tests catch it
+  log: (line: string) => void = (line) => console.log(line);
 
   constructor(
     readonly host: string | Dialer,
@@ -837,18 +870,31 @@ export class Tunnel {
       this.open.add(local);
       local.once('close', () => this.open.delete(local));
       local.setNoDelay(true);
-      let remote: Duplex | null = null;
       const dial = typeof this.host === 'function' ? this.host : null;
-      try {
-        remote = dial ? await dial() : await connectRemote(this.host as string, this.gatePort);
-        if (remote instanceof net.Socket) remote.setNoDelay(true);
-        const { rest, socket } = await handshake(remote, this.secret, this.channel, HANDSHAKE_MS, undefined, this.tls);
-        await pipeBoth(socket, local, rest);
-      } catch (e) {
-        local.destroy();
-        remote?.destroy();
-        // the gate's own refusal ("busy", "not paired") is an answer, not a broken road
-        if (dial && !(e instanceof GateRefused)) dial.failed?.(e as Error);
+      const started = Date.now();
+      let pause = TUNNEL_WAIT_FIRST_MS;
+      for (;;) {
+        let remote: Duplex | null = null;
+        try {
+          remote = dial ? await dial() : await connectRemote(this.host as string, this.gatePort);
+          if (remote instanceof net.Socket) remote.setNoDelay(true);
+          const { rest, socket } = await handshake(remote, this.secret, this.channel, HANDSHAKE_MS, undefined, this.tls);
+          await pipeBoth(socket, local, rest);
+          return;
+        } catch (e) {
+          remote?.destroy();
+          const left = TUNNEL_WAIT_MS - (Date.now() - started);
+          if (tooManyDials(e) && !local.destroyed && left > 0) {
+            const ms = Math.min(pause, left);
+            this.log(`waiting for the anchor: too many dials, retrying in ${ms} ms`);
+            pause = Math.min(pause * 2, TUNNEL_WAIT_MAX_MS);
+            if (await waitOnLocal(local, ms)) continue;
+          }
+          local.destroy();
+          // the gate's own refusal ("busy", "not paired") is an answer, not a broken road
+          if (dial && !(e instanceof GateRefused)) dial.failed?.(e as Error);
+          return;
+        }
       }
     });
     await new Promise<void>((resolve, reject) => {
