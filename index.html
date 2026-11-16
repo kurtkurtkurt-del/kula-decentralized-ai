@@ -10,7 +10,7 @@
 <link rel="stylesheet" href="site.css">
 </head>
 <body>
-<!-- kula's download page (v0.5.1, 16.11.2026). Plain html + site.css, no build step, nothing
+<!-- kula's download page (v0.6.0, 17.11.2026). Plain html + site.css, no build step, nothing
      fetched from anywhere else.
 
      Downloads use the newest GitHub release by stable asset names, so the release must carry
@@ -38,7 +38,7 @@
 
 <main>
   <section class="hero wrap">
-    <p class="kicker"><span class="dot" aria-hidden="true"></span> open models · on your own devices · v0.5.1</p>
+    <p class="kicker"><span class="dot" aria-hidden="true"></span> open models · on your own devices · v0.6.0</p>
     <h1>Your devices,<br>one local AI.</h1>
     <p class="lede">kula joins your phones, tablets and computers into one AI cluster that runs open
       models. They talk to each other directly — nothing goes to a cloud.</p>
@@ -367,7 +367,23 @@
   </section>
 
   <section class="news wrap" aria-labelledby="news-h0">
-    <h2 id="news-h0">what's new in 0.5.1 <time class="news-date" datetime="2026-11-16">16 November 2026</time></h2>
+    <h2 id="news-h0">what's new in 0.6.0 <time class="news-date" datetime="2026-11-17">17 November 2026</time></h2>
+    <ul class="news-list">
+      <li><b>Devices in different homes join over the internet.</b> A computer that stays on at home
+        becomes an anchor; your phone on mobile data or a friend's computer reach each other through
+        it. No server in between, of ours or anyone's; the anchor carries only scrambled bytes.</li>
+      <li><b>Joining is an invite</b> that works once, for ten minutes. Your own devices have no
+        limit; a friend's device has a daily one you set.</li>
+      <li><b>kula picks the way:</b> the same wi-fi, then the internet, then an anchor.</li>
+      <li><b>A split model works over the internet too</b>, slower per word; kula says how fast and you choose.</li>
+      <li><b>A second anchor keeps the circle up</b> when a home's address changes.</li>
+      <li><b>Checked for the internet</b> before release. Not yet tried with a real router or a phone on mobile data.</li>
+      <li><b>New apps.</b> Android, Mac, Linux and Windows, all 0.6.0.</li>
+    </ul>
+  </section>
+
+  <details class="news news-old wrap">
+    <summary><h2 id="news-h051">what's new in 0.5.1 <time class="news-date" datetime="2026-11-16">16 November 2026</time></h2><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 10 5 5 5-5"/></svg></summary>
     <ul class="news-list">
       <li><b>Computers without a graphics card help in a split again.</b> kula's door now stops
         anything that would run code on them, as on the phone. Not yet tried between two real computers.</li>
@@ -378,7 +394,7 @@
       <li><b>Windows says when a wi-fi is "public"</b> and how to make it private, so other devices can reach it.</li>
       <li><b>New apps.</b> Android, Mac, Linux and Windows, all 0.5.1.</li>
     </ul>
-  </section>
+  </details>
 
   <details class="news news-old wrap">
     <summary><h2 id="news-h050">what's new in 0.5.0 <time class="news-date" datetime="2026-11-15">15 November 2026</time></h2><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 10 5 5 5-5"/></svg></summary>
@@ -507,7 +523,7 @@
     <a href="https://huggingface.co/bartowski/mistralai_Mistral-Small-3.2-24B-Instruct-2506-GGUF">Mistral Small</a>
     <a href="https://huggingface.co/unsloth/GLM-4.7-Flash-GGUF">GLM 4.7</a>
   </nav>
-  <p class="small">kula v0.5.1 · runs on <a href="https://github.com/ggml-org/llama.cpp">llama.cpp</a> · type: Inter Tight (SIL OFL)</p>
+  <p class="small">kula v0.6.0 · runs on <a href="https://github.com/ggml-org/llama.cpp">llama.cpp</a> · type: Inter Tight (SIL OFL)</p>
 </footer>
 
 <script>
