@@ -184,5 +184,14 @@ test('the snapshot carries host.gate and the engine\'s anchor counters, and no a
     const { anchor: _a, ...plain } = engine;
     assert.equal('anchor' in kulaSnapshot(plain as any, { list: () => [] } as any).host, false);
     assert.equal(kulaSnapshot({ ...plain, anchor: () => { throw new Error('x'); } } as any, { list: () => [] } as any).host.anchor, null);
+    // P1b: a row's throughName and through 'self' pass as they are; memberMaxDay only when the engine says it
+    assert.equal('throughName' in s.devices[0], false, 'a row without it leaves it out');
+    const selfRow = { ...structuredClone(row), through: 'self', throughName: 'this computer', where: 'through this computer (its anchor)' };
+    const s2 = kulaSnapshot({ ...engine, peers: () => [selfRow], anchor: () => ({ on: true, reachable: null, links: 3, bytesDay: 9e9, capDay: 2e9, memberMaxDay: 3e9 }) } as any, { list: () => [] } as any, Date.now());
+    assert.equal(s2.devices[0].through, 'self');
+    assert.equal(s2.devices[0].throughName, 'this computer');
+    assert.equal(s2.host.anchor!.memberMaxDay, 3e9);
+    assert.equal(clean(s2)!.devices[0].through, 'self');
+    assert.equal('memberMaxDay' in s.host.anchor!, false);
   });
 });

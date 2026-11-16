@@ -43,8 +43,9 @@ export interface EyeDevice {
   // (16.11.2026): reached through an always-on computer of the circle that passes the bytes on
   // (tls end to end, it carries ciphertext only); relay stays the hosted relay
   via: 'cable' | 'wifi' | 'relay' | 'internet' | 'anchor';
-  through?: string | null;         // via 'anchor': the anchor's device id; null: not said; absent: an older look
-  anchor?: boolean;                // this device offers the anchor role; absent: an older look
+  through?: string | null;         // via 'anchor': the anchor's device id, 'self' when this computer is the anchor; null: not in the peer book; absent: an older look
+  throughName?: string | null;     // via 'anchor': the anchor's name ('this computer' for 'self'); null: not said; absent: an older look
+  anchor?: boolean;               // this device offers the anchor role; absent: an older look
   where: string;                   // how it is reached, in words (an address, "usb cable", …)
   // which kind of address its pinned certificate answered at (docs/INTERNET.md): its lan
   // address, a global ipv6 address, or a port its router mapped; null on a cable or a relay.
@@ -166,9 +167,11 @@ export interface Snapshot {
     diskFreeMb?: number | null;
     /** this computer as an anchor of the circle (16.11.2026), the engine's live counters: on (it
      *  offers the role), reachable (its gate answered from outside; null: not known), links (devices
-     *  holding a link to it now), bytesDay (bytes it passed on in the last day, ciphertext) and
-     *  capDay (its daily limit in bytes; null: none). null: could not say; absent: an engine without anchors */
-    anchor?: { on: boolean; reachable: boolean | null; links: number; bytesDay: number; capDay: number | null } | null;
+     *  holding a link to it now), bytesDay (bytes it passed on in the last day, ciphertext, every member together),
+     *  capDay (the daily limit per dialing member in bytes; null: none), memberMaxDay (the most bytes
+     *  any single member passed today; null: not said; absent: an engine that does not count it).
+     *  null: could not say; absent: an engine without anchors */
+    anchor?: { on: boolean; reachable: boolean | null; links: number; bytesDay: number; capDay: number | null; memberMaxDay?: number | null } | null;
     /** this computer's own gate refusals, from the reject lines of its own signed ledger
      *  (ui/godseye-feed.ts hostGate); null: no ledger read yet; absent: an older look */
     gate?: EyeGate | null;

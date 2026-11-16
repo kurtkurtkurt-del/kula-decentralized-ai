@@ -63,6 +63,15 @@
 //                                        computer's host.anchor.on) and at least one far device
 //                                        (internet or anchor); through Steady (SHOW 3 / HIDE 4)
 // A snapshot without the new fields gives none of it.
+// P1b (16.11.2026): a row's `through` is 'self' when this computer is the anchor. Its through card
+// (keyed 'self') reads "X is reached through this computer (its anchor)"; it never sets `thru` (it
+// clears it) and never gives an anchor-down card (this computer is up by definition; a 'self' left in
+// older notes is passed over); for one-anchor it counts as this computer's own anchor, once, beside
+// host.anchor.on. A row's `throughName` (the anchor's name the engine knows) names an anchor that is
+// not a row of the look: an anchor's name is its row's, else a throughName a row of the look gives
+// for that id, else the notes', else "an anchor". A row through a null id with a throughName gets a
+// through card keyed `name:<throughName>` (cardId hashes it) and nothing else: no `thru`, no
+// anchor-down. The notes still keep ids only, never a name of an anchor.
 //
 // A moved address (16.11.2026, P5): a device that answers with its pinned certificate (tls true,
 // and trust.certPinned not false when the device said it) from a public address block it was not
@@ -289,6 +298,11 @@ const textOf = (x: unknown): string | null =>
   typeof x === 'string' ? x : typeof x === 'number' && Number.isFinite(x) ? String(x) : null;
 /** A usable id: a non-empty string no longer than STR_MAX, so a cut id is never compared with a full one. */
 const idOf = (x: unknown): string | null => (typeof x === 'string' && x.length > 0 && x.length <= STR_MAX ? x : null);
+/** A row's `through` when this computer is the anchor (P1b). */
+const SELF = 'self';
+/** A row's throughName as a title says it: a string cut to STR_MAX; null when empty or not one. */
+const throughNameOf = (o: Record<string, unknown>): string | null =>
+  (typeof o.throughName === 'string' ? cut(o.throughName) : '') || null;
 /** The address as today's line shows it: a string cut to WHERE_MAX; anything else is left out. */
 const whereOf = (x: unknown): string | null =>
   typeof x === 'string' ? x.slice(0, WHERE_MAX) : null;
@@ -481,16 +495,30 @@ export function create(ctx: BranchCtx): Branch {
   }
   const movedWords = (name: string) => `${name} answered from a network it was not seen on before (its pinned certificate matched)`;
 
-  /** An anchor's name as this computer knows it: its row in the look, else the notes; null: unknown. */
+  /** An anchor's name as this computer knows it: 'this computer' for SELF; its row in the look,
+   *  else a throughName a row of the look gives for it, else the notes; null: unknown. */
   function anchorName(id: string): string | null {
-    for (const raw of listOf(snap?.devices)) {
+    if (id === SELF) return 'this computer';
+    const devices = listOf(snap?.devices).slice(0, MAX_DEVICES);
+    for (const raw of devices) {
       const o = objOf(raw);
       if (o && idOf(o.id) === id) { const n = cut(textOf(o.name) ?? ''); if (n) return n; break; }
     }
+    for (const raw of devices) {
+      const o = objOf(raw);
+      if (o && idOf(o.through) === id) { const n = throughNameOf(o); if (n) return n; }
+    }
     return devs.get(id)?.name || null;
   }
-  /** "anchor Y", or "an anchor" when this computer cannot name it */
-  const anchorWords = (id: string | null) => { const n = id === null ? null : anchorName(id); return n ? `anchor ${n}` : 'an anchor'; };
+  /** "(was wifi)" after the anchor's words, folded into their own bracket when they end in one */
+  const wasAfter = (w: string, prev: string): string => (w.endsWith(')') ? `${w.slice(0, -1)}, was ${prev})` : `${w} (was ${prev})`);
+  /** "anchor Y", "this computer (its anchor)" for SELF, or "an anchor" when this computer cannot
+   *  name it; tn: the row's own throughName, for an anchor known by name only */
+  const anchorWords = (id: string | null, tn: string | null = null) => {
+    if (id === SELF) return 'this computer (its anchor)';
+    const n = (id === null ? null : anchorName(id)) ?? tn;
+    return n ? `anchor ${n}` : 'an anchor';
+  };
   /** a device's name as a card says it: its row's name, else its id */
   const rowName = (o: Record<string, unknown>, id: string) => cut(textOf(o.name) ?? '') || id;
   /** "X", "X, Z" or "X, Z (+n more)" */
@@ -507,7 +535,7 @@ export function create(ctx: BranchCtx): Branch {
       if (!o || id === null || taken.has(id)) continue;
       taken.add(id);
       const y = devs.get(id)?.thru ?? null;
-      if (y === null || y === id || o.reachable !== false) continue;
+      if (y === null || y === SELF || y === id || o.reachable !== false) continue;   // this computer is up
       lost.set(y, [...(lost.get(y) ?? []), { id, name: rowName(o, id) }]);
     }
     const out: { y: string; card: Suggestion }[] = [];
@@ -530,14 +558,17 @@ export function create(ctx: BranchCtx): Branch {
   function oneAnchor(now: Snapshot): Suggestion[] {
     const anchors = new Map<string, string>();   // id -> how a title names it
     let far = false;
+    let viaSelf = false;                         // a row reached through this computer: it is an anchor
     for (const raw of listOf(now.devices).slice(0, MAX_DEVICES)) {
       const o = objOf(raw);
       if (!o) continue;
       if (isFar(o)) far = true;
+      if (kindOf(o.via) === 'anchor' && idOf(o.through) === SELF) viaSelf = true;
       const id = idOf(o.id);
       if (id !== null && o.anchor === true && !anchors.has(id)) anchors.set(id, rowName(o, id));
     }
-    const hostOn = objOf(objOf(now.host)?.anchor)?.on === true;   // this computer offers the role
+    // this computer offers the role: its own counters say so, or a row is reached through it (once)
+    const hostOn = objOf(objOf(now.host)?.anchor)?.on === true || viaSelf;
     if (anchors.size + (hostOn ? 1 : 0) !== 1 || !far) return [];
     const only = hostOn ? 'this computer' : [...anchors.values()][0];
     return [{
@@ -702,8 +733,11 @@ export function create(ctx: BranchCtx): Branch {
         }
         if (e.name !== name) { e.name = name; changed = true; }
         // the anchor it is routed through: its row says so; answering over another kind clears it
+        // through this computer: no anchor-down can come from it, so the last other anchor is forgotten
         const through = kindOf(d.via) === 'anchor' ? idOf(d.through) : null;
-        if (through !== null && through !== id) {
+        if (through === SELF) {
+          if (e.thru !== null) { e.thru = null; changed = true; }
+        } else if (through !== null && through !== id) {
           if (e.thru !== through) { e.thru = through; changed = true; }
         } else if (e.thru !== null && d.reachable === true && kindOf(d.via) !== 'anchor') {
           e.thru = null;
@@ -725,7 +759,7 @@ export function create(ctx: BranchCtx): Branch {
           e.sw.push({ at, from: prev, to: via });
           if (e.sw.length > SW_MAX) e.sw.shift();
           ctx.emit(via === 'anchor'
-            ? `${e.name || id} is now reached through ${anchorWords(through)} (was ${prev})`
+            ? `${e.name || id} is now reached through ${wasAfter(anchorWords(through, throughNameOf(d)), prev)}`
             : `${e.name || id} is now reached over ${via} (was ${prev})`);
           changed = true;
         }
@@ -823,16 +857,20 @@ export function create(ctx: BranchCtx): Branch {
         });
       }
       // reached through an anchor: one card per anchor while it lasts
-      const through = new Map<string, { id: string; name: string }[]>();   // Y -> reachable rows through it
+      // key: Y (an id, or SELF), or name:<throughName> for an anchor the engine knows by name only
+      const through = new Map<string, { y: string | null; tn: string | null; ds: { id: string; name: string }[] }>();
       const taken = new Set<string>();
       for (const o of objs) {
         if (o === null || o.reachable !== true || kindOf(o.via) !== 'anchor') continue;
-        const id = idOf(o.id), y = idOf(o.through);
-        if (id === null || y === null || y === id || taken.has(id)) continue;
+        const id = idOf(o.id), y = idOf(o.through), tn = throughNameOf(o);
+        const key = y ?? (tn !== null ? `name:${tn}` : null);
+        if (id === null || key === null || y === id || taken.has(id)) continue;
         taken.add(id);
-        through.set(y, [...(through.get(y) ?? []), { id, name: rowName(o, id) }]);
+        const g = through.get(key) ?? { y, tn, ds: [] };
+        g.ds.push({ id, name: rowName(o, id) });
+        through.set(key, g);
       }
-      for (const [y, ds] of through) {
+      for (const [key, { y, tn, ds }] of through) {
         // the anchor kind's readings of these devices, pooled: usually ~N ms from K probes
         let k = 0;
         const ms: number[] = [];
@@ -844,10 +882,10 @@ export function create(ctx: BranchCtx): Branch {
           if (ok > 0) ms.push(...st.ms.slice(-ok));   // only the last ok answer times are this ring's
         }
         const med = k >= 10 ? usualMs(ms) : null;
-        const yN = anchorName(y);
+        const yN = (y === null ? null : anchorName(y)) ?? tn;
         suggestions.push({
-          id: cardId('connections', 'through', y), kind: 'warn', weight: 1,
-          title: `${fewNames(ds.map((d) => d.name))} ${ds.length === 1 ? 'is' : 'are'} reached through ${anchorWords(y)}`,
+          id: cardId('connections', 'through', key), kind: 'warn', weight: 1,
+          title: `${fewNames(ds.map((d) => d.name))} ${ds.length === 1 ? 'is' : 'are'} reached through ${anchorWords(y, tn)}`,
           why: `neither their wi-fi nor a direct internet address answered. ${yN ?? 'the anchor'} passes the bytes on and cannot read them. `
             + `${med !== null ? `usually ~${med} ms (from ${k} probes)` : 'not enough looks yet'}. apart and split both work; the planner says what a split would cost.`,
           action: { do: 'probe', devices: ds.map((d) => d.id) }, label: 'look again',

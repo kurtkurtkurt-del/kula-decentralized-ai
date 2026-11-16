@@ -115,7 +115,10 @@
 //   the anchor network (16.11.2026). A device's via is a short word as before, so 'anchor' passes
 //   as it is. A device's through (the anchor it is reached through): absent stays absent; a
 //   usable id gets peerId's reading (a stand-in where an id needs one, the same as the device it
-//   names), anything else is null. A device's anchor (it offers the role): absent stays absent,
+//   names; 'self', this computer as the anchor, is not one of the ids a peer is kept from, so it
+//   passes as 'self'), anything else is null. A device's throughName (the anchor's name, P1b):
+//   absent stays absent; a string is cleaned like a name (cleanName) and cut to 80, an empty one
+//   or anything else is null. A device's anchor (it offers the role): absent stays absent,
 //   true and false are kept, anything else is false.
 //   the host's anchor (this computer's own anchor counters): absent stays absent; one that is not
 //   an object is null. on keeps true and false, anything else is false; reachable keeps true and
@@ -123,6 +126,7 @@
 //     links                      0 .. 1 000 000          0
 //     bytesDay                   0 .. 1e15 (1 PB)        0
 //     capDay                     0 .. 1e15 (1 PB)        null (no limit, or not a number)
+//     memberMaxDay               0 .. 1e15 (1 PB)        null (not a number); absent stays absent
 //   the host's gate (its own gate's refusals, from its own ledger): absent stays absent; one that
 //   is not an object is null. hours keeps the last 26 entries whose start is a usable time (an
 //   entry that is not an object, or without one, is dropped first); an hour's by is cleaned like
@@ -372,6 +376,7 @@ function devOf(raw: Record<string, unknown>, id: string): EyeDevice {
     ...('worker' in raw ? { worker: workerOf(raw.worker) } : {}),
     // the anchor network (16.11.2026): only when the snapshot has them (an older one does not)
     ...('through' in raw ? { through: peerId(raw.through) } : {}),
+    ...('throughName' in raw ? { throughName: (typeof raw.throughName === 'string' ? cleanName(raw.throughName).slice(0, NAME_MAX) : '') || null } : {}),
     ...('anchor' in raw ? { anchor: bool2(raw.anchor) } : {}),
   };
 }
@@ -385,6 +390,7 @@ function hostAnchorOf(raw: unknown): NonNullable<Snapshot['host']['anchor']> | n
     links: capped(raw.links, 0, LINKS_MAX) ?? 0,
     bytesDay: capped(raw.bytesDay, 0, BYTES_MAX) ?? 0,
     capDay: capped(raw.capDay, 0, BYTES_MAX),
+    ...('memberMaxDay' in raw ? { memberMaxDay: capped(raw.memberMaxDay, 0, BYTES_MAX) } : {}),
   };
 }
 

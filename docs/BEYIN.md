@@ -190,9 +190,9 @@ and absent stays absent). No address of anyone reaches the eye.
 
 | field | what it says | who fills it |
 |---|---|---|
-| `devices[].via: 'anchor'`, `through` | the device is reached through an anchor of the circle; `through` is that anchor's row id (null: not said) | the engine's peer rows, read by `ui/godseye-feed.ts` through a widened row. Nothing fills it yet: the anchor's stage 2 adds a peer field (a name like `viaAnchor`, still to come) that the feed will map to these two |
+| `devices[].via: 'anchor'`, `through`, `throughName` | the device is reached through an anchor of the circle; `through` is that anchor's row id, `'self'` when this computer is the anchor, null when the anchor is not in the peer book; `throughName` its name for the cards (notes keep ids only) | the engine's peer rows (anchor stage 2, kula-main 1e3669b0), read by `ui/godseye-feed.ts` through a widened row |
 | `devices[].anchor` | this device offers the anchor role | the engine's peer rows, as above |
-| `host.anchor` | this computer as an anchor: on, reachable from outside (or not known), links held now, bytes passed on in the last day (ciphertext), its daily cap | `engine.anchor()` when the engine has one; absent otherwise |
+| `host.anchor` | this computer as an anchor: on, reachable from outside (or not known), links held now, bytes passed on in the last day by all members together (ciphertext), the daily cap per dialing member, and `memberMaxDay`, the most one member passed (asked of the anchor side, may be absent) | `engine.anchor()` when the engine has one; absent otherwise |
 | `host.gate` | this computer's own gate refusals per UTC hour (at most 26, the last one running): by reason (every `rpc guard: …` under `rpc guard`), how many came from a non-private address (`far`), how many distinct outside networks (`nets`, a count of hashed ipv4 /24 and ipv6 /48 blocks), the last 5 rpc guard refusals | the feed, today, from the reject lines of this computer's own signed ledger, verified in the same pass (`hostGate`); each line counted once, an unchanged ledger costs a 26-entry copy |
 | hint `loss: { hi }` | for a device reached from afar with at least 10 probes: the upper end of the 80% Wilson interval of its missed probes | the connections branch, for the planner |
 
@@ -255,7 +255,7 @@ sits beside the host's ledger check:
 | `trust:rpc-guard:<id>` | 3 | a device says its own gate cut one; its verdict does not change (it defended itself) |
 | `trust:gate-guess` | 3 | 5 or more wrong codes in the last 24 hours: someone may be guessing; all refused |
 | `trust:gate-burst` | 2 | more knocking from outside the lan than usual for this hour of day (burst.ts's fit, unchanged, on each finished hour's `far` count, kept in trust's notes under `~gate`); also, learning or not, 1000 or more in the running hour |
-| `trust:anchor-cap` | 2 | this computer as an anchor carried more than its daily limit; it stays while above 0.95 of it. Nothing is switched off |
+| `trust:anchor-cap` | 2 | one member passed more than its daily limit through this computer as an anchor (`memberMaxDay` against the per-member cap; without `memberMaxDay` only when one member or none is linked); it stays while above 0.95 of it. Nothing is switched off |
 
 Every card only opens the trust page; one feed line when it comes and one when it goes. The
 thresholds (the tail, the 1000, the 5 guesses) were not measured against a real router's scanner

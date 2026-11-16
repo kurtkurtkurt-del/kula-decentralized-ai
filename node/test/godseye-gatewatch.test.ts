@@ -1,7 +1,8 @@
 // the gate watch (16.11.2026, P4): this computer's own gate (host.gate, from its own signed ledger)
 // in the trust branch. Scanners are counted, not alarmed; a burst of far refusals against the usual
 // of that hour of day is a card, never a red check; the rpc guard and 5+ guesses are; a device's own
-// rpc guard is a card that never bars it; the anchor's daily cap has a card with a 0.95 hold. A look
+// rpc guard is a card that never bars it; the anchor's daily cap (per member: memberMaxDay, else the
+// total only while at most one member holds a link, P1b) has a card with a 0.95 hold. A look
 // without host.gate makes the same report as before, and the fit (`~gate`) survives a reload.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -212,9 +213,9 @@ test("a device's own rpc guard: the card, its verdict unchanged, absent from unt
   assert.equal(gateCheckOf(v), undefined, 'no host.gate: no host check');
 });
 
-test('the anchor past its daily cap: on at 1.01, held at 0.96, gone at 0.9; 0.96 alone is nothing', () => {
+test('the anchor past its daily cap (one member: the total is its own): on at 1.01, held at 0.96, gone at 0.9; 0.96 alone is nothing', () => {
   const cap = 2e9;
-  const anchor = (x: number) => ({ anchor: { on: true, reachable: true, links: 2, bytesDay: x * cap, capDay: cap } });
+  const anchor = (x: number) => ({ anchor: { on: true, reachable: true, links: 1, bytesDay: x * cap, capDay: cap } });
   const { b, events } = branch();
   b.observe(snap([plainDev()], anchor(1.01)) as any, null);
   let c = card(b.view(), 'trust:anchor-cap');
@@ -236,6 +237,39 @@ test('the anchor past its daily cap: on at 1.01, held at 0.96, gone at 0.9; 0.96
   assert.equal(card(other.b.view(), 'trust:anchor-cap'), undefined, 'no cap: no card');
   // the report is not touched by the anchor
   assert.equal(gateCheckOf(other.b.view()), undefined);
+});
+
+test('the cap is per member: memberMaxDay over and under, and several members without it give no card', () => {
+  const cap = 2e9;
+  const anchor = (o: Record<string, unknown>) => ({ anchor: { on: true, reachable: true, links: 3, bytesDay: 5 * cap, capDay: cap, ...o } });
+  // one member past its limit: the card in member words, held at 0.96, gone at 0.9
+  const { b, events } = branch();
+  b.observe(snap([plainDev()], anchor({ memberMaxDay: 1.01 * cap })) as any, null);
+  let c = card(b.view(), 'trust:anchor-cap');
+  assert.ok(c);
+  assert.equal(c.weight, 2);
+  assert.equal(c.title, 'a member passed more than its daily limit through this anchor');
+  assert.equal(c.why, 'one member passed 2.02 of its 2.00 GB daily limit through this anchor in the last day, ciphertext only. nothing was switched off.');
+  b.observe(snap([plainDev()], anchor({ memberMaxDay: 0.96 * cap })) as any, null);
+  assert.ok(card(b.view(), 'trust:anchor-cap'), 'held above 0.95');
+  b.observe(snap([plainDev()], anchor({ memberMaxDay: 0.9 * cap })) as any, null);
+  assert.equal(card(b.view(), 'trust:anchor-cap'), undefined, 'gone under 0.95');
+  assert.deepEqual(events, ['one member passed 2.02 of its 2.00 GB daily limit through this anchor', 'every member of this anchor is back under its daily limit']);
+  // every member under its limit while all together are far over it: no card
+  const under = branch();
+  under.b.observe(snap([plainDev()], anchor({ memberMaxDay: 0.5 * cap })) as any, null);
+  assert.equal(card(under.b.view(), 'trust:anchor-cap'), undefined, 'memberMaxDay under: no card, whatever bytesDay says');
+  // three members and no memberMaxDay (absent, or null): bytesDay over the cap says nothing per member
+  const three = branch();
+  three.b.observe(snap([plainDev()], anchor({})) as any, null);
+  assert.equal(card(three.b.view(), 'trust:anchor-cap'), undefined, 'links 3 without memberMaxDay: no card');
+  three.b.observe(snap([plainDev()], anchor({ memberMaxDay: null })) as any, null);
+  assert.equal(card(three.b.view(), 'trust:anchor-cap'), undefined, 'memberMaxDay null: no card');
+  assert.deepEqual(three.events, []);
+  // no member at all and no memberMaxDay: the total is compared (it is nobody's but this one's)
+  const none = branch();
+  none.b.observe(snap([plainDev()], anchor({ links: 0 })) as any, null);
+  assert.equal(card(none.b.view(), 'trust:anchor-cap')?.title, 'this anchor carried more than its daily limit');
 });
 
 test('no host.gate: the report is the same as before, no notes key, no card', () => {

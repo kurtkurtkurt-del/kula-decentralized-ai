@@ -1,5 +1,6 @@
 // the brain's side of the anchor network contract (16.11.2026): a device's via 'anchor', through
-// and anchor, the host's anchor counters and its gate's refusals, as guard.ts cleans them. Each
+// (an id, or 'self' when this computer is the anchor), throughName and anchor, the host's anchor
+// counters (memberMaxDay included, P1b) and its gate's refusals, as guard.ts cleans them. Each
 // field valid, absent and garbage; a healthy look with all of them comes out deep-equal.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -29,13 +30,15 @@ const healthy = (): Record<string, unknown> => ({
   at: T0 + 25 * H + 10,
   host: {
     name: 'mac', freeMb: 4000, ledger: { ok: true, count: 12, problem: null },
-    anchor: { on: true, reachable: null, links: 3, bytesDay: 5e9, capDay: 2e10 },
+    anchor: { on: true, reachable: null, links: 3, bytesDay: 5e9, capDay: 2e10, memberMaxDay: 3e9 },
     gate: gate(),
   },
   devices: [
-    dev({ id: 'far1', via: 'anchor', through: 'anc1', where: 'through anc1' }),
+    dev({ id: 'far1', via: 'anchor', through: 'anc1', throughName: 'home mac', where: 'through anchor home mac' }),
     dev({ id: 'anc1', via: 'internet', reachedBy: 'mapped', anchor: true, through: null }),
     dev({ id: 'p2', anchor: false }),
+    dev({ id: 'far2', via: 'anchor', through: 'self', throughName: 'this computer', where: 'through this computer (its anchor)' }),
+    dev({ id: 'far3', via: 'anchor', through: null, throughName: '3fa9c1d2…', where: 'through anchor 3fa9c1d2…' }),
   ],
   work: { loaded: null, loading: null, chatting: 0, plan: [], decisions: [], llama: false },
   models: [],
@@ -53,8 +56,41 @@ test('a look without any of the new fields stays without them', () => {
   assert.equal('anchor' in s.host, false);
   assert.equal('gate' in s.host, false);
   assert.equal('through' in s.devices[0], false);
+  assert.equal('throughName' in s.devices[0], false);
   assert.equal('anchor' in s.devices[0], false);
   assert.deepStrictEqual(clean(structuredClone(s)), s);
+  // a host anchor from an engine that does not count members leaves memberMaxDay out
+  const h = clean({ at: 1, host: { name: 'mac', freeMb: 1, anchor: { on: true, reachable: null, links: 1, bytesDay: 2, capDay: 3 } } })!;
+  assert.equal('memberMaxDay' in h.host.anchor!, false);
+});
+
+test('through: \'self\' (this computer is the anchor) passes as \'self\'', () => {
+  assert.equal(clean({ at: 1, devices: [dev({ via: 'anchor', through: 'self' })] })!.devices[0].through, 'self');
+});
+
+test('throughName: a name cleaned and cut to 80, anything else or empty null', () => {
+  const n = (x: unknown) => clean({ at: 1, devices: [dev({ via: 'anchor', throughName: x })] })!.devices[0].throughName;
+  assert.equal(n('home mac'), 'home mac');
+  assert.equal(n('this computer'), 'this computer');
+  assert.equal(n('y'.repeat(300)), 'y'.repeat(80));
+  assert.equal(n('evil‮\ncard'), 'evil card');
+  assert.equal(n(''), null);
+  assert.equal(n('  ​ '), null);
+  assert.equal(n(null), null);
+  assert.equal(n(42), null);
+  assert.equal(n({ name: 'x' }), null);
+});
+
+test('host.anchor.memberMaxDay: kept, clamped 0..1e15, null when not a number', () => {
+  const m = (x: unknown) => clean({ at: 1, host: { name: 'mac', freeMb: 1, anchor: { on: true, reachable: null, links: 2, bytesDay: 9, capDay: 8, memberMaxDay: x } } })!.host.anchor!.memberMaxDay;
+  assert.equal(m(4e9), 4e9);
+  assert.equal(m(0), 0);
+  assert.equal(m(-5), 0);
+  assert.equal(m(1e20), 1e15);
+  assert.equal(m(null), null);
+  assert.equal(m('3 GB'), null);
+  assert.equal(m(NaN), null);
+  assert.equal(m(Infinity), null);
 });
 
 test('via: anchor passes as a word, as every via does', () => {

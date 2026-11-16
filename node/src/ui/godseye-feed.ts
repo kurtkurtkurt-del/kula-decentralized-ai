@@ -230,9 +230,10 @@ export function hostLedger(file = ledgerFile()): Snapshot['host']['ledger'] {
 // reached over the internet (peers.ts pickRoute). The anchor network (16.11.2026) is read through
 // a widened row (AnchorRow), so this compiles before the engine has it: a row whose via is
 // 'anchor' (reached through an anchor of the circle) passes as it is, its `through` names the
-// anchor's row, and `anchor: true` marks a row that offers the role.
-type AnchorRow = Omit<PeerRow, 'via'> & { via?: PeerRow['via'] | 'anchor'; through?: string | null; anchor?: boolean };
-type AnchorLook = { on?: unknown; reachable?: unknown; links?: unknown; bytesDay?: unknown; capDay?: unknown };
+// anchor's row ('self' when this computer is the anchor, null when the anchor is not in the peer
+// book), its `throughName` the anchor's name, and `anchor: true` marks a row that offers the role.
+type AnchorRow = Omit<PeerRow, 'via'> & { via?: PeerRow['via'] | 'anchor'; through?: string | null; throughName?: string | null; anchor?: boolean };
+type AnchorLook = { on?: unknown; reachable?: unknown; links?: unknown; bytesDay?: unknown; capDay?: unknown; memberMaxDay?: unknown };
 const via = (p: PeerRow): EyeDevice['via'] => {
   if ((p as AnchorRow).via === 'anchor') return 'anchor';
   const v = p.via ?? (p.cable ? 'cable' : p.far ? 'relay' : 'wifi');
@@ -283,19 +284,24 @@ export function deviceOf(p: PeerRow, trust: TrustLook | null = null): EyeDevice 
     ...(p.worker ? { worker: { at: p.worker.at, busy: p.worker.busy, tokensUsed: p.worker.tokensUsed, ctx: p.worker.ctx, ramFreeMb: p.worker.ramFreeMb } } : {}),
     // the anchor network: only when the row says it (an engine without anchors leaves them out)
     ...(a.through !== undefined ? { through: a.through } : {}),
+    ...(a.throughName !== undefined ? { throughName: a.throughName } : {}),
     ...(a.anchor !== undefined ? { anchor: a.anchor } : {}),
   };
 }
 
 // this computer's anchor counters from engine.anchor(), when the engine has one: absent without
-// it, null when it throws or says nothing; plain fields only (guard.ts cleans them)
+// it, null when it throws or says nothing; plain fields only (guard.ts cleans them). memberMaxDay
+// (the most any single member passed today) only when the engine says it
 function anchorOf(engine: Engine): Pick<Snapshot['host'], 'anchor'> {
   const e = engine as Engine & { anchor?: () => AnchorLook | null | undefined };
   if (typeof e.anchor !== 'function') return {};
   let r: AnchorLook | null | undefined = null;
   try { r = e.anchor(); } catch { r = null; }
   if (!r || typeof r !== 'object') return { anchor: null };
-  return { anchor: { on: r.on, reachable: r.reachable, links: r.links, bytesDay: r.bytesDay, capDay: r.capDay } as NonNullable<Snapshot['host']['anchor']> };
+  return { anchor: {
+    on: r.on, reachable: r.reachable, links: r.links, bytesDay: r.bytesDay, capDay: r.capDay,
+    ...(r.memberMaxDay !== undefined ? { memberMaxDay: r.memberMaxDay } : {}),
+  } as NonNullable<Snapshot['host']['anchor']> };
 }
 
 /** One look for god's eye. Reads only: the engine's status and cached peer rows, the model

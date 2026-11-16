@@ -47,7 +47,11 @@
 //                              (at least MIN_K, P < TAIL_P), or the last finished hour was a tail,
 //                              or the CUSUM rose; at any time, learning or not, BACKSTOP (1000) or
 //                              more far refusals in the running hour (a backstop, not measured)
-//   trust:anchor-cap        2  bytesDay above capDay; it stays while above CAP_STAY (0.95) × capDay
+//   trust:anchor-cap        2  capDay is per dialing member (P1b): memberMaxDay (the most one member
+//                              passed today) above capDay when the engine says it; without it,
+//                              bytesDay (every member together) above capDay only while links <= 1
+//                              (the total is that one member's), else no card. It stays while
+//                              above CAP_STAY (0.95) × capDay
 // One feed line when a card comes and one when it goes (gateLines), never one per look.
 //
 // The uncertainty: none of these thresholds (MIN_K, TAIL_P, the 1000 backstop, 5 guesses) was
@@ -69,7 +73,7 @@ export const GUESSES = new Set(['wrong pin', 'wrong secret', 'bad proof']);
 export const GUESS_LIMIT = 5;          // guesses in a day that turn a check red
 export const GUARD = 'rpc guard';      // every reason starting with it is the guard's
 export const BACKSTOP = 1000;          // far refusals in the running hour: a card even while learning
-export const CAP_STAY = 0.95;          // the anchor-cap card stays while bytesDay is above this × capDay
+export const CAP_STAY = 0.95;          // the anchor-cap card stays while the bytes held (capBytes) are above this × capDay
 export const GATE_KEY = '~gate';       // the reserved key of the fit in trust's notes
 export const GATE_HOURS = 26;          // the hours the gate holds at most
 
@@ -223,14 +227,26 @@ const warn = (id: string, weight: 1 | 2 | 3, title: string, why: string): Sugges
   ({ id, kind: 'warn', weight, title, why, action: { ...OPEN }, label: 'look' });
 const gb = (bytes: number) => { const x = bytes / 1e9; return x < 10 ? x.toFixed(2) : x.toFixed(1); };
 
-/** the anchor's bytes against its daily cap: on above the cap, staying on above CAP_STAY × cap */
-export function capOn(anchor: unknown, was: boolean): boolean {
-  if (!isObj(anchor)) return false;
-  const bytes = anchor.bytesDay;
+const bytesOk = (x: unknown): x is number => typeof x === 'number' && Number.isFinite(x) && x >= 0;
+
+/** the bytes the anchor's daily limit is held against (capDay is per dialing member): the most one
+ *  member passed (memberMaxDay) when the engine says it; else every member together (bytesDay), but
+ *  only while at most one member holds a link, where the total is that member's; else null */
+export function capBytes(anchor: unknown): { bytes: number; cap: number; member: boolean } | null {
+  if (!isObj(anchor)) return null;
   const cap = anchor.capDay;
-  if (typeof bytes !== 'number' || !Number.isFinite(bytes) || bytes < 0) return false;
-  if (typeof cap !== 'number' || !Number.isFinite(cap) || cap <= 0) return false;
-  return was ? bytes > CAP_STAY * cap : bytes > cap;
+  if (typeof cap !== 'number' || !Number.isFinite(cap) || cap <= 0) return null;
+  if (bytesOk(anchor.memberMaxDay)) return { bytes: anchor.memberMaxDay, cap, member: true };
+  const links = anchor.links;
+  if (typeof links !== 'number' || !Number.isFinite(links) || links > 1) return null;
+  return bytesOk(anchor.bytesDay) ? { bytes: anchor.bytesDay, cap, member: false } : null;
+}
+
+/** the anchor's bytes against its daily cap (capBytes): on above the cap, staying on above CAP_STAY × cap */
+export function capOn(anchor: unknown, was: boolean): boolean {
+  const c = capBytes(anchor);
+  if (!c) return false;
+  return was ? c.bytes > CAP_STAY * c.cap : c.bytes > c.cap;
 }
 
 /** every gate card this look says, weight 3 first. `cap`: the anchor-cap card is on (capOn) */
@@ -296,14 +312,24 @@ export function gateCards(st: GateState, gate: unknown, devices: readonly EyeDev
       });
     }
   }
-  if (cap && isObj(anchor)) {
-    const title = 'this anchor carried more than its daily limit';
-    const x = `${gb(anchor.bytesDay as number)} of ${gb(anchor.capDay as number)} GB in the last day`;
-    out.push({
-      card: warn('trust:anchor-cap', 2, title, `${x}, ciphertext only. nothing was switched off.`),
-      said: `${title}: ${x}`,
-      gone: 'this anchor is back under its daily limit',
-    });
+  const c = cap ? capBytes(anchor) : null;
+  if (c) {
+    if (c.member) {
+      const x = `one member passed ${gb(c.bytes)} of its ${gb(c.cap)} GB daily limit through this anchor`;
+      out.push({
+        card: warn('trust:anchor-cap', 2, 'a member passed more than its daily limit through this anchor', `${x} in the last day, ciphertext only. nothing was switched off.`),
+        said: x,
+        gone: 'every member of this anchor is back under its daily limit',
+      });
+    } else {
+      const title = 'this anchor carried more than its daily limit';
+      const x = `${gb(c.bytes)} of ${gb(c.cap)} GB in the last day`;
+      out.push({
+        card: warn('trust:anchor-cap', 2, title, `${x}, ciphertext only. nothing was switched off.`),
+        said: `${title}: ${x}`,
+        gone: 'this anchor is back under its daily limit',
+      });
+    }
   }
   return out.sort((a, b) => (b.card.weight ?? 2) - (a.card.weight ?? 2));
 }
