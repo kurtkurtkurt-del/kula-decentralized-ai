@@ -981,8 +981,13 @@ export class Engine {
     if (!g) return false;
     const row = this.deviceRow(g);
     writePeers(list.filter((p) => !g.includes(p)), file);
-    // an anchor this computer joined: forgetting it leaves it (no more registering there)
-    for (const p of g) if (p.fp && removeJoined(this.joinedFile(), p.fp)) this.note(`left the anchor ${row.name}`);
+    // an anchor this computer joined: forgetting it leaves it (no more registering there), and
+    // takes away the access its pair-back gave it, since its row (and so "unpair") is gone now
+    const left = g.filter((p) => !!p.fp && removeJoined(this.joinedFile(), p.fp)).map((p) => p.fp!);
+    if (left.length) {
+      const cut = this.takeAccess(left);
+      this.note(`left the anchor ${row.name}${cut ? ': it can no longer use this computer' : ''}`);
+    }
     for (const p of g) {
       this.reach.delete(p.id); this.held.delete(p.id); this.workers.delete(p.id); this.trusts.delete(p.id); this.heard.delete(p.id); this.heardAt.delete(p.id);
       if (p.cable) this.jobs.delete(p.cable.serial);
@@ -1006,15 +1011,22 @@ export class Engine {
   unpairPeer(id: string): boolean {
     const g = groupOf(groupPeers(readPeers(this.file())), id);
     if (!g) return false;
+    if (!this.takeAccess(g.map((p) => p.fp).filter((fp): fp is string => !!fp))) return false;
+    const row = this.deviceRow(g);
+    this.note(`${row.name} can no longer use this computer`);
+    return true;
+  }
+
+  // Takes these certificates off this computer's own paired list, one signed ledger line each;
+  // false when none of them was paired here.
+  private takeAccess(certs: string[]): boolean {
     const book = this.paired();
-    const fps = [...new Set(g.map((p) => p.fp).filter((fp): fp is string => !!fp && book.has(fp)))];
+    const fps = [...new Set(certs.map((fp) => fp.toLowerCase()).filter((fp) => book.has(fp)))];
     if (!fps.length) return false;
     const dir = path.dirname(this.opts.pairedFile ?? pairedFile());
     const ledger = new Ledger(path.join(dir, 'ledger.jsonl'), loadDeviceKey());
     const seen = new Seen(path.join(dir, 'seen.json'));
     for (const fp of fps) removePaired(fp, book, seen, ledger);
-    const row = this.deviceRow(g);
-    this.note(`${row.name} can no longer use this computer`);
     return true;
   }
 

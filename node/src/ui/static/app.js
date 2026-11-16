@@ -1412,7 +1412,9 @@ function renderDevices() {
         // forgetting here takes nothing away on the phone: it still knows this computer's
         // certificate until it is removed there (share this phone › devices that can use this phone)
         const still = g.peers.some((p) => p.tls) ? `\n\n${g.name} still lets this computer in until you remove this computer there: on ${g.name}, kula › share this phone › devices that can use this phone › remove.` : '';
-        if (!confirm(`forget ${g.name}? this computer stops using it.${both.length > 1 ? ` every way (${both.join(' and ')}) is forgotten.` : ''} you would pair it again to use it.${still}`)) return;
+        // a joined anchor: forgetting it also leaves it and takes away what its pair-back gave it
+        const left = g.peers.some((p) => p.anchor) ? `\n\nif this computer joined ${g.name} as an anchor, it leaves it too${usesMe ? `, and ${g.name} can no longer use this computer` : ''}. to come back, ask for a new invite.` : '';
+        if (!confirm(`forget ${g.name}? this computer stops using it.${both.length > 1 ? ` every way (${both.join(' and ')}) is forgotten.` : ''} you would pair it again to use it.${still}${left}`)) return;
         for (const p of g.peers) await postJson('peers/remove', { id: p.id }).catch((err) => toast(err.message));
         const gone = new Set(g.peers.flatMap((p) => p.routes ?? [p.id]));
         settings.peers = settings.peers.filter((id) => !gone.has(id));
@@ -1904,10 +1906,32 @@ async function added(row) {
   postJson('nearby/look').then((v) => { NEAR = v; renderNearby(); }).catch(() => {});
 }
 
+// An anchor's invite (kula-peer v3 with anchor: true), as its json or its base64url code: joining
+// one is asked first, since the anchor's computer may use this one afterwards (its pair-back).
+function isAnchorInvite(text) {
+  let s = String(text || '').trim();
+  try {
+    if (!s.startsWith('{')) {
+      if (s.length <= 40 || !/^[A-Za-z0-9_-]+=*$/.test(s)) return false;
+      const b = atob(s.replace(/=+$/, '').replace(/-/g, '+').replace(/_/g, '/'));
+      s = new TextDecoder().decode(Uint8Array.from(b, (c) => c.charCodeAt(0)));
+    }
+    const o = JSON.parse(s);
+    return !!o && o.k === 'kula-peer' && o.anchor === true;
+  } catch { return false; }
+}
+const JOIN_ASK = 'join this anchor?\n\nthis computer then starts sharing itself and stays linked to the anchor. the anchor\'s computer may then use this computer: run model layers on it and ask it for answers.\n\nto stop that later, forget the anchor in your devices.';
+function askJoin() {
+  if (confirm(JOIN_ASK)) return true;
+  addMsg('not joined.');
+  return false;
+}
+
 $('add-type').addEventListener('click', async () => {
+  const anchor = $('add-anchor').checked;
+  if (anchor && !askJoin()) return;
   addMsg('pairing…');
   try {
-    const anchor = $('add-anchor').checked;
     if (anchor) addMsg('joining the anchor…');
     const row = await postJson('peers/add', { address: $('add-address').value.trim(), pin: $('add-pin').value.trim(), fp: $('add-fp').value.trim(), name: $('add-name').value.trim(), anchor });
     $('add-pin').value = '';
@@ -1918,6 +1942,7 @@ $('add-type').addEventListener('click', async () => {
 $('add-paste').addEventListener('click', async () => {
   const text = $('add-text').value.trim();
   if (!text) return addMsg('paste what the phone shows first', 'bad');
+  if (isAnchorInvite(text) && !askJoin()) return;
   addMsg('adding…');
   try {
     // a hosted relay's six digit code is for the terminal (kula-node peers add --relay): the anchor replaced it here
@@ -1928,6 +1953,7 @@ $('add-paste').addEventListener('click', async () => {
 });
 
 async function addScanned(text) {
+  if (isAnchorInvite(text) && !askJoin()) return;
   addMsg('found the code, pairing…');
   try { await added(await postJson('peers/add', { text })); } catch (e) { addMsg(e.message, 'bad'); }
 }

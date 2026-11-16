@@ -336,7 +336,8 @@ export function joinedRoads(list: JoinedAnchor[]): PeerAnchor[] {
 export function inviteWords(e: unknown, typedCert = false): string {
   if (e instanceof GateRefused) {
     switch (e.reason) {
-      case 'pin used': return 'this invite was used already: each invite works once. ask for a new one.';
+      // a stolen invite used first: the real joiner learns what to do about the device that took it
+      case 'pin used': return 'this invite was used already: each invite works once. ask for a new one. if it was not you who used it, tell the anchor\'s owner to remove the device that used it.';
       case 'pin expired': return 'this invite ran out (it works for 10 minutes). ask for a new one.';
       case 'wrong pin': return 'the code does not match the anchor\'s invite: check it, or ask for a new invite.';
       case 'not paired': return 'the anchor has no invite open: ask for a new one.';
@@ -347,6 +348,9 @@ export function inviteWords(e: unknown, typedCert = false): string {
   if (m === FP_MISMATCH) return typedCert ? 'the certificate does not match what the anchor shows: not joining' : 'another computer answered there, not the anchor: not joining';
   return m;
 }
+
+// An anchor's own invite pasted on that same computer.
+export const SELF_INVITE_WORDS = 'this invite is from this computer itself: it cannot join its own anchor. open the invite on the other computer that should join.';
 
 // again: this computer had joined that anchor before (the same certificate is in the store); the
 // page then says so instead of "joined" a second time
@@ -370,6 +374,9 @@ export async function joinWithInvite(o: {
   const fpPrefix = String(o.fpPrefix ?? '').replace(/[\s-]/g, '').toLowerCase();
   if (fpPrefix && !/^[0-9a-f]+$/.test(fpPrefix)) throw new Error('the certificate is hex (0-9, a-f)');
   if (!p.fp && fpPrefix.length < FP_PREFIX_MIN) throw new Error(`type the start of the anchor's certificate too (${FP_PREFIX_MIN} letters and digits or more)`);
+  // this computer's own invite pasted here: refused before anything is dialed or the code is spent
+  const own = o.identity.fp.toLowerCase();
+  if ((p.fp && p.fp.toLowerCase() === own) || (fpPrefix && own.startsWith(fpPrefix))) throw new Error(SELF_INVITE_WORDS);
   const timeoutMs = o.timeoutMs ?? 6000;
   const ways = candidates(p);
   if (!ways.length) throw new Error('the invite has no address');

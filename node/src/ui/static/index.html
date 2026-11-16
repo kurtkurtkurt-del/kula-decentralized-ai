@@ -241,11 +241,11 @@
           <label class="field"><span>code</span><input id="add-pin" placeholder="16 letters and digits after “code”" spellcheck="false"></label>
           <label class="field"><span>certificate <em>optional</em></span><input id="add-fp" placeholder="the 16 after “certificate”, to be sure" spellcheck="false"></label>
           <label class="field"><span>name <em>optional</em></span><input id="add-name" placeholder="my phone"></label>
-          <label class="switch"><input type="checkbox" id="add-anchor" role="switch"><span>an invite from an anchor (a computer far away: then the certificate is needed)</span></label>
+          <label class="switch"><input type="checkbox" id="add-anchor" role="switch"><span>an invite from an anchor (a computer far away: then the certificate is needed). joining starts sharing this computer, and the anchor's computer may use it</span></label>
           <button type="button" class="primary" id="add-type">pair</button>
         </div>
         <div class="tab-body" data-body="paste" hidden>
-          <p class="hint">paste the code another device or computer shows. an invite from an anchor goes here too: this computer joins that anchor and can then reach your devices through it when far from home.</p>
+          <p class="hint">paste the code another device or computer shows. an invite from an anchor goes here too: this computer joins that anchor and can then reach your devices through it when far from home. joining means this computer starts sharing itself, and the anchor's computer may use it; you are asked first.</p>
           <label class="field"><span>the code another device or computer shows</span><textarea id="add-text" rows="3" spellcheck="false" placeholder="paste it here"></textarea></label>
           <button type="button" class="primary" id="add-paste">add</button>
         </div>

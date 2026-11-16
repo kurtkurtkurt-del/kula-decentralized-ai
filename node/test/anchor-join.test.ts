@@ -25,7 +25,7 @@ type TlsServer = import('../src/gate.ts').TlsServer;
 const { createIdentity, newPin, Paired } = await import('../src/tls.ts');
 type GateIdentity = import('../src/tls.ts').GateIdentity;
 const { AnchorHub, circleMembers } = await import('../src/anchor.ts');
-const { OneTimeCodes, AnchorHost, AnchorLinks, joinWithInvite, joinedAgainWords, readJoined, joinedRoads, pairBackCode, reachableFromOutside, ringCapped } = await import('../src/join.ts');
+const { OneTimeCodes, AnchorHost, AnchorLinks, joinWithInvite, joinedAgainWords, inviteWords, readJoined, joinedRoads, pairBackCode, reachableFromOutside, ringCapped } = await import('../src/join.ts');
 const { parsePeerText, readPeers, writePeers, probePeers, setRing } = await import('../src/peers.ts');
 const { joinAnchor, dialAnchor } = await import('../src/anchor.ts');
 type Peer = import('../src/peers.ts').Peer;
@@ -341,6 +341,64 @@ test('the pair-back code opens for the anchor\'s certificate only, once', async 
     assert.deepEqual(X.codes.recent(A.identity.fp), [{ pin: hpin, why: 'pin used' }]);
     assert.equal(X.codes.take(hpin, A.identity.fp), false, 'once');
   } finally { await closeAll([A, X, S], [echo]); }
+});
+
+// D4 #16: the pair-back left the anchor in this computer's paired list; once its row is forgotten
+// there is no "remove its access" left, so forgetting takes the access away too
+test('forgetting a joined anchor takes away its access: it leaves paired and its next api handshake hears not paired', async () => {
+  const echo = await echoServer();
+  const A = await home('anchor', echo.port, { anchor: true });
+  const B = await home('member', echo.port);
+  const notes: string[] = [];
+  const eB = new Engine({ peersFile: B.peersFile, pairedFile: path.join(B.dir, 'paired'), identity: B.identity, llama: null, log: (s) => notes.push(s) });
+  const toB = async () => {
+    const sock = net.connect({ host: '127.0.0.1', port: B.gate.port });
+    await new Promise((r) => sock.once('connect', r));
+    try { return await handshake(sock, '', 'api', 3000, undefined, { identity: A.identity, fp: B.identity.fp }); } finally { sock.destroy(); }
+  };
+  try {
+    await joinWithInvite({ peer: parsePeerText(A.host!.invite(mapped(A)).code), identity: B.identity, peersFile: B.peersFile, joinedFile: B.joinedFile });
+    link(B);
+    await until(() => B.paired.has(A.identity.fp), 6000, 'A to pair back with B');
+    await toB();
+    const row = eB.peers().find((r) => r.anchor)!;
+    assert.equal(row.usesThisComputer, true, 'the pair-back gave the anchor access');
+    assert.equal(eB.removePeer(row.id), true);
+    assert.deepEqual(readJoined(B.joinedFile), [], 'left the anchor');
+    assert.ok(!B.paired.has(A.identity.fp), 'the anchor is off this computer\'s paired list');
+    assert.ok(notes.some((n) => /^left the anchor .+: it can no longer use this computer$/.test(n)), notes.join(' | '));
+    await assert.rejects(toB(), (e) => e instanceof GateRefused && e.reason === 'not paired');
+  } finally { await eB.close(); await closeAll([A, B], [echo]); }
+});
+
+// D4 #21: an anchor's own invite pasted on that same computer
+test('this computer\'s own invite is refused in plain words, before the code is spent', async () => {
+  const echo = await echoServer();
+  const A = await home('anchor', echo.port, { anchor: true });
+  try {
+    const inv = A.host!.invite(mapped(A));
+    await assert.rejects(
+      joinWithInvite({ peer: parsePeerText(inv.code), identity: A.identity, peersFile: A.peersFile, joinedFile: A.joinedFile }),
+      /^Error: this invite is from this computer itself: it cannot join its own anchor\./,
+    );
+    // typed: address, code and the certificate start
+    const typed: Peer = { id: inv.typed.address, name: '', host: '127.0.0.1', port: A.gate.port, secret: '', fp: null, pin: inv.typed.code, paired_at: null, anchor: true, kind: 'pc', ram: null, bw: null, added_at: 't' };
+    await assert.rejects(
+      joinWithInvite({ peer: typed, fpPrefix: inv.typed.certificate, identity: A.identity, peersFile: A.peersFile, joinedFile: A.joinedFile }),
+      /cannot join its own anchor/,
+    );
+    assert.equal(A.host!.current()?.code, inv.code, 'the invite is still open');
+    assert.ok(!A.paired.has(A.identity.fp));
+    assert.deepEqual(readPeers(A.peersFile), []);
+    assert.deepEqual(readJoined(A.joinedFile), []);
+  } finally { await closeAll([A], [echo]); }
+});
+
+// D4 #17: a stolen invite used first; the real joiner learns what to do about it
+test('the words for an invite used already name the owner\'s remedy', () => {
+  const w = inviteWords(new GateRefused('pin used'));
+  assert.match(w, /used already: each invite works once/);
+  assert.match(w, /if it was not you who used it, tell the anchor's owner to remove the device that used it/);
 });
 
 test('a typed invite: address, code and the certificate start (16 or more) join; a short or wrong start is refused before the code is spent', async () => {
