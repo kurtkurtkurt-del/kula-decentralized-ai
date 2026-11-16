@@ -26,7 +26,7 @@ export interface TrustSource {
   now?: () => number;
 }
 
-interface Reject { t: number; why: string; peer: string }
+interface Reject { t: number; why: string; peer: string; n?: number }
 
 // One chain file as last read: kept while its size and mtime stay the same (rotated files
 // never change; the live one is read again after each append).
@@ -58,7 +58,7 @@ function scan(src: TrustSource, file: string, prevIn: string): FileScan {
     if (!l.includes('"kind":"reject"')) continue;
     try {
       const o = JSON.parse(l);
-      if (o.kind === 'reject') rejects.push({ t: Number(o.t) || 0, why: typeof o.reason === 'string' ? o.reason : '?', peer: typeof o.peer === 'string' ? o.peer : '?' });
+      if (o.kind === 'reject') rejects.push({ t: Number(o.t) || 0, why: typeof o.reason === 'string' ? o.reason : '?', peer: typeof o.peer === 'string' ? o.peer : '?', n: Number.isSafeInteger(o.n) && o.n >= 1 ? Math.min(o.n, 1e9) : 1 });
     } catch {}
   }
   const s: FileScan = { size, mtimeMs, prevIn, hashes: lines.map(sha256Hex), problems: v.problems.length, last: v.last, rejects };
@@ -120,7 +120,8 @@ export function trustBody(src: TrustSource, since: string | null, challenge: str
   const recent: Reject[] = [];
   for (const s of scans) for (const r of s.rejects) {
     if (r.t < now - TRUST_DAY_MS) continue;
-    day[r.why] = (day[r.why] ?? 0) + 1;
+    // one line may stand for n refusals (the auditor's flood limit, 17.11.2026)
+    day[r.why] = (day[r.why] ?? 0) + (r.n ?? 1);
     recent.push(r);
   }
   const cert = src.cert();
