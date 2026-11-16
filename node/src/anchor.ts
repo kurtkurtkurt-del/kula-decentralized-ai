@@ -53,6 +53,16 @@ export const ANCHOR_ACCEPT_MS = 10_000;
 export const ANCHOR_CONTROL_SILENCE_MS = 3 * ANCHOR_PING_MS;
 // tcp keepalive on every anchor leg: dead legs are found this way, never by an idle cut
 export const ANCHOR_KEEPALIVE_MS = 30_000;
+// how often the hub asks again whether every registered member and every stream's two ends are
+// still members (a removed device is cut within this, with or without a drop call); each control
+// line is checked as it comes too
+export const ANCHOR_CHECK_MS = 5_000;
+// streams the friends' devices (capped members) leave free between them, for the person's own
+// devices and this computer's own dials: at most a quarter of streamsTotal
+export const ANCHOR_OWN_STREAMS = 32;
+// a member's side: `open`s being set up at once (one TLS connection each); more are ignored, so a
+// dishonest anchor cannot make a member open connections without end
+export const ANCHOR_ACCEPTS_IN_FLIGHT = 32;
 
 export const FP_RE = /^[0-9a-f]{64}$/;
 export type AnchorKind = 'pc' | 'phone' | 'tablet';
@@ -84,6 +94,9 @@ export interface AnchorOptions {
   record?: () => AddrRecord | null;
   // `who` lines answered per member: a bucket of `burst`, refilled at `perMinute` (default 60, 120)
   whoRate?: { burst: number; perMinute: number };
+  // `record` lines checked per member (each is a certificate parse and a signature check): a
+  // bucket of `burst`, refilled at `perMinute` (default 16, 30); the rest are dropped unread
+  recordRate?: { burst: number; perMinute: number };
   // tests: every byte the anchor carries, as it sees it
   tap?: (dir: 'd→t' | 't→d', data: Buffer) => void;
   // tests: a dishonest anchor changes the records it hands out
@@ -182,15 +195,29 @@ export class AnchorHub {
   private readonly listeners = new Set<(e: AnchorEvent) => void>();
   private readonly dials = new DialBucket();
   private readonly whos = new DialBucket();
+  private readonly recs = new DialBucket();
   private readonly records = new Map<string, AddrRecord>();
   private readonly days = new Map<string, { day: number; bytes: number }>();
   private readonly now: () => number;
+  private readonly checker: NodeJS.Timeout;
   private closed = false;
 
   constructor(private readonly opts: AnchorOptions) {
     this.caps = { ...ANCHOR_CAPS };
     this.setCaps(opts.caps ?? {});
     this.now = opts.now ?? Date.now;
+    this.checker = setInterval(() => this.check(), ANCHOR_CHECK_MS);
+    this.checker.unref();
+  }
+
+  // Membership is asked again, not only at the handshake: whoever is no longer a member (unpaired
+  // and out of the peer book, in any order, drop called or not) loses its control connection and
+  // its streams, both ends.
+  private check(): void {
+    const fps = new Set<string>();
+    for (const fp of this.registry.keys()) fps.add(fp);
+    for (const s of this.streams.values()) { if (!s.self) fps.add(s.from); fps.add(s.to); }
+    for (const fp of fps) { try { this.drop(fp); } catch {} }
   }
 
   // the person changes the caps; a value that is not a positive number is ignored
@@ -240,6 +267,7 @@ export class AnchorHub {
 
   close(): void {
     this.closed = true;
+    clearInterval(this.checker);
     for (const m of this.registry.values()) { this.failPending(m, 'anchor closing'); m.conn.destroy(); }
     this.registry.clear();
     for (const s of this.streams.values()) for (const l of s.legs) l.destroy();
@@ -329,6 +357,8 @@ export class AnchorHub {
     while (this.registry.get(who.fp) === m) {
       let line: string;
       try { line = await reader.line(silence); } catch (e) { why = (e as Error).message === 'timeout' ? 'silent' : 'closed'; break; }
+      // removed since the last line: cut now, the line is not answered
+      if (!this.opts.isMember(who.fp)) { this.drop(who.fp); break; }
       let o: any;
       try { o = JSON.parse(line); } catch { continue; }
       if (o?.t === 'ping') send(socket, { t: 'pong' });
@@ -357,7 +387,10 @@ export class AnchorHub {
 
   // A member gave a record: kept when it is signed by the certificate it names, about the giver
   // itself, a member, or an anchor the giver's own record names, and newer than the one kept.
+  // At most `recordRate` of them are checked per member; the rest are dropped before the check.
   private carry(from: string, x: unknown): void {
+    const r = this.opts.recordRate ?? { burst: 16, perMinute: 30 };
+    if (!this.recs.take(from, r.burst, r.perMinute, this.now())) return;
     const c = checkRecord(x);
     if (!c.ok) return;
     const rec = c.rec;
@@ -366,8 +399,22 @@ export class AnchorHub {
     if (rec.fp !== from && !named && !this.opts.isMember(rec.fp)) return;
     const old = this.records.get(rec.fp);
     if (old && old.seq >= rec.seq) return;
-    if (!old && this.records.size >= ANCHOR_MAX_RECORDS) return;
+    if (!old && this.records.size >= ANCHOR_MAX_RECORDS && !this.makeRoom(rec.fp === from)) return;
     this.records.set(rec.fp, rec);
+  }
+
+  // The store is full: the records `knows()` no longer covers go (an anchor nobody registered names
+  // any more, a device no longer a member). A member's own record is never refused for space: when
+  // everything left is still covered, the oldest record about a non-member goes, else the oldest.
+  private makeRoom(own: boolean): boolean {
+    for (const fp of [...this.records.keys()]) if (!this.knows(fp)) this.records.delete(fp);
+    if (this.records.size < ANCHOR_MAX_RECORDS) return true;
+    if (!own) return false;
+    let victim: string | undefined;
+    for (const fp of this.records.keys()) if (!this.opts.isMember(fp)) { victim = fp; break; }
+    victim ??= this.records.keys().next().value;
+    if (victim !== undefined) this.records.delete(victim);
+    return true;
   }
 
   // `who`: the records held about the fingerprints asked for, each newer than the seq the member
@@ -402,6 +449,16 @@ export class AnchorHub {
     return n;
   }
 
+  // the streams dialed by friends' devices (capped members), all of them together
+  private cappedStreams(): number {
+    let n = 0;
+    for (const s of this.streams.values()) if (!s.self && this.capped(s.from)) n++;
+    return n;
+  }
+
+  // what friends' devices leave free: ANCHOR_OWN_STREAMS, at most a quarter of the total
+  private ownStreams(): number { return Math.min(ANCHOR_OWN_STREAMS, Math.floor(this.caps.streamsTotal / 4)); }
+
   // One stream: the caps, the open to the target, its accept, then the pipe. `ready` is called
   // just before the pipe starts, `refuse` instead of it.
   private async run(d: Dialer, to: string, ready: () => void, refuse: (why: string) => void): Promise<void> {
@@ -414,6 +471,8 @@ export class AnchorHub {
       if (this.streamsOf(d.fp) >= this.caps.streamsPerMember) return refuse('too many streams');
     }
     if (this.streams.size >= this.caps.streamsTotal) return refuse('full');
+    // friends' devices together stop short of the total: the rest stays for the person's own
+    if (!d.self && this.capped(d.fp) && this.cappedStreams() >= this.caps.streamsTotal - this.ownStreams()) return refuse('full');
     const target = this.registry.get(to);
     if (!target) return refuse('not here');
     let sid = randomBytes(8).toString('hex');
@@ -565,9 +624,14 @@ export function joinAnchor(opts: AnchorMemberOptions): Promise<AnchorMembership>
   let retry: NodeJS.Timeout | null = null;
   const streams = new Set<Duplex>();
 
+  // `open`s being set up (from the open to the pipe): at most ANCHOR_ACCEPTS_IN_FLIGHT
+  let accepting = 0;
+  let ignoredAt = 0;
   const accept = async (sid: string, from: string) => {
     let socket: Duplex | null = null;
     let local: net.Socket | null = null;
+    let settled = false;
+    const settle = () => { if (!settled) { settled = true; accepting--; } };
     try {
       const o = await openAnchor(opts.anchor, opts.identity, timeoutMs);
       socket = o.socket;
@@ -580,8 +644,10 @@ export function joinAnchor(opts: AnchorMemberOptions): Promise<AnchorMembership>
       local = net.connect({ host: '127.0.0.1', port: opts.gatePort, allowHalfOpen: true });
       await new Promise<void>((res, rej) => { local!.once('connect', res); local!.once('error', rej); });
       local.setNoDelay(true);
+      settle();
       await pipeBoth(socket, local, rest);
     } catch (e) {
+      settle();
       log(`anchor stream from ${from.slice(0, 16)}…: ${(e as Error).message}`);
       socket?.destroy();
       local?.destroy();
@@ -632,7 +698,16 @@ export function joinAnchor(opts: AnchorMemberOptions): Promise<AnchorMembership>
         try { line = await reader.line(2 * pingMs + timeoutMs); } catch { break; }
         let m: any;
         try { m = JSON.parse(line); } catch { continue; }
-        if (m?.t === 'open' && typeof m.sid === 'string') void accept(m.sid, String(m.from ?? ''));
+        if (m?.t === 'open' && typeof m.sid === 'string') {
+          // counted before the first await, so a burst of opens cannot get past the ceiling
+          if (accepting >= ANCHOR_ACCEPTS_IN_FLIGHT) {
+            const t = Date.now();
+            if (t - ignoredAt > 10_000) { ignoredAt = t; log(`anchor: ${ANCHOR_ACCEPTS_IN_FLIGHT} streams being set up already; more opens are ignored`); }
+            continue;
+          }
+          accepting++;
+          void accept(m.sid, String(m.from ?? ''));
+        }
         else if (m?.t === 'record') { try { book?.take(m.rec); } catch {} }
         else if (m?.t === 'error' && m.reason === 'replaced') { replaced = true; break; }
       }

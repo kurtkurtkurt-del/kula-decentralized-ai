@@ -13,9 +13,10 @@ import path from 'node:path';
 import tls from 'node:tls';
 import { randomBytes } from 'node:crypto';
 import { Duplex } from 'node:stream';
-import { startGateServer, handshake, probe, GateRefused, FP_MISMATCH, type GateServer, type TlsServer } from '../src/gate.ts';
+import { startGateServer, handshake, probe, connectRemote, LineReader, GateRefused, FP_MISMATCH, type GateServer, type TlsServer } from '../src/gate.ts';
 import { createIdentity, newPin, Paired, type GateIdentity } from '../src/tls.ts';
-import { AnchorHub, circleMembers, dialAnchor, joinAnchor, type AnchorCaps, type AnchorEvent, type AnchorMembership, type AnchorRef } from '../src/anchor.ts';
+import { AnchorHub, circleMembers, dialAnchor, joinAnchor, ANCHOR_ACCEPTS_IN_FLIGHT, type AnchorCaps, type AnchorEvent, type AnchorMembership, type AnchorRef } from '../src/anchor.ts';
+import { signRecord } from '../src/addrrecord.ts';
 
 const SECRET_TEXT = 'the bread is fresh in Berlin';
 const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'kula-anchor-'));
@@ -41,18 +42,20 @@ function readAtLeast(s: Duplex, n: number, timeoutMs = 3000): Promise<Buffer> {
 
 interface Home { name: string; dir: string; identity: GateIdentity; paired: Paired; tls: TlsServer; gate: GateServer; hub: AnchorHub | null }
 
-async function home(name: string, echoPort: number, anchor?: { caps?: Partial<AnchorCaps>; tap?: (dir: 'd→t' | 't→d', b: Buffer) => void; events?: AnchorEvent[]; now?: () => number; capped?: (fp: string) => boolean }): Promise<Home> {
+interface HubMore { now?: () => number; capped?: (fp: string) => boolean; recordRate?: { burst: number; perMinute: number } }
+
+async function home(name: string, echoPort: number, anchor?: { caps?: Partial<AnchorCaps>; tap?: (dir: 'd→t' | 't→d', b: Buffer) => void; events?: AnchorEvent[] } & HubMore): Promise<Home> {
   const dir = tmp();
   const identity = createIdentity(name);
   const paired = new Paired(path.join(dir, 'paired'));
   const t: TlsServer = { identity, paired, pin: newPin(), onPinUsed: () => {} };
-  const hub = anchor ? new AnchorHub({ self: identity.fp, isMember: circleMembers(paired, path.join(dir, 'peers.json')), caps: anchor.caps, tap: anchor.tap, now: anchor.now, capped: anchor.capped }) : null;
+  const hub = anchor ? new AnchorHub({ self: identity.fp, isMember: circleMembers(paired, path.join(dir, 'peers.json')), caps: anchor.caps, tap: anchor.tap, now: anchor.now, capped: anchor.capped, recordRate: anchor.recordRate }) : null;
   const gate = await startGateServer({ port: 0, host: '127.0.0.1', secret: null, targets: () => echoPort, tls: t, anchor: hub ?? undefined, onAnchor: anchor?.events ? (e) => anchor.events!.push(e) : undefined });
   return { name, dir, identity, paired, tls: t, gate, hub };
 }
 
 // every member is a friend's device (capped) unless `capped` says otherwise
-async function world(caps?: Partial<AnchorCaps>, more: { now?: () => number; capped?: (fp: string) => boolean } = {}) {
+async function world(caps?: Partial<AnchorCaps>, more: HubMore = {}) {
   const echo = await echoServer();
   const taps: { dir: 'd→t' | 't→d'; b: Buffer }[] = [];
   const events: AnchorEvent[] = [];
@@ -378,5 +381,216 @@ test('two far masters through the anchor cannot both hold a gate\'s rpc slot (it
     d1.socket.destroy();
   } finally {
     await w.close();
+  }
+});
+
+// --- security review D4, group 3 (the anchor hub) ---------------------------------------------
+
+// A member's control connection by hand: the gate handshake on the anchor channel, then JSON lines.
+async function control(port: number, identity: GateIdentity, anchorFp: string) {
+  const raw = await connectRemote('127.0.0.1', port, 3000);
+  const h = await handshake(raw, '', 'anchor', 3000, undefined, { identity, fp: anchorFp });
+  const reader = new LineReader(h.socket);
+  if (h.rest.length) reader.feed(h.rest);
+  h.socket.on('error', () => {});
+  const write = (o: unknown) => h.socket.write(JSON.stringify(o) + '\n');
+  const next = async (ms = 3000) => JSON.parse(await reader.line(ms));
+  return { socket: h.socket, reader, write, next };
+}
+
+async function registered(port: number, identity: GateIdentity, anchorFp: string) {
+  const c = await control(port, identity, anchorFp);
+  c.write({ t: 'register', name: 'by-hand', kind: 'pc' });
+  assert.equal((await c.next()).t, 'registered');
+  return c;
+}
+
+// the far side hung up: 'end' (the legs are half-open, allowHalfOpen) or 'close'
+const closedWithin = (s: Duplex, ms: number): Promise<boolean> => new Promise((resolve) => {
+  if (s.destroyed || s.readableEnded) return resolve(true);
+  const t = setTimeout(() => resolve(false), ms);
+  const done = () => { clearTimeout(t); resolve(true); };
+  s.once('end', done);
+  s.once('close', done);
+  s.resume();
+});
+
+const bookEntry = (fp: string, name: string) => ({ id: name, name, host: '', port: 0, secret: '', fp, pin: null, paired_at: new Date().toISOString(), kind: 'pc', ram: null, bw: null, added_at: new Date().toISOString() });
+
+test('#4 a removed member is cut within 6 s (unpaired then out of the book, or the other way round) with no drop call; its `who` gets no answer', async () => {
+  for (const order of ['paired first', 'book first'] as const) {
+    const w = await world();
+    const { A, B, C } = w;
+    const members: AnchorMembership[] = [];
+    try {
+      // B is the target, registered and piping into an echo server; B1 asks `who` after it is
+      // removed (the line check), B2 stays silent (the 5 s check)
+      members.push(await joinAnchor({ anchor: w.ref, identity: B.identity, name: 'b', kind: 'pc', gatePort: w.echo.port }));
+      const B1 = createIdentity('removed-1');
+      const B2 = createIdentity('removed-2');
+      const book = (fps: GateIdentity[]) => fs.writeFileSync(path.join(A.dir, 'peers.json'), JSON.stringify([bookEntry(C.identity.fp, 'phone-far'), ...fps.map((i, k) => bookEntry(i.fp, `removed-${k}`))]));
+      for (const i of [B1, B2]) A.paired.add(i.fp);
+      book([B1, B2]);
+      const c1 = await registered(A.gate.port, B1, A.identity.fp);
+      const c2 = await registered(A.gate.port, B2, A.identity.fp);
+      const s1 = await dialAnchor(w.ref, B1, B.identity.fp);
+      const s2 = await dialAnchor(w.ref, B2, B.identity.fp);
+      s1.write('one'); s2.write('two');
+      assert.equal((await readAtLeast(s1, 3)).toString(), 'one');
+      assert.equal((await readAtLeast(s2, 3)).toString(), 'two');
+      // the anchor carries C's record and answers `who` about it
+      c1.write({ t: 'record', rec: signRecord(C.identity, { addrs: [{ host: '127.0.0.1', port: 1, via: 'lan' }], anchors: [], seq: 5, at: 5 }) });
+      const who = { t: 'who', fps: [C.identity.fp], seqs: [0] };
+      c1.write(who);
+      assert.equal((await c1.next()).rec.fp, C.identity.fp, 'a member is answered');
+      // the first half of the removal: still a member the other way
+      if (order === 'paired first') { A.paired.remove(B1.fp); A.paired.remove(B2.fp); } else book([]);
+      c1.write(who);
+      assert.equal((await c1.next()).rec.fp, C.identity.fp, `${order}: still a member, still answered`);
+      // the second half: no longer a member, and nobody calls drop
+      if (order === 'paired first') book([]); else { A.paired.remove(B1.fp); A.paired.remove(B2.fp); }
+      c1.write(who);
+      await assert.rejects(c1.next(6000), (e: unknown) => e instanceof Error && e.message !== 'timeout',`${order}: no answer, the control connection is cut`);
+      const cut = await Promise.all([closedWithin(c2.socket, 6000), closedWithin(s1, 6000), closedWithin(s2, 6000)]);
+      assert.deepEqual(cut, [true, true, true], `${order}: the silent member's control connection and both streams are cut within 6 s`);
+      assert.deepEqual(A.hub!.members().map((m) => m.fp), [B.identity.fp], `${order}: only B is left`);
+      assert.ok(w.events.some((e) => e.type === 'leave' && e.fp === B2.fp && e.why === 'removed'));
+    } finally {
+      for (const m of members) await m.close();
+      await w.close();
+    }
+  }
+});
+
+test('#6 200 `record` lines in a second: at most 16 are checked, the rest dropped', async () => {
+  const clock = 5_000_000;
+  const w = await world(undefined, { now: () => clock });
+  try {
+    const c = await registered(w.A.gate.port, w.B.identity, w.A.identity.fp);
+    // in writes of ten lines, so the gate's limit on unread bytes is not what speaks; the clock
+    // stands still, so the whole burst falls in one second
+    for (let seq = 1; seq <= 200; seq++) {
+      c.write({ t: 'record', rec: signRecord(w.B.identity, { addrs: [{ host: '127.0.0.1', port: seq, via: 'lan' }], anchors: [], seq, at: seq }) });
+      if (seq % 10 === 0) await new Promise((r) => setImmediate(r));
+    }
+    c.write({ t: 'ping' });
+    assert.equal((await c.next()).t, 'pong', 'every line was read');
+    // each record is newer than the last: the one kept says how many were checked
+    assert.equal(w.A.hub!.carried(w.B.identity.fp)!.seq, 16);
+    c.socket.destroy();
+  } finally {
+    await w.close();
+  }
+});
+
+test('#7 600 throwaway records from one member: a new member\'s record is still kept and answered', async () => {
+  const w = await world(undefined, { recordRate: { burst: 100_000, perMinute: 6_000_000 } });
+  const { A, B } = w;
+  try {
+    const bad = await registered(A.gate.port, B.identity, A.identity.fp);
+    const addrs = [{ host: '127.0.0.1', port: 9, via: 'lan' as const }];
+    // B names four throwaway "anchors" in its own record, gives their records, renames, again
+    for (let round = 0; round < 150; round++) {
+      const ids = [0, 1, 2, 3].map((i) => createIdentity(`throwaway-${round}-${i}`));
+      let lines = JSON.stringify({ t: 'record', rec: signRecord(B.identity, { addrs, anchors: ids.map((i) => ({ fp: i.fp, host: '127.0.0.1', port: 9 })), seq: round + 1, at: round + 1 }) }) + '\n';
+      for (const i of ids) lines += JSON.stringify({ t: 'record', rec: signRecord(i, { addrs, anchors: [], seq: 1, at: 1 }) }) + '\n';
+      bad.socket.write(lines);
+      await new Promise((r) => setImmediate(r));
+    }
+    bad.write({ t: 'ping' });
+    assert.equal((await bad.next(10_000)).t, 'pong');
+    // a new member comes and gives its own record
+    const E = createIdentity('new-member');
+    A.paired.add(E.fp);
+    const e = await registered(A.gate.port, E, A.identity.fp);
+    e.write({ t: 'record', rec: signRecord(E, { addrs, anchors: [], seq: 7, at: 7 }) });
+    e.write({ t: 'ping' });
+    assert.equal((await e.next()).t, 'pong');
+    assert.equal(A.hub!.carried(E.fp)?.seq, 7, 'the new member\'s record is kept');
+    bad.write({ t: 'who', fps: [E.fp], seqs: [0] });
+    const got = await bad.next();
+    assert.equal(got.t, 'record');
+    assert.equal(got.rec.fp, E.fp, 'and handed to a member that asks');
+    bad.socket.destroy(); e.socket.destroy();
+  } finally {
+    await w.close();
+  }
+});
+
+test('#13 friends\' devices together leave 32 streams free: the person\'s own dials and dialLocal still get through', async () => {
+  const friends = Array.from({ length: 8 }, (_, i) => createIdentity(`friend-${i}`));
+  const friendFps = new Set(friends.map((f) => f.fp));
+  const w = await world(undefined, { capped: (fp) => friendFps.has(fp) });
+  const { A, B, C } = w;
+  const open: Duplex[] = [];
+  let m: AnchorMembership | null = null;
+  try {
+    for (const f of friends) A.paired.add(f.fp);
+    // B (the person's own) is the target, piping into an echo server
+    m = await joinAnchor({ anchor: w.ref, identity: B.identity, name: 'b', kind: 'pc', gatePort: w.echo.port });
+    // eight friends at their 16 streams each would fill all 128
+    let full = 0;
+    for (const f of friends) {
+      for (let i = 0; i < 16; i++) {
+        try { open.push(await dialAnchor(w.ref, f, B.identity.fp)); }
+        catch (e) { assert.ok(e instanceof GateRefused && e.reason === 'full', String(e)); full++; }
+      }
+    }
+    assert.equal(open.length, 96, 'friends stop at 128 - 32');
+    assert.equal(full, 32);
+    // the anchor's own dial and the person's own device (C, not capped) still get a stream
+    const mine = await A.hub!.dialLocal(B.identity.fp);
+    mine.write('mine');
+    assert.equal((await readAtLeast(mine, 4)).toString(), 'mine');
+    open.push(mine);
+    const own = await dialAnchor(w.ref, C.identity, B.identity.fp);
+    open.push(own);
+    assert.equal(A.hub!.stats().streams, 98);
+  } finally {
+    for (const s of open) s.destroy();
+    await m?.close();
+    await w.close();
+  }
+});
+
+test('#14 a member sets up at most 32 accepts at once: 100 `open`s from a dishonest anchor give at most 32 connections', async () => {
+  const echo = await echoServer();
+  const dir = tmp();
+  const identity = createIdentity('dishonest-anchor');
+  const paired = new Paired(path.join(dir, 'paired'));
+  const member = createIdentity('member');
+  paired.add(member.fp);
+  let accepts = 0;
+  // an anchor that asks for 100 streams at once and never answers an accept
+  class Dishonest extends AnchorHub {
+    override async serve(socket: Duplex, reader: LineReader, _who: { fp: string; peer: string }, done: () => void): Promise<void> {
+      socket.on('error', () => {});
+      let msg: any;
+      try { msg = JSON.parse(await reader.line(3000)); } catch { socket.destroy(); return; }
+      done();
+      if (msg.t === 'accept') { accepts++; return; }   // held, never answered
+      if (msg.t !== 'register') { socket.destroy(); return; }
+      let lines = JSON.stringify({ t: 'registered' }) + '\n';
+      for (let i = 0; i < 100; i++) lines += JSON.stringify({ t: 'open', sid: `s${i}`, from: 'ab'.repeat(32) }) + '\n';
+      socket.write(lines);
+      for (;;) { try { await reader.line(60_000); } catch { break; } }
+    }
+  }
+  const hub = new Dishonest({ self: identity.fp, isMember: (fp) => paired.has(fp) });
+  const gate = await startGateServer({ port: 0, host: '127.0.0.1', secret: null, targets: () => echo.port, tls: { identity, paired, pin: null, onPinUsed: () => {} }, anchor: hub });
+  let connects = 0;
+  const ref: AnchorRef = { host: '127.0.0.1', port: gate.port, fp: identity.fp, connect: async () => { connects++; return connectRemote('127.0.0.1', gate.port, 3000); } };
+  const m = await joinAnchor({ anchor: ref, identity: member, name: 'm', kind: 'pc', gatePort: echo.port, timeoutMs: 3000, retryMs: 60_000 });
+  try {
+    await sleep(1000);
+    const acceptConnections = connects - 1;   // the first is the control connection
+    assert.ok(acceptConnections > 0, 'the member did accept');
+    assert.ok(acceptConnections <= ANCHOR_ACCEPTS_IN_FLIGHT, `${acceptConnections} accept connections for 100 opens`);
+    assert.ok(accepts <= ANCHOR_ACCEPTS_IN_FLIGHT);
+  } finally {
+    await m.close();
+    hub.close();
+    await gate.close();
+    echo.close();
   }
 });
