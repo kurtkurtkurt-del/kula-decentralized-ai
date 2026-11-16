@@ -13,7 +13,8 @@ import { findLlama, TAG } from './llama.js';
 import { home, expandHome } from './paths.js';
 import { lanIPv4, globalIPv6, freeRamMB, measureBandwidth, detectGpu } from './sysinfo.js';
 import { startPortMapper, mapLine, type PortMapper } from './portmap.js';
-import type { PeerAddr } from './peers.js';
+import { peersFile, type PeerAddr } from './peers.js';
+import { AnchorHub, circleMembers, type AnchorCaps, type AnchorEvent } from './anchor.js';
 import { freePort, startChild, type Child, exited } from './children.js';
 import { startApiServer, type ApiServer, apiAuth } from './api.js';
 import { loadOrCreateKey } from './audit/key.js';
@@ -45,6 +46,9 @@ export interface ShareOptions {
   // ask the router for the gate port (PCP, NAT-PMP, UPnP-IGD; docs/INTERNET.md). needs tls only
   mapPort?: boolean;
   gateway?: string;           // the router to ask; default: the system's default route
+  // be an anchor for this computer's circle (docs/ANCHOR.md): members that cannot reach each
+  // other talk through this gate. true: the default caps; an object: those caps. needs tls.
+  anchor?: boolean | Partial<AnchorCaps>;
 }
 
 // The qr the phone scans. v2 carries the shared secret (protocol v1); v3 carries
@@ -99,6 +103,7 @@ export type ShareHandle = (() => Promise<void>) & {
   gatePort: number; dashboard: Dashboard | null; deviceName: string; host: string | null;
   qr(): string; code(): { pin: string; exp: number } | null;
   paired(): number;   // devices that may come in without a code (~/.kula-node/paired)
+  anchor?: AnchorHub | null;  // with the anchor option: its registry, caps and own dials (dialLocal)
 };
 
 export async function share(opts: ShareOptions): Promise<ShareHandle> {
@@ -113,6 +118,7 @@ export async function share(opts: ShareOptions): Promise<ShareHandle> {
   if (opts.relay && opts.tls === false) throw new Error('--relay needs tls: the handshake crosses the relay and must be end to end (drop --no-tls)');
   // the internet must never meet v1: it proves no identity and carries prompts in plain text
   if (opts.mapPort && (opts.tls === false || opts.secret)) throw new Error('--map-port needs tls only: drop --no-tls and --secret (v1 must not face the internet)');
+  if (opts.anchor && opts.tls === false) throw new Error('an anchor needs tls: members are known by their certificates (drop --no-tls)');
   const useTls = opts.tls !== false;
   if (!useTls) log('tls is off (--no-tls): v1 only, prompts and answers cross the network in plain text');
   // v1 needs a secret in a qr. With tls the qr carries none, so unless one was given
@@ -257,7 +263,23 @@ export async function share(opts: ShareOptions): Promise<ShareHandle> {
   // dual-stack unless asked not to, or while v1 may be heard: plain text stays on ipv4 as before
   const dualStack = opts.dualStack !== false && !v1Open(secret, tlsServer);
   if (opts.dualStack !== false && !dualStack) log('the gate stays on ipv4 while v1 is on (--secret / --no-tls)');
-  const gate = await startGateServer({ port: opts.port, dualStack, secret, targets, onEvent, admit: (peer, nonceC, unixMs) => auditor.hello(peer, nonceC, unixMs), tls: tlsServer, rpcGuard: true });
+  // the anchor: members are the devices paired with this gate and the ones this computer paired
+  // with as a master (its peer book); it carries their bytes and learns who, when and how much
+  let anchor: AnchorHub | null = null;
+  if (opts.anchor && tlsServer) {
+    anchor = new AnchorHub({ self: tlsServer.identity.fp, isMember: circleMembers(tlsServer.paired, peersFile()), caps: typeof opts.anchor === 'object' ? opts.anchor : undefined });
+    const c = anchor.caps;
+    log(`anchor on: ${c.streamsPerMember} streams per member, ${c.streamsTotal} in all, ${c.dialsPerMinute} dials a minute, ${Math.round(c.bytesPerDay / 1e9 * 10) / 10} GB a day per dialing member`);
+  }
+  const short = (fp: string | null) => (fp ? `${fp.slice(0, 16)}…` : '?');
+  const onAnchor = (e: AnchorEvent) => {
+    if (e.type === 'register') log(`anchor: ${e.name || short(e.fp)} (${e.kind}, ${short(e.fp)}) registered from ${e.peer}${e.replaced ? ', replacing its earlier connection' : ''}`);
+    else if (e.type === 'leave') log(`anchor: ${short(e.fp)} left (${e.why})`);
+    else if (e.type === 'open') log(`anchor: stream ${short(e.from)} → ${short(e.to)}`);
+    else if (e.type === 'close') log(`anchor: stream ${short(e.from)} → ${short(e.to)} ended after ${e.ms} ms, ${e.bytes} bytes`);
+    else log(`anchor: refused ${e.peer}${e.fp ? ` (${short(e.fp)})` : ''}: ${e.reason}${e.to ? ` (to ${short(e.to)})` : ''}`);
+  };
+  const gate = await startGateServer({ port: opts.port, dualStack, secret, targets, onEvent, admit: (peer, nonceC, unixMs) => auditor.hello(peer, nonceC, unixMs), tls: tlsServer, rpcGuard: true, anchor: anchor ?? undefined, onAnchor });
   liveGate = gate;
   // the router's door to the gate, when the person asked for one (--map-port)
   let mapper: PortMapper | null = null;
@@ -357,6 +379,7 @@ export async function share(opts: ShareOptions): Promise<ShareHandle> {
     bonjour.destroy();
     await relay?.close();
     await mapper?.stop();
+    anchor?.close();
     await gate.close();
     if (api) await api.close();
     if (rpc) await rpc.stop();
@@ -369,6 +392,7 @@ export async function share(opts: ShareOptions): Promise<ShareHandle> {
     gatePort: gate.port, dashboard, deviceName: name, host,
     qr: () => qrText,
     paired: () => tlsServer?.paired.size ?? 0,
+    anchor,
     // a code that ran out by time is renewed here, so whoever asks never shows a dead one
     code: () => {
       if (!tlsServer) return null;

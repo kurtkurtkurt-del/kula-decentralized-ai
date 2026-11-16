@@ -18,8 +18,17 @@ the connection, unchanged, to the local port of the requested channel.
 |---|---|---|
 | `rpc` | `ggml-rpc-server` on 127.0.0.1 | split mode (one master at a time) |
 | `api` | `ApiServer.kt` / `node/src/api.ts` / dev-gate's shim on 127.0.0.1 | apart mode, the night |
+| `anchor` | the anchor itself (`node/src/anchor.ts`): a member's control connection, or a pipe to another member's gate | devices that cannot reach each other (16.11.2026; kula-node with the anchor on only, v2 only) |
 
-To reach a device behind another NAT the gate does not change: the relay pipes the two ends and v2 TLS runs end to end inside the pipe; see `docs/RELAY.md`.
+**The third channel, `anchor`** (16.11.2026, [ANCHOR.md](ANCHOR.md)): a reachable circle computer
+carries bytes between two of its members. Same KULA2 handshake, but members only (a certificate in
+the gate's `paired` list, or pinned with `paired_at` in the computer's peer book), the server
+always answers `paired` or `NO not paired` and **never `pin`**, and then one JSON line follows
+(`register`, `dial`, `accept`). Membership gives nothing on `rpc` or `api`. The dialer runs a fresh
+gate handshake with the target's own gate inside the pipe, so the anchor sees only TLS records.
+Without the anchor turned on, and on the phone, `anchor` is `bad channel` as before.
+
+To reach a device behind another NAT through a hosted relay the gate does not change either: the relay pipes the two ends and v2 TLS runs end to end inside the pipe; see `docs/RELAY.md`.
 
 A master never talks to the gate directly either: it opens a **tunnel**, a listener on its
 own 127.0.0.1 that does the handshake once and then pipes bytes both ways. llama.cpp or the
@@ -246,7 +255,7 @@ The wire reply is `NO <reason>`; the same word is the `why` of the ledger's `rej
 |---|---|
 | `no hello` | no line within 5 s |
 | `bad hello` | not `KULA1`/`KULA2`, wrong field count, a clock that is not a number (v2 requires it) |
-| `bad channel` | not `rpc` or `api` |
+| `bad channel` | not `rpc` or `api` (or `anchor` on a kula-node with the anchor on) |
 | `bad nonce` | not 32 hex |
 | `replay` | this peer used this nonce before (v1 with an auditor; always in v2) |
 | `clock` | the client's clock is more than 120 s from ours (same scope as `replay`) |
@@ -255,11 +264,11 @@ The wire reply is `NO <reason>`; the same word is the `why` of the ledger's `rej
 | `no tls` | a TLS client reached a server that only speaks v1 (the client sees a TLS error) |
 | `tls` | the TLS handshake did not finish (ledger only; no line can reach the client) |
 | `no client cert` | a v2 client presented no certificate |
-| `not paired` | the client certificate is unknown and there is no open code, or the client sent no code, or the open code was made for another computer's certificate |
+| `not paired` | the client certificate is unknown and there is no open code, or the client sent no code, or the open code was made for another computer's certificate; on `anchor`: the certificate is not a member, whatever code is open |
 | `wrong pin` | the pairing proof did not match |
 | `bad proof` | a paired client sent something other than `-` |
 | `channel closed` | the channel's local target is not running (no model loaded, the api server not started) |
-| `busy` | another peer is on the `rpc` channel |
+| `busy` | another master is on the `rpc` channel: another certificate in v2 (kula-node since 16.11.2026; streams through an anchor or relay all come from 127.0.0.1), another address in v1 |
 | `target down` | the 127.0.0.1 target refused the connection |
 | `overloaded` | more than 32 connections in the handshake at once (answered at once, before any hello) |
 | `no v1` | the server has no v1 secret (`kula-node share --tls` without `--secret`); a plain hello is refused |
@@ -267,6 +276,10 @@ The wire reply is `NO <reason>`; the same word is the `why` of the ledger's `rej
 
 Client-side errors: `fingerprint mismatch` (the server certificate is not the one in the
 QR; no hello is sent), `tls …` (handshake failure), `server proof wrong`.
+
+After `OK -` on the `anchor` channel, refusals are JSON lines (`{"t":"error","reason"}`: `not here`,
+`bad dial`, `too many streams`, `full`, `too many dials`, `byte limit`, …); see
+[ANCHOR.md](ANCHOR.md#the-channel).
 
 ## the api channel's two rules from the gate (10.11.2026)
 

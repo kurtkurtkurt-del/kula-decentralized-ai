@@ -23,6 +23,12 @@ and a growing share of ISPs hand out IPv6).
 
 ## the layers
 
+> **16.11.2026: layers 3 and 4 are superseded by [ANCHOR.md](ANCHOR.md).** There is no hole
+> punching and no QUIC: a reachable circle computer (layer 1 or 2) is an *anchor*, a third
+> channel on its gate, and carries bytes between members that cannot reach each other, TLS end to
+> end inside. Unlike layer 4 below it carries the rpc channel too (split mode), with caps. The
+> text below is kept as it was decided on 11.11.2026.
+
 Each layer is tried only when the one before did not reach the device. All of them carry the
 same gate protocol; none changes who is trusted.
 
@@ -63,6 +69,8 @@ client says so.
 
 ### 3. QUIC hole punching with an introducer from your circle
 
+*Superseded on 16.11.2026 by [ANCHOR.md](ANCHOR.md): no hole punching.*
+
 Both devices send UDP to each other's public address at the same moment, so each NAT sees an
 outgoing flow and lets the answer in. Someone both can reach must tell each the other's public
 address and the moment: the introducer. In kula that is any paired device of the circle that is
@@ -72,6 +80,9 @@ pair of NATs (two strict NATs defeat it); a 2025 large-scale measurement of libp
 not read for this page: check them there before quoting a number.
 
 ### 4. Limited relay on a circle device
+
+*Superseded on 16.11.2026 by [ANCHOR.md](ANCHOR.md): the circle device is the anchor, a channel
+on its gate rather than a WebSocket relay, and it carries split streams too.*
 
 What [RELAY.md](RELAY.md) does with a hosted WebSocket relay, done by a circle device instead:
 both ends connect out to it, it pipes bytes, and the gate's v2 TLS runs end to end inside the
@@ -114,6 +125,11 @@ Sources: [iroh 1.0](https://iroh.computer/blog/v1), [iroh Kotlin docs](https://d
 4. **Split mode never goes over the internet.** The rpc channel (one model across devices) needs
    LAN latency; it is only ever dialled at the peer's LAN address. A device reached only over
    the internet works in apart mode, and the brain says so on a card.
+   *Superseded on 16.11.2026 by [ANCHOR.md](ANCHOR.md): measured on 16.11.2026, each far worker
+   adds about one round trip per token (Qwen3-0.6B: 46 tok/s at 0 ms, 17.7 at 30 ms, 7.7 at
+   100 ms), so a far split is slow but works; the anchor carries rpc streams and the planner (stage
+   3) will show the estimate and let the person pick split or apart. Today's code still dials rpc
+   at the LAN address only.*
 5. **For layer 3 (QUIC), iroh is the candidate**, not libp2p and not our own QUIC: it dials keys
    (our principle), it is stable since 1.0, it has both a Node and a Kotlin binding, and its
    relay/introducer role is a program a circle device can run. The gate protocol would run

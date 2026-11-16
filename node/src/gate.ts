@@ -14,6 +14,7 @@ import { ReplayCheck, clockCheck } from './audit/checks.js';
 import { fingerprint, type GateIdentity, type Paired } from './tls.js';
 import { isLoopback, plainIp } from './policy.js';
 import { RpcGuard } from './rpcguard.js';
+import type { AnchorHub, AnchorEvent } from './anchor.js';
 
 export type Channel = 'rpc' | 'api';
 export const CHANNELS: Channel[] = ['rpc', 'api'];
@@ -265,6 +266,11 @@ export interface GateServerOptions {
   // read what a remote client sends on the rpc channel and cut it before a graph with a code
   // op reaches ggml-rpc-server (rpcguard.ts); kula-node share turns it on
   rpcGuard?: boolean;
+  // the third channel, `anchor` (docs/ANCHOR.md): v2 only, members only, no pin path; without
+  // it an anchor hello is told "NO bad channel" as before. Its events come on onAnchor, apart
+  // from GateEvent.
+  anchor?: AnchorHub;
+  onAnchor?: (e: AnchorEvent) => void;
 }
 
 // A duplex over a socket whose first bytes were already read: the TLS wrapper
@@ -324,10 +330,12 @@ function connectLocal(port: number, timeoutMs = 3000): Promise<net.Socket> {
 
 export async function startGateServer(opts: GateServerOptions): Promise<GateServer> {
   const emit = opts.onEvent ?? (() => {});
-  // The rpc channel is one remote peer at a time: the ip that holds it and how
-  // many of its connections are open.
-  let rpcPeer: string | null = null;
+  // The rpc channel is one remote master at a time: who holds it and how many of its
+  // connections are open. Who = the client certificate in v2, the ip in v1: streams through
+  // an anchor or a relay all arrive from 127.0.0.1, so two far masters would share an ip.
+  let rpcHolder: string | null = null;
   let rpcOpen = 0;
+  const unAnchor = opts.anchor && opts.onAnchor ? opts.anchor.on(opts.onAnchor) : null;
   // v2 checks replays and clocks itself when no admit hook does
   const ring = new ReplayCheck();
   const secureContext = opts.tls ? tls.createSecureContext({ key: opts.tls.identity.keyPem, cert: opts.tls.identity.certPem, minVersion: 'TLSv1.3' }) : null;
@@ -342,7 +350,8 @@ export async function startGateServer(opts: GateServerOptions): Promise<GateServ
       s.destroy();
       n++;
     }
-    return n;
+    // its anchor connections too, unless it is still a member another way (the peer book)
+    return n + (opts.anchor?.drop(fp) ?? 0);
   };
 
   // After the proof: find the target, say OK, pipe until either side closes. `handshakeDone`
@@ -351,10 +360,11 @@ export async function startGateServer(opts: GateServerOptions): Promise<GateServ
     let targetPort: number | null = null;
     try { targetPort = await opts.targets(channel); } catch { targetPort = null; }
     if (targetPort == null) return refuse('channel closed');
-    if (channel === 'rpc' && rpcPeer !== null && rpcPeer !== peer && rpcOpen > 0) return refuse('busy');
+    const who = fp ?? peer;
+    if (channel === 'rpc' && rpcHolder !== null && rpcHolder !== who && rpcOpen > 0) return refuse('busy');
     // the rpc slot is taken before the (async) connect, so two peers arriving together cannot both get it
-    if (channel === 'rpc') { rpcPeer = peer; rpcOpen++; }
-    const letGo = () => { if (channel === 'rpc') { rpcOpen--; if (rpcOpen === 0) rpcPeer = null; } };
+    if (channel === 'rpc') { rpcHolder = who; rpcOpen++; }
+    const letGo = () => { if (channel === 'rpc') { rpcOpen--; if (rpcOpen === 0) rpcHolder = null; } };
     let target: net.Socket;
     try { target = await connectLocal(targetPort); } catch { letGo(); return refuse('target down'); }
     target.setNoDelay(true);
@@ -446,8 +456,9 @@ export async function startGateServer(opts: GateServerOptions): Promise<GateServ
     try { hello = await reader.line(HANDSHAKE_MS); } catch { return refuse('no hello'); }
     const parts = hello.trim().split(' ');
     if (parts.length !== 4 || parts[0] !== 'KULA2') return refuse('bad hello');
-    if (!CHANNELS.includes(parts[1] as Channel)) return refuse('bad channel');
-    channel = parts[1] as Channel;
+    const hub = parts[1] === 'anchor' ? opts.anchor : undefined;
+    if (!hub && !CHANNELS.includes(parts[1] as Channel)) return refuse('bad channel');
+    if (!hub) channel = parts[1] as Channel;
     const nonceC = parts[2];
     if (!isNonce(nonceC)) return refuse('bad nonce');
     if (!/^\d{1,16}$/.test(parts[3])) return refuse('bad hello');
@@ -455,6 +466,27 @@ export async function startGateServer(opts: GateServerOptions): Promise<GateServ
     const why = opts.admit ? opts.admit(peer, nonceC, unixMs) : (ring.check(peer, nonceC) ?? clockCheck(unixMs, Date.now()));
     if (why) return refuse(why);
     if (!fpC) return refuse('no client cert');
+    if (hub) {
+      // the anchor channel (docs/ANCHOR.md): members only, and never a pin: a stranger hears
+      // "not paired" even while a pairing code is open, so nobody pairs through this door. Being
+      // a member gives nothing on rpc or api: those stay with the paired set below.
+      const no = (reason: string) => {
+        hub.refused(peer, fpC, reason);
+        try { writeLine(socket, `NO ${reason}`); } catch {}
+        socket.end();
+        setTimeout(() => socket.destroy(), 200);
+      };
+      if (!hub.isMember(fpC)) return no('not paired');
+      writeLine(socket, `${nonce()} paired`);
+      let proof: string;
+      try { proof = await reader.line(HANDSHAKE_MS); } catch { return no('no proof'); }
+      if (proof.trim() !== '-') return no('bad proof');
+      writeLine(socket, 'OK -');
+      // no idle cut on anchor legs (an rpc stream sits idle between chats): tcp keepalive finds dead ones
+      raw.setKeepAlive(true, 30_000);
+      return hub.serve(socket, reader, { fp: fpC, peer }, handshakeDone);
+    }
+    const ch = parts[1] as Channel;
     const paired = t.paired.has(fpC);
     let pin = t.pin;
     if (!paired && pin !== null && t.pinExpiresAt != null && Date.now() > t.pinExpiresAt) {
@@ -475,18 +507,18 @@ export async function startGateServer(opts: GateServerOptions): Promise<GateServ
       if (proof !== '-') return refuse('bad proof');
       okLine = 'OK -';
     } else {
-      if (!sameHex(proof, pinProofClient(pin!, nonceC, nonceS, channel, fpS, fpC))) return refuse('wrong pin');
+      if (!sameHex(proof, pinProofClient(pin!, nonceC, nonceS, ch, fpS, fpC))) return refuse('wrong pin');
       // the code must still be the open one now: a second handshake that waited with the same
       // code while the first paired (or the code ran out or was replaced) is refused (review 1.5)
       if (t.pin !== pin || (t.pinExpiresAt != null && Date.now() > t.pinExpiresAt)) return refuse('pin used');
       // the first connection with the right code pairs the client and spends the code
       t.paired.add(fpC);
       t.pin = null;
-      emit({ type: 'pair', channel, peer, at: Date.now(), v: 2, fp: fpC });
+      emit({ type: 'pair', channel: ch, peer, at: Date.now(), v: 2, fp: fpC });
       t.onPinUsed?.();
-      okLine = `OK ${pinProofServer(pin!, nonceC, nonceS, channel, fpS, fpC)}`;
+      okLine = `OK ${pinProofServer(pin!, nonceC, nonceS, ch, fpS, fpC)}`;
     }
-    await admitted(socket, peer, channel, okLine, reader.release(), 2, fpC, refuse, handshakeDone);
+    await admitted(socket, peer, ch, okLine, reader.release(), 2, fpC, refuse, handshakeDone);
   };
 
   // Half-open on every leg: a peer that sends its FIN after the request still gets the
@@ -573,6 +605,7 @@ export async function startGateServer(opts: GateServerOptions): Promise<GateServ
     server,
     drop,
     close: () => new Promise<void>((resolve) => {
+      unAnchor?.();
       server.close(() => resolve());
       for (const s of open) s.destroy();
     }),
@@ -610,8 +643,9 @@ export function wrapClient(socket: Duplex, t: TlsClient, timeoutMs = HANDSHAKE_M
 // line (normally nothing); `fp` is the worker's certificate fingerprint in v2 (the
 // pinned one, or the learned one when tlsOpts.fp was empty). With `tls` the v2
 // handshake runs, else v1. The socket may be any duplex stream: a tcp socket on
-// the lan, a relayed stream from far away (relay.ts).
-export async function handshake(socket: Duplex, secret: string, channel: Channel, timeoutMs = HANDSHAKE_MS, clockMs?: number, tlsOpts?: TlsClient | null): Promise<{ rest: Buffer; socket: Duplex; fp: string | null }> {
+// the lan, a relayed stream from far away (relay.ts), a stream through an anchor (anchor.ts).
+// 'anchor' is the anchor's own channel (v2 only; the anchor never asks for a pin there).
+export async function handshake(socket: Duplex, secret: string, channel: Channel | 'anchor', timeoutMs = HANDSHAKE_MS, clockMs?: number, tlsOpts?: TlsClient | null): Promise<{ rest: Buffer; socket: Duplex; fp: string | null }> {
   if (tlsOpts) {
     const s = await wrapClient(socket, tlsOpts, timeoutMs);
     const reader = new LineReader(s);
