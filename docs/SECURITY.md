@@ -216,7 +216,7 @@ pinned (with `paired_at`) in the peer book. Both must go before the anchor turns
 | ... and it is no longer in the peer book either (in either order) | on the anchor: its control connection, its streams (both ends), and its `who` lines get no answer | within 5 s: the anchor asks again every 5 s and on every control line, whether or not anyone called `drop` |
 | forgets it in the peer book but leaves it paired | nothing: it is still a member, and still paired | — |
 | on a computer that joined an anchor: forgets the anchor on the page | it stops registering there, **and** the anchor's computer is taken off this computer's `paired` list (one signed ledger line), so it can no longer use this computer | as removing access, above |
-| on a phone that joined an anchor: forgets the anchor | it stops registering there. The anchor's computer keeps its access to the phone until it is removed under "devices that can use this phone" | removal there: refused at once, open connections closed |
+| on a phone that joined an anchor: forgets the anchor | it stops registering there, and the anchor's computer loses its access to the phone at once (its open connections are cut); coming back takes a new invite |
 
 ### logging
 
@@ -285,7 +285,7 @@ pinned (with `paired_at`) in the peer book. Both must go before the anchor turns
 - **A stolen invite** used within its 10 minutes gives the thief the ring the invite named:
   `home` for a "mine" invite.
 - **The phone:** Doze, network handover and TLS inside TLS are shown only on a real device. The
-  phone does not sign, give or take address records yet, and it has no ceiling on the `open`s it
-  sets up. On the phone, an anchor's computer counts as a friend's for the rpc seat only while
-  the anchor is joined as "a friend's computer"; once the anchor is forgotten, its computer (still
-  paired until removed) counts as the person's own.
+  phone does not sign, give or take address records yet. On the phone, an anchor's computer counts
+  as a friend's for the rpc seat while the anchor is joined as "a friend's computer"; forgetting the
+  anchor also removes its computer's access to the phone (and any separate pairing with that same
+  computer, as on kula-node). The phone sets up at most 32 `open`s from an anchor at once.

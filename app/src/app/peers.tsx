@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Alert, Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { router } from 'expo-router';
 import EmptyState from '@/components/EmptyState';
 import StaffPage from '@/components/StaffPage';
@@ -8,7 +8,7 @@ import { parseLedger, peerBadge, type AuditEntry } from '@/llm/audit';
 import { probeAll } from '@/llm/cluster';
 import { tapSelect } from '@/lib/haptics';
 import { hasNative, llama, type PeerFound } from '@/llm/native';
-import { isRemote } from '@/llm/peers';
+import { forgetPeerRow, isRemote } from '@/llm/peers';
 import { forgetPeer, usePeers, type Peer } from '@/llm/store';
 import { peerWhere, ScanModal, usePeerAdd } from '@/components/models/PeerScan';
 import { VERDICT_COLOR } from '@/theme/audit';
@@ -37,6 +37,29 @@ export default function PeersScreen() {
   }, [peers.length]);
 
   const { take, paste, err, setErr, note } = usePeerAdd(() => setScan(false));
+  const [left, setLeft] = useState<string | null>(null);
+  useEffect(() => {
+    if (!left) return;
+    const id = setTimeout(() => setLeft(null), 5000);
+    return () => clearTimeout(id);
+  }, [left]);
+  // an anchor's row is left behind a yes: leaving also takes its computer's access to this phone (D4 #16)
+  const remove = (p: Peer) => {
+    tapSelect();
+    if (!p.anchor) { forgetPeer(p.id); return; }
+    const name = p.name.toLowerCase();
+    Alert.alert(t('peers.leave.title', { name }), t('peers.leave.body'), [
+      { text: t('word.cancel'), style: 'cancel' },
+      {
+        text: t('peers.leave.yes'),
+        style: 'destructive',
+        onPress: () => {
+          setErr(null);
+          forgetPeerRow(p).then(() => setLeft(t('peers.left', { name })), (e: unknown) => setErr(String((e as Error)?.message ?? e)));
+        },
+      },
+    ]);
+  };
   const openScan = () => {
     setErr(null);
     setScan(true);
@@ -80,7 +103,7 @@ export default function PeersScreen() {
             <Text style={[styles.meta, ok[p.id] === true && styles.okText, ok[p.id] === false && styles.offText]}>{ok[p.id] === null ? '…' : ok[p.id] ? t('peers.ok') : ok[p.id] === false ? t('peers.off') : ''}</Text>
           </View>
           <Badge verdict={peerBadge(audit, p.host)} label={t(`audit.verdict.${peerBadge(audit, p.host)}`)} />
-          <Pressable onPress={() => { tapSelect(); forgetPeer(p.id); }} hitSlop={10} accessibilityRole="button" accessibilityLabel={t('a11y.remove', { name: p.name })} style={styles.xHit}><Text style={styles.x}>×</Text></Pressable>
+          <Pressable onPress={() => remove(p)} hitSlop={10} accessibilityRole="button" accessibilityLabel={t('a11y.remove', { name: p.name })} style={styles.xHit}><Text style={styles.x}>×</Text></Pressable>
         </View>
       ))}
       <View style={styles.actions}>
@@ -103,7 +126,7 @@ export default function PeersScreen() {
           <Text style={styles.compLink}>{t('comp.title')} ›</Text>
         </Pressable>
       ) : null}
-      {note ? <Text style={styles.okText} accessibilityLiveRegion="polite">{note}</Text> : null}
+      {note || left ? <Text style={styles.okText} accessibilityLiveRegion="polite">{note ?? left}</Text> : null}
       {err && !scan ? <Text style={styles.offText} accessibilityRole="alert">{err}</Text> : null}
       {nearby.filter((f) => !known.has(f.id ?? '')).length ? (
         <>

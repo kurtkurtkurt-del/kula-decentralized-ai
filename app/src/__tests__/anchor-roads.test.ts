@@ -38,11 +38,18 @@ const mockNative = {
     if (!mockNative.joinAnswer) throw new Error('this invite was used already: each invite works once. ask for a new one.');
     return mockNative.joinAnswer;
   },
+  forgets: [] as string[],
+  forgetFails: false,
+  forgetAnchor: async (fp: string) => {
+    if (mockNative.forgetFails) throw new Error('no store');
+    mockNative.forgets.push(fp);
+    return [];
+  },
 };
 jest.mock('@/llm/native', () => ({ get llama() { return mockNative; }, native: () => mockNative, hasNative: () => true, GATE_PORT: 50551 }));
 
 import { peerArgs, probeAll, REMOTE_NO_SPLIT, type Plan } from '@/llm/cluster';
-import { fromBase64Url, isInvite, isPeerQr, joinInvite, parseInvite, parsePeerQr, takePeerQr } from '@/llm/peers';
+import { forgetPeerRow, fromBase64Url, isInvite, isPeerQr, joinInvite, parseInvite, parsePeerQr, takePeerQr } from '@/llm/peers';
 import { addrKind, cleanRoad, pickRoad, reachedBy, roadArgs, roadsOf, ROAD_STAGGER_MS, type RoadProbe } from '@/llm/roads';
 import { healPeers, peers, rememberPeer, type Peer, type Road } from '@/llm/store';
 
@@ -61,6 +68,8 @@ beforeEach(() => {
   mockNative.joined = [];
   mockNative.joins = [];
   mockNative.joinAnswer = null;
+  mockNative.forgets = [];
+  mockNative.forgetFails = false;
   mockStore.clear();
 });
 afterEach(() => {
@@ -254,6 +263,23 @@ describe('the anchor’s invite', () => {
   });
   it('the anchor’s refusal comes back in its plain words, nothing is kept', async () => {
     await expect(joinInvite(JSON.stringify(invite), 'friend')).rejects.toThrow('this invite was used already');
+    expect(peers()).toEqual([]);
+  });
+  it('forgetting an anchor’s row leaves it natively, which takes its computer’s access (D4 #16)', async () => {
+    mockNative.joinAnswer = { fp: FP_A, name: 'Berlin Mac', host: '2001:db8::5', port: 50551, via: 'ipv6', again: false, sharing: false };
+    const { peer: anchor } = await joinInvite(JSON.stringify(invite), 'friend');
+    rememberPeer(peer());
+    // leaving fails natively: the row stays, so the person can try again
+    mockNative.forgetFails = true;
+    await expect(forgetPeerRow(anchor)).rejects.toThrow('no store');
+    expect(peers().map((p) => p.id)).toContain(anchor.id);
+    mockNative.forgetFails = false;
+    await forgetPeerRow(anchor);
+    expect(mockNative.forgets).toEqual([FP_A]);
+    expect(peers().map((p) => p.id)).toEqual(['b']);
+    // a device that is not an anchor is only forgotten here: its access is its own row's business
+    await forgetPeerRow(peers()[0]);
+    expect(mockNative.forgets).toEqual([FP_A]);
     expect(peers()).toEqual([]);
   });
 });

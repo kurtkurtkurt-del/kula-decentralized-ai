@@ -4,7 +4,7 @@ import { GATE_PORT, llama, type AnchorWhose } from '@/llm/native';
 import { cleanName } from '@/llm/peerName';
 import { randomHex } from '@/llm/random';
 import { addrKind, cleanAddrs, cleanAnchors, ipOf } from '@/llm/roads';
-import { rememberPeer, saveShare, settings, share, touchPeer, type Peer, type PeerAddr, type PeerAnchor } from '@/llm/store';
+import { forgetPeer, rememberPeer, saveShare, settings, share, touchPeer, type Peer, type PeerAddr, type PeerAnchor } from '@/llm/store';
 
 // The peer qr: what a shared phone or a computer shows, and what the master scans. It
 // carries the gate address and what the first connection needs, and the device's passport
@@ -268,6 +268,16 @@ export async function joinInvite(text: string, whose: AnchorWhose): Promise<Join
   };
   rememberPeer(peer);
   return { name: r.name, again: r.again, sharing: r.sharing, peer };
+}
+
+/**
+ * Forgets a device row (× in connected devices). An anchor's row also leaves the anchor natively,
+ * and that takes away the access its pair-back gave the anchor's computer to this phone (security
+ * review D4 #16): its next connection hears "not paired". The row stays when leaving fails.
+ */
+export async function forgetPeerRow(p: Peer): Promise<void> {
+  if (p.anchor && p.fp && llama?.forgetAnchor) await llama.forgetAnchor(p.fp);
+  forgetPeer(p.id);
 }
 
 /** The anchors this phone joined, as roads for every device (none without the native module). */

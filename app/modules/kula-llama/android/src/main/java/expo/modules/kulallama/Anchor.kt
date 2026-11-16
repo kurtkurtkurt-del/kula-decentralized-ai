@@ -47,6 +47,14 @@ object Anchor {
   /** The first reconnect wait after a lost control connection; doubles up to [MAX_RETRY_MS]. */
   const val FIRST_RETRY_MS = 1_000L
   const val MAX_RETRY_MS = 30_000L
+  /**
+   * At most this many of an anchor's `open`s are set up at once (from the open to the pipe), each a
+   * TLS connection and a thread; more are ignored, so a dishonest anchor cannot exhaust the phone
+   * (security review D4 #14; node/src/anchor.ts ANCHOR_ACCEPTS_IN_FLIGHT).
+   */
+  const val ACCEPTS_IN_FLIGHT = 32
+  /** The "opens ignored" log line comes at most this often. */
+  const val IGNORED_LOG_MS = 10_000L
   /** An invite and its pair-back code live as long as a pairing code (node/src/join.ts INVITE_TTL_MS). */
   const val INVITE_TTL_MS = Gate.PIN_TTL_MS
   /** At most this many anchors are kept (node/src/road.ts MAX_ANCHORS). */
@@ -130,8 +138,9 @@ object Anchor {
    * Registers this phone with one anchor and keeps the control connection: a ping every 25 s, a
    * reconnect with backoff (1 s doubling to 30 s) when it is lost, along the anchor's addresses
    * in turn. A second register from this certificate elsewhere replaces this one: it stops then
-   * instead of fighting back. [kick] reconnects at once (the network changed). Every stream the
-   * anchor opens for this phone is accepted and piped into the gate at 127.0.0.1:[gatePort].
+   * instead of fighting back. [kick] reconnects at once (the network changed). A stream the
+   * anchor opens for this phone is accepted and piped into the gate at 127.0.0.1:[gatePort], at
+   * most [ACCEPTS_IN_FLIGHT] being set up at once.
    */
   class Member(
     val fp: String,
@@ -159,6 +168,9 @@ object Anchor {
     private var way = 0
     private var kicked = false
     private val streams = ConcurrentHashMap.newKeySet<Socket>()
+    /** `open`s being set up now (from the open to the pipe): at most [ACCEPTS_IN_FLIGHT]. */
+    private val accepting = java.util.concurrent.atomic.AtomicInteger(0)
+    @Volatile private var ignoredAt = 0L
 
     private fun set(s: State, w: String?) { state = s; why = w; runCatching { onState(s, w) } }
 
@@ -221,7 +233,7 @@ object Anchor {
             val line = readLine(inp) ?: break
             val m = runCatching { JSONObject(line) }.getOrNull() ?: continue
             when (m.optString("t")) {
-              "open" -> { val sid = m.optString("sid"); if (sid.isNotEmpty()) thread(name = "anchor-stream", isDaemon = true) { accept(ref, sid, m.optString("from")) } }
+              "open" -> { val sid = m.optString("sid"); if (sid.isNotEmpty()) take(ref, sid, m.optString("from")) }
               "error" -> if (m.optString("reason") == "replaced") throw Refused("replaced")
             }
           }
@@ -234,8 +246,29 @@ object Anchor {
       }
     }
 
-    /** The anchor has a stream for this phone: open a second connection, accept it, pipe it into the gate. */
-    private fun accept(ref: Ref, sid: String, from: String) {
+    /**
+     * An `open` from the anchor: counted here, before any thread or connection, and ignored when
+     * [ACCEPTS_IN_FLIGHT] are being set up already (one log line per [IGNORED_LOG_MS]).
+     */
+    private fun take(ref: Ref, sid: String, from: String) {
+      if (accepting.incrementAndGet() > ACCEPTS_IN_FLIGHT) {
+        accepting.decrementAndGet()
+        val t = System.currentTimeMillis()
+        if (t - ignoredAt >= IGNORED_LOG_MS) { ignoredAt = t; Log.w(TAG, "$ACCEPTS_IN_FLIGHT streams being set up already; more opens from ${hp(ref.host, ref.port)} are ignored") }
+        return
+      }
+      val settled = java.util.concurrent.atomic.AtomicBoolean(false)
+      val settle = { if (settled.compareAndSet(false, true)) accepting.decrementAndGet() }
+      try {
+        thread(name = "anchor-stream", isDaemon = true) { try { accept(ref, sid, from, settle) } finally { settle() } }
+      } catch (e: Throwable) {
+        settle()
+        Log.w(TAG, "stream from ${from.take(16)}…: ${e.message}")
+      }
+    }
+
+    /** The anchor has a stream for this phone: open a second connection, accept it, pipe it into the gate. [settle] once it is piped. */
+    private fun accept(ref: Ref, sid: String, from: String, settle: () -> Unit) {
       var s: Socket? = null
       var local: Socket? = null
       try {
@@ -245,6 +278,8 @@ object Anchor {
         if (r.optString("t") != "ready") throw Refused(reasonOf(r))
         s.soTimeout = 0
         local = Socket().also { it.connect(InetSocketAddress("127.0.0.1", gatePort), 3000) }
+        // set up: from here it is a running stream, not an open in flight
+        settle()
         Gate.pipe(s, s.getInputStream(), local, ByteArray(0))
       } catch (e: Exception) {
         Log.w(TAG, "stream from ${from.take(16)}…: ${e.message}")
@@ -368,6 +403,20 @@ object Anchor {
     var hit = false
     updateJoined(file) { list -> list.filter { (it.fp != fp.lowercase()).also { keep -> if (!keep) hit = true } } }
     return hit
+  }
+
+  /**
+   * Forgetting a joined anchor (the app's forget on its row): its pair-back gave the anchor's
+   * computer lasting access to this phone, so that goes too (security review D4 #16; node/src/ui/
+   * engine.ts takeAccess). Out of the paired list first ([Unpair.remove]: its next handshake hears
+   * "not paired", one signed ledger line through [record]), then out of the store, so the gate's
+   * seat rule cannot count it as the person's own meanwhile. The caller tells the running worker to
+   * cut what it has open. Returns (left the store, access taken).
+   */
+  fun forget(file: File, fp: String, paired: Paired, hosts: Hosts?, seen: Seen?, record: ((Map<String, Any?>) -> Unit)?): Pair<Boolean, Boolean> {
+    val f = fp.lowercase()
+    val cut = Unpair.remove(f, paired, hosts, seen, record)
+    return removeJoined(file, f) to cut
   }
 
   // --- joining (the phone pairs with an anchor's invite) ----------------------------------

@@ -242,6 +242,116 @@ class AnchorTest {
     } finally { gate.stop() }
   }
 
+  /**
+   * A dishonest anchor: the gate's v2 handshake on its "anchor" channel for any certificate, then
+   * `registered` and [opens] `open` lines on the control connection. Every `accept` connection is
+   * counted and held without an answer, so it stays in flight.
+   */
+  private class DishonestAnchor(val opens: Int) {
+    val identity = GateIdentity.create("anchor")
+    private val server: javax.net.ssl.SSLServerSocket
+    val accepts = java.util.concurrent.atomic.AtomicInteger(0)
+    val held = java.util.concurrent.ConcurrentLinkedQueue<Socket>()
+    @Volatile var control: Socket? = null
+    val port: Int get() = server.localPort
+
+    init {
+      val ctx = javax.net.ssl.SSLContext.getInstance("TLS")
+      val anyone = object : javax.net.ssl.X509TrustManager {
+        override fun checkClientTrusted(c: Array<java.security.cert.X509Certificate>?, a: String?) {}
+        override fun checkServerTrusted(c: Array<java.security.cert.X509Certificate>?, a: String?) {}
+        override fun getAcceptedIssuers(): Array<java.security.cert.X509Certificate> = arrayOf()
+      }
+      ctx.init(identity.keyManagers(), arrayOf(anyone), null)
+      server = ctx.serverSocketFactory.createServerSocket(0, 200, InetAddress.getByName("127.0.0.1")) as javax.net.ssl.SSLServerSocket
+      server.enabledProtocols = arrayOf("TLSv1.3")
+      server.wantClientAuth = true
+      Thread { while (true) { val s = runCatching { server.accept() }.getOrNull() ?: break; Thread { serve(s) }.apply { isDaemon = true }.start() } }.apply { isDaemon = true }.start()
+    }
+
+    private fun serve(s: Socket) {
+      try {
+        val inp = s.getInputStream()
+        val out = s.getOutputStream()
+        val hello = Anchor.readLine(inp) ?: return
+        if (!hello.startsWith("${Gate.VERSION2} anchor ")) return
+        out.write("${Gate.randomHex(16)} paired\n".toByteArray()); out.flush()
+        if (Anchor.readLine(inp) != "-") return
+        out.write("OK -\n".toByteArray()); out.flush()
+        val first = org.json.JSONObject(Anchor.readLine(inp) ?: return)
+        when (first.optString("t")) {
+          "register" -> {
+            control = s
+            Anchor.send(s, org.json.JSONObject().put("t", "registered"))
+            repeat(opens) { Anchor.send(s, org.json.JSONObject().put("t", "open").put("sid", "s$it").put("from", "f".repeat(64))) }
+            while (Anchor.readLine(inp) != null) { /* pings */ }
+          }
+          // held: never answered while the test looks
+          "accept" -> { held.add(s); accepts.incrementAndGet(); return }
+        }
+      } catch (_: Exception) {}
+      runCatching { s.close() }
+    }
+
+    fun open(sid: String) { Anchor.send(control!!, org.json.JSONObject().put("t", "open").put("sid", sid).put("from", "f".repeat(64))) }
+    fun close() { runCatching { server.close() }; held.forEach { runCatching { it.close() } }; runCatching { control?.close() } }
+  }
+
+  @Test
+  fun aDishonestAnchorsOpensAreCappedInFlight() {
+    // security review D4 #14: every open was accepted, one tls connection and one thread each
+    val phone = GateIdentity.create("phone")
+    val anchor = DishonestAnchor(100)
+    val m = Anchor.Member(anchor.identity.fp, { listOf(Anchor.Ref("127.0.0.1", anchor.port, anchor.identity.fp)) }, phone, "phone", "phone", freePort(), timeoutMs = 20_000).start()
+    try {
+      val until = System.currentTimeMillis() + 15_000
+      while (anchor.accepts.get() < Anchor.ACCEPTS_IN_FLIGHT && System.currentTimeMillis() < until) Thread.sleep(50)
+      // the rest would have come by now
+      Thread.sleep(2000)
+      assertEquals(Anchor.ACCEPTS_IN_FLIGHT, anchor.accepts.get())
+      // once those ended, an open is taken again
+      val n = anchor.held.size
+      anchor.held.forEach { runCatching { it.close() } }
+      anchor.held.clear()
+      Thread.sleep(1000)
+      anchor.open("again")
+      val until2 = System.currentTimeMillis() + 10_000
+      while (anchor.accepts.get() <= n && System.currentTimeMillis() < until2) Thread.sleep(50)
+      assertEquals(n + 1, anchor.accepts.get())
+    } finally { m.close(); anchor.close() }
+  }
+
+  @Test
+  fun forgettingAnAnchorTakesItsAccessToThisPhone() {
+    // security review D4 #16: the pair-back gave the anchor's computer lasting access; leaving kept it
+    val phone = GateIdentity.create("phone")
+    val anchor = GateIdentity.create("anchor")
+    val dir = java.nio.file.Files.createTempDirectory("kula-anchors").toFile()
+    val store = File(dir, "anchors.json")
+    val pairedFile = File(dir, "paired")
+    Anchor.writeJoined(store, listOf(Anchor.Joined(anchor.fp, "berlin", "10.0.0.1", 50551, emptyList(), 1L, whose = Anchor.FRIEND)))
+    Paired(pairedFile).add(anchor.fp, "berlin")
+    val echo = echo()
+    val port = freePort()
+    // the running gate reads the paired file; the app's forget writes it through another object
+    val gateList = Paired(pairedFile)
+    val gate = Gate.Server(port, null, { echo.localPort }, null, Gate.TlsServer(phone, gateList, null), friend = { Anchor.friendOf(Anchor.readJoined(store), it) })
+    gate.start()
+    try {
+      assertNull(Gate.probe("127.0.0.1", port, "", "api", tls = Gate.TlsClient(anchor, phone.fp)))
+      val lines = mutableListOf<Map<String, Any?>>()
+      assertEquals(true to true, Anchor.forget(store, anchor.fp.uppercase(), Paired(pairedFile), null, null) { lines.add(it) })
+      assertEquals(emptyList<Anchor.Joined>(), Anchor.readJoined(store))
+      assertFalse(Paired(pairedFile).contains(anchor.fp))
+      assertEquals(listOf(Unpair.fields(anchor.fp, "berlin")), lines)
+      // its next handshake hears "not paired"
+      assertEquals("gate: NO not paired", Gate.probe("127.0.0.1", port, "", "api", tls = Gate.TlsClient(anchor, phone.fp)))
+      // forgetting again changes nothing and writes nothing
+      assertEquals(false to false, Anchor.forget(store, anchor.fp, Paired(pairedFile), null, null) { lines.add(it) })
+      assertEquals(1, lines.size)
+    } finally { gate.stop(); echo.close() }
+  }
+
   @Test
   fun aUsedInviteNamesTheOwnersRemedy() {
     // security review D4 #17: a stolen invite used first; the real joiner learns what to do

@@ -73,7 +73,7 @@ C → S   one JSON line:
   meanwhile is cut (17.11.2026).
 - A kula-node member sets up at most 32 streams the anchor `open`ed at once (one TLS connection
   each); further `open`s are ignored until those are piped or failed, so a dishonest anchor cannot
-  make it open connections without end (17.11.2026). The phone has no such ceiling yet.
+  make it open connections without end (17.11.2026). The phone has the same ceiling.
 - On the control connection, the address book (below) has two more lines: right after
   `registered` the anchor sends its own `{"t":"record","rec"}`; the member gives
   `{"t":"record","rec"}` and asks `{"t":"who","fps":[…],"seqs":[…]}` (32 at most a line), and the

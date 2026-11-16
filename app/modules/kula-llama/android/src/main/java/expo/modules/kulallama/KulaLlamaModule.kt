@@ -300,9 +300,15 @@ class KulaLlamaModule : Module() {
     }
     /** The anchors this phone joined: `[{fp, name, host, port, addrs, joinedAt, waitingBack}]`. */
     AsyncFunction("joinedAnchors") { joinedList() }
-    /** Leaves an anchor: forgotten here; the worker drops its control connection. Returns the list after. */
+    /**
+     * Leaves an anchor: forgotten here, and the access its pair-back gave the anchor's computer is
+     * taken away (Anchor.forget, security review D4 #16): its next handshake hears "not paired",
+     * the worker cuts what it has open and drops the control connection. Returns the list after.
+     */
     AsyncFunction("forgetAnchor") { fp: String ->
-      Anchor.removeJoined(WorkerService.anchorsFile(context), fp.lowercase())
+      val f = fp.lowercase()
+      Anchor.forget(WorkerService.anchorsFile(context), f, Paired(WorkerService.pairedFile(context)), Hosts(Keeper.hostsFile(context)), Seen(WorkerService.seenFile(context)), recordUnpair())
+      tellWorkerForget(f)
       tellWorkerAnchors()
       joinedList()
     }
@@ -484,14 +490,22 @@ class KulaLlamaModule : Module() {
    * open connections (it would notice within two seconds anyway; the gate refuses it at once).
    */
   private fun removePaired(fp: String): Boolean {
+    val removed = Unpair.remove(fp, Paired(WorkerService.pairedFile(context)), Hosts(Keeper.hostsFile(context)), Seen(WorkerService.seenFile(context)), recordUnpair())
+    tellWorkerForget(fp)
+    return removed
+  }
+
+  /** The signed ledger line of a removed device (Unpair.fields). */
+  private fun recordUnpair(): (Map<String, Any?>) -> Unit {
     val ledger = WorkerService.ledgerFile(context)
-    val removed = Unpair.remove(fp, Paired(WorkerService.pairedFile(context)), Hosts(Keeper.hostsFile(context)), Seen(WorkerService.seenFile(context))) { fields ->
-      runCatching { expo.modules.kulallama.audit.Ledger(ledger, KeyStoreVault.deviceKey(WorkerService.deviceKeyFile(context)).key).append("health", null, fields) }
-    }
+    return { fields -> runCatching { expo.modules.kulallama.audit.Ledger(ledger, KeyStoreVault.deviceKey(WorkerService.deviceKeyFile(context)).key).append("health", null, fields) } }
+  }
+
+  /** The running worker cuts [fp]'s open connections (the gate refuses its next one by itself). */
+  private fun tellWorkerForget(fp: String) {
     if (WorkerService.isRunning(context)) runCatching {
       context.startService(Intent(context, WorkerService::class.java).setAction(WorkerService.ACTION_FORGET).putExtra(WorkerService.EXTRA_FP, fp))
     }
-    return removed
   }
 
   private fun stopWorkerNow() {
