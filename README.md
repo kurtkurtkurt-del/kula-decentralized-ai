@@ -27,6 +27,40 @@ and says when a device alone would be faster. Rule of thumb: jobs are split, mod
 iOS is out of scope for now: the app opens on iOS but runs no models (a Swift module is written
 on a branch, never built).
 
+## what's new in 0.6.0 · 17 November 2026
+
+- **Devices in different homes join over the internet, with no server in between.** A computer
+  that stays on at home can be an **anchor** (devices → share this computer → "make this computer
+  an anchor"). Your phone on mobile data, a laptop at a friend's, a friend's computer in another
+  city then reach each other through it. Nothing else is involved: no server of ours or anyone's,
+  no outside address service. The anchor carries only scrambled bytes: what devices say to each
+  other stays between them; the anchor sees who talks to whom and how much. kula asks your router
+  to open its door and says plainly when you must do it by hand, or when your provider gives the
+  home no public address (then that home cannot be an anchor).
+- **Joining is an invite.** The anchor makes a code that works once, for ten minutes, as text or
+  a QR; it asks whether the device is yours or a friend's. Your own devices have no limit through
+  the anchor; a friend's device may pass up to a daily amount you set (5 GB to start).
+- **kula picks the way by itself:** the same wi-fi first, then the internet directly, then through
+  an anchor. A phone that leaves home keeps working and comes back to the wi-fi when it returns.
+  Every device row says which way it is reached.
+- **A split model works over the internet too, and you choose.** Each far device adds about one
+  round trip of the network to every token (a piece of a word); the plan says how fast it expects
+  it to be, learns the real speed from the first answer, and you pick apart or split. Measured on
+  one Mac with a small model: 46 tokens a second at no delay, 18 at 30 ms, 8 at 100 ms.
+- **A second anchor keeps the circle up.** Devices sign their own addresses and the anchors pass
+  them on, so when a home's address changes the others find it again without a new invite, as
+  long as a second anchor is there.
+- **Safe to face the internet.** A security review before release: a stranger cannot get past the
+  door or fill the disk with knocks; a device you remove is cut within seconds; your own device
+  takes the split seat from a friend's device that sat on it idle for a minute; joining asks first
+  and says what the other computer may then do. What is still open is in
+  [docs/SECURITY.md](docs/SECURITY.md).
+- **The brain knows the far devices:** which anchor a device is reached through, what a far split
+  will cost, a gate that strangers knock on, a device that answers from a new network.
+- **Not yet tried with a real router, a real phone on mobile data or a second home.** The steps
+  for that are in [docs/ANCHOR-TEST.md](docs/ANCHOR-TEST.md). How the anchor works:
+  [docs/ANCHOR.md](docs/ANCHOR.md).
+
 ## what's new in 0.5.1 · 16 November 2026
 
 - **Computers without a graphics card help in a split again.** Since 0.5.0 a Windows or Linux
