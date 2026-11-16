@@ -167,9 +167,11 @@ export interface Snapshot {
     diskFreeMb?: number | null;
     /** this computer as an anchor of the circle (16.11.2026), the engine's live counters: on (it
      *  offers the role), reachable (its gate answered from outside; null: not known), links (devices
-     *  holding a link to it now), bytesDay (bytes it passed on in the last day, ciphertext, every member together),
-     *  capDay (the daily limit per dialing member in bytes; null: none), memberMaxDay (the most bytes
-     *  any single member passed today; null: not said; absent: an engine that does not count it).
+     *  holding a link to it now), bytesDay (bytes it passed on in the last day, ciphertext, every member
+     *  together, the owner's own devices too), capDay (the daily limit of one friend's device, circle or
+     *  world, in bytes, set by the anchor's owner; the owner's own devices have none; null: none),
+     *  memberMaxDay (the most bytes any single friend's device passed today; null: not said; absent: an
+     *  engine that does not count it; without it the brain makes no cap card).
      *  null: could not say; absent: an engine without anchors */
     anchor?: { on: boolean; reachable: boolean | null; links: number; bytesDay: number; capDay: number | null; memberMaxDay?: number | null } | null;
     /** this computer's own gate refusals, from the reject lines of its own signed ledger

@@ -23,7 +23,12 @@
 // ledger read again teaches nothing twice; finished hours the gate no longer holds (the computer
 // was off past 26 hours) were not seen, so the CUSUM starts again, as trust.ts does for a device;
 // notes ahead of the ledger's clock by more than an hour (the clock went back) re-anchor and take
-// nothing in.
+// nothing in. A new level (VERDICT 1, DO 3: the gate opened to the internet after quiet learning,
+// where burst.ts alone would keep the card about two months): once past learning, when the 24
+// newest finished hours together, and each 6-hour quarter of them alone, hold more than RHO × the
+// sum of max(RATE_FLOOR, usual) of their hours of day, the fit starts again from freshBurst() on
+// those 24 hours, with one feed line (LEVEL_LINE). One loud hour fills one quarter only: a burst.
+// A focused try that stays this high for a whole day reads as a new level too.
 //
 // The host check `gate` (trust.ts puts it beside the host's ledger check; absent when the look has
 // no host.gate, so an older look's report is the same as before):
@@ -47,11 +52,11 @@
 //                              (at least MIN_K, P < TAIL_P), or the last finished hour was a tail,
 //                              or the CUSUM rose; at any time, learning or not, BACKSTOP (1000) or
 //                              more far refusals in the running hour (a backstop, not measured)
-//   trust:anchor-cap        2  capDay is per dialing member (P1b): memberMaxDay (the most one member
-//                              passed today) above capDay when the engine says it; without it,
-//                              bytesDay (every member together) above capDay only while links <= 1
-//                              (the total is that one member's), else no card. It stays while
-//                              above CAP_STAY (0.95) × capDay
+//   trust:anchor-cap        2  a friend's device passed its daily limit: capDay is the limit of one
+//                              friend's device (circle or world; the owner's own devices have none),
+//                              memberMaxDay the most one of them passed today, above capDay. No
+//                              memberMaxDay, no card (bytesDay is every member together, the owner's
+//                              own devices too). It stays while above CAP_STAY (0.95) × capDay
 // One feed line when a card comes and one when it goes (gateLines), never one per look.
 //
 // The uncertainty: none of these thresholds (MIN_K, TAIL_P, the 1000 backstop, 5 guesses) was
@@ -61,7 +66,7 @@
 // "about": a scanner farm in one block is one network, a carrier-grade nat is many people. A
 // device's rpc guard count is its own word; this computer's comes from its own signed ledger.
 import type { EyeDevice, Suggestion, TrustCheck } from '../types.js';
-import { burstStep, freshBurst, nbTail, NEED, STRATUM_NEED, B0, MIN_K, TAIL_P, type BurstFit } from './burst.js';
+import { burstStep, freshBurst, nbTail, NEED, STRATUM_NEED, B0, MIN_K, TAIL_P, RHO, RATE_FLOOR, type BurstFit } from './burst.js';
 import { cardId } from './decide.js';
 
 export type GateClass = 'stranger' | 'guess' | 'guard' | 'other';
@@ -127,8 +132,38 @@ export function hoursOf(gate: unknown): GateHour[] {
   return [...byStart.values()].sort((a, b) => a.start - b.start).slice(-GATE_HOURS);
 }
 
-/** take in every finished hour not taken in yet (all but the last, which is running) */
-export function gateStep(st: GateState, hours: GateHour[]): { st: GateState; changed: boolean } {
+/** the feed line of a refit (gateStep's `line`) */
+export const LEVEL_LINE = "this computer's gate: a new level: learning what is usual again";
+const LEVEL_HOURS = 24;                // the newest finished hours a new level is read from
+const LEVEL_PARTS = 4;                 // ... and each quarter of them (6 hours) on its own
+
+/** a new level (VERDICT 1, DO 3): the 24 newest finished hours, consecutive, together hold more
+ *  than RHO × the sum of max(RATE_FLOOR, usual) of their hours of day, and so does each 6-hour
+ *  quarter of them on its own, so one loud hour (or a few) is a burst and never a new level. Only
+ *  once the fit is past learning. Returns those hours, or null */
+function newLevel(fit: BurstFit, hours: GateHour[]): GateHour[] | null {
+  if (fit.n < NEED) return null;
+  const last = hours.slice(-LEVEL_HOURS - 1, -1);
+  if (last.length < LEVEL_HOURS || last[LEVEL_HOURS - 1].start - last[0].start !== (LEVEL_HOURS - 1) * HOUR) return null;
+  const per = LEVEL_HOURS / LEVEL_PARTS;
+  const over = (part: GateHour[]) => {
+    let k = 0;
+    let usual = 0;
+    for (const h of part) {
+      const d = hourOf(h.start);
+      k += Math.min(h.far, PER_HOUR);
+      usual += Math.max(RATE_FLOOR, fit.a[d] / fit.b[d]);
+    }
+    return k > RHO * usual;
+  };
+  if (!over(last)) return null;
+  for (let i = 0; i < LEVEL_PARTS; i++) if (!over(last.slice(i * per, (i + 1) * per))) return null;
+  return last;
+}
+
+/** take in every finished hour not taken in yet (all but the last, which is running). After them,
+ *  a new level (newLevel) refits from freshBurst() on the 24 newest finished hours and says `line` */
+export function gateStep(st: GateState, hours: GateHour[]): { st: GateState; changed: boolean; line?: string } {
   if (hours.length < 2) return { st, changed: false };
   const lastDone = hours[hours.length - 2].start;
   if (st.at > hours[hours.length - 1].start + HOUR) {
@@ -146,6 +181,12 @@ export function gateStep(st: GateState, hours: GateHour[]): { st: GateState; cha
     const r = burstStep(fit, hourOf(h.start), k);
     s = { fit: r.fit, at: h.start, lastBurst: r.tail ? k : 0, lastUsual: r.tail ? Math.min(r.usual, LAMBDA_MAX) : 0, rising: r.rise };
     changed = true;
+  }
+  const level = changed ? newLevel(s.fit, hours) : null;
+  if (level) {
+    let fit = freshBurst();
+    for (const h of level) fit = burstStep(fit, hourOf(h.start), Math.min(h.far, PER_HOUR)).fit;
+    return { st: { fit, at: s.at, lastBurst: 0, lastUsual: 0, rising: false }, changed: true, line: LEVEL_LINE };
   }
   return { st: s, changed };
 }
@@ -229,17 +270,15 @@ const gb = (bytes: number) => { const x = bytes / 1e9; return x < 10 ? x.toFixed
 
 const bytesOk = (x: unknown): x is number => typeof x === 'number' && Number.isFinite(x) && x >= 0;
 
-/** the bytes the anchor's daily limit is held against (capDay is per dialing member): the most one
- *  member passed (memberMaxDay) when the engine says it; else every member together (bytesDay), but
- *  only while at most one member holds a link, where the total is that member's; else null */
-export function capBytes(anchor: unknown): { bytes: number; cap: number; member: boolean } | null {
+/** the bytes the anchor's daily limit is held against: capDay is the limit of one friend's device
+ *  (the owner's own devices have none), memberMaxDay the most one friend's device passed today. Null
+ *  without memberMaxDay: bytesDay (every member together, the owner's own devices too) says nothing
+ *  of one device, and links counts the links held now, not the day's (VERDICT 1, DO 1) */
+export function capBytes(anchor: unknown): { bytes: number; cap: number } | null {
   if (!isObj(anchor)) return null;
   const cap = anchor.capDay;
   if (typeof cap !== 'number' || !Number.isFinite(cap) || cap <= 0) return null;
-  if (bytesOk(anchor.memberMaxDay)) return { bytes: anchor.memberMaxDay, cap, member: true };
-  const links = anchor.links;
-  if (typeof links !== 'number' || !Number.isFinite(links) || links > 1) return null;
-  return bytesOk(anchor.bytesDay) ? { bytes: anchor.bytesDay, cap, member: false } : null;
+  return bytesOk(anchor.memberMaxDay) ? { bytes: anchor.memberMaxDay, cap } : null;
 }
 
 /** the anchor's bytes against its daily cap (capBytes): on above the cap, staying on above CAP_STAY × cap */
@@ -314,22 +353,12 @@ export function gateCards(st: GateState, gate: unknown, devices: readonly EyeDev
   }
   const c = cap ? capBytes(anchor) : null;
   if (c) {
-    if (c.member) {
-      const x = `one member passed ${gb(c.bytes)} of its ${gb(c.cap)} GB daily limit through this anchor`;
-      out.push({
-        card: warn('trust:anchor-cap', 2, 'a member passed more than its daily limit through this anchor', `${x} in the last day, ciphertext only. nothing was switched off.`),
-        said: x,
-        gone: 'every member of this anchor is back under its daily limit',
-      });
-    } else {
-      const title = 'this anchor carried more than its daily limit';
-      const x = `${gb(c.bytes)} of ${gb(c.cap)} GB in the last day`;
-      out.push({
-        card: warn('trust:anchor-cap', 2, title, `${x}, ciphertext only. nothing was switched off.`),
-        said: `${title}: ${x}`,
-        gone: 'this anchor is back under its daily limit',
-      });
-    }
+    const x = `a friend's device passed ${gb(c.bytes)} of its ${gb(c.cap)} GB daily limit through this anchor`;
+    out.push({
+      card: warn('trust:anchor-cap', 2, "a friend's device passed its daily limit through this anchor", `${x} in the last day, ciphertext only; your own devices have no limit. nothing was switched off.`),
+      said: x,
+      gone: "every friend's device is back under its daily limit through this anchor",
+    });
   }
   return out.sort((a, b) => (b.card.weight ?? 2) - (a.card.weight ?? 2));
 }

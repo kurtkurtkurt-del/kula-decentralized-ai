@@ -653,6 +653,7 @@ export function create(ctx: BranchCtx): Branch {
           if (r.changed) {
             s.burst = r.st.fit; s.at = r.st.at; s.lastBurst = r.st.lastBurst; s.lastUsual = r.st.lastUsual; s.rising = r.st.rising;
             changed = true;
+            if (r.line) ctx.emit(r.line);   // a new level: the fit started again (gatewatch.ts newLevel)
           }
         }
       }

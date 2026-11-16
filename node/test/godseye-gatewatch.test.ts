@@ -1,8 +1,8 @@
 // the gate watch (16.11.2026, P4): this computer's own gate (host.gate, from its own signed ledger)
 // in the trust branch. Scanners are counted, not alarmed; a burst of far refusals against the usual
 // of that hour of day is a card, never a red check; the rpc guard and 5+ guesses are; a device's own
-// rpc guard is a card that never bars it; the anchor's daily cap (per member: memberMaxDay, else the
-// total only while at most one member holds a link, P1b) has a card with a 0.95 hold. A look
+// rpc guard is a card that never bars it; the anchor's daily cap (per friend's device: memberMaxDay
+// only, no card without it) has a card with a 0.95 hold; a new far level refits the burst. A look
 // without host.gate makes the same report as before, and the fit (`~gate`) survives a reload.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -110,6 +110,41 @@ test('30 quiet days of scanners, then an hour of 60: the burst card, a calm chec
   assert.deepEqual(events.slice(1), ["the knocking on this computer's gate is back to its usual"]);
 });
 
+test('14 days of no far knock, then 60 days at 5 an hour (the gate opened to the internet): a new level, the burst card off within 72 hours', () => {
+  const { b, events } = branch();
+  const change = T0 - 60 * 24 * H;
+  const far = (s: number) => (s >= change ? 5 : 0);
+  let firstOn = Infinity;
+  let lastOn = -Infinity;
+  for (let run = change - 14 * 24 * H; run < T0; run += H) {
+    b.observe(snap([plainDev()], { gate: gateAt(run, far) }) as any, null);
+    if (card(b.view(), 'trust:gate-burst')) { firstOn = Math.min(firstOn, run); lastOn = run; }
+  }
+  assert.equal(firstOn, change, 'the change shows at once');
+  const stayed = (lastOn - change) / H + 1;
+  assert.ok(lastOn < change + 72 * H, `the card stayed ${stayed} hours after the change (to ${(T0 - change) / H} hours shown)`);
+  assert.equal(events.filter((e) => /a new level: learning what is usual again$/.test(e)).length, 1, 'one feed line for the new level');
+  const v = b.view() as any;
+  assert.equal(gateCheckOf(v).ok, true, 'the check stays calm');
+  assert.doesNotMatch(gateCheckOf(v).text, /still learning/, 'the new level is learned');
+});
+
+test('14 days of no far knock, then one hour of 60: the card shows and stays for the finished hour, no new level', () => {
+  const { b, events } = branch();
+  const burst = T0;
+  const far = (s: number) => (s === burst ? 60 : 0);
+  for (let run = T0 - 14 * 24 * H; run < T0; run += H) b.observe(snap([plainDev()], { gate: gateAt(run, far) }) as any, null);
+  assert.equal(card(b.view(), 'trust:gate-burst'), undefined, 'quiet days: no card');
+  b.observe(snap([plainDev()], { gate: gateAt(T0, far) }) as any, null);
+  assert.match(card(b.view(), 'trust:gate-burst')?.why ?? '', /^60 knocks from outside the lan in the last hour/, 'the running hour');
+  b.observe(snap([plainDev()], { gate: gateAt(T0 + H, far) }) as any, null);
+  assert.match(card(b.view(), 'trust:gate-burst')?.why ?? '', /^60 knocks from outside the lan in the last finished hour/, 'the finished hour still says it');
+  b.observe(snap([plainDev()], { gate: gateAt(T0 + 2 * H, far) }) as any, null);
+  assert.equal(card(b.view(), 'trust:gate-burst'), undefined, 'a quiet hour: gone');
+  assert.equal(events.filter((e) => /a new level/.test(e)).length, 0, 'one loud hour is no new level');
+  assert.doesNotMatch(gateCheckOf(b.view()).text, /still learning/, 'the fit was not started again');
+});
+
 test('while learning: no burst card, except the backstop of 1000 in the running hour', () => {
   const { b } = branch();
   b.observe(snap([plainDev()], { gate: gateAt(T0, (s) => (s === T0 ? 60 : 0)) }) as any, null);
@@ -213,49 +248,45 @@ test("a device's own rpc guard: the card, its verdict unchanged, absent from unt
   assert.equal(gateCheckOf(v), undefined, 'no host.gate: no host check');
 });
 
-test('the anchor past its daily cap (one member: the total is its own): on at 1.01, held at 0.96, gone at 0.9; 0.96 alone is nothing', () => {
+test("a friend's device past the anchor's daily cap (memberMaxDay): on at 1.01, held at 0.96, gone at 0.9; 0.96 alone is nothing", () => {
   const cap = 2e9;
-  const anchor = (x: number) => ({ anchor: { on: true, reachable: true, links: 1, bytesDay: x * cap, capDay: cap } });
+  const anchor = (x: number) => ({ anchor: { on: true, reachable: true, links: 1, bytesDay: x * cap, capDay: cap, memberMaxDay: x * cap } });
   const { b, events } = branch();
   b.observe(snap([plainDev()], anchor(1.01)) as any, null);
   let c = card(b.view(), 'trust:anchor-cap');
   assert.ok(c);
   assert.equal(c.weight, 2);
-  assert.equal(c.title, 'this anchor carried more than its daily limit');
-  assert.equal(c.why, '2.02 of 2.00 GB in the last day, ciphertext only. nothing was switched off.');
+  assert.equal(c.title, "a friend's device passed its daily limit through this anchor");
+  assert.equal(c.why, "a friend's device passed 2.02 of its 2.00 GB daily limit through this anchor in the last day, ciphertext only; your own devices have no limit. nothing was switched off.");
   b.observe(snap([plainDev()], anchor(0.96)) as any, null);
   c = card(b.view(), 'trust:anchor-cap');
   assert.ok(c, 'held above 0.95');
-  assert.equal(c.why, '1.92 of 2.00 GB in the last day, ciphertext only. nothing was switched off.');
+  assert.match(c.why, /^a friend's device passed 1\.92 of its 2\.00 GB daily limit/);
   b.observe(snap([plainDev()], anchor(0.9)) as any, null);
   assert.equal(card(b.view(), 'trust:anchor-cap'), undefined, 'gone under 0.95');
-  assert.deepEqual(events, ['this anchor carried more than its daily limit: 2.02 of 2.00 GB in the last day', 'this anchor is back under its daily limit']);
+  assert.deepEqual(events, ["a friend's device passed 2.02 of its 2.00 GB daily limit through this anchor", "every friend's device is back under its daily limit through this anchor"]);
   const other = branch();
   other.b.observe(snap([plainDev()], anchor(0.96)) as any, null);
   assert.equal(card(other.b.view(), 'trust:anchor-cap'), undefined, '0.96 from below: no card');
-  other.b.observe(snap([plainDev()], { anchor: { on: true, reachable: null, links: 0, bytesDay: 5 * cap, capDay: null } }) as any, null);
+  other.b.observe(snap([plainDev()], { anchor: { on: true, reachable: null, links: 0, bytesDay: 5 * cap, capDay: null, memberMaxDay: 5 * cap } }) as any, null);
   assert.equal(card(other.b.view(), 'trust:anchor-cap'), undefined, 'no cap: no card');
   // the report is not touched by the anchor
   assert.equal(gateCheckOf(other.b.view()), undefined);
 });
 
-test('the cap is per member: memberMaxDay over and under, and several members without it give no card', () => {
+test('the cap is per friend device: memberMaxDay over and under, and without it no card', () => {
   const cap = 2e9;
   const anchor = (o: Record<string, unknown>) => ({ anchor: { on: true, reachable: true, links: 3, bytesDay: 5 * cap, capDay: cap, ...o } });
-  // one member past its limit: the card in member words, held at 0.96, gone at 0.9
+  // one friend's device past its limit with three linked: the card, held at 0.96, gone at 0.9
   const { b, events } = branch();
   b.observe(snap([plainDev()], anchor({ memberMaxDay: 1.01 * cap })) as any, null);
-  let c = card(b.view(), 'trust:anchor-cap');
-  assert.ok(c);
-  assert.equal(c.weight, 2);
-  assert.equal(c.title, 'a member passed more than its daily limit through this anchor');
-  assert.equal(c.why, 'one member passed 2.02 of its 2.00 GB daily limit through this anchor in the last day, ciphertext only. nothing was switched off.');
+  assert.equal(card(b.view(), 'trust:anchor-cap')?.title, "a friend's device passed its daily limit through this anchor");
   b.observe(snap([plainDev()], anchor({ memberMaxDay: 0.96 * cap })) as any, null);
   assert.ok(card(b.view(), 'trust:anchor-cap'), 'held above 0.95');
   b.observe(snap([plainDev()], anchor({ memberMaxDay: 0.9 * cap })) as any, null);
   assert.equal(card(b.view(), 'trust:anchor-cap'), undefined, 'gone under 0.95');
-  assert.deepEqual(events, ['one member passed 2.02 of its 2.00 GB daily limit through this anchor', 'every member of this anchor is back under its daily limit']);
-  // every member under its limit while all together are far over it: no card
+  assert.equal(events.length, 2);
+  // every friend's device under its limit while all together (the owner's own too) are far over it: no card
   const under = branch();
   under.b.observe(snap([plainDev()], anchor({ memberMaxDay: 0.5 * cap })) as any, null);
   assert.equal(card(under.b.view(), 'trust:anchor-cap'), undefined, 'memberMaxDay under: no card, whatever bytesDay says');
@@ -266,10 +297,13 @@ test('the cap is per member: memberMaxDay over and under, and several members wi
   three.b.observe(snap([plainDev()], anchor({ memberMaxDay: null })) as any, null);
   assert.equal(card(three.b.view(), 'trust:anchor-cap'), undefined, 'memberMaxDay null: no card');
   assert.deepEqual(three.events, []);
-  // no member at all and no memberMaxDay: the total is compared (it is nobody's but this one's)
-  const none = branch();
-  none.b.observe(snap([plainDev()], anchor({ links: 0 })) as any, null);
-  assert.equal(card(none.b.view(), 'trust:anchor-cap')?.title, 'this anchor carried more than its daily limit');
+  // one link or none and no memberMaxDay: still no card (links is now, bytesDay the whole day, VERDICT 1 DO 1)
+  for (const links of [1, 0]) {
+    const one = branch();
+    one.b.observe(snap([plainDev()], { anchor: { on: true, reachable: true, links, bytesDay: 6e9, capDay: 5e9 } }) as any, null);
+    assert.equal(card(one.b.view(), 'trust:anchor-cap'), undefined, `links ${links}, bytesDay 6e9 over capDay 5e9, no memberMaxDay: no card`);
+    assert.deepEqual(one.events, []);
+  }
 });
 
 test('no host.gate: the report is the same as before, no notes key, no card', () => {
