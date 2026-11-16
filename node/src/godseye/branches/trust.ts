@@ -29,20 +29,31 @@
 // proof fails it (a phone can make one); a friend's (circle) device that cannot say gets the card too.
 // It remembers the newest proof that held (P60, G3): a device that proved once counts as a phone, so
 // answering as a computer fails it, and a fall from a proof that held to a failure is said once.
+//
+// The gate watch (16.11.2026, gatewatch.ts): this computer's own gate, from the reject lines of its
+// own signed ledger (host.gate). A host check `gate` beside the host's ledger: calm while strangers
+// and scanners knock (counted, not alarmed), red only for an rpc guard refusal in the 26 hours or 5
+// or more wrong codes in a day. Its far count per finished hour goes through burst.ts like a
+// device's refusals; the fit is kept in these notes under the reserved key `~gate` (never a device,
+// never trimmed). Cards, each only opening this branch: more knocking than usual, the gate's rpc
+// guard, a device's own rpc guard (its verdict does not change: it defended itself, and untrusted()
+// never sees it), guessing, and the anchor past its daily cap. One feed line when a card comes and
+// one when it goes. A look without host.gate makes the same report as before.
 import type { Branch, BranchCtx, EyeDevice, EyeTrust, Snapshot, Suggestion, TrustCheck, TrustReport, Verdict } from '../types.js';
 import type { EyeKey, EyeKeys } from '../platform.js';
 import { fromBase64, sha256Hex } from '../hash.js';
 import { hhmm, pct } from './util.js';
 import { cardId } from './decide.js';
 import { burstStep, freshBurst, saneBurst, nbTail, NEED, STRATUM_NEED, B0, MIN_K, TAIL_P, type BurstFit } from './burst.js';
+import { GUESSES, GUESS_LIMIT, GATE_KEY, capOn, gateCards, gateCheck, gateLines, gateStep, hoursOf, type GateState } from './gatewatch.js';
+export { GUESS_LIMIT };
 
 // the signatures and the certificate's subject come from the platform (ctx.keys: node:crypto on a
 // computer, platform.ts); the hashes are plain TypeScript and the same everywhere
 const sha = (s: string | Uint8Array) => sha256Hex(s);
 const SIG_TAIL = /,"sig":"([A-Za-z0-9+/=]*)"\}$/;
-// refusals that mean someone tried a code or a proof that was not theirs
-const GUESSES = new Set(['wrong pin', 'wrong secret', 'bad proof']);
-export const GUESS_LIMIT = 5;
+// GUESSES (refusals that mean someone tried a code or a proof that was not theirs) and GUESS_LIMIT
+// live in gatewatch.ts, which classes this computer's own gate refusals with the same words
 const HOUR = 3_600_000;        // a burst window: one hour of the answer's own clock
 const MAX_DEVICES = 40;        // devices kept in the notes beyond those in the snapshot (never dropped)
 const ABSURD = 8.64e15;        // ms: a time past this is absurd, nothing is taken in
@@ -58,8 +69,9 @@ const firstBad = (cs: TrustCheck[]) => cs.find((c) => c.ok === false && !INFO.ha
 /** the hour of day (UTC) a window starting at `start` stands for: the one holding its middle */
 const hourOf = (start: number) => Math.floor((start + HOUR / 2) / HOUR) % 24;
 
-/** a device id the notes can take as a key: a non-empty string of at most 200 chars */
-const okId = (id: unknown): id is string => typeof id === 'string' && id.length > 0 && id.length <= 200;
+/** a device id the notes can take as a key: a non-empty string of at most 200 chars, never the gate
+ *  watch's reserved key */
+const okId = (id: unknown): id is string => typeof id === 'string' && id.length > 0 && id.length <= 200 && id !== GATE_KEY;
 /** a device name the view and feed can show: a short string, or a plain stand-in */
 const devName = (d: EyeDevice) => (typeof d.name === 'string' && d.name.length > 0 && d.name.length <= 200 ? d.name : 'a device');
 
@@ -140,6 +152,11 @@ interface Seen {
 }
 type Notes = Record<string, Seen>;
 const fresh = (): Seen => ({ head: null, verified: 0, since: 0, at: 0, restartSeen: null, fault: null, faultAt: null, faultLine: null, gap: false, held: null, seen: 0, count: 0, shrunkTo: null, rejAt: -1, rejTotal: 0, win: { start: 0, k: 0 }, burst: freshBurst(), lastBurst: 0, lastUsual: 0, rising: false, shorterRestart: false, proved: 0, provedDown: false });
+/** the gate watch's fit as its `~gate` Seen keeps it: burst the fit, at the newest finished hour
+ *  taken in, lastBurst / lastUsual / rising what that hour said; a fresh one when there is none */
+const gateOf = (s: Seen | undefined): GateState => (s
+  ? { fit: s.burst, at: s.at, lastBurst: s.lastBurst, lastUsual: s.lastUsual, rising: s.rising }
+  : { fit: freshBurst(), at: 0, lastBurst: 0, lastUsual: 0, rising: false });
 
 /** notes read back from disk, rebuilt as a null-prototype object so a device id like "__proto__"
  *  stays a key and never a prototype, or fresh notes when the file is not what this branch wrote:
@@ -250,6 +267,12 @@ export function create(ctx: BranchCtx): Branch {
   let snap: Snapshot | null = null;
   let report: TrustReport | null = null;
   const said = new Map<string, Verdict>();
+  // the gate watch's cards of the last look, the ones on (id → the line for when it goes) and
+  // whether the anchor-cap card is on (its hysteresis). Memory only: after a restart a card that
+  // is still on says its line once more
+  let gateNow: Suggestion[] = [];
+  let gateOn = new Map<string, string>();
+  let capWas = false;
   // each device's last window, line -> its sha256 (A8): only lines not in the last answer are
   // hashed again. Keyed by the whole line, so a line changed by one byte is a new line and hashed;
   // rebuilt from this answer's lines every time, so it never holds more than one window per device.
@@ -531,6 +554,9 @@ export function create(ctx: BranchCtx): Branch {
       : hl.ok
         ? { k: 'ledger', ok: true, text: `its own ledger: ${plural(hl.count, 'line')}, the chain and every signature hold` }
         : { k: 'ledger', ok: false, text: `its own ledger is broken${hlProblem ? `: ${hlProblem}` : ''}` }];
+    // its own gate (gatewatch.ts): only when the look has one, so an older look's report is the same
+    const gc = gateCheck(gateOf(notes[GATE_KEY]), now.host && typeof now.host === 'object' ? now.host.gate : undefined);
+    if (gc) host.push(gc);
     const devices = (Array.isArray(now.devices) ? now.devices.filter((d): d is EyeDevice => !!d && typeof d === 'object') : []).map(deviceReport);
     const bad = devices.filter((d) => d.verdict === 'bad');
     const hostBad = host.some((c) => c.ok === false);
@@ -616,8 +642,30 @@ export function create(ctx: BranchCtx): Branch {
         if (!d.trust || !okId(d.id)) continue;   // nothing to take in, or no key the notes can take
         changed = takeIn(d, d.trust, (notes[d.id] ??= fresh())) || changed;
       }
+      // the gate watch (gatewatch.ts): this computer's own gate's finished hours into its fit
+      const host = now.host && typeof now.host === 'object' ? now.host : null;
+      const gate = host?.gate;
+      if (gate && typeof gate === 'object') {
+        const hours = hoursOf(gate);
+        if (hours.length >= 2) {
+          const s = (notes[GATE_KEY] ??= fresh());
+          const r = gateStep(gateOf(s), hours);
+          if (r.changed) {
+            s.burst = r.st.fit; s.at = r.st.at; s.lastBurst = r.st.lastBurst; s.lastUsual = r.st.lastUsual; s.rising = r.st.rising;
+            changed = true;
+          }
+        }
+      }
       report = build(now);
-      trim(new Set(devs.map((d) => d.id)));
+      // its cards, and a feed line when one comes or goes
+      capWas = capOn(host?.anchor, capWas);
+      const cards = gateCards(gateOf(notes[GATE_KEY]), gate, devs, host?.anchor, capWas);
+      const gl = gateLines(gateOn, cards);
+      gateOn = gl.on;
+      for (const line of gl.lines) ctx.emit(line);
+      gateNow = cards.map((c) => c.card);
+      // the gate's fit is never trimmed: it is no device
+      trim(new Set([...devs.map((d) => d.id), GATE_KEY]));
       trimHashes();
       if (changed) ctx.save(notes);
     },
@@ -650,7 +698,8 @@ export function create(ctx: BranchCtx): Branch {
     },
     view() {
       const devs = snap?.devices ?? [];
-      if (!report || !devs.length) return { built: true, stat: 'nothing to check', gauge: null, rows: [], lines: [], report: report ?? undefined };
+      // the gate's cards show even with no device to check
+      if (!report || !devs.length) return { built: true, stat: 'nothing to check', gauge: null, rows: [], lines: [], report: report ?? undefined, ...(gateNow.length ? { suggestions: [...gateNow] } : {}) };
       const ok = report.devices.filter((d) => d.verdict === 'ok').length;
       const bad = report.devices.filter((d) => d.verdict === 'bad').length + (report.host.checks.some((c) => c.ok === false) ? 1 : 0);
       return {
@@ -661,7 +710,8 @@ export function create(ctx: BranchCtx): Branch {
         lines: report.devices.map((d) => `${d.name} · ${d.verdict === 'ok' ? 'all clear' : d.verdict === 'bad' ? firstBad(d.checks).text : 'not checked yet'}`),
         note: 'nothing private goes into these checks: no prompts, no answers, only who connected and whether it was let in.',
         report,
-        suggestions: ownerBlindCards(),
+        // the gate's cards (weight 3 and 2) before owner-blind's (weight 1)
+        suggestions: [...gateNow, ...ownerBlindCards()],
       };
     },
   };
