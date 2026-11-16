@@ -15,6 +15,7 @@
 //   wifi       80         sometimes
 //   relay      300        sometimes
 //   internet   150        often
+//   anchor     300        sometimes
 //   other      -          none
 //
 // Notes are one small json (ctx.save). Bounds: at most MAX_DEVICES devices (a device the current
@@ -30,19 +31,41 @@
 // Which address answered (11.11.2026, docs/INTERNET.md): a snapshot device may say reachedBy,
 // 'lan', 'ipv6' or 'mapped' (its router's port). A device that answers, but only at a global ipv6
 // address or its router's port, gets one card: it is reached over the internet, answers are
-// slower and only apart mode works there (split needs the lan). Something to know; its button
-// only looks again (a probe), which puts it back on the lan once the lan answers.
+// slower there, and apart and split both work over it (a split waits about one round trip per
+// token for each far worker; the planner says the estimate). Something to know; its button only
+// looks again (a probe), which puts it back on the lan once the lan answers. A device reached
+// through an anchor gets the anchor's card below instead.
 //
-// A remote peer's link, in words (13.11.2026): for a device reached over the internet or a relay,
-// once its kind has 10 probes, the line also says what the ring and the ms list already hold, and
-// nothing new is probed: the spread (8 in 10 of its last answer times fall within a range, from at
-// least 10 of them), the loss (the 80% Wilson interval of the missed share, whole percents) and
-// what that costs a split (one round trip per token before any compute, so at best 1000/ms tok/s:
-// an upper bound). A fourth row, 'remote links', says how many such devices the look holds and the
-// slowest usual latency among them. Words only: no card, no hint, no feed line.
-import type { Branch, BranchCtx, BranchView, EyeDevice, Snapshot, Suggestion } from '../types.js';
+// A remote peer's link, in words (13.11.2026): for a device reached over the internet, a relay or
+// an anchor, once its kind has 10 probes, the line also says what the ring and the ms list already
+// hold, and nothing new is probed: the spread (8 in 10 of its last answer times fall within a
+// range, from at least 10 of them), the loss (the 80% Wilson interval of the missed share, whole
+// percents) and what that costs a split (one round trip per token before any compute, so at best
+// 1000/ms tok/s: an upper bound). A fourth row, 'remote links', says how many such devices the look
+// holds and the slowest usual latency among them. No card and no feed line for these words; the
+// deciding branches get one hint per such device (16.11.2026): { id, loss: { hi } }, the upper end
+// of that 80% Wilson interval as a share 0..1, from the same ring.
+//
+// Anchors (16.11.2026, the anchor network): a device may be reached via 'anchor', through an
+// always-on computer of the person's own circle (its row id in the snapshot's `through`) that
+// passes the bytes on and cannot read them (tls end to end). No server outside. The stat counts
+// them ('· n anchor'). The notes keep per device `thru`, the last anchor id it was routed through
+// (an id only, never an address): set while its row says via 'anchor' through a usable id, cleared
+// once it answers over another kind; a file without it loads as null and v stays 1. How many
+// readings in a row each device missed lives in memory (from the notes' last kind on start). A
+// switch to an anchor is the feed line "X is now reached through anchor Y (was wifi)". Three cards,
+// each only a probe or opening a panel; an anchor this computer cannot name reads "an anchor":
+//   connections:through:<Y>     warn 1   reachable devices via anchor through Y, one card per Y
+//   connections:anchor-down:<Y> warn 3   Y missed its last 3 readings (or left the look) and a
+//                                        device last routed through Y is not reachable; goes when
+//                                        either answers once; one feed line when it shows, one when it goes
+//   connections:one-anchor      suggest 1  exactly one anchor known (rows with anchor, plus this
+//                                        computer's host.anchor.on) and at least one far device
+//                                        (internet or anchor); through Steady (SHOW 3 / HIDE 4)
+// A snapshot without the new fields gives none of it.
+import type { Branch, BranchCtx, BranchView, DeviceHint, EyeDevice, Snapshot, Suggestion } from '../types.js';
 import { reachWord } from './util.js';
-import { cardId } from './decide.js';
+import { Steady, cardId, names } from './decide.js';
 
 export const MAX_DEVICES = 40;
 export const MAX_KINDS = 6;
@@ -65,6 +88,7 @@ export const ASSUMED: { kind: string; ms: number; drops: string }[] = [
   { kind: 'wifi', ms: 80, drops: 'sometimes' },
   { kind: 'relay', ms: 300, drops: 'sometimes' },
   { kind: 'internet', ms: 150, drops: 'often' },
+  { kind: 'anchor', ms: 300, drops: 'sometimes' },
 ];
 const ASSUMED_BY_KIND = new Map(ASSUMED.map((a) => [a.kind, a]));
 const ASSUMED_LINE = `${ASSUMED.map((a) => `${a.kind}: ${a.ms} ms, ${a.drops} drops`).join(' · ')} · other: none`;
@@ -74,6 +98,11 @@ export const INTERNET_ADDRS = ['ipv6', 'mapped'];
 /** Did this snapshot device answer only over the internet? Its reachedBy says so, or its via. */
 export function overInternet(d: Record<string, unknown>): boolean {
   return INTERNET_ADDRS.includes(d.reachedBy as string) || kindOf(d.via) === 'internet';
+}
+
+/** Is this snapshot device far: reached over the internet or through an anchor (a relay is not)? */
+export function isFar(d: Record<string, unknown>): boolean {
+  return overInternet(d) || kindOf(d.via) === 'anchor';
 }
 
 /** The link kind as a dimension, from a snapshot's via: cut to 20 chars, lower case, letters /
@@ -126,6 +155,7 @@ export interface DevNotes {
   at: number | null;     // the checkedAt of the last reading taken in
   k: Map<string, KindStat>;
   sw: SwitchRec[];
+  thru: string | null;   // the last anchor id it was routed through; null: none (or a file from before this field)
 }
 /** The notes as they live in memory: dev is a Map by id, so ids like __proto__ are ordinary keys. */
 export interface ConnectionsNotes { v: 1; dev: Map<string, DevNotes> }
@@ -243,7 +273,12 @@ function saneDev(x: unknown): [string, DevNotes] | null {
     if (!s || !isTime(s.at) || !saneKind(s.from) || !saneKind(s.to) || s.from === s.to) return null;
     sw.push({ at: s.at, from: s.from, to: s.to });
   }
-  return [id, { name: cut(e.name), seen: e.seen, kind: e.kind, at: e.at, k, sw }];
+  let thru: string | null = null;                  // missing in a file from before this field
+  if (e.thru !== undefined && e.thru !== null) {
+    thru = idOf(e.thru);
+    if (thru === null) return null;
+  }
+  return [id, { name: cut(e.name), seen: e.seen, kind: e.kind, at: e.at, k, sw, thru }];
 }
 
 /** A notes file from disk, kept only if it has exactly the shape this file writes. A bad shape
@@ -268,12 +303,93 @@ export function create(ctx: BranchCtx): Branch {
   let snap: Snapshot | null = null;
   let savedAt = Number.NEGATIVE_INFINITY;    // the first change after start is saved at once
   let dirty = false;                         // something changed since the last save
+  // readings missed in a row, per device id, in memory: on start, the trailing misses of the
+  // notes' last kind; a new reading adds one or resets it
+  const miss = new Map<string, number>();
+  for (const [id, e] of devs) {
+    const ring = e.kind === null ? [] : e.k.get(e.kind)?.ring ?? [];
+    let n = 0;
+    for (let i = ring.length - 1; i >= 0 && !ring[i]; i--) n++;
+    miss.set(id, n);
+  }
+  const steady = new Steady();               // the one-anchor card's hysteresis
+  let steadyCards: Suggestion[] = [];
+  let downCards: Suggestion[] = [];          // the anchor-down cards of the last look
+  const downNow = new Set<string>();         // the anchor ids whose anchor-down card shows, for the feed
+
+  /** An anchor's name as this computer knows it: its row in the look, else the notes; null: unknown. */
+  function anchorName(id: string): string | null {
+    for (const raw of listOf(snap?.devices)) {
+      const o = objOf(raw);
+      if (o && idOf(o.id) === id) { const n = cut(textOf(o.name) ?? ''); if (n) return n; break; }
+    }
+    return devs.get(id)?.name || null;
+  }
+  /** "anchor Y", or "an anchor" when this computer cannot name it */
+  const anchorWords = (id: string | null) => { const n = id === null ? null : anchorName(id); return n ? `anchor ${n}` : 'an anchor'; };
+  /** a device's name as a card says it: its row's name, else its id */
+  const rowName = (o: Record<string, unknown>, id: string) => cut(textOf(o.name) ?? '') || id;
+  /** "X", "X, Z" or "X, Z (+n more)" */
+  const fewNames = (ns: string[]) => `${ns.slice(0, 2).join(', ')}${ns.length > 2 ? ` (+${ns.length - 2} more)` : ''}`;
+
+  /** The anchor-down cards of this look, from the rows and the notes: an anchor Y that missed its
+   *  last 3 readings or left the look, with at least one row last routed through Y not reachable. */
+  function anchorDown(now: Snapshot, here: Set<string>): { y: string; card: Suggestion }[] {
+    const lost = new Map<string, { id: string; name: string }[]>();   // Y -> unreachable rows through it, first-seen order
+    const taken = new Set<string>();
+    for (const raw of listOf(now.devices).slice(0, MAX_DEVICES)) {
+      const o = objOf(raw);
+      const id = o ? idOf(o.id) : null;
+      if (!o || id === null || taken.has(id)) continue;
+      taken.add(id);
+      const y = devs.get(id)?.thru ?? null;
+      if (y === null || y === id || o.reachable !== false) continue;
+      lost.set(y, [...(lost.get(y) ?? []), { id, name: rowName(o, id) }]);
+    }
+    const out: { y: string; card: Suggestion }[] = [];
+    for (const [y, ds] of lost) {
+      const gone = !here.has(y);
+      if (!gone && (miss.get(y) ?? 0) < 3) continue;
+      const yT = anchorWords(y);
+      const who = ds.length <= 2 ? names(ds) : fewNames(ds.map((d) => d.name));
+      out.push({ y, card: {
+        id: cardId('connections', 'anchor-down', y), kind: 'warn', weight: 3,
+        title: `${yT} is not answering: ${who} cannot be reached`,
+        why: `they were last reached through ${yT}. they return when ${anchorName(y) ?? 'it'} answers or on this wi-fi. seen from this computer only.`,
+        action: { do: 'probe', devices: [...(gone ? [] : [y]), ...ds.map((d) => d.id)] }, label: 'look again',
+      } });
+    }
+    return out;
+  }
+
+  /** The one-anchor card's reason this look: exactly one anchor known and a far device. */
+  function oneAnchor(now: Snapshot): Suggestion[] {
+    const anchors = new Map<string, string>();   // id -> how a title names it
+    let far = false;
+    for (const raw of listOf(now.devices).slice(0, MAX_DEVICES)) {
+      const o = objOf(raw);
+      if (!o) continue;
+      if (isFar(o)) far = true;
+      const id = idOf(o.id);
+      if (id !== null && o.anchor === true && !anchors.has(id)) anchors.set(id, rowName(o, id));
+    }
+    const hostOn = objOf(objOf(now.host)?.anchor)?.on === true;   // this computer offers the role
+    if (anchors.size + (hostOn ? 1 : 0) !== 1 || !far) return [];
+    const only = hostOn ? 'this computer' : [...anchors.values()][0];
+    return [{
+      id: cardId('connections', 'one-anchor'), kind: 'suggest', weight: 1,
+      title: `only one anchor (${only}): if it goes, far devices lose each other`,
+      why: 'a second always-on computer in another home, made an anchor, keeps the circle up. this computer knows only the anchors it is paired with.',
+      action: { do: 'open', panel: 'devices' },
+    }];
+  }
 
   function save() {
     const dev: [string, unknown][] = [...devs.entries()].map(([id, e]) => [id, {
       name: e.name, seen: e.seen, kind: e.kind, at: e.at,
       k: [...e.k.entries()].map(([kind, s]) => [kind, { ring: packRing(s.ring), ms: [...s.ms], last: s.last }]),
       sw: e.sw.map((s) => ({ ...s })),
+      ...(e.thru !== null ? { thru: e.thru } : {}),   // only when there is one: today's shape otherwise
     }]);
     ctx.save({ v: 1, dev });
     dirty = false;
@@ -319,8 +435,8 @@ export function create(ctx: BranchCtx): Branch {
     return `${best.kind} has been the steadier link (${rateWords(best.rate, second.rate)})`;
   }
 
-  /** A snapshot device reached over the internet or a relay: the ones whose link gets the words. */
-  const isRemote = (d: Record<string, unknown>) => overInternet(d) || kindOf(d.via) === 'relay';
+  /** A snapshot device reached over the internet, a relay or an anchor: the ones whose link gets the words. */
+  const isRemote = (d: Record<string, unknown>) => isFar(d) || kindOf(d.via) === 'relay';
 
   /** What the probes say of the kind a snapshot device names (its via): null until that kind
    *  has 10 probes; med is null until 5 of the ring's answers carry a time. */
@@ -414,11 +530,20 @@ export function create(ctx: BranchCtx): Branch {
         const name = cut(textOf(d.name) ?? '');
         let e = devs.get(id);
         if (!e) {
-          e = { name, seen: at, kind: null, at: null, k: new Map(), sw: [] };
+          e = { name, seen: at, kind: null, at: null, k: new Map(), sw: [], thru: null };
           devs.set(id, e);
+          miss.set(id, 0);
           changed = true;
         }
         if (e.name !== name) { e.name = name; changed = true; }
+        // the anchor it is routed through: its row says so; answering over another kind clears it
+        const through = kindOf(d.via) === 'anchor' ? idOf(d.through) : null;
+        if (through !== null && through !== id) {
+          if (e.thru !== through) { e.thru = through; changed = true; }
+        } else if (e.thru !== null && d.reachable === true && kindOf(d.via) !== 'anchor') {
+          e.thru = null;
+          changed = true;
+        }
         if (at < e.seen - REANCHOR_MS) { e.seen = at; changed = true; }   // the stored seen was a bad clock
         else if (at > e.seen) e.seen = at;
         if (!isTime(d.checkedAt)) continue;  // unusable time: no reading
@@ -434,9 +559,12 @@ export function create(ctx: BranchCtx): Branch {
         if (prev !== null && via !== prev) {
           e.sw.push({ at, from: prev, to: via });
           if (e.sw.length > SW_MAX) e.sw.shift();
-          ctx.emit(`${e.name || id} is now reached over ${via} (was ${prev})`);
+          ctx.emit(via === 'anchor'
+            ? `${e.name || id} is now reached through ${anchorWords(through)} (was ${prev})`
+            : `${e.name || id} is now reached over ${via} (was ${prev})`);
           changed = true;
         }
+        miss.set(id, reach ? 0 : (miss.get(id) ?? 0) + 1);
         e.kind = via;
         e.at = checked;
         let k = e.k.get(via);
@@ -473,9 +601,25 @@ export function create(ctx: BranchCtx): Branch {
         for (const [id] of gone) {
           if (devs.size <= MAX_DEVICES) break;
           devs.delete(id);
+          miss.delete(id);
           changed = true;
         }
       }
+      // the anchor-down cards: one feed line when one shows and one when it goes
+      const down = anchorDown(now, here);
+      downCards = down.map((x) => x.card);
+      for (const { y, card } of down) if (!downNow.has(y)) ctx.emit(card.title);
+      for (const y of downNow.keys()) {
+        if (down.some((x) => x.y === y)) continue;
+        const yT = anchorWords(y);
+        ctx.emit(here.has(y) && (miss.get(y) ?? 0) === 0
+          ? `${yT} answers again`
+          : `nothing reached through ${yT} is cut off now`);
+      }
+      downNow.clear();
+      for (const { y } of down) downNow.add(y);
+      const one = oneAnchor(now);
+      steadyCards = steady.step(one, one);
       if (changed) dirty = true;
       const wall = ctx.now();
       if (Number.isFinite(wall)) { if (wall < savedAt) savedAt = wall; }   // a backward clock must not stop saving for long
@@ -496,17 +640,61 @@ export function create(ctx: BranchCtx): Branch {
       // reached, but only over the internet: one card per device while it lasts
       const suggestions: Suggestion[] = [];
       for (const o of objs) {
-        if (o === null || o.reachable !== true || !overInternet(o)) continue;
+        if (o === null || o.reachable !== true || !overInternet(o) || kindOf(o.via) === 'anchor') continue;
         const id = idOf(o.id);
         if (id === null) continue;
-        const name = cut(textOf(o.name) ?? '') || id;
+        const name = rowName(o, id);
         const at = o.reachedBy === 'mapped' ? 'the port its router opened' : o.reachedBy === 'ipv6' ? 'its ipv6 address' : 'an internet address';
         suggestions.push({
           id: cardId('connections', 'internet', id), kind: 'warn', weight: 1,
           title: `${name} is reached over the internet`,
-          why: `its lan address did not answer; its pinned certificate answered at ${at}. answers are slower there, and only apart mode works over it: split mode needs the lan.`,
+          why: `its lan address did not answer; its pinned certificate answered at ${at}. answers are slower there. apart and split both work over it; a split waits about one round trip per token for each far worker (the planner says the estimate).`,
           action: { do: 'probe', devices: [id] }, label: 'look again',
         });
+      }
+      // reached through an anchor: one card per anchor while it lasts
+      const through = new Map<string, { id: string; name: string }[]>();   // Y -> reachable rows through it
+      const taken = new Set<string>();
+      for (const o of objs) {
+        if (o === null || o.reachable !== true || kindOf(o.via) !== 'anchor') continue;
+        const id = idOf(o.id), y = idOf(o.through);
+        if (id === null || y === null || y === id || taken.has(id)) continue;
+        taken.add(id);
+        through.set(y, [...(through.get(y) ?? []), { id, name: rowName(o, id) }]);
+      }
+      for (const [y, ds] of through) {
+        // the anchor kind's readings of these devices, pooled: usually ~N ms from K probes
+        let k = 0;
+        const ms: number[] = [];
+        for (const d of ds) {
+          const st = devs.get(d.id)?.k.get('anchor');
+          if (!st) continue;
+          k += st.ring.length;
+          const ok = st.ring.filter((x) => x).length;
+          if (ok > 0) ms.push(...st.ms.slice(-ok));   // only the last ok answer times are this ring's
+        }
+        const med = k >= 10 ? usualMs(ms) : null;
+        const yN = anchorName(y);
+        suggestions.push({
+          id: cardId('connections', 'through', y), kind: 'warn', weight: 1,
+          title: `${fewNames(ds.map((d) => d.name))} ${ds.length === 1 ? 'is' : 'are'} reached through ${anchorWords(y)}`,
+          why: `neither their wi-fi nor a direct internet address answered. ${yN ?? 'the anchor'} passes the bytes on and cannot read them. `
+            + `${med !== null ? `usually ~${med} ms (from ${k} probes)` : 'not enough looks yet'}. apart and split both work; the planner says what a split would cost.`,
+          action: { do: 'probe', devices: ds.map((d) => d.id) }, label: 'look again',
+        });
+      }
+      suggestions.push(...downCards, ...steadyCards);
+      // the loss hint for the deciding branches: remote devices whose kind has 10 probes
+      const hints: DeviceHint[] = [];
+      const hinted = new Set<string>();
+      for (const o of objs) {
+        if (o === null || !isRemote(o)) continue;
+        const id = idOf(o.id);
+        const r = id === null || hinted.has(id) ? null : readingOf(o);
+        const loss = r ? wilson80(r.n - r.ok, r.n) : null;
+        if (id === null || !loss) continue;
+        hinted.add(id);
+        hints.push({ id, loss: { hi: loss[1] } });
       }
       const today = snap !== null && isTime(snap.at) ? dayKey(snap.at) : null;
       let switches = 0;
@@ -515,7 +703,8 @@ export function create(ctx: BranchCtx): Branch {
       }
       return {
         built: true,
-        stat: `${cable} cable · ${wifi} wi-fi${relay ? ` · ${relay} relay` : ''}${kindCounts.get('internet') ? ` · ${kindCounts.get('internet')} internet` : ''}`,
+        stat: `${cable} cable · ${wifi} wi-fi${relay ? ` · ${relay} relay` : ''}${kindCounts.get('internet') ? ` · ${kindCounts.get('internet')} internet` : ''}`
+          + `${kindCounts.get('anchor') ? ` · ${kindCounts.get('anchor')} anchor` : ''}`,
         gauge: null,
         rows: [
           ['kinds', kinds.length ? kinds.map(([k, n]) => `${k} ${n}`).join(' · ') : 'none yet'],
@@ -526,6 +715,7 @@ export function create(ctx: BranchCtx): Branch {
         lines: objs.filter((o) => o !== null).map((o) => deviceLine(o)),
         note: objs.length ? undefined : 'no device yet.',
         ...(suggestions.length ? { suggestions } : {}),
+        ...(hints.length ? { hints } : {}),
       };
     },
   };

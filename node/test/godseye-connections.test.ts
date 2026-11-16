@@ -50,7 +50,7 @@ function leaked(b: any, c: any): string {
 }
 
 /** the assumed table as the view says it, one line */
-const ASSUMED_LINE = 'cable: 20 ms, rare drops · wifi: 80 ms, sometimes drops · relay: 300 ms, sometimes drops · internet: 150 ms, often drops · other: none';
+const ASSUMED_LINE = 'cable: 20 ms, rare drops · wifi: 80 ms, sometimes drops · relay: 300 ms, sometimes drops · internet: 150 ms, often drops · anchor: 300 ms, sometimes drops · other: none';
 
 // ---- the pure parts
 
@@ -204,8 +204,8 @@ test('an internet device with 20 answers says its spread, its loss and what a sp
   assert.equal(v.lines[0], 'pixel · internet · 203.0.113.7:50551 · reachable · 290 ms · answers 100% over internet'
     + ' · usually 195 ms · 8 in 10 answers within 110–280 ms · loses 0–8% of probes · a split across it: at best ~3–5 tok/s');
   assert.deepEqual(v.rows[3], ['remote links', '1 device · slowest usually 195 ms']);
-  // words only: no hint, no card id beyond today's, no feed line
-  assert.equal((v as any).hints, undefined);
+  // no card id beyond today's, no feed line; the one hint (16.11.2026): the loss's upper end, 0.0759
+  assert.deepEqual((v as any).hints.map((h: any) => [h.id, Math.round(h.loss.hi * 1e4)]), [['p1', 759]]);
   assert.deepEqual((v.suggestions ?? []).map((s: any) => s.id), ['connections:internet:p1']);
   assert.deepEqual(c.feed, []);
 });
@@ -1145,6 +1145,7 @@ test('the assumed table is exactly the starting assumptions', () => {
     { kind: 'wifi', ms: 80, drops: 'sometimes' },
     { kind: 'relay', ms: 300, drops: 'sometimes' },
     { kind: 'internet', ms: 150, drops: 'often' },
+    { kind: 'anchor', ms: 300, drops: 'sometimes' },
   ]);
   const { b } = drive([snap([], at(0))]);
   assert.deepEqual(b.view().rows[2], ['assumed', ASSUMED_LINE]);
@@ -1163,7 +1164,7 @@ test('a device that answers only at its router\'s port or ipv6 gets one card; th
   const cards = v.suggestions ?? [];
   assert.deepEqual(cards.map((c: any) => c.id), ['connections:internet:p1', 'connections:internet:p2']);
   assert.equal(cards[0].title, 'pixel is reached over the internet');
-  assert.match(cards[0].why, /the port its router opened.*apart mode/);
+  assert.match(cards[0].why, /the port its router opened.*apart and split both work/);
   assert.match(cards[1].why, /its ipv6 address/);
   assert.deepEqual(cards[0].action, { do: 'probe', devices: ['p1'] });
   for (const c of cards) assert.ok(cleanCard(c), 'the eye keeps the card as the branch wrote it');
