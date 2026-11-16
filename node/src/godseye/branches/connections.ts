@@ -63,9 +63,28 @@
 //                                        computer's host.anchor.on) and at least one far device
 //                                        (internet or anchor); through Steady (SHOW 3 / HIDE 4)
 // A snapshot without the new fields gives none of it.
+//
+// A moved address (16.11.2026, P5): a device that answers with its pinned certificate (tls true,
+// and trust.certPinned not false when the device said it) from a public address block it was not
+// seen on before. The block is the public ipv4 /16 or the global ipv6 /32 (2000::/3), parsed from
+// the row's `where` (host:port, [ipv6]:port, a bare address; the first word only, so whereIs's
+// "(router port, over the internet)" tail is left out). An unparsable where, a lan or other
+// private address (10/8, 172.16/12, 192.168/16, 100.64/10, loopback, link-local, ula, multicast),
+// or a device via 'anchor' (no address of its own) gives nothing: a lan change, or lan to internet,
+// is not a move (the switch line says that). The notes keep per device `nb`, at most NB_MAX
+// entries of [h, first, last, n]: h the first 12 hex of sha256(id|block), first and last the look
+// times it answered from that block, n how many answers; never an address or a block. A full list
+// drops the entry seen least recently. A file without nb loads with an empty list; an empty list is
+// not written. A device's first block says nothing. A later unseen block gives one feed line a day
+// at most per device, "X answered from a network it was not seen on before (its pinned certificate
+// matched)", and, only when the device was settled before it (at most 2 blocks, at least 20
+// answers over them, first to last at least 3 days), the card
+//   connections:moved:<id>      warn 2     for 24 h from that look (in memory), opens trust
+// The feed day and the card's time live in memory: a restart forgets them.
 import type { Branch, BranchCtx, BranchView, DeviceHint, EyeDevice, Snapshot, Suggestion } from '../types.js';
 import { reachWord } from './util.js';
 import { Steady, cardId, names } from './decide.js';
+import { sha256Hex } from '../hash.js';
 
 export const MAX_DEVICES = 40;
 export const MAX_KINDS = 6;
@@ -81,6 +100,13 @@ const RECENT_MS = 24 * 3600_000;     // two kinds are compared only when both we
 const SLOWER_X = 3;                  // a kind answered more than 3 times its assumed ms is slower than usual
 const MS_OK_MAX = 3_600_000;         // a probe answer later than an hour is no answer time at all
 const MAX_TIME = 8.64e15;            // the last ms a Date can hold; later is no time at all
+export const NB_MAX = 6;             // address blocks remembered per device (as hashes)
+const NB_HEX = 12;                   // hex chars of sha256(id|block) a block entry keeps
+const SETTLED_BLOCKS = 2;            // settled: at most this many blocks ...
+const SETTLED_ANSWERS = 20;          // ... at least this many answers over them ...
+const SETTLED_MS = 3 * 24 * 3600_000; // ... first to last at least this long
+const MOVED_MS = 24 * 3600_000;      // the moved card lasts this long from the look that saw it
+const PARSE_MAX = 100;               // a where longer than this is cut before parsing
 
 /** What each kind is expected to be like: the assumptions table above. 'other' has none. */
 export const ASSUMED: { kind: string; ms: number; drops: string }[] = [
@@ -98,6 +124,85 @@ export const INTERNET_ADDRS = ['ipv6', 'mapped'];
 /** Did this snapshot device answer only over the internet? Its reachedBy says so, or its via. */
 export function overInternet(d: Record<string, unknown>): boolean {
   return INTERNET_ADDRS.includes(d.reachedBy as string) || kindOf(d.via) === 'internet';
+}
+
+/** a dotted ipv4 as its four bytes, else null */
+function v4Of(s: string): number[] | null {
+  const m = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(s);
+  if (!m) return null;
+  const b = m.slice(1, 5).map(Number);
+  return b.every((x) => x <= 255) ? b : null;
+}
+/** an ipv4 that names a public network: not this-network, private, shared (cgnat), loopback,
+ *  link-local, multicast or reserved */
+function publicV4(b: number[]): boolean {
+  const [a, c] = b;
+  if (a === 0 || a === 10 || a === 127 || a >= 224) return false;
+  if (a === 100 && c >= 64 && c <= 127) return false;
+  if (a === 169 && c === 254) return false;
+  if (a === 172 && c >= 16 && c <= 31) return false;
+  if (a === 192 && c === 168) return false;
+  return true;
+}
+/** an ipv6 as its eight 16-bit groups ('::' and a trailing dotted ipv4 allowed), else null */
+function v6Of(s: string): number[] | null {
+  if (s.length > 45 || !/^[0-9a-fA-F:.]+$/.test(s)) return null;
+  const halves = s.split('::');
+  if (halves.length > 2 || (halves.length === 2 && halves[0].includes('.'))) return null;
+  const part = (x: string): number[] | null => {
+    if (x === '') return [];
+    const out: number[] = [];
+    const bits = x.split(':');
+    for (let i = 0; i < bits.length; i++) {
+      const b = bits[i];
+      if (i === bits.length - 1 && b.includes('.')) {
+        const v4 = v4Of(b);
+        if (!v4) return null;
+        out.push((v4[0] << 8) | v4[1], (v4[2] << 8) | v4[3]);
+      } else if (/^[0-9a-fA-F]{1,4}$/.test(b)) out.push(parseInt(b, 16));
+      else return null;
+    }
+    return out;
+  };
+  const head = part(halves[0]);
+  if (!head) return null;
+  if (halves.length === 1) return head.length === 8 ? head : null;
+  const tail = part(halves[1]);
+  if (!tail || head.length + tail.length > 7) return null;
+  return [...head, ...new Array<number>(8 - head.length - tail.length).fill(0), ...tail];
+}
+/** The public address block a row's where names: 'a.b' (ipv4 /16) or 'g1:g2' (global ipv6 /32,
+ *  lower-case hex, no leading zeros); null for an unparsable where, a hostname, or a lan / private
+ *  address. Only the first word is read (host:port, [ipv6]:port or a bare address). */
+export function blockOf(where: unknown): string | null {
+  if (typeof where !== 'string') return null;
+  const tok = where.trim().slice(0, PARSE_MAX).split(/\s/)[0] ?? '';
+  let host: string;
+  if (tok.startsWith('[')) {
+    const end = tok.indexOf(']');
+    if (end < 0) return null;
+    const rest = tok.slice(end + 1);
+    if (rest !== '' && !/^:\d{1,5}$/.test(rest)) return null;
+    host = tok.slice(1, end);
+  } else if (tok.split(':').length === 2) {
+    const [h, p] = tok.split(':');
+    if (!/^\d{1,5}$/.test(p)) return null;
+    host = h;
+  } else {
+    host = tok;
+  }
+  host = host.replace(/%[^%]*$/, '');               // an ipv6 zone (%en0) says nothing of the block
+  if (!host) return null;
+  const v4 = v4Of(host);
+  if (v4) return publicV4(v4) ? `${v4[0]}.${v4[1]}` : null;
+  const g = v6Of(host);
+  if (!g) return null;
+  if (g.slice(0, 5).every((x) => x === 0) && g[5] === 0xffff) {   // ::ffff:a.b.c.d is an ipv4
+    const b = [g[6] >> 8, g[6] & 255, g[7] >> 8, g[7] & 255];
+    return publicV4(b) ? `${b[0]}.${b[1]}` : null;
+  }
+  if (g[0] < 0x2000 || g[0] > 0x3fff) return null;  // only global unicast: not ula, link-local, loopback, multicast
+  return `${g[0].toString(16)}:${g[1].toString(16)}`;
 }
 
 /** Is this snapshot device far: reached over the internet or through an anchor (a relay is not)? */
@@ -156,7 +261,11 @@ export interface DevNotes {
   k: Map<string, KindStat>;
   sw: SwitchRec[];
   thru: string | null;   // the last anchor id it was routed through; null: none (or a file from before this field)
+  nb: BlockRec[];        // public address blocks it answered from, as hashes; [] in a file from before this field
 }
+/** One address block a device answered from: 12 hex of sha256(id|block), the first and last look
+ *  time it answered from there, how many answers. Never the address or the block itself. */
+export type BlockRec = [h: string, first: number, last: number, n: number];
 /** The notes as they live in memory: dev is a Map by id, so ids like __proto__ are ordinary keys. */
 export interface ConnectionsNotes { v: 1; dev: Map<string, DevNotes> }
 /** The notes as they live on disk: dev is an array of [id, device] pairs (json cannot hold a Map). */
@@ -278,7 +387,19 @@ function saneDev(x: unknown): [string, DevNotes] | null {
     thru = idOf(e.thru);
     if (thru === null) return null;
   }
-  return [id, { name: cut(e.name), seen: e.seen, kind: e.kind, at: e.at, k, sw, thru }];
+  const nb: BlockRec[] = [];                       // missing in a file from before this field
+  if (e.nb !== undefined) {
+    if (!Array.isArray(e.nb)) return null;
+    for (const r of e.nb.slice(-NB_MAX)) {
+      if (!Array.isArray(r) || r.length !== 4) return null;
+      const [h, first, last, n] = r;
+      if (typeof h !== 'string' || !/^[0-9a-f]{12}$/.test(h) || !isTime(first) || !isTime(last) || first > last) return null;
+      if (typeof n !== 'number' || !Number.isSafeInteger(n) || n < 1) return null;
+      if (nb.some((x) => x[0] === h)) continue;    // first one wins
+      nb.push([h, first, last, n]);
+    }
+  }
+  return [id, { name: cut(e.name), seen: e.seen, kind: e.kind, at: e.at, k, sw, thru, nb }];
 }
 
 /** A notes file from disk, kept only if it has exactly the shape this file writes. A bad shape
@@ -316,6 +437,49 @@ export function create(ctx: BranchCtx): Branch {
   let steadyCards: Suggestion[] = [];
   let downCards: Suggestion[] = [];          // the anchor-down cards of the last look
   const downNow = new Set<string>();         // the anchor ids whose anchor-down card shows, for the feed
+  const movedAt = new Map<string, number>(); // id -> the look time its moved card dates from (in memory)
+  const movedDay = new Map<string, string>(); // id -> the day of its last moved feed line (in memory)
+
+  /** settled: at most 2 blocks, at least 20 answers over them, first to last at least 3 days */
+  function settled(nb: BlockRec[]): boolean {
+    if (nb.length < 1 || nb.length > SETTLED_BLOCKS) return false;
+    let n = 0, first = Infinity, last = -Infinity;
+    for (const [, f, l, k] of nb) { n += k; first = Math.min(first, f); last = Math.max(last, l); }
+    return n >= SETTLED_ANSWERS && last - first >= SETTLED_MS;
+  }
+
+  /** A pinned answer from a public block: count it; an unseen block after the first is one feed
+   *  line a day, and a card when the device was settled. True when the notes changed. */
+  function noteBlock(id: string, e: DevNotes, d: Record<string, unknown>, at: number): boolean {
+    if (d.tls !== true || objOf(d.trust)?.certPinned === false) return false;   // not pinned
+    if (kindOf(d.via) === 'anchor') return false;    // no address of its own
+    const block = blockOf(d.where);
+    if (block === null) return false;
+    const h = sha256Hex(`${id}|${block}`).slice(0, NB_HEX);
+    const known = e.nb.find((r) => r[0] === h);
+    if (known) {
+      known[1] = Math.min(known[1], at);
+      known[2] = Math.max(known[2], at);
+      if (known[3] < Number.MAX_SAFE_INTEGER) known[3]++;
+      return true;
+    }
+    if (e.nb.length > 0) {
+      if (settled(e.nb)) movedAt.set(id, at);
+      const day = dayKey(at);
+      if (movedDay.get(id) !== day) {
+        movedDay.set(id, day);
+        ctx.emit(movedWords(e.name || id));
+      }
+    }
+    e.nb.push([h, at, at, 1]);
+    while (e.nb.length > NB_MAX) {                 // drop the one seen least recently, never the new one
+      let drop = 0;
+      for (let i = 1; i < e.nb.length - 1; i++) if (e.nb[i][2] < e.nb[drop][2]) drop = i;
+      e.nb.splice(drop, 1);
+    }
+    return true;
+  }
+  const movedWords = (name: string) => `${name} answered from a network it was not seen on before (its pinned certificate matched)`;
 
   /** An anchor's name as this computer knows it: its row in the look, else the notes; null: unknown. */
   function anchorName(id: string): string | null {
@@ -390,6 +554,7 @@ export function create(ctx: BranchCtx): Branch {
       k: [...e.k.entries()].map(([kind, s]) => [kind, { ring: packRing(s.ring), ms: [...s.ms], last: s.last }]),
       sw: e.sw.map((s) => ({ ...s })),
       ...(e.thru !== null ? { thru: e.thru } : {}),   // only when there is one: today's shape otherwise
+      ...(e.nb.length ? { nb: e.nb.map((r) => [...r]) } : {}),   // hashes and times only
     }]);
     ctx.save({ v: 1, dev });
     dirty = false;
@@ -530,7 +695,7 @@ export function create(ctx: BranchCtx): Branch {
         const name = cut(textOf(d.name) ?? '');
         let e = devs.get(id);
         if (!e) {
-          e = { name, seen: at, kind: null, at: null, k: new Map(), sw: [], thru: null };
+          e = { name, seen: at, kind: null, at: null, k: new Map(), sw: [], thru: null, nb: [] };
           devs.set(id, e);
           miss.set(id, 0);
           changed = true;
@@ -593,6 +758,7 @@ export function create(ctx: BranchCtx): Branch {
           }
         }
         k.last = at;
+        if (reach) noteBlock(id, e, d, at);
         changed = true;
       }
       // the cap: drop vanished devices first, the oldest seen first; never one this look holds
@@ -602,9 +768,13 @@ export function create(ctx: BranchCtx): Branch {
           if (devs.size <= MAX_DEVICES) break;
           devs.delete(id);
           miss.delete(id);
+          movedAt.delete(id);
+          movedDay.delete(id);
           changed = true;
         }
       }
+      // a moved card lasts 24 h from its look; a look before it (a bad clock) ends it too
+      for (const [id, t] of movedAt) if (at - t >= MOVED_MS || at < t) movedAt.delete(id);
       // the anchor-down cards: one feed line when one shows and one when it goes
       const down = anchorDown(now, here);
       downCards = down.map((x) => x.card);
@@ -681,6 +851,18 @@ export function create(ctx: BranchCtx): Branch {
           why: `neither their wi-fi nor a direct internet address answered. ${yN ?? 'the anchor'} passes the bytes on and cannot read them. `
             + `${med !== null ? `usually ~${med} ms (from ${k} probes)` : 'not enough looks yet'}. apart and split both work; the planner says what a split would cost.`,
           action: { do: 'probe', devices: ds.map((d) => d.id) }, label: 'look again',
+        });
+      }
+      // answered from an unseen network after being settled: 24 h, opens the trust branch
+      for (const id of movedAt.keys()) {
+        const e = devs.get(id);
+        if (!e) continue;
+        suggestions.push({
+          id: cardId('connections', 'moved', id), kind: 'warn', weight: 2,
+          title: movedWords(e.name || id),
+          why: 'its certificate is the one pinned from its qr, so it holds the same key: normal after a move or a new provider. '
+            + 'if nobody moved it, its key may have been copied: ask its owner, or pair again. the brain compares address blocks; it cannot say where.',
+          action: { do: 'open', panel: 'branch', branch: 'trust' }, label: 'trust',
         });
       }
       suggestions.push(...downCards, ...steadyCards);
