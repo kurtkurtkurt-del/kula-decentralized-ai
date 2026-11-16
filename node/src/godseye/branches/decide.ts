@@ -19,6 +19,15 @@
 // split() also tries the workers nearest-cost first (compute per MB plus the link over the room a
 // worker gives) and takes a set from that order only when it is strictly faster, so a fast far phone
 // no longer always comes before a slower near one; a greedy second order, not a search (L10 P56).
+// A far worker (isFar: reached straight over the internet or through an anchor; a relay is never a
+// seat of a split) is priced apart from the near ones (anchor network, P3): its hop is kFar (the
+// planner's learned far k, once it has 3 far split answers) or 1, times its link's srtt, or
+// FAR_HOP_MS for its route when senses has no link; a near worker is priced exactly as before. The
+// probe's ms is a whole handshake, about 4 round trips, so k = 1 is likely about 4x pessimistic for a
+// far link: a split with a far worker says its tok/s at that pessimistic end (Place.tps, so "faster
+// split" never fires on an assumption) and `far` = { lo, hi, assumed }, hi at FAR_HI_K until kFar is
+// learned (then lo = hi, at kFar). A seat may carry connections' `loss` hint (the upper end of its
+// missed probe share), which the planner names when a far link drops probes.
 //
 // A device's free memory is its worker's live reading (GET /status, `worker.ramFreeMb`) when that
 // is fresh (WORKER_FRESH_MS) and it holds none of our model; when it holds our model, a reading
@@ -38,6 +47,8 @@ export const GAIN = 1.15;          // sim.ts GAIN_TO_SHARE: "faster" means at le
 export const HOP_MS = 10;          // per worker per token: 3 round trips of 3 ms (planner.ts net) and the activation
 export const WORKER_FRESH_MS = 120_000;   // a free device's worker reading is used this long after it came
 export const SLACK = 1.05;         // a card that shows stays while its reason holds within this much
+export const FAR_HOP_MS = { internet: 150, anchor: 300 } as const;   // a far worker's round trip when senses has no link (assumed)
+export const FAR_HI_K = 0.25;      // the optimistic far k: the probe's ms is about 4 round trips (DECISIONS P3)
 export const SHOW = 3;             // looks a reason must hold before its card shows
 export const HIDE = 4;             // looks a reason must be gone before its card goes
 const MB = 1024 * 1024;
@@ -54,7 +65,10 @@ export interface Seat {
   tonight: DeviceHint['tonight'] | null;
   files?: { file: string; tps: number }[];   // tok/s it answered with on these files, each weighing 1 or more
   link?: Link;                      // senses: its link's usual round trip (ms); never on this computer's seat
+  loss?: number;                    // connections: the upper end of its missed probe share, 0..1; only with that hint
 }
+/** a seat reached straight over the internet or through an anchor (a relay is never split over) */
+export const isFar = (x: { via: string }): boolean => x.via === 'internet' || x.via === 'anchor';
 /** a device the deciding branches leave out, and why */
 export interface Barred { id: string; name: string; why: string }
 export interface Field { seats: Seat[]; barred: Barred[]; measured: Map<string, Measured[]> }
@@ -156,6 +170,23 @@ export function linksOf(ctx: Pick<BranchCtx, 'peek'>): Map<string, Link> {
   return out;
 }
 
+/** the missed probe share's upper end connections gave, by device id: a string id and a loss whose hi
+ *  is finite in [0, 1]. Read by shape, so a hint without one is no entry */
+export function lossOf(ctx: Pick<BranchCtx, 'peek'>): Map<string, number> {
+  const out = new Map<string, number>();
+  const hs = ctx.peek('connections')?.hints;
+  if (!Array.isArray(hs)) return out;
+  for (const h of hs) {
+    if (!h || typeof h.id !== 'string') continue;
+    const l = (h as { loss?: unknown }).loss;
+    if (l === null || typeof l !== 'object') continue;
+    const hi = (l as { hi?: unknown }).hi;
+    if (typeof hi !== 'number' || !Number.isFinite(hi) || hi < 0 || hi > 1) continue;
+    out.set(h.id, hi);
+  }
+  return out;
+}
+
 /** the devices trust says no to: a bad verdict, with its first failed check */
 export function untrusted(ctx: Pick<BranchCtx, 'peek'>): Map<string, string> {
   const out = new Map<string, string>();
@@ -191,6 +222,7 @@ export function field(s: Snapshot, ctx: Pick<BranchCtx, 'peek'>, measured?: Map<
   const hints = hintsOf(ctx);
   const trust = untrusted(ctx);
   const links = linksOf(ctx);
+  const losses = lossOf(ctx);
   // the measured speeds: the planner's own notes, or what it handed the others
   let speeds = measured;
   if (!speeds) {
@@ -214,7 +246,8 @@ export function field(s: Snapshot, ctx: Pick<BranchCtx, 'peek'>, measured?: Map<
     // answering another master: left out, a line in the view and nothing more (no card, no probe)
     if (busy) { barred.push({ id: d.id, name: d.name, why: 'answering someone else' }); continue; }
     const link = links.get(d.id);
-    seats.push({ id: d.id, name: d.name, local: false, kind: d.kind, via: d.via, ramMb: ram, capMb: Math.floor(ram * WORKER_SHARE), speed: speedOf(s, d.id, d.kind, d.bwGBs, speeds.get(d.id)), tonight: tonightOf(d.id), files: filesOf(s, speeds.get(d.id)), ...(link ? { link } : {}) });
+    const loss = losses.get(d.id);
+    seats.push({ id: d.id, name: d.name, local: false, kind: d.kind, via: d.via, ramMb: ram, capMb: Math.floor(ram * WORKER_SHARE), speed: speedOf(s, d.id, d.kind, d.bwGBs, speeds.get(d.id)), tonight: tonightOf(d.id), files: filesOf(s, speeds.get(d.id)), ...(link ? { link } : {}), ...(loss !== undefined ? { loss } : {}) });
   }
   if (s.work.llama && s.host.freeMb != null && s.host.freeMb > 0) {
     const no = hints.get('local')?.find((h) => h.no)?.no ?? null;
@@ -249,6 +282,7 @@ export interface Place {
   shares?: { seat: Seat; mb: number }[];
   action: SuggestAction;
   chain?: { computeMs: number; links: Link[] };   // split with a k and every worker's link: its compute time per token and the links, in order
+  far?: { lo: number; hi: number; assumed: boolean };   // a split with a far worker, speeds known: its tok/s at kFar or 1 (lo) and at FAR_HI_K while assumed (hi), unrounded
 }
 
 /** apart without this computer's seat says here:false: kula's engine runs this computer in apart
@@ -283,16 +317,20 @@ export function gbsFor(x: Seat, m: EyeModel, gb: number | null): number | null {
 /** one model across this computer and the devices near it (never a relay), the bytes on the
  *  fastest first; the fewest workers that give the shortest token, or that fit when a speed is unknown.
  *  With a usable k (finite, > 0) a worker with a link costs k times its srtt per token instead of HOP_MS,
- *  and a place whose every worker has a link says its chain; without one it is as before L9 */
-export function split(f: Field, m: EyeModel, slack = 1, k?: number): Place | null {
+ *  and a place whose every worker has a link says its chain; without one it is as before L9.
+ *  A far worker (isFar) costs kFar (usable: finite, > 0; else 1, HOP_PRIOR) times its srtt, or
+ *  FAR_HOP_MS for its route without a link, whatever k is; a place using one says `far` */
+export function split(f: Field, m: EyeModel, slack = 1, k?: number, kFar?: number): Place | null {
   const host = f.seats.find((x) => x.local);
   if (!host || !(m.catalog || m.here) || !(m.needMb > 0)) return null;
   const gb = readGb(m);
   const usable = typeof k === 'number' && Number.isFinite(k) && k > 0;
+  const learned = typeof kFar === 'number' && Number.isFinite(kFar) && kFar > 0;
   const gbsOf = (x: Seat): number | null => gbsFor(x, m, gb);
   const speed = (x: Seat) => gbsOf(x) ?? -1;
   const bySpeed = f.seats.filter((x) => !x.local && x.via !== 'relay').sort((a, b) => speed(b) - speed(a) || b.capMb - a.capMb);
-  const hopOf = (x: Seat) => (usable && x.link ? k! * x.link.srtt : HOP_MS);
+  const farMs = (x: Seat): number => (x.link ? x.link.srtt : FAR_HOP_MS[x.via as keyof typeof FAR_HOP_MS]);
+  const hopOf = (x: Seat) => (isFar(x) ? (learned ? kFar! : 1) * farMs(x) : usable && x.link ? k! * x.link.srtt : HOP_MS);
   // a worker's cost per MB of the model it takes: its compute plus its link spread over its room (L10 P56)
   const perMb = (x: Seat): number => {
     const g = gbsOf(x);
@@ -323,6 +361,11 @@ export function split(f: Field, m: EyeModel, slack = 1, k?: number): Place | nul
     const ms = known ? computeMs + hop : null;
     const place: Place = { mode: 'split', seats: [host, ...used.map((x) => x.seat)], tps: ms ? Math.round((1000 / ms) * 10) / 10 : null, shares, action: loadAction(m, 'split', used.map((x) => x.seat)) };
     if (known && usable && used.every((x) => x.seat.link)) place.chain = { computeMs, links: used.map((x) => x.seat.link!) };
+    if (ms != null && used.some((x) => isFar(x.seat))) {
+      // hi: the far links at FAR_HI_K while kFar is not learned; the near ones as priced
+      const hiMs = learned ? ms : computeMs + used.reduce((t, x) => t + (isFar(x.seat) ? FAR_HI_K * farMs(x.seat) : hopOf(x.seat)), 0);
+      place.far = { lo: 1000 / ms, hi: 1000 / hiMs, assumed: !learned };
+    }
     // speeds unknown: the fewest that fit (the speed order); in the nearest-cost order it ends that order
     if (ms == null) { if (o === 0 && !best) best = place; break; }
     if (ms < bestMs) { best = place; bestMs = ms; }   // from the second order only strictly faster
@@ -331,8 +374,9 @@ export function split(f: Field, m: EyeModel, slack = 1, k?: number): Place | nul
 }
 
 /** the loaded split's chain of model m, as split() would say it: each part's compute time from its
- *  seat's speed on m and the workers' links; null when any of it is missing */
-export function loadedChain(s: Snapshot, f: Field, m: EyeModel): { computeMs: number; links: Link[] } | null {
+ *  seat's speed on m and the workers' links; null when any of it is missing. With a far worker
+ *  (isFar) it also says which link is far, one flag per link: the planner learns kFar from it */
+export function loadedChain(s: Snapshot, f: Field, m: EyeModel): { computeMs: number; links: Link[]; far?: boolean[] } | null {
   const L = s.work.loaded;
   if (!L || L.mode !== 'split' || !(L.model.id === m.id || L.model.file === m.file)) return null;
   const parts = (L.parts ?? []).filter((p) => p.mb > 0);
@@ -341,6 +385,7 @@ export function loadedChain(s: Snapshot, f: Field, m: EyeModel): { computeMs: nu
   if (!parts.length || !(total > 0) || !gb) return null;
   let computeMs = 0;
   const links: Link[] = [];
+  const far: boolean[] = [];
   for (const p of parts) {
     const seat = p.local ? f.seats.find((x) => x.local) : f.seats.find((x) => !x.local && x.id === p.id);
     if (!seat) return null;
@@ -350,9 +395,11 @@ export function loadedChain(s: Snapshot, f: Field, m: EyeModel): { computeMs: nu
     if (!seat.local) {
       if (!seat.link) return null;
       links.push(seat.link);
+      far.push(isFar(seat));
     }
   }
-  return links.length ? { computeMs, links } : null;
+  if (!links.length) return null;
+  return far.some((x) => x) ? { computeMs, links, far } : { computeMs, links };
 }
 
 // ---- words

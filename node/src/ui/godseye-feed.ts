@@ -3,11 +3,12 @@
 // leaks through, so the eye can later move into a program of its own and get the same snapshot
 // over a pipe.
 import fs from 'node:fs';
+import net from 'node:net';
 import path from 'node:path';
 import type { Engine, PeerRow, TrustLook } from './engine.js';
 import { hostLabel } from './engine.js';
 import type { ProjectRunner } from './projects.js';
-import type { EyeDevice, EyeHealth, EyeTrust, Snapshot } from '../godseye/index.js';
+import type { EyeDevice, EyeGate, EyeHealth, EyeTrust, Snapshot } from '../godseye/index.js';
 import { freeRamMB } from '../sysinfo.js';
 import { ledgerFile } from '../ledgercmd.js';
 import { loadOrCreate } from '../audit/key.js';
@@ -37,14 +38,135 @@ let ledgerKeyId = '';
 const rotatedSeen = new Map<string, FileSeen>();
 let liveSeen: { file: string; seen: FileSeen } | null = null;
 
-function foldLines(text: string, publicKey: KeyObject, from: Fold): Fold {
-  const r = verifyLines(text.split('\n').filter((l) => l.length > 0), publicKey, from.last);
+// this computer's own gate refusals for host.gate (16.11.2026), read from the same pass. Its gate
+// writes every refused handshake as a signed reject line, {"t":<ms>,"kind":"reject","peer":<plain
+// ip>,"reason":<word>,…} (gate.ts, share.ts, audit/auditor.ts reject). Sound: only lines this
+// pass verified (chain and signature) are counted. Cheap: in checkFile's prefix fold (never the
+// torn tail, which is verified each time and counted once it is whole), each newly verified line
+// gets one regexp, and a JSON.parse only when it is a reject in the last 26 UTC hours; an
+// unchanged ledger costs hostGate's 26-entry copy. Exactly once: an incremental fold counts every
+// new line; a fold from byte 0 (the first look, a rewritten file, a broken prefix) counts only the
+// lines newer than the newest reject counted before this pass. The buckets live in memory, one
+// per UTC hour, and start again when the ledger key changes (the lines are then verified again
+// under the new key). An address never leaves here: a refusal from an address that is not private
+// (PRIVATE below) counts as far, and its network (ipv4 /24, ipv6 /48) is kept only as a short
+// sha256 so that hostGate can say how many distinct networks knocked. At most NETS_HOUR networks
+// are kept per hour (a scan wider than that reads as at least that many); at most GATE_BY_MAX
+// reasons per hour (a reason past them still counts as far).
+const HOUR = 3_600_000;
+const GATE_HOURS = 26;               // host.gate's hours, the last one running
+const GATE_BY_MAX = 40;              // reasons kept per hour (guard.ts looks at no more)
+const GATE_GUARD = 5;                // rpc guard refusals kept, the newest
+const NETS_HOUR = 10_000;            // network hashes kept per hour
+const REASON_MAX = 200;              // a reason or a guard's why is cut here (guard.ts REASON)
+const REJECT_LINE = /^\{"t":(\d{1,16}),"kind":"reject",/;
+type GateHour = { by: Map<string, number>; far: number; nets: Set<string> };
+const gateHours = new Map<number, GateHour>();
+let gateGuard: { t: number; why: string }[] = [];
+let gateNewest = -1;                 // the newest reject t counted
+const PRIVATE = new net.BlockList();
+for (const [a, bits] of [['10.0.0.0', 8], ['172.16.0.0', 12], ['192.168.0.0', 16], ['169.254.0.0', 16], ['100.64.0.0', 10], ['127.0.0.0', 8]] as const) PRIVATE.addSubnet(a, bits, 'ipv4');
+PRIVATE.addAddress('::1', 'ipv6');
+PRIVATE.addSubnet('fe80::', 10, 'ipv6');
+PRIVATE.addSubnet('fc00::', 7, 'ipv6');
+const hourOf = (t: number): number => Math.floor(t / HOUR) * HOUR;
+const shapeKey = (k: string): boolean => k === '__proto__' || k === 'constructor' || k === 'prototype';
+
+// an ipv6 address's eight groups (an embedded ipv4 tail as its two), or null
+function v6groups(ip: string): string[] | null {
+  let s = ip.toLowerCase();
+  const m = /(\d+)\.(\d+)\.(\d+)\.(\d+)$/.exec(s);
+  if (m) {
+    const [a, b, c, d] = m.slice(1).map(Number);
+    s = `${s.slice(0, m.index)}${((a << 8) | b).toString(16)}:${((c << 8) | d).toString(16)}`;
+  }
+  const [head, tail] = s.split('::');
+  const h = head ? head.split(':') : [];
+  const t = tail === undefined ? null : tail ? tail.split(':') : [];
+  const groups = t === null ? h : [...h, ...Array<string>(Math.max(0, 8 - h.length - t.length)).fill('0'), ...t];
+  return groups.length === 8 ? groups.map((g) => parseInt(g, 16).toString(16)) : null;
+}
+
+// a refusal's source network as a short hash when its address is not private; null for a private
+// address or anything that is not an address
+function farNet(peer: unknown): string | null {
+  if (typeof peer !== 'string') return null;
+  let ip = peer.replace(/%.*$/, '');
+  const mapped = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/i.exec(ip);
+  if (mapped) ip = mapped[1];
+  let block: string;
+  const fam = net.isIP(ip);
+  if (fam === 4) {
+    if (PRIVATE.check(ip, 'ipv4')) return null;
+    block = `${ip.split('.').slice(0, 3).join('.')}.0/24`;
+  } else if (fam === 6) {
+    if (PRIVATE.check(ip, 'ipv6')) return null;
+    const g = v6groups(ip);
+    if (!g) return null;
+    block = `${g.slice(0, 3).join(':')}::/48`;
+  } else return null;
+  return createHash('sha256').update(block).digest('hex').slice(0, 16);
+}
+
+// one fold's new whole lines: each verified reject in the window, newer than `floor` when the fold
+// started from byte 0 (null: an incremental fold, every new line counts)
+function gateFold(lines: string[], problems: Problem[], floor: number | null): void {
+  const bad = new Set(problems.map((p) => p.n));   // verifyLines numbers the lines from 1
+  const first = hourOf(Date.now()) - (GATE_HOURS - 1) * HOUR;
+  for (let i = 0; i < lines.length; i++) {
+    const m = REJECT_LINE.exec(lines[i]);
+    if (!m || bad.has(i + 1)) continue;
+    const t = Number(m[1]);
+    if (t < first || (floor !== null && t <= floor)) continue;
+    let o: unknown;
+    try { o = JSON.parse(lines[i]); } catch { continue; }
+    if (!o || typeof o !== 'object') continue;
+    const { reason, peer } = o as { reason?: unknown; peer?: unknown };
+    if (typeof reason !== 'string') continue;   // not a refusal's shape
+    const start = hourOf(t);
+    let h = gateHours.get(start);
+    if (!h) gateHours.set(start, (h = { by: new Map(), far: 0, nets: new Set() }));
+    const rpc = reason.startsWith('rpc guard');
+    const key = rpc ? 'rpc guard' : reason.slice(0, REASON_MAX);
+    if (!shapeKey(key) && (h.by.has(key) || h.by.size < GATE_BY_MAX)) h.by.set(key, (h.by.get(key) ?? 0) + 1);
+    const far = farNet(peer);
+    if (far !== null) { h.far++; if (h.nets.size < NETS_HOUR) h.nets.add(far); }
+    if (rpc) { gateGuard.push({ t, why: reason.slice(0, REASON_MAX) }); if (gateGuard.length > GATE_GUARD) gateGuard = gateGuard.slice(-GATE_GUARD); }
+    if (t > gateNewest) gateNewest = t;
+  }
+  for (const s of gateHours.keys()) if (s < first) gateHours.delete(s);
+}
+
+/** This computer's gate over the last 26 UTC hours (the last one running), from the reject lines
+ *  hostLedger verified; null until hostLedger has read a ledger. Counts only, no address. Its own
+ *  export, because hostLedger returns early when nothing changed. */
+export function hostGate(now = Date.now()): EyeGate | null {
+  if (!ledgerKeyId) return null;
+  const last = hourOf(now);
+  const first = last - (GATE_HOURS - 1) * HOUR;
+  for (const s of gateHours.keys()) if (s < first) gateHours.delete(s);
+  const hours: EyeGate['hours'] = [];
+  const nets = new Set<string>();
+  for (let s = first; s <= last; s += HOUR) {
+    const h = gateHours.get(s);
+    hours.push({ start: s, by: h ? Object.fromEntries(h.by) : {}, far: h ? h.far : 0 });
+    if (h) for (const n of h.nets) nets.add(n);
+  }
+  return { hours, nets: nets.size, guard: gateGuard.filter((g) => g.t >= first && g.t < last + HOUR).map((g) => ({ ...g })) };
+}
+
+// `gate`: count the rejects among the newly verified lines (the prefix fold only); its value is
+// the floor for a fold from byte 0, null for an incremental one
+function foldLines(text: string, publicKey: KeyObject, from: Fold, gate?: { floor: number | null }): Fold {
+  const lines = text.split('\n').filter((l) => l.length > 0);
+  const r = verifyLines(lines, publicKey, from.last);
   verifiedLines += r.count;
+  if (gate) gateFold(lines, r.problems, gate.floor);
   if (r.count === 0) return from;
   return { count: from.count + r.count, problems: [...from.problems, ...r.problems.map((p) => ({ n: p.n + from.count, reason: p.reason }))], last: r.last };
 }
 
-function checkFile(f: string, mtimeMs: number, prevIn: string, publicKey: KeyObject, before: FileSeen | null): FileSeen {
+function checkFile(f: string, mtimeMs: number, prevIn: string, publicKey: KeyObject, before: FileSeen | null, floor: number): FileSeen {
   const buf = fs.readFileSync(f);
   const end = buf.lastIndexOf(10) + 1; // whole lines end here (a "\n" is always a utf-8 boundary)
   let h = createHash('sha256');
@@ -56,7 +178,7 @@ function checkFile(f: string, mtimeMs: number, prevIn: string, publicKey: KeyObj
     else h = createHash('sha256');
   }
   h.update(buf.subarray(offset, end));
-  pre = foldLines(buf.subarray(offset, end).toString('utf8'), publicKey, pre);
+  pre = foldLines(buf.subarray(offset, end).toString('utf8'), publicKey, pre, { floor: offset > 0 ? null : floor });
   const all = end < buf.length ? foldLines(buf.subarray(end).toString('utf8'), publicKey, pre) : pre;
   return { size: buf.length, mtimeMs, prevIn, offset: end, prefixHash: h.digest('hex'), pre, all };
 }
@@ -71,7 +193,8 @@ export function hostLedger(file = ledgerFile()): Snapshot['host']['ledger'] {
   try {
     const key = loadOrCreate();
     const keyId = createHash('sha256').update(key.publicKey.export({ type: 'spki', format: 'der' })).digest('hex');
-    if (keyId !== ledgerKeyId) { rotatedSeen.clear(); liveSeen = null; ledgerKeyId = keyId; }
+    if (keyId !== ledgerKeyId) { rotatedSeen.clear(); liveSeen = null; ledgerKeyId = keyId; gateHours.clear(); gateGuard = []; gateNewest = -1; }
+    const floor = gateNewest;   // a fold from byte 0 in this pass counts only rejects newer than this
     let prev = GENESIS;
     let count = 0;
     let problem: string | null = null;
@@ -86,7 +209,7 @@ export function hostLedger(file = ledgerFile()): Snapshot['host']['ledger'] {
         const cached = live ? lastLive : (rotatedSeen.get(f) ?? null);
         let seen = cached && cached.size === s.size && cached.mtimeMs === s.mtimeMs && cached.prevIn === prev ? cached : null;
         // a rotated file new here was the live file a moment ago (a rotation renames it)
-        if (!seen) seen = checkFile(f, s.mtimeMs, prev, key.publicKey, cached ?? (live ? null : lastLive));
+        if (!seen) seen = checkFile(f, s.mtimeMs, prev, key.publicKey, cached ?? (live ? null : lastLive), floor);
         if (live) liveSeen = { file, seen }; else { rotatedSeen.set(f, seen); kept.add(f); }
         all = seen.all;
       }
@@ -104,8 +227,15 @@ export function hostLedger(file = ledgerFile()): Snapshot['host']['ledger'] {
 
 // the way the device is reached now (one device is one row: engine.peers, devices.ts)
 // a wi-fi record whose gate answered only at a global ipv6 address or its router's port is
-// reached over the internet (peers.ts pickRoute)
+// reached over the internet (peers.ts pickRoute). The anchor network (16.11.2026) is read through
+// a widened row (AnchorRow), so this compiles before the engine has it: a row whose via is
+// 'anchor' (reached through an anchor of the circle) passes as it is, its `through` names the
+// anchor's row ('self' when this computer is the anchor, null when the anchor is not in the peer
+// book), its `throughName` the anchor's name, and `anchor: true` marks a row that offers the role.
+type AnchorRow = Omit<PeerRow, 'via'> & { via?: PeerRow['via'] | 'anchor'; through?: string | null; throughName?: string | null; anchor?: boolean };
+type AnchorLook = { on?: unknown; reachable?: unknown; links?: unknown; bytesDay?: unknown; capDay?: unknown; memberMaxDay?: unknown };
 const via = (p: PeerRow): EyeDevice['via'] => {
+  if ((p as AnchorRow).via === 'anchor') return 'anchor';
   const v = p.via ?? (p.cable ? 'cable' : p.far ? 'relay' : 'wifi');
   return v === 'anchor' || (v === 'wifi' && (p.reachedBy === 'ipv6' || p.reachedBy === 'mapped')) ? 'internet' : v;
 };
@@ -140,6 +270,7 @@ export function healthOf(lines: string[]): EyeHealth | null {
 }
 
 export function deviceOf(p: PeerRow, trust: TrustLook | null = null): EyeDevice {
+  const a = p as AnchorRow;
   return {
     id: p.id, name: p.name, kind: p.kind, via: via(p), where: p.where, reachedBy: p.reachedBy ?? null,
     reachable: p.reach ? p.reach.ok : null, reachMs: p.reach?.ms ?? null, reason: p.reach?.ok ? null : p.reach?.reason ?? null,
@@ -151,7 +282,26 @@ export function deviceOf(p: PeerRow, trust: TrustLook | null = null): EyeDevice 
     // its worker's own /status at the last probe (scan D M2 M1): numbers and flags only; absent
     // until one answered here
     ...(p.worker ? { worker: { at: p.worker.at, busy: p.worker.busy, tokensUsed: p.worker.tokensUsed, ctx: p.worker.ctx, ramFreeMb: p.worker.ramFreeMb } } : {}),
+    // the anchor network: only when the row says it (an engine without anchors leaves them out)
+    ...(a.through !== undefined ? { through: a.through } : {}),
+    ...(a.throughName !== undefined ? { throughName: a.throughName } : {}),
+    ...(a.anchor !== undefined ? { anchor: a.anchor } : {}),
   };
+}
+
+// this computer's anchor counters from engine.anchor(), when the engine has one: absent without
+// it, null when it throws or says nothing; plain fields only (guard.ts cleans them). memberMaxDay
+// (the most any single member passed today) only when the engine says it
+function anchorOf(engine: Engine): Pick<Snapshot['host'], 'anchor'> {
+  const e = engine as Engine & { anchor?: () => AnchorLook | null | undefined };
+  if (typeof e.anchor !== 'function') return {};
+  let r: AnchorLook | null | undefined = null;
+  try { r = e.anchor(); } catch { r = null; }
+  if (!r || typeof r !== 'object') return { anchor: null };
+  return { anchor: {
+    on: r.on, reachable: r.reachable, links: r.links, bytesDay: r.bytesDay, capDay: r.capDay,
+    ...(r.memberMaxDay !== undefined ? { memberMaxDay: r.memberMaxDay } : {}),
+  } as NonNullable<Snapshot['host']['anchor']> };
 }
 
 /** One look for god's eye. Reads only: the engine's status and cached peer rows, the model
@@ -178,7 +328,8 @@ export function kulaSnapshot(engine: Engine, projects: ProjectRunner, now = Date
   } : null;
   return structuredClone({
     at: now,
-    host: { name: hostLabel(), freeMb, diskFreeMb, ledger: hostLedger() },
+    // hostGate after hostLedger: the gate's counts come from the pass hostLedger just made
+    host: { name: hostLabel(), freeMb, diskFreeMb, ledger: hostLedger(), gate: hostGate(now), ...anchorOf(engine) },
     devices: rows.map((p) => deviceOf(p, engine.trustOf(p.id))),
     work: { loaded, loading: st.loading, chatting: st.chatting, plan: st.plan, decisions: st.decisions, llama: st.llama, photos: engine.photos() },
     models: engine.models().map((m) => ({ id: m.id, name: m.name, file: m.file, size: m.size, quant: m.quant, params_b: m.params_b, catalog: m.catalog, here: m.here, needMb: m.needMb, active_b: m.active_b, vision: m.vision })),

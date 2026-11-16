@@ -33,11 +33,12 @@ const snap = (o: Record<string, any> = {}): any => ({
   work: { loaded: null, loading: null, chatting: 0, plan: [], decisions: [], llama: true, ...(o.work ?? {}) },
 });
 
-// ---- fixture X: 6000 MB, 4 GB (readGb 4.2); host 8000 free (cap 5600); p1 wifi and p2 internet, 4000 each (cap 3000)
+// ---- fixture X: 6000 MB, 4 GB (readGb 4.2); host 8000 free (cap 5600); p1 and p2 wifi (p2 was internet before 16.11.2026), 4000 each (cap 3000)
 const X = model('x', 'X', 6000, 4 * GB);
 const P1 = { srtt: 20, rttvar: 2 };
 const P2 = { srtt: 200, rttvar: 20 };
-const S0 = snap({ devices: [dev({ ramMb: 4000 }), dev({ id: 'p2', name: 'galaxy', via: 'internet', ramMb: 4000 })], models: [X] });
+// p2 is wifi now: far seats are priced apart since 16.11.2026 (see godseye-far-split.test.ts); this tests near-k pricing
+const S0 = snap({ devices: [dev({ ramMb: 4000 }), dev({ id: 'p2', name: 'galaxy', via: 'wifi', ramMb: 4000 })], models: [X] });
 // measured on X's file: local 2, p1 6, p2 5 tok/s (n 5): GB/s 8.4, 25.2, 21
 const MEASURED = () => new Map<string, any[]>([
   ['local', [{ file: X.file, tps: 2, n: 5 }]], ['p1', [{ file: X.file, tps: 6, n: 5 }]], ['p2', [{ file: X.file, tps: 5, n: 5 }]],
@@ -65,10 +66,11 @@ function branch(peeks: Record<string, any> = {}, notes: unknown = null) {
   return { look, notes: () => kept as any };
 }
 
-// ---- fixture Y: X's model and speeds, but p1 (tps 6) over the internet at srtt 400, p2 (tps 5) on wifi at srtt 20
+// ---- fixture Y: X's model and speeds, but p1 (tps 6) on a slow wifi link at srtt 400 (internet before 16.11.2026), p2 (tps 5) on wifi at srtt 20
 const Y1 = { srtt: 400, rttvar: 40 };
 const Y2 = { srtt: 20, rttvar: 2 };
-const SY = snap({ devices: [dev({ ramMb: 4000, via: 'internet' }), dev({ id: 'p2', name: 'galaxy', ramMb: 4000 })], models: [X] });
+// p1 is wifi now: far seats are priced apart since 16.11.2026 (see godseye-far-split.test.ts); this tests near-k pricing
+const SY = snap({ devices: [dev({ ramMb: 4000, via: 'wifi' }), dev({ id: 'p2', name: 'galaxy', ramMb: 4000 })], models: [X] });
 const sensesY = () => senses([{ id: 'p1', link: Y1 }, { id: 'p2', link: Y2 }]);
 const fieldY = () => fieldX(sensesY(), SY);
 
