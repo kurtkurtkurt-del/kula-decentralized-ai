@@ -279,3 +279,84 @@ test('no far seat, no far card', () => {
     assert.equal('far' in r.split!, false);
   }
 });
+
+// ---- far estimates are not facts (VERDICT 1, DO 2)
+// W loaded split over this computer and pixel (far, link L): lo = 1000 / (CW + L), hi = 1000 / (CW + L / 4);
+// alone: pixel 12 tok/s. L 40: lo 8.1, hi 10.7 (× GAIN 12.3 > 12); L 200: lo 3.5, hi 7.5 (× GAIN 8.6 < 12)
+const loadedW = (tps: number | null, L: number) => {
+  const s = snap({
+    devices: [dev({ ramMb: 4000, via: 'internet' }), dev({ id: 'p2', name: 'galaxy', via: 'internet', ramMb: 4000 })], models: [W],
+    work: {
+      loaded: loaded(W, 'split', [here(tps), on('p1', 'pixel', null)], {
+        parts: [{ id: 'local', name: 'this computer', local: true, mb: 0, layers: 0 }, { id: 'p1', name: 'pixel', local: false, mb: 2500, layers: 30 }],
+      }),
+    },
+  });
+  const peeks = senses([{ id: 'p1', link: { srtt: L, rttvar: 4 } }, { id: 'p2', link: { srtt: 300, rttvar: 30 } }]);
+  return planner.plan(s, fieldOf(s, peeks, MEASURED_W()), W as any, true);
+};
+const aloneCard = (r: any) => r.cards.find((c: any) => c.id === `planner:alone:${W.id}`);
+
+test('a loaded far split with no live tok/s: "alone is faster" only above the far range high end × GAIN', () => {
+  const mid = loadedW(null, 40);
+  assert.deepEqual(seatIds(mid.split), ['local', 'p1']);
+  assert.ok(mid.split!.far!.assumed);
+  near(mid.split!.far!.lo, 1000 / (CW + 40), 1e-9);
+  near(mid.split!.far!.hi, 1000 / (CW + 10), 1e-9);
+  assert.equal(mid.alone!.tps, 12);
+  // alone between lo × GAIN and hi × GAIN: the k = 1 end would warn, the range does not
+  assert.ok(12 >= mid.split!.tps! * decide.GAIN && 12 < mid.split!.far!.hi * decide.GAIN);
+  assert.equal(aloneCard(mid), undefined);
+
+  const high = loadedW(null, 200);
+  const c = aloneCard(high);
+  assert.ok(c, JSON.stringify(high.cards.map((x: any) => x.id)));
+  assert.equal(c.kind, 'warn');
+  assert.equal(c.title, 'split is slower than pixel alone for W');
+  assert.equal(c.why, 'split answers at about 3.5\u{2013}7.5 tok/s (its far links assumed from probes); on pixel alone it would at ~12 (from the speeds they answered with), with no link to cross.');
+  assert.deepEqual(cleanCard(c), c);
+});
+
+test('a loaded far split with a live tok/s: the alone card as before', () => {
+  // live 8: 12 >= 8 × GAIN, even though the far range's high end × GAIN is above 12
+  const c = aloneCard(loadedW(8, 40));
+  assert.ok(c);
+  assert.equal(c.why, 'split answers at 8 tok/s (measured); on pixel alone it would at ~12 (from the speeds they answered with), with no link to cross.');
+  // live 11: 12 < 11 × GAIN, no card
+  assert.equal(aloneCard(loadedW(11, 200)), undefined);
+});
+
+// Y: 5000 MB, 4 GB; this computer holds it alone at 1 tok/s; galaxy (far, cap 3000) answers 5 tok/s:
+// c = 0.6 × 1000 / 5 + 0.4 × 1000 / 1 = 520 ms; + 150 (internet) = 1.49 tok/s, + 300 (anchor) = 1.22, both ≥ GAIN × 1
+const Y = model('y', 'Y', 5000, 4 * GB);
+const MEASURED_Y = () => new Map<string, any[]>([['local', [{ file: Y.file, tps: 1, n: 5 }]], ['p2', [{ file: Y.file, tps: 5, n: 5 }]]]);
+const fastSplit = (via: string, peeks: Record<string, any>) => {
+  const s = snap({ devices: [dev({ id: 'p2', name: 'galaxy', via, ramMb: 4000 })], models: [Y] });
+  return planner.plan(s, fieldOf(s, peeks, MEASURED_Y()), Y as any, true);
+};
+const fasterCard = (r: any) => r.cards.find((c: any) => c.id === `planner:split:${Y.id}`);
+
+test('no faster-split card while the far fit is assumed and a far seat has no link', () => {
+  for (const [via, ms] of [['internet', 150], ['anchor', 300]] as const) {
+    const r = fastSplit(via, {});
+    assert.deepEqual(seatIds(r.split), ['local', 'p2'], via);
+    assert.equal(r.split!.tps, r1(1000 / (520 + ms)), via);
+    assert.equal(r.alone!.tps, 1);
+    assert.ok(r.split!.tps! >= r.alone!.tps! * decide.GAIN, via);
+    assert.equal(fasterCard(r), undefined, via);
+    assert.equal(planner.farGuessed(r.split!), true);
+  }
+  // the same split with a link of 150 ms: a pessimistic end, so the card shows
+  const l = fastSplit('internet', senses([{ id: 'p2', link: { srtt: 150, rttvar: 10 } }]));
+  assert.equal(l.split!.tps, r1(1000 / 670));
+  assert.equal(planner.farGuessed(l.split!), false);
+  const c = fasterCard(l);
+  assert.ok(c, JSON.stringify(l.cards.map((x: any) => x.id)));
+  assert.equal(c.title, 'Y would run faster split over mac and galaxy: ~1.5 tok/s; alone here on mac ~1');
+  // a learned far fit prices the assumed round trip: not a guess any more
+  const H = { ks: [1, 1, 1], errs: [0.1, 0.1, 0.1] };
+  const s = snap({ devices: [dev({ id: 'p2', name: 'galaxy', via: 'internet', ramMb: 4000 })], models: [Y] });
+  const learned = planner.plan(s, fieldOf(s, {}, MEASURED_Y()), Y as any, true, undefined, H);
+  assert.equal(planner.farGuessed(learned.split!), false);
+  assert.ok(fasterCard(learned));
+});

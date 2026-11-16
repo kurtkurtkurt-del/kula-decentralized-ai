@@ -25,7 +25,11 @@
 // split() prices a far link at k = 1 (the pessimistic end: the probe's ms is about 4 round trips) and
 // says the range up to k = 0.25; after, at hopFar's k with its 80% range. A split with a far worker
 // uses that range, not the near one: lowEnd is null for it (the point rule on the pessimistic tps) and
-// the split cards end with the far range sentence instead of hopWords. One more card:
+// the split cards end with the far range sentence instead of hopWords. Far estimates are not used as
+// facts (VERDICT 1, DO 2): no faster-split card while the far fit is assumed and a far worker has no
+// link (farGuessed: its 150/300 ms is a constant, not a pessimistic end); and a loaded far split with no
+// live tok/s warns "alone is faster" only when alone reaches the range's high end (k 0.25) × GAIN, not
+// its k = 1 end (with a live tok/s, as before). One more card:
 //   far     a split would use a far worker and alone or apart exists: the far split's likely range
 //           beside apart (or alone), with a far link's missed probes when they reach 20%; action null,
 //           the person chooses (weight 1)
@@ -124,6 +128,10 @@ export function farRange(S: Place, hopFar: HopFit | undefined): { lo: number; hi
   return hopInterval(S.far.lo, hopFar.errs) ?? { lo: S.far.lo, hi: S.far.lo };
 }
 
+/** a split whose far cost is a guess, not an end: assumed (hopFar not learned) and a far worker
+ *  without a link, priced at FAR_HOP_MS (a constant, not a pessimistic end); no faster-split card */
+export const farGuessed = (S: Place): boolean => !!S.far?.assumed && S.seats.some((x) => !x.local && isFar(x) && !x.link);
+
 const rangeWord = (r: { lo: number; hi: number }) =>
   r1(r.lo) === r1(r.hi) ? `~${r1(r.lo)} tok/s` : Number.isFinite(r.hi) ? `${r1(r.lo)}\u{2013}${r1(r.hi)} tok/s` : `${r1(r.lo)} tok/s or more`;
 const farHow = (S: Place, hopFar: HopFit | undefined) =>
@@ -159,7 +167,7 @@ export function plan(s: Snapshot, f: Field, m: EyeModel, strict: boolean, hop?: 
         title: `${m.name} fits only split: ${names(S.seats.map((x) => ({ name: seatName(s, x) })))} together hold it`,
         why: `it needs about ${gb1(m.needMb)}; the most one place offers is ${gb1(biggest)}. split, ${tpsWord(S.tps)}${S.tps ? ` (${from(S.seats)})` : ''}.${tonight(S.seats)}${hopWords(S, hop)}${farWords(s, S, hopFar)}`,
       });
-    } else if (S.tps != null && A.tps != null && splitFaster(S.tps, lowEnd(S, A, hop), A.tps, gain, slack)) {
+    } else if (S.tps != null && A.tps != null && !farGuessed(S) && splitFaster(S.tps, lowEnd(S, A, hop), A.tps, gain, slack)) {
       cards.push({
         id: cardId('planner', 'split', m.id), kind: 'suggest', weight: 2, action: S.action, label: 'load split',
         title: `${m.name} would run faster split over ${names(S.seats.map((x) => ({ name: seatName(s, x) })))}: ~${S.tps} tok/s; alone ${where(s, A.seats[0])} ~${A.tps}`,
@@ -197,12 +205,16 @@ export function plan(s: Snapshot, f: Field, m: EyeModel, strict: boolean, hop?: 
   // alone: loaded split while one place alone is clearly faster
   if (L?.mode === 'split' && A) {
     const live = L.devices.find((d) => d.local)?.tps ?? L.devices[0]?.tps ?? null;
-    const now = live && live > 0 ? live : S?.tps ?? null;
-    if (now != null && A.tps != null && A.tps >= now * gain) {
+    const measuredNow = live != null && live > 0;
+    // no live tps and the far links only assumed: the split's tps is the k = 1 end, so compare at hi
+    const assumed = !measuredNow && S?.far?.assumed ? S.far : null;
+    const now = measuredNow ? live : S?.tps ?? null;
+    const bar = assumed ? assumed.hi : now;
+    if (now != null && bar != null && A.tps != null && A.tps >= bar * gain) {
       cards.push({
         id: cardId('planner', 'alone', m.id), kind: 'warn', weight: 2, action: A.action, label: 'load alone',
         title: `split is slower than ${seatName(s, A.seats[0])} alone for ${m.name}`,
-        why: `split answers ${live ? 'at' : 'at about'} ${Math.round(now * 10) / 10} tok/s${live ? ' (measured)' : ''}; ${where(s, A.seats[0])} alone it would at ~${A.tps} (${from(A.seats)}), with no link to cross.`,
+        why: `split answers ${assumed ? `at about ${rangeWord(assumed)} (its far links assumed from probes)` : `${measuredNow ? 'at' : 'at about'} ${Math.round(now * 10) / 10} tok/s${measuredNow ? ' (measured)' : ''}`}; ${where(s, A.seats[0])} alone it would at ~${A.tps} (${from(A.seats)}), with no link to cross.`,
       });
     }
   }
