@@ -177,3 +177,117 @@ The snapshot grew by three small fields for this: `models[].vision`, `models[].a
 of experts reads only its active weights per token) and `work.photos` (photos sent in chats since
 kula-node started, and how many nothing could see). Tests: `node/test/godseye-decide.test.ts`,
 `node/test/godseye-advisor.test.ts`.
+
+## the brain and the anchor network (16.11.2026)
+
+The anchor network (the person's own always-on computers passing bytes between far devices, no
+server outside; the anchor itself is `docs/ANCHOR.md`, written in its own session) gave the brain five small packages.
+It still only watches, warns and suggests: no new signal bars a device, turns its verdict, closes
+a port or switches anything off. A look without the new fields makes the same report as before.
+
+**The snapshot contract** (`node/src/godseye/types.ts`; `branches/guard.ts` cleans every new field,
+and absent stays absent). No address of anyone reaches the eye.
+
+| field | what it says | who fills it |
+|---|---|---|
+| `devices[].via: 'anchor'`, `through` | the device is reached through an anchor of the circle; `through` is that anchor's row id (null: not said) | the engine's peer rows, read by `ui/godseye-feed.ts` through a widened row. Nothing fills it yet: the anchor's stage 2 adds a peer field (a name like `viaAnchor`, still to come) that the feed will map to these two |
+| `devices[].anchor` | this device offers the anchor role | the engine's peer rows, as above |
+| `host.anchor` | this computer as an anchor: on, reachable from outside (or not known), links held now, bytes passed on in the last day (ciphertext), its daily cap | `engine.anchor()` when the engine has one; absent otherwise |
+| `host.gate` | this computer's own gate refusals per UTC hour (at most 26, the last one running): by reason (every `rpc guard: …` under `rpc guard`), how many came from a non-private address (`far`), how many distinct outside networks (`nets`, a count of hashed ipv4 /24 and ipv6 /48 blocks), the last 5 rpc guard refusals | the feed, today, from the reject lines of this computer's own signed ledger, verified in the same pass (`hostGate`); each line counted once, an unchanged ledger costs a 26-entry copy |
+| hint `loss: { hi }` | for a device reached from afar with at least 10 probes: the upper end of the 80% Wilson interval of its missed probes | the connections branch, for the planner |
+
+The phone's look (`app/src/eye/snapshot.ts`) carries none of these yet, so on the phone none of
+what follows shows.
+
+**Routes** (connections). An anchor is assumed at 300 ms, sometimes dropping, until probes say
+otherwise; the branch's tile counts `· n anchor`. The notes keep per device the id of the last
+anchor it went through, never an address. Three cards, each only a probe or opening a page; an
+anchor this computer cannot name reads "an anchor":
+
+| card | weight | shows when | title |
+|---|---|---|---|
+| `connections:through:<Y>` | warn 1 | a reachable device goes through anchor Y (one card per anchor) | "X is reached through anchor Y": Y passes the bytes on and cannot read them; apart and split both work |
+| `connections:anchor-down:<Y>` | warn 3 | Y missed its last 3 probes (or left the look) and a device last routed through Y cannot be reached; goes when either answers once | "anchor Y is not answering: X and Z cannot be reached" (seen from this computer only) |
+| `connections:one-anchor` | suggest 1 | exactly one anchor known and at least one far device | "only one anchor (Y): if it goes, far devices lose each other": a second always-on computer in another home keeps the circle up |
+
+A switch is one feed line ("X is now reached through anchor Y (was wifi)"). The older internet card
+no longer says only apart works there: apart and split both do, a split waiting about one round
+trip per token for each far worker.
+
+**What a far split costs** (planner, `branches/decide.ts`). A far worker is one reached straight
+over the internet or through an anchor; a relay is never a seat of a split. A near worker is priced
+exactly as before. A far worker's hop is k times its link's usual round trip (senses' srtt), or
+150 ms over the internet and 300 ms through an anchor when there is no link yet.
+
+The unit caveat: the probe's ms is a whole handshake (tcp, tls 1.3, hello, proof), about **4 round
+trips**, not one. So k = 1 against it is probably about 4 times too slow for a far link. Until three
+far split answers were watched, the planner gives a range: its low end at k = 1 (one probe's ms per
+token), its high end at k = 0.25 (a quarter of it). With a 200 ms link and c ms of compute per
+token: low 1000/(c+200), high 1000/(c+50) tok/s. After three far answers, the far fit (`hopFar`,
+kept apart from the near fit `hop`: a chain with a far worker teaches only `hopFar`) gives its own
+k and its 80% range. The speed a split with a far worker reports is the low end, so "faster split"
+never fires on an assumption.
+
+One card, `planner:far:<model>` (suggest, weight 1, no button: the person chooses), when a split
+would use a far worker and alone or apart exists: "far devices: split likely lo–hi tok/s, apart ~x
+tok/s each" (or alone, when no apart). Its why names the far workers, says "assumed from probes, i
+of 3 far split answers watched" or "learned", and names a far link that missed 20% or more of its
+probes (a split stops when one worker drops). The split cards end with the same range sentence.
+The 16 Nov proxy measurements (46 / 32 / 17.7 / 12.9 / 7.7 tok/s at 0 / 10 / 30 / 50 / 100 ms added
+round trip) are a test (`godseye-hop-points.test.ts`): k = 1 against the true round trip fits them
+within 10%. The heavy bench's numbers did not move.
+
+**Gate watch** (trust, `branches/gatewatch.ts`). This computer's own gate, from `host.gate`. Every
+refusal reason is a stranger (no hello, tls, not paired, … someone without a pairing knocked), a
+guess (a code or proof that was not theirs), the rpc guard (a paired device sent the split's rpc a
+command that can carry code; it was dropped before llama.cpp saw it) or other. A host check `gate`
+sits beside the host's ledger check:
+
+- **calm** (ok): "its gate refused N strangers today (no hello ×a, tls ×b) from about M networks:
+  scanners find every open port; none got in", with "(still learning what is usual: n of 24 hours)"
+  while it learns. Scanners are counted, never alarmed.
+- **red** only for an rpc guard refusal in the 26 hours, or 5 or more wrong codes in a day. It turns
+  the cluster's verdict red, never a device's.
+
+| card | weight | shows when |
+|---|---|---|
+| `trust:gate-guard` | 3 | at once, while the 26 hours hold an rpc guard refusal at this gate (kula versions that differ can do this by accident) |
+| `trust:rpc-guard:<id>` | 3 | a device says its own gate cut one; its verdict does not change (it defended itself) |
+| `trust:gate-guess` | 3 | 5 or more wrong codes in the last 24 hours: someone may be guessing; all refused |
+| `trust:gate-burst` | 2 | more knocking from outside the lan than usual for this hour of day (burst.ts's fit, unchanged, on each finished hour's `far` count, kept in trust's notes under `~gate`); also, learning or not, 1000 or more in the running hour |
+| `trust:anchor-cap` | 2 | this computer as an anchor carried more than its daily limit; it stays while above 0.95 of it. Nothing is switched off |
+
+Every card only opens the trust page; one feed line when it comes and one when it goes. The
+thresholds (the tail, the 1000, the 5 guesses) were not measured against a real router's scanner
+rate. `nets` is "about": a scanner farm in one block is one network, a carrier-grade nat is many people.
+
+**A moved address** (connections). When a settled device (at most 2 address blocks, at least 20
+answers over them, first to last at least 3 days) answers with its pinned certificate from a public
+block it was not seen on (ipv4 /16, ipv6 /32), the feed says so once a day and the card
+`connections:moved:<id>` (warn 2, 24 hours, opens trust) explains: the same key, normal after a move
+or a new provider; if nobody moved it, ask its owner or pair again. A lan change, lan to internet, a
+roaming phone (never settled) and a device through an anchor give nothing. **Privacy:** the notes
+keep per device at most 6 entries of the first 12 hex of sha256(id | block), with first and last seen
+and a count; never an address, never a block. The brain compares blocks; it cannot say where.
+
+Tests: `godseye-anchor-contract`, `godseye-gatefeed`, `godseye-routes`, `godseye-far-split`,
+`godseye-hop-points`, `godseye-gatewatch`, `godseye-moved` (all `node/test/*.test.ts`). Eight older
+assertions (hop-wire, split-order) that priced an internet seat like a near link now use wifi seats;
+far pricing is tested on its own.
+
+**What waits**
+
+- The unit of the prior: the proxy run that logs `gate.probe`'s ms beside tok/s at 0 / 10 / 30 / 50
+  / 100 ms, then the choice of a far prior of 0.25. If the 16 Nov round trips were one-way, the
+  0.25 high end is wrong; that run shows it.
+- A scanner burst at a far device's own gate still turns that device red and keeps it from seats
+  (trust.ts). Softening it needs a bench4 scenario with internet noise first.
+- "X and Z cannot reach each other" for pairs without this computer: needs the circle's address book.
+- A paired device arriving at this gate from a new address: the connect lines carry no fingerprint,
+  so only devices this computer probes are watched for a move.
+- Other devices' anchor bytes and caps; a metered-data flag on phones (the app is not part of this).
+- The anchor's own refusals (too many streams, full, too many dials, byte limit) are logged in
+  share, not in the signed ledger yet, so the gate watch does not see them.
+- The moved address: the first public block says nothing; the card and the once-a-day line live in
+  memory (a restart forgets them); a device that once had 3 or more blocks never counts as settled
+  again (entries do not age); documentation test-net ranges count as public.
