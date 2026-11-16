@@ -12,7 +12,7 @@ import { Duplex, type Transform } from 'node:stream';
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import { ReplayCheck, clockCheck } from './audit/checks.js';
 import { fingerprint, type GateIdentity, type Paired } from './tls.js';
-import { isLoopback, plainIp } from './policy.js';
+import { isLoopback, isPrivateAddress, plainIp } from './policy.js';
 import { RpcGuard } from './rpcguard.js';
 import type { AnchorHub, AnchorEvent } from './anchor.js';
 
@@ -26,6 +26,12 @@ export const FP_MISMATCH = 'fingerprint mismatch';
 // Connections allowed to sit in a handshake at once; the next one is told "NO overloaded"
 // and dropped at once, so a flood of half-open connections cannot pin memory or threads.
 export const MAX_HANDSHAKES = 32;
+// Of those, internet addresses together hold at most half; the rest stay for the lan and
+// loopback (relayed and anchor streams), so a flood from outside cannot lock the home out (D4 #2).
+export const MAX_INTERNET_HANDSHAKES = MAX_HANDSHAKES / 2;
+// What a gate's own reader may hold while no line is awaited: a client that pours bytes before
+// its OK, or a member that pours them while the anchor waits for the target's accept, is cut (D4 #5).
+export const MAX_HELD_BYTES = 64 * 1024;
 // A pairing code lives this long after it was made (shown in a qr); then "NO pin expired"
 // and a fresh one is made, so a photographed qr stops working in minutes, not days.
 export const PIN_TTL_MS = 10 * 60_000;
@@ -115,15 +121,100 @@ export function sameHex(a: string, b: string): boolean {
   return ba.length === bb.length && timingSafeEqual(ba, bb);
 }
 
+// --- handshake slots (D4 #2) -----------------------------------------------------------
+
+// The eight 16-bit words of an ipv6 address, null when it is not one.
+function ipv6Words(ip: string): number[] | null {
+  let s = ip.split('%')[0].toLowerCase();
+  if (!net.isIPv6(s)) return null;
+  const v4 = /^(.*:)(\d+)\.(\d+)\.(\d+)\.(\d+)$/.exec(s);
+  if (v4) {
+    const [a, b, c, d] = v4.slice(2).map(Number);
+    s = `${v4[1]}${((a << 8) | b).toString(16)}:${((c << 8) | d).toString(16)}`;
+  }
+  const halves = s.split('::');
+  const part = (h: string) => (h ? h.split(':') : []);
+  const head = part(halves[0]);
+  const tail = halves.length === 2 ? part(halves[1]) : [];
+  const fill = 8 - head.length - tail.length;
+  if (fill < 0 || (halves.length === 1 && fill !== 0)) return null;
+  const words = [...head, ...Array<string>(fill).fill('0'), ...tail].map((w) => parseInt(w, 16));
+  return words.length === 8 && words.every((w) => Number.isInteger(w) && w >= 0 && w <= 0xffff) ? words : null;
+}
+
+// Does this peer come from the internet (neither loopback nor a private, link-local or lan range)?
+export function fromInternet(peer: string): boolean {
+  const p = plainIp(peer);
+  return !isLoopback(p) && !isPrivateAddress(p.split('%')[0]);
+}
+
+// The bucket a peer's handshakes count in: null for loopback (every relayed or anchor stream
+// arrives from 127.0.0.1, many devices at once); an internet ipv6 address by its /56, since one
+// home or one rented host is handed a whole prefix; any other address as itself.
+export function handshakeKey(peer: string): string | null {
+  const p = plainIp(peer);
+  if (isLoopback(p)) return null;
+  if (fromInternet(p)) {
+    const w = ipv6Words(p);
+    if (w) return `${w[0].toString(16)}:${w[1].toString(16)}:${w[2].toString(16)}:${(w[3] & 0xff00).toString(16)}::/56`;
+  }
+  return p;
+}
+
+export interface HandshakeCounts { total: number; internet: number; byKey: Map<string, number> }
+
+// The slot rule, without sockets: MAX_HANDSHAKES in all, MAX_INTERNET_HANDSHAKES of them for
+// internet addresses together, MAX_HANDSHAKES_PER_ADDRESS per bucket (handshakeKey).
+export function mayHandshake(c: HandshakeCounts, peer: string): boolean {
+  if (c.total >= MAX_HANDSHAKES) return false;
+  if (fromInternet(peer) && c.internet >= MAX_INTERNET_HANDSHAKES) return false;
+  const k = handshakeKey(peer);
+  return k === null || (c.byKey.get(k) ?? 0) < MAX_HANDSHAKES_PER_ADDRESS;
+}
+
+// The counts the gate keeps: take() gives a release function, or null ("NO overloaded").
+export class HandshakeSlots implements HandshakeCounts {
+  total = 0;
+  internet = 0;
+  byKey = new Map<string, number>();
+
+  take(peer: string): (() => void) | null {
+    if (!mayHandshake(this, peer)) return null;
+    const k = handshakeKey(peer);
+    const far = fromInternet(peer);
+    this.total++;
+    if (far) this.internet++;
+    if (k !== null) this.byKey.set(k, (this.byKey.get(k) ?? 0) + 1);
+    let given = false;
+    return () => {
+      if (given) return;
+      given = true;
+      this.total--;
+      if (far) this.internet--;
+      if (k !== null) { const n = (this.byKey.get(k) ?? 1) - 1; if (n > 0) this.byKey.set(k, n); else this.byKey.delete(k); }
+    };
+  }
+}
+
 // Reads "\n" terminated lines from a socket while keeping whatever came after
-// the last line, so the raw pipe that follows loses nothing.
+// the last line, so the raw pipe that follows loses nothing. With `maxHeld` (the gate's own
+// readers: MAX_HELD_BYTES) a socket whose unread bytes pass it while no line is awaited is
+// destroyed and the bytes dropped; a line awaited is limited to 4096 bytes either way.
 export class LineReader {
   private buf: Buffer = Buffer.alloc(0);
   private waiting: { resolve: (line: string) => void; reject: (e: Error) => void } | null = null;
   private closed: Error | null = null;
+  private over = false;
   private readonly onData = (chunk: Buffer) => {
+    if (this.over) return;
     this.buf = this.buf.length ? Buffer.concat([this.buf, chunk]) : chunk;
     this.flush();
+    if (this.maxHeld !== null && !this.waiting && this.buf.length > this.maxHeld) {
+      this.over = true;
+      this.buf = Buffer.alloc(0);
+      this.closed = new Error('too much unread');
+      this.socket.destroy();
+    }
   };
   private readonly onEnd = () => {
     this.closed = new Error('connection closed');
@@ -134,7 +225,7 @@ export class LineReader {
     this.flush();
   };
 
-  constructor(private readonly socket: Duplex) {
+  constructor(private readonly socket: Duplex, private readonly maxHeld: number | null = null) {
     socket.on('data', this.onData);
     socket.on('end', this.onEnd);
     socket.on('close', this.onEnd);
@@ -143,6 +234,9 @@ export class LineReader {
 
   // Bytes that were read before this reader existed (the protocol sniff).
   feed(chunk: Buffer) { this.onData(chunk); }
+
+  // how many unread bytes it holds now
+  get held(): number { return this.buf.length; }
 
   private flush() {
     if (!this.waiting) return;
@@ -282,6 +376,26 @@ export interface GateServerOptions {
   // from GateEvent.
   anchor?: AnchorHub;
   onAnchor?: (e: AnchorEvent) => void;
+  // whether a client certificate is a friend's device (ring circle or world on this computer);
+  // false or absent: the person's own (ring home, the default). Only decides the rpc seat (D4 #10).
+  friend?: (fp: string) => boolean;
+  // the clock for the rpc seat's idle time (tests); default Date.now
+  now?: () => number;
+}
+
+// The rpc seat: one remote master at a time, with every rpc connection it holds and when a
+// byte last passed on any of them.
+interface SeatConn { socket: Duplex; target: net.Socket | null }
+interface Seat { who: string; fp: string | undefined; last: number; conns: Set<SeatConn> }
+
+// How long a friend's device may hold the rpc seat with nothing passing before one of the
+// person's own devices may take it (D4 #10).
+export const SEAT_IDLE_MS = 60_000;
+
+// May an arriving rpc connection take the seat from its holder? Only an own device from a
+// friend's one idle for SEAT_IDLE_MS; never a friend from an own device, never two of a kind.
+export function maySeatBeTaken(holderIsFriend: boolean, arrivingIsFriend: boolean, idleMs: number): boolean {
+  return holderIsFriend && !arrivingIsFriend && idleMs >= SEAT_IDLE_MS;
 }
 
 // A duplex over a socket whose first bytes were already read: the TLS wrapper
@@ -344,8 +458,16 @@ export async function startGateServer(opts: GateServerOptions): Promise<GateServ
   // The rpc channel is one remote master at a time: who holds it and how many of its
   // connections are open. Who = the client certificate in v2, the ip in v1: streams through
   // an anchor or a relay all arrive from 127.0.0.1, so two far masters would share an ip.
-  let rpcHolder: string | null = null;
-  let rpcOpen = 0;
+  // A friend's device that sat on it idle for SEAT_IDLE_MS gives it up to one of the person's own
+  // devices (D4 #10, the person's decision 17 Nov): its rpc connections end, with them its model.
+  let seat: Seat | null = null;
+  const now = opts.now ?? Date.now;
+  // friend or own, by the client certificate's ring; a v1 client (no certificate) is own. When the
+  // hook fails, nobody gives up a seat: the holder counts as own and the newcomer as a friend.
+  const friendOf = (fp: string | undefined, onError: boolean): boolean => {
+    if (!fp || !opts.friend) return false;
+    try { return opts.friend(fp); } catch { return onError; }
+  };
   const unAnchor = opts.anchor && opts.onAnchor ? opts.anchor.on(opts.onAnchor) : null;
   // v2 checks replays and clocks itself when no admit hook does
   const ring = new ReplayCheck();
@@ -372,12 +494,28 @@ export async function startGateServer(opts: GateServerOptions): Promise<GateServ
     try { targetPort = await opts.targets(channel); } catch { targetPort = null; }
     if (targetPort == null) return refuse('channel closed');
     const who = fp ?? peer;
-    if (channel === 'rpc' && rpcHolder !== null && rpcHolder !== who && rpcOpen > 0) return refuse('busy');
-    // the rpc slot is taken before the (async) connect, so two peers arriving together cannot both get it
-    if (channel === 'rpc') { rpcHolder = who; rpcOpen++; }
-    const letGo = () => { if (channel === 'rpc') { rpcOpen--; if (rpcOpen === 0) rpcHolder = null; } };
+    const conn: SeatConn = { socket, target: null };
+    let mine: Seat | null = null;
+    if (channel === 'rpc') {
+      if (seat && seat.who !== who && seat.conns.size > 0) {
+        if (!maySeatBeTaken(friendOf(seat.fp, false), friendOf(fp, true), now() - seat.last)) return refuse('busy');
+        // the friend's device sat idle: its rpc connections end and this own device gets the seat
+        const old = seat;
+        seat = null;
+        for (const c of old.conns) { c.target?.destroy(); c.socket.destroy(); }
+        old.conns.clear();
+      }
+      // the rpc seat is taken before the (async) connect, so two peers arriving together cannot both get it
+      if (!seat) seat = { who, fp, last: now(), conns: new Set() };
+      mine = seat;
+      mine.conns.add(conn);
+    }
+    const letGo = () => { if (mine) { mine.conns.delete(conn); if (mine.conns.size === 0 && seat === mine) seat = null; } };
     let target: net.Socket;
     try { target = await connectLocal(targetPort); } catch { letGo(); return refuse('target down'); }
+    // its seat was taken while it connected: it was ended already
+    if (mine && !mine.conns.has(conn)) { target.destroy(); socket.destroy(); return; }
+    conn.target = target;
     target.setNoDelay(true);
     const leg = target.localPort;
     const kept = channel === 'api' && leg !== undefined && !isLoopback(peer);
@@ -393,6 +531,12 @@ export async function startGateServer(opts: GateServerOptions): Promise<GateServ
       if (opts.tls && !opts.tls.paired.has(fp)) drop(fp);
     }
     const guard = channel === 'rpc' && opts.rpcGuard ? new RpcGuard((why) => emit({ type: 'reject', channel, peer, at: Date.now(), reason: `rpc guard: ${why}`, v, fp })) : undefined;
+    if (mine) {
+      // a byte either way on any of the seat's connections: not idle
+      const touch = () => { mine!.last = now(); };
+      socket.on('data', touch);
+      target.on('data', touch);
+    }
     const counts = await pipeBoth(socket, target, rest, Buffer.alloc(0), guard);
     live.delete(socket);
     if (kept && apiPeers.get(leg!) === plainIp(peer)) apiPeers.delete(leg!);
@@ -402,7 +546,7 @@ export async function startGateServer(opts: GateServerOptions): Promise<GateServ
   };
 
   const servePlain = async (socket: net.Socket, peer: string, first: Buffer, handshakeDone: () => void) => {
-    const reader = new LineReader(socket);
+    const reader = new LineReader(socket, MAX_HELD_BYTES);
     reader.feed(first);
     let channel: Channel | null = null;
     const refuse = (reason: string) => {
@@ -455,7 +599,8 @@ export async function startGateServer(opts: GateServerOptions): Promise<GateServ
       return;
     }
     const fpC = peerFingerprint(socket) ?? undefined;
-    const reader = new LineReader(socket);
+    // the anchor hub keeps this reader while a dial waits for its accept (anchor.ts run)
+    const reader = new LineReader(socket, MAX_HELD_BYTES);
     let channel: Channel | null = null;
     const refuse = (reason: string) => {
       emit({ type: 'reject', channel, peer, at: Date.now(), reason, v: 2, fp: fpC });
@@ -550,9 +695,9 @@ export async function startGateServer(opts: GateServerOptions): Promise<GateServ
   // answer (llama.cpp's tunnels and the phone's Tunnel shut their write side first). The
   // open sockets are kept so close() can end them; net.Server.close() only stops listening.
   const open = new Set<net.Socket>();
-  // connections between accept and the end of their handshake, in all and per address
-  let inHandshake = 0;
-  const perAddress = new Map<string, number>();
+  // connections between accept and the end of their handshake: in all, from the internet, per
+  // address bucket (handshakeKey)
+  const slots = new HandshakeSlots();
   const server = net.createServer({ allowHalfOpen: true }, (socket) => {
     open.add(socket);
     socket.once('close', () => open.delete(socket));
@@ -561,9 +706,9 @@ export async function startGateServer(opts: GateServerOptions): Promise<GateServ
     // the ledger, the busy check and the events keep seeing "10.0.0.5"
     const peer = plainIp(socket.remoteAddress ?? '?');
     socket.on('error', () => {});
-    // per address, except loopback: every relayed stream arrives from 127.0.0.1, many devices at once
-    const fromHere = isLoopback(peer) ? 0 : perAddress.get(peer) ?? 0;
-    if (inHandshake >= MAX_HANDSHAKES || fromHere >= MAX_HANDSHAKES_PER_ADDRESS) {
+    // per address bucket, except loopback; internet addresses together at most half (D4 #2)
+    const release = slots.take(peer);
+    if (!release) {
       emit({ type: 'reject', channel: null, peer, at: Date.now(), reason: 'overloaded', v: 1 });
       // read and drop the hello: closing with unread input sends a reset, and the
       // client would see "connection reset" instead of the reason (Gate.kt b60c257)
@@ -572,15 +717,13 @@ export async function startGateServer(opts: GateServerOptions): Promise<GateServ
       setTimeout(() => socket.destroy(), 200);
       return;
     }
-    inHandshake++;
-    if (!isLoopback(peer)) perAddress.set(peer, fromHere + 1);
     let counted = true;
     // a handshake has HANDSHAKE_TOTAL_MS in all, however its bytes trickle in (review 1.2)
     const deadline = setTimeout(() => { if (counted) socket.destroy(); }, HANDSHAKE_TOTAL_MS);
     const uncount = () => {
       if (!counted) return;
-      counted = false; inHandshake--; clearTimeout(deadline);
-      if (!isLoopback(peer)) { const n = (perAddress.get(peer) ?? 1) - 1; if (n > 0) perAddress.set(peer, n); else perAddress.delete(peer); }
+      counted = false; clearTimeout(deadline);
+      release();
     };
     // the slot is given back when the pipe starts (open event) or the socket is gone
     socket.once('close', uncount);

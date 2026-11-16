@@ -13,7 +13,7 @@ import { findLlama, TAG } from './llama.js';
 import { home, expandHome } from './paths.js';
 import { lanIPv4, globalIPv6, freeRamMB, measureBandwidth, detectGpu } from './sysinfo.js';
 import { startPortMapper, mapLine, type PortMapper, type Mapping } from './portmap.js';
-import { peersFile, type PeerAddr } from './peers.js';
+import { peersFile, readPeers, widestRing, type PeerAddr } from './peers.js';
 import { AnchorHub, circleMembers, type AnchorCaps, type AnchorEvent } from './anchor.js';
 import { OneTimeCodes, AnchorHost, AnchorLinks, joinedFile, readJoined, joinedRoads, ringCapped, type Invite, type LinkView, type Whose } from './join.js';
 import type { PeerAnchor } from './road.js';
@@ -334,7 +334,10 @@ export async function share(opts: ShareOptions): Promise<ShareHandle> {
       if (r !== null) log(`anchor: refused ${e.peer}${e.fp ? ` (${short(e.fp)})` : ''}: ${e.reason}${e.to ? ` (to ${short(e.to)})` : ''}`);
     }
   };
-  const gate = await startGateServer({ port: opts.port, dualStack, secret, targets, onEvent, admit: (peer, nonceC, unixMs) => auditor.hello(peer, nonceC, unixMs), tls: tlsServer, rpcGuard: true, anchor: anchor ?? undefined, onAnchor });
+  const gate = await startGateServer({ port: opts.port, dualStack, secret, targets, onEvent, admit: (peer, nonceC, unixMs) => auditor.hello(peer, nonceC, unixMs), tls: tlsServer, rpcGuard: true, anchor: anchor ?? undefined, onAnchor,
+    // the rpc seat (user, 17.11.2026): a friend's device (ring circle or world in this computer's peer
+    // book) idle for a minute gives it up to one of the person's own; an unknown certificate is own
+    friend: (fp) => { const recs = readPeers(peersFile()).filter((p) => p.fp && p.fp.toLowerCase() === fp.toLowerCase()); return recs.length > 0 && widestRing(recs) !== 'home'; } });
   liveGate = gate;
   // the router's door to the gate, when the person asked for one (--map-port)
   let mapper: PortMapper | null = null;
