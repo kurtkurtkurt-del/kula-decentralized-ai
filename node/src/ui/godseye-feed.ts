@@ -40,7 +40,8 @@ let liveSeen: { file: string; seen: FileSeen } | null = null;
 
 // this computer's own gate refusals for host.gate (16.11.2026), read from the same pass. Its gate
 // writes every refused handshake as a signed reject line, {"t":<ms>,"kind":"reject","peer":<plain
-// ip>,"reason":<word>,…} (gate.ts, share.ts, audit/auditor.ts reject). Sound: only lines this
+// ip>,"reason":<word>,…} (gate.ts, share.ts, audit/auditor.ts reject); a line of the auditor's
+// limiter carries "n", the refusals it stands for, and counts as that many. Sound: only lines this
 // pass verified (chain and signature) are counted. Cheap: in checkFile's prefix fold (never the
 // torn tail, which is verified each time and counted once it is whole), each newly verified line
 // gets one regexp, and a JSON.parse only when it is a reject in the last 26 UTC hours; an
@@ -59,6 +60,7 @@ const GATE_BY_MAX = 40;              // reasons kept per hour (guard.ts looks at
 const GATE_GUARD = 5;                // rpc guard refusals kept, the newest
 const NETS_HOUR = 10_000;            // network hashes kept per hour
 const REASON_MAX = 200;              // a reason or a guard's why is cut here (guard.ts REASON)
+const N_MAX = 1_000_000_000;         // a reject line's `n` (the refusals it stands for) is cut here
 const REJECT_LINE = /^\{"t":(\d{1,16}),"kind":"reject",/;
 type GateHour = { by: Map<string, number>; far: number; nets: Set<string> };
 const gateHours = new Map<number, GateHour>();
@@ -121,16 +123,18 @@ function gateFold(lines: string[], problems: Problem[], floor: number | null): v
     let o: unknown;
     try { o = JSON.parse(lines[i]); } catch { continue; }
     if (!o || typeof o !== 'object') continue;
-    const { reason, peer } = o as { reason?: unknown; peer?: unknown };
+    const { reason, peer, n: nRaw } = o as { reason?: unknown; peer?: unknown; n?: unknown };
     if (typeof reason !== 'string') continue;   // not a refusal's shape
+    // a line written by the auditor's limiter stands for `n` refusals (D4 #1); without it, one
+    const n = typeof nRaw === 'number' && Number.isSafeInteger(nRaw) && nRaw >= 1 ? Math.min(nRaw, N_MAX) : 1;
     const start = hourOf(t);
     let h = gateHours.get(start);
     if (!h) gateHours.set(start, (h = { by: new Map(), far: 0, nets: new Set() }));
     const rpc = reason.startsWith('rpc guard');
     const key = rpc ? 'rpc guard' : reason.slice(0, REASON_MAX);
-    if (!shapeKey(key) && (h.by.has(key) || h.by.size < GATE_BY_MAX)) h.by.set(key, (h.by.get(key) ?? 0) + 1);
+    if (!shapeKey(key) && (h.by.has(key) || h.by.size < GATE_BY_MAX)) h.by.set(key, (h.by.get(key) ?? 0) + n);
     const far = farNet(peer);
-    if (far !== null) { h.far++; if (h.nets.size < NETS_HOUR) h.nets.add(far); }
+    if (far !== null) { h.far += n; if (h.nets.size < NETS_HOUR) h.nets.add(far); }
     if (rpc) { gateGuard.push({ t, why: reason.slice(0, REASON_MAX) }); if (gateGuard.length > GATE_GUARD) gateGuard = gateGuard.slice(-GATE_GUARD); }
     if (t > gateNewest) gateNewest = t;
   }

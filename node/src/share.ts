@@ -21,7 +21,7 @@ import { AddressBook, bookFile } from './addressbook.js';
 import { freePort, startChild, type Child, exited } from './children.js';
 import { startApiServer, type ApiServer, apiAuth } from './api.js';
 import { loadOrCreateKey } from './audit/key.js';
-import { Ledger } from './audit/ledger.js';
+import { Ledger, type Entry } from './audit/ledger.js';
 import { Auditor } from './audit/auditor.js';
 import { startRelayWorker, type RelayWorker } from './relay.js';
 import { DashboardState } from './dashboard/state.js';
@@ -103,6 +103,26 @@ const stamp = () => new Date().toISOString().slice(11, 19);
 const logSinks = new Set<(s: string) => void>();
 export const log = (s: string) => { console.log(`${stamp()}  ${s}`); for (const f of logSinks) f(`${stamp()}  ${s}`); };
 
+// A refused handshake into the signed ledger (security review D4, 17 Nov). `peer` stays the plain
+// ip the brain counts by; a refusal that arrived over an anchor leg comes from 127.0.0.1, so the
+// client certificate's fingerprint (its first 16 hex) goes on the line too (#12). replay and clock
+// are written by the auditor itself when it refuses the hello. null: nothing written now (the
+// auditor's limiter held it, or the auditor wrote it already).
+export function ledgerGateReject(auditor: Auditor, e: Extract<GateEvent, { type: 'reject' }>): Entry | null {
+  if (e.reason === 'replay' || e.reason === 'clock') return null;
+  return auditor.reject(e.peer, e.reason, { ...(e.channel ? { channel: e.channel } : {}), ...(e.fp ? { fp: e.fp.slice(0, 16) } : {}) });
+}
+
+// A stranger refused at the anchor channel's door (#3): a refusal the brain's gate watch must
+// see, so a reject line with channel 'anchor', through the same limiter. A member's refusals
+// (caps, a bad request) and the anchor's own dials stay in the unsigned log, as register, leave
+// and streams do: /trust hands ledger lines to every paired device. undefined: not a stranger's
+// refusal; null: held by the limiter.
+export function ledgerAnchorRefusal(auditor: Auditor, isMember: (fp: string) => boolean, e: AnchorEvent): Entry | null | undefined {
+  if (e.type !== 'refuse' || e.peer === 'self' || (e.fp !== null && isMember(e.fp))) return undefined;
+  return auditor.reject(e.peer, e.reason, { channel: 'anchor', ...(e.fp ? { fp: e.fp.slice(0, 16) } : {}) });
+}
+
 // What `share` hands back: stop(), with the gate port and the dashboard on it (tests, the cli's log).
 // deviceName: what the qr and mdns call this computer (a function's own name is read-only);
 // qr(): the payload the last qr carried (its json; '' before the first); code(): the open one-time
@@ -161,7 +181,8 @@ export async function share(opts: ShareOptions): Promise<ShareHandle> {
   const ledgerFile = path.join(home(), 'ledger.jsonl');
   const ledger = new Ledger(ledgerFile, key);
   if (ledger.setAside) log(`ledger: set aside the old unsigned lines from before the signed ledger as ${ledger.setAside.file} (${ledger.setAside.lines} lines); the signed chain starts again`);
-  const auditor = new Auditor({ ledger, log });
+  // refusals rate-limited (D4 #1): a stranger's loop of connections cannot fill the disk
+  const auditor = new Auditor({ ledger, log, limit: true });
   // when each paired device was last here (the dashboard's and `kula-node paired list`'s "last seen")
   const seen = new Seen(seenFile());
   // the old key is not readable: the lines it signed no longer verify, and the ledger says why
@@ -172,9 +193,9 @@ export async function share(opts: ShareOptions): Promise<ShareHandle> {
     else if (e.type === 'open') { auditor.connect(e.peer, e.channel); if (e.fp && seen.saw(e.fp, e.peer)) showPaired(); log(`${e.channel} open from ${e.peer}${e.v === 2 ? ' (tls)' : ''}`); }
     else if (e.type === 'close') { auditor.end(e.peer, e.channel, e.ms, e.bytesIn, e.bytesOut); log(`${e.channel} closed from ${e.peer} after ${e.ms} ms, in ${e.bytesIn} out ${e.bytesOut} bytes`); }
     else {
-      // replay and clock are written by the auditor itself when it refuses the hello
-      if (e.reason !== 'replay' && e.reason !== 'clock') auditor.reject(e.peer, e.reason, e.channel ? { channel: e.channel } : {});
-      log(`refused ${e.peer}${e.channel ? ' on ' + e.channel : ''}: ${e.reason}`);
+      // logged only when a line was written (the auditor's own log says how many it stands for);
+      // a held refusal, and replay and clock (logged by the auditor's hello), are not logged here
+      if (ledgerGateReject(auditor, e)) log(`refused ${e.peer}${e.channel ? ' on ' + e.channel : ''}: ${e.reason}`);
     }
   };
   // what the qr claims against what this machine measured
@@ -307,7 +328,11 @@ export async function share(opts: ShareOptions): Promise<ShareHandle> {
     else if (e.type === 'leave') log(`anchor: ${short(e.fp)} left (${e.why})`);
     else if (e.type === 'open') log(`anchor: stream ${short(e.from)} → ${short(e.to)}`);
     else if (e.type === 'close') log(`anchor: stream ${short(e.from)} → ${short(e.to)} ended after ${e.ms} ms, ${e.bytes} bytes`);
-    else log(`anchor: refused ${e.peer}${e.fp ? ` (${short(e.fp)})` : ''}: ${e.reason}${e.to ? ` (to ${short(e.to)})` : ''}`);
+    else {
+      // a stranger's refusal goes to the signed ledger, limited (D4 #3); logged only when written
+      const r = anchor ? ledgerAnchorRefusal(auditor, (fp) => anchor!.isMember(fp), e) : undefined;
+      if (r !== null) log(`anchor: refused ${e.peer}${e.fp ? ` (${short(e.fp)})` : ''}: ${e.reason}${e.to ? ` (to ${short(e.to)})` : ''}`);
+    }
   };
   const gate = await startGateServer({ port: opts.port, dualStack, secret, targets, onEvent, admit: (peer, nonceC, unixMs) => auditor.hello(peer, nonceC, unixMs), tls: tlsServer, rpcGuard: true, anchor: anchor ?? undefined, onAnchor });
   liveGate = gate;
@@ -448,6 +473,8 @@ export async function share(opts: ShareOptions): Promise<ShareHandle> {
     if (rpc) await rpc.stop();
     clearInterval(healthTimer);
     clearInterval(apiTimer);
+    // the refusals the limiter still holds are written before the ledger is left
+    try { auditor.flush(); } catch (e) { log(`ledger: held refusals not written: ${(e as Error).message}`); }
     ledgerUi.stop();
     logSinks.delete(logSink);
     if (dashboard) await dashboard.close();

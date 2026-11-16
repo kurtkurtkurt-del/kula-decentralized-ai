@@ -13,16 +13,28 @@ export const MAX_BYTES_PER_SEC = 2_000_000_000;
 export const HOT_C = 42;
 export const LOW_BATTERY = 15;
 
-// Remembers the last NONCE_RING nonces per peer; the same one twice is a replay.
+// rings kept at most: the peers heard from most recently (security review D4 #18: one ring per
+// address, never dropped, let many ipv6 addresses grow memory without end)
+export const MAX_RINGS = 4096;
+
+// Remembers the last NONCE_RING nonces per peer; the same one twice is a replay. Only the
+// MAX_RINGS peers heard from most recently keep a ring; the clock check still holds for the rest.
 export class ReplayCheck {
   private rings = new Map<string, { list: string[]; set: Set<string> }>();
 
-  constructor(readonly size = NONCE_RING) {}
+  constructor(readonly size = NONCE_RING, readonly maxRings = MAX_RINGS) {}
+
+  get count(): number { return this.rings.size; }
 
   // Returns 'replay' when the nonce was seen before, null otherwise (and records it).
   check(peer: string, nonce: string): Reason | null {
     let ring = this.rings.get(peer);
-    if (!ring) { ring = { list: [], set: new Set() }; this.rings.set(peer, ring); }
+    if (ring) { this.rings.delete(peer); this.rings.set(peer, ring); }   // the newest at the end
+    else {
+      ring = { list: [], set: new Set() };
+      this.rings.set(peer, ring);
+      while (this.rings.size > this.maxRings) this.rings.delete(this.rings.keys().next().value!);
+    }
     if (ring.set.has(nonce)) return 'replay';
     ring.list.push(nonce);
     ring.set.add(nonce);
