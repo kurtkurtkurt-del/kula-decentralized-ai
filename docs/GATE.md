@@ -160,8 +160,10 @@ S → C   OK <proof_s>     pin:    HMAC-SHA256(pin, "nonce_s|nonce_c|channel|fp_
   no secret anywhere.
 - A replayed nonce and a clock more than two minutes off are refused on every v2 hello,
   **with or without an auditor**.
-- 5 s per handshake line, no timeout afterwards; proofs compared in constant time; bytes
-  after the proof line are forwarded.
+- 5 s per handshake line and 20 s for the whole handshake, no timeout afterwards; proofs
+  compared in constant time; bytes after the proof line are forwarded. How many handshakes may
+  run at once, and how much a connection may send before it is let in:
+  [below](#handshake-slots-and-held-bytes-17112026).
 - A TLS socket cannot be half-closed: when one direction ends, the TLS side is closed fully
   with `close_notify` (the plain side gets `shutdownOutput`). Apart mode's HTTP answers, which
   end with the close, still arrive whole.
@@ -236,8 +238,12 @@ What a removal does, the same on both workers:
 2. **open connections are closed** (`Gate.Server.drop(fp)` / `GateServer.drop(fp)`): the
    phone's app tells the worker (`ACTION_FORGET`) and the worker also compares the list every
    two seconds; `share` compares it every two seconds; the dashboard and the chat page cut at
-   once. A pipe whose certificate left the list between its handshake and its start is cut
-   too. A split model on that master loses this worker's layers;
+   once (17.11.2026: the share dashboard cuts at once; the chat page's "remove its access" is
+   cut by `share`'s two-second check). A pipe whose certificate left the list between its
+   handshake and its start is cut too. A split model on that master loses this worker's
+   layers. On a computer that is an anchor, a device that is no longer a member (neither in
+   `paired` nor in the peer book) also loses its anchor connections within 5 s
+   ([ANCHOR.md](ANCHOR.md#removal-17112026));
 3. **one signed ledger line**: kind `health` with `unpaired` = the first 16 hex of the
    fingerprint and `name` when known. Not a new kind on purpose: `node/src/audit/ledger.ts`
    `KINDS` rejects unknown kinds, so an older kula-node verifying a newer phone's ledger
@@ -246,6 +252,59 @@ What a removal does, the same on both workers:
    as it is when another writer changed it;
 4. the device can come back only by pairing again with a fresh one-time code. Removing the
    last paired master also opens v1 again where a v1 secret was given (see above).
+
+## handshake slots and held bytes (17.11.2026)
+
+A computer's gate can face the internet (an anchor, `--map-port`), so how many connections may
+sit in a handshake at once is counted with that in mind (security review D4;
+`mayHandshake` in `node/src/gate.ts`):
+
+- **32 in all.** The next one hears `NO overloaded` at once, before any hello.
+- **At most 16 of them from internet addresses together.** An internet address is one that is not
+  loopback and not in a private, shared (carrier NAT) or link-local range. The other half stays
+  for the home network and for streams through an anchor or a relay, so a flood from outside
+  cannot lock the home out.
+- **8 per address.** An internet IPv6 address counts by its /56 (one home or one rented host gets
+  a whole prefix); a private or link-local address, and every IPv4 address, counts by itself.
+  Loopback has no per-address count: every anchor and relay stream arrives from 127.0.0.1.
+- **5 s per line, 20 s for the whole handshake**, however slowly its bytes come. A slot is given
+  back when the pipe starts or the socket closes.
+- **64 KiB held.** The gate's own reader keeps whatever comes after a line. A connection that has
+  more than 64 KiB unread while no line is awaited (before its OK, or on the `anchor` channel while
+  a dial waits for the target's accept) is cut and its bytes dropped. A line itself is still
+  limited to 4096 bytes.
+
+The phone's gate is not reached from the internet directly: on the wi-fi, and through the anchors
+it joined (from 127.0.0.1). It keeps 32 handshakes in all with 5 s per line, and now 20 s for the
+whole handshake as well (`HANDSHAKE_TOTAL_MS` in `Gate.kt`, phone: in 0.6.0).
+
+## the rpc seat (17.11.2026)
+
+The `rpc` channel takes one master at a time: the **seat**. Its holder is the client certificate
+(v2) or the address (v1), with every rpc connection it has open. Through an anchor there is no idle
+cut, so a friend's device could hold the seat with an idle model and the person's own devices
+would hear `busy` for good. The person's rule (17.11.2026): **one of the person's own devices takes
+the seat from a friend's device that has passed no byte, either way, on any of its rpc
+connections for a minute** (`SEAT_IDLE_MS`). The friend's rpc connections are closed, and its
+loaded model ends with them. Otherwise the newcomer hears `busy` as before:
+
+| holder | newcomer | result |
+|---|---|---|
+| a friend's device, idle 60 s or more | the person's own device | the newcomer takes the seat |
+| a friend's device, active in the last minute | anyone | `busy` |
+| the person's own device | anyone | `busy` |
+| a friend's device | another friend's device | `busy` |
+
+- **On a computer** (`maySeatBeTaken` in `node/src/gate.ts`, the `friend` hook in
+  `node/src/share.ts`): a friend's device is one whose ring in the peer book is `circle` or
+  `world`; a certificate with no record there is the person's own. If the ring cannot be read,
+  nobody gives up the seat.
+- **On the phone** (`Gate.kt`, `WorkerService.kt`, `Anchor.friendOf`, phone: in 0.6.0): its
+  paired list keeps no ring. Joining an anchor asks whose computer it is, and the answer is kept
+  in `anchors.json`: the computer of an anchor joined as "a friend's computer" (or joined before
+  the question was asked) is a friend's device; an anchor joined as "my computer", and every
+  other paired master, is the person's own. If the answer cannot be read, nobody gives up the
+  seat. Only a v2 client can take it.
 
 ## refusal reasons
 
@@ -268,9 +327,9 @@ The wire reply is `NO <reason>`; the same word is the `why` of the ledger's `rej
 | `wrong pin` | the pairing proof did not match |
 | `bad proof` | a paired client sent something other than `-` |
 | `channel closed` | the channel's local target is not running (no model loaded, the api server not started) |
-| `busy` | another master is on the `rpc` channel: another certificate in v2 (kula-node since 16.11.2026; streams through an anchor or relay all come from 127.0.0.1), another address in v1 |
+| `busy` | another master is on the `rpc` channel: another certificate in v2 (kula-node since 16.11.2026; streams through an anchor or relay all come from 127.0.0.1), another address in v1; unless the seat rule lets this one take it ([the rpc seat](#the-rpc-seat-17112026)) |
 | `target down` | the 127.0.0.1 target refused the connection |
-| `overloaded` | more than 32 connections in the handshake at once (answered at once, before any hello) |
+| `overloaded` | no handshake slot is free (answered at once, before any hello): 32 in all; on a computer also 16 for internet addresses together and 8 per address ([slots](#handshake-slots-and-held-bytes-17112026)) |
 | `no v1` | the server has no v1 secret (`kula-node share --tls` without `--secret`); a plain hello is refused |
 | `pin expired` | the pairing code is older than 10 minutes; a new one is made then and the next QR carries it |
 
@@ -345,7 +404,8 @@ computer: …,"attest":null}         a computer has no hardware that could vouch
 
 `Tunnel` (in `Gate.kt` and `node/src/gate.ts`) listens on a free 127.0.0.1 port. Every
 accepted local connection opens one connection to the worker's gate, performs the handshake
-on the chosen channel, and pipes. The `rpc` channel admits one master at a time, so split
+on the chosen channel, and pipes. The `rpc` channel admits one master at a time ([the rpc
+seat](#the-rpc-seat-17112026)), so split
 mode opens one tunnel per worker and llama.cpp holds it open for the life of the model. The
 `api` channel admits many; apart mode keeps one tunnel per worker for its HTTP calls. A
 tunnel whose handshake fails closes the local side without writing a byte.

@@ -30,7 +30,9 @@ anchor.
 ## why inside the gate
 
 - **The gate already proves who is calling.** It runs TLS 1.3 with client certificates and has its
-  handshake caps in front (32 at once, 8 per address, 20 s per handshake). A WebSocket or HTTP
+  handshake caps in front (32 at once, at most 16 of them from internet addresses, 8 per address
+  with an internet IPv6 address counted by its /56, 20 s per handshake, 64 KiB held with no line
+  awaited: [GATE.md](GATE.md#handshake-slots-and-held-bytes-17112026)). A WebSocket or HTTP
   server on an internet-facing port would add a parser that strangers can reach before anyone is
   known.
 - **The hosted relay trusts claims.** It takes a claimed fingerprint and a six-digit code
@@ -67,7 +69,11 @@ C → S   one JSON line:
 - The control connection is dead after 75 s without a line (three missed pings) on the anchor's
   side; the member gives up after two pings without an answer and reconnects, 1 s first, doubling
   up to 30 s.
-- The target has 10 s to accept a stream (`did not accept`).
+- The target has 10 s to accept a stream (`did not accept`). A dialer that pours more than 64 KiB
+  meanwhile is cut (17.11.2026).
+- A kula-node member sets up at most 32 streams the anchor `open`ed at once (one TLS connection
+  each); further `open`s are ignored until those are piped or failed, so a dishonest anchor cannot
+  make it open connections without end (17.11.2026). The phone has no such ceiling yet.
 - On the control connection, the address book (below) has two more lines: right after
   `registered` the anchor sends its own `{"t":"record","rec"}`; the member gives
   `{"t":"record","rec"}` and asks `{"t":"who","fps":[…],"seqs":[…]}` (32 at most a line), and the
@@ -106,15 +112,20 @@ turn it away.
 - The two ends of a stream need not be paired with each other. The target's gate decides: a pinned
   certificate, or its own open one-time code. The anchor never vouches. This is also how two far
   members pair for the first time.
-- Removing a device on the anchor computer (`kula-node paired remove`, the dashboard) cuts its
-  control connection and its streams, unless it is still a member through the peer book.
+- Membership is asked again, not only at the handshake (17.11.2026): on every control line and
+  every 5 s. A device that is no longer a member loses its control connection and its streams
+  (both ends), and its `who` lines get no answer, within 5 s, whichever order its paired line and
+  its peer-book record went in and whether or not anyone called `drop`. See
+  [removal](#removal-17112026).
 
 ## what the anchor learns
 
 Who talks to whom (certificate fingerprints), when, how many bytes, and both IP addresses. Never
 the content: the inner TLS is end to end and pinned. The anchor computer's log says all of this
-(`anchor: stream … → …, N bytes`). The anchor owner is a person in your circle; choose anchors as
-you choose who may see that you were online and when.
+(`anchor: stream … → …, N bytes`). Through `who` it also learns every fingerprint each member
+pinned: a member asks each anchor about all of them once a minute. The anchor owner is a person in
+your circle; choose anchors as you choose who may see that you were online and when, and whom you
+know.
 
 ## caps
 
@@ -126,6 +137,15 @@ Defaults, settable by the person (`share({ anchor: { … } })`, `AnchorHub.setCa
 | streams in all | 128 | `full` (the anchor computer's own dials count here too) |
 | dials, per **friend's** device: a token bucket | 120 at once (`dialBurst`), refilled at 30 a minute (`dialsPerMinute`) | `too many dials` |
 | bytes a day, per dialing **friend's** device, both ways | 5 GB (UTC day) | new streams `byte limit`, and the member's running streams are cut |
+| streams dialed by **friends'** devices, all together (17.11.2026) | the total less 32 (or less a quarter of the total, when that is smaller): 96 by default | `full`; the rest stays for the person's own devices and this computer's own dials |
+
+Fixed, not settable (17.11.2026):
+
+| what | limit | past it |
+|---|---|---|
+| `record` lines, per member | 16 at once, then 30 a minute | dropped before the signature check |
+| `who` lines, per member | 60 at once, then 120 a minute | dropped |
+| records held | 512 | records that no member needs any more (an anchor no registered member names, a device no longer a member) go first; a member's own record is never refused for space |
 
 - **The byte cap is for friends' devices only** (the person's decision, 16.11.2026). A dialing
   member whose record in the anchor computer's peer book is ring `circle` (or `world`) is capped;
@@ -147,7 +167,8 @@ Defaults, settable by the person (`share({ anchor: { … } })`, `AnchorHub.setCa
 
 - **No idle cut.** An rpc stream sits idle between chats, and cutting it kills the loaded model.
   Dead legs are found by TCP keepalive (30 s) on every anchor leg and by the loss of the control
-  connection.
+  connection. The anchor never ends an idle stream; the target's gate may, by the rpc seat rule
+  ([below](#the-rpc-seat-17112026)).
 - **Split streams are carried.** The anchor cannot tell channels apart and does not try; it is the
   last road, after the wi-fi and direct addresses. Whether a far split is worth it is the planner's
   call (stage 3), not the anchor's.
@@ -166,6 +187,80 @@ Defaults, settable by the person (`share({ anchor: { … } })`, `AnchorHub.setCa
 - **Far split is slow and heavy** on uplink and mobile data: the weights cross the anchor.
 - **Networks that block unusual outbound ports block the gate**, and with it the anchor.
 - **A phone is never an anchor.** Its gate answers `bad channel` to `anchor`.
+
+## security (17.11.2026)
+
+Review D4 read the anchor with three attackers in mind: a stranger on the internet, a member of
+the same anchor, and the anchor's owner. The threat model, what faces the internet and the whole
+list of what changed are in [SECURITY.md](SECURITY.md#the-anchor-and-the-internet-17112026); this
+part keeps what the anchor itself does.
+
+### removal (17.11.2026)
+
+On the anchor's computer a device is a member while it is in the gate's `paired` list **or**
+pinned (with `paired_at`) in the peer book.
+
+- **Removing its access** (`kula-node paired remove`, the share dashboard, the page's "remove its
+  access") refuses its next handshake on `rpc` and `api` and closes its open pipes there: at once
+  from the dashboard, otherwise within 2 s.
+- **Once it is neither paired nor in the peer book**, in either order, the anchor cuts its control
+  connection and every stream it is an end of, and answers none of its `who` lines. The anchor
+  asks on every control line and every 5 s, so this takes 5 s at most, with or without a `drop`
+  call.
+- **Forgetting it in the peer book only** changes nothing here: it is still paired, so still a
+  member.
+- **On the joiner's side**, forgetting the anchor on a computer's page also takes the anchor's
+  computer off the paired list (above, under join); on the phone it is removed under "devices
+  that can use this phone".
+
+### the rpc seat (17.11.2026)
+
+A gate's `rpc` channel takes one master at a time. Through an anchor there is no idle cut, so a
+friend's device could hold a computer's seat with an idle model, and the person's own devices
+would hear `busy` for as long as it liked. The person decided (17.11.2026): **an own device takes
+the seat from a friend's device that has passed nothing for a minute.** The friend's rpc
+connections end, and its loaded model with them. A friend never takes the seat from an own
+device, and two friends or two own devices never take it from each other. On a computer, a
+friend's device is one whose ring in the peer book is `circle` or `world`; a certificate with no
+record there counts as own. On the phone it is the answer given when joining: an anchor joined
+as "a friend's computer" is a friend's, everything else own (phone: in 0.6.0, under "the phone"
+above). The rule is the gate's ([GATE.md](GATE.md#the-rpc-seat-17112026)),
+whether the connection came through an anchor or not.
+
+### logging (17.11.2026)
+
+- **The signed ledger** gets a stranger's knock on the anchor door: a `reject` line with
+  `channel: 'anchor'`, through the auditor's limiter (one line per address block and reason per
+  10 s, `n` saying how many refusals it stands for). The brain's gate watch counts it.
+- **The unsigned share log** gets register, leave, streams (`anchor: stream … → …, N bytes`), a
+  member's refusals after `OK -` (caps, a bad request) and this computer's own dials. They stay
+  out of the ledger on purpose: `GET /trust` hands ledger lines to every paired device, and they
+  would show every member who talks to whom.
+
+### limits (17.11.2026)
+
+- **A flood from the internet** can fill the 16 handshake slots internet addresses share and keep
+  far members out; the home network keeps working.
+- **The certificate is visible** to anyone who scans the port, so a home can be followed across
+  address changes.
+- **`who` hands out a signed record** (lan address, public addresses, anchors) to any member that
+  knows the device's full fingerprint; nobody can list devices. The owner learns each member's
+  pinned list (above).
+- **The owner** can hold back a record, serve an older validly signed one, and drop streams; it
+  cannot read, forge or pair.
+- **A member's own record can name any address**, and devices that pinned it will try a TLS hello
+  there.
+- **A recent invite shows:** for 30 minutes after an invite was used or ran out, a stranger hears
+  `pin` instead of `not paired` on `rpc` and `api`.
+- **A typed invite** pins only 16 hex (64 bits) of the anchor's certificate before it pairs; a
+  gate with a matching prefix that answers `paired` is accepted, but cannot pair back without the
+  code.
+- **A stolen invite** used within its 10 minutes gives the thief the ring the invite named
+  (`home` for "mine").
+- **A device paired the ordinary way** (a qr, not an invite) has no ring in the peer book and
+  counts as the person's own: not byte-capped and not a friend for the seat until someone sets
+  its ring to `circle`. Only invites ask whose a device is. A certificate with no peer-book record
+  at all is byte-capped (above) but counts as own for the seat.
 
 ## in the code
 
@@ -197,6 +292,9 @@ Defaults, settable by the person (`share({ anchor: { … } })`, `AnchorHub.setCa
 | giving and asking over each link; a link following an anchor's new address | `node/src/join.ts`, `AnchorLinks` (`book`, `redial`) |
 | the note line on the page | `node/src/ui/engine.ts`, `pullMoves` |
 | address book tests: two anchors, kill one, the other's new port, forged, old and changed records | `node/test/address-book.test.ts` |
+| membership asked again every 5 s, record rate, eviction, the streams left for own devices, `open`s in flight (17.11.2026) | `node/src/anchor.ts` (`ANCHOR_CHECK_MS`, `ANCHOR_OWN_STREAMS`, `ANCHOR_ACCEPTS_IN_FLIGHT`); tests in `node/test/anchor.test.ts` |
+| handshake slots, 64 KiB held, the rpc seat (17.11.2026) | `node/src/gate.ts` (`mayHandshake`, `MAX_HELD_BYTES`, `maySeatBeTaken`), `friend` in `node/src/share.ts`; `node/test/gate-flood.test.ts`, `node/test/gate-seat.test.ts` |
+| a stranger's anchor knock in the ledger, the refusal limiter (17.11.2026) | `ledgerAnchorRefusal` in `node/src/share.ts`, `node/src/audit/auditor.ts`; `node/test/ledger-flood.test.ts` |
 
 ## roads (stage 3, 16.11.2026)
 
@@ -284,18 +382,26 @@ invite" ticked. Then:
    (`pairBackCode`).
 4. Its engine takes the joined anchors as its roads (`EngineOptions.anchors`), and its share qr
    names them (`anchors`), so a device that pairs with it on the wi-fi can later reach it through
-   them. Forgetting the anchor on the page leaves it.
+   them. Forgetting the anchor on the page leaves it, and since 17.11.2026 also takes the
+   anchor's computer off this computer's paired list (one signed ledger line): the access its
+   pair-back gave is gone with it, and the note says "it can no longer use this computer".
+
+**An invite is a full pairing both ways** (17.11.2026). After step 3 the anchor's computer may use
+the joiner (run model layers on it, ask it for answers) without asking again. So the page asks
+yes or no before it joins: "joining starts sharing this computer, and the anchor's computer may
+use it". A computer's own invite pasted on that same computer is refused before its code is spent.
 
 What the joiner hears when it does not work:
 
 | the anchor's gate said | words |
 |---|---|
-| `pin used` | "this invite was used already: each invite works once. ask for a new one." |
+| `pin used` | "this invite was used already: each invite works once. ask for a new one. if it was not you who used it, tell the anchor's owner to remove the device that used it." (17.11.2026: a stolen invite used first) |
 | `pin expired` (ran out, or a newer invite replaced it) | "this invite ran out (it works for 10 minutes). ask for a new one." |
 | `wrong pin` | "the code does not match the anchor's invite: check it, or ask for a new invite." |
 | `not paired` (no invite open) | "the anchor has no invite open: ask for a new one." |
 | another certificate at TLS | "the certificate does not match what the anchor shows: not joining" (typed), or the next address is tried |
 | nothing answers | "the anchor does not answer at …: is it on, and is its door open from where you are?" |
+| (nothing dialed) the invite is this computer's own | "this invite is from this computer itself: it cannot join its own anchor. open the invite on the other computer that should join." |
 
 The gate remembers a used or expired invite code for 30 minutes, only to say which of these it
 was. Besides the qr's own code it keeps any number of such one-time codes (`TlsServer.codes`), each
@@ -328,7 +434,24 @@ The phone is a member, never an anchor: its gate still answers `bad channel` to 
   mode's api tunnel and the split's rpc tunnels (`Gate.Tunnel(anchor=…)`, an SSLSocket inside the
   SSLSocket to the anchor). Only hosted-relay peers stay out of split. A refused dial with
   `too many dials` makes the tunnel wait up to a minute instead of failing llama.cpp.
+- **Asked first** (17.11.2026, phone: in 0.6.0): an invite is joined only after an answer. The
+  question says that joining pairs both ways, that once the phone is shared the anchor's computer
+  may run models on it without asking again, and where to take that away ("devices that can use
+  this phone"). It also asks whose computer it is: **my computer**, **a friend's computer**, or
+  cancel. The answer is kept with the anchor in `anchors.json` (`whose`; an entry from before the
+  question counts as a friend's) and decides the rpc seat (below). Joining the same anchor again
+  takes the new answer. Forgetting a joined anchor on the phone stops registering there but does
+  not remove the anchor's computer from "devices that can use this phone".
+- **Four anchors at most** (phone: in 0.6.0): a fifth invite is refused in plain words before its
+  code is spent ("forget one of them first"); the store no longer drops the oldest silently. An
+  anchor joined before may come again.
+- **`anchors.json` is changed under a file lock** (`anchors.json.lock`, phone: in 0.6.0), since the
+  app and the worker are two processes and both change it; a join or a cleared pair-back code is
+  not lost.
 - **The rpc slot** on the phone's gate is held by the client certificate (v2), not the address.
+  The seat rule holds on the phone too (phone: in 0.6.0): there, the computer of an anchor joined
+  as "a friend's computer" is a friend's device; an anchor joined as "my computer", and every
+  other paired master, is the person's own.
 - The device rows say **on this wi-fi**, **over the internet** or **through anchor X**.
 - The phone's own share qr names its joined anchors (`anchors`), so a computer that pairs with it
   on the wi-fi can later reach it through them.
@@ -387,7 +510,9 @@ as an anchor. Roads and `AnchorLinks` then find it there.
   an anchor that the giver's own record names; it checks the signature only so as not to carry
   rubbish, keeps the newest per fingerprint (512 at most, in memory) and hands one to a member
   only when it is about a member or about an anchor a registered member names. `who` lines: 60 at
-  once, then 120 a minute, per member.
+  once, then 120 a minute, per member; `record` lines: 16 at once, then 30 a minute, per member,
+  the rest dropped before the signature check. When the store is full, the records nobody needs
+  any more go first, and a member's own record is never refused for space (17.11.2026).
 
 ### a second anchor
 

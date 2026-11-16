@@ -21,6 +21,11 @@ key, `kula_device_key`), the cluster secret (v1) and the pairing code (v2).
 | **A3 a compromised partner** | the paired master phone is stolen/malicious | passes the gate; makes the worker download a model, writes the worker's memory over RPC |
 | **A4 another app on the same phone** | 127.0.0.1 | the tunnel and the RPC server are on loopback; Android has no loopback isolation between UIDs |
 | **A5 the model server** | HF or the host in `url` | redirects, a long body, a wrong size |
+| **A6 a stranger on the internet** (17.11.2026) | anywhere, once a computer is an anchor or maps its gate port | reaches the gate port and sees its certificate; tries handshakes and floods them. Without a paired certificate or an open one-time code (64 bits) it gets no further than the handshake, and on the `anchor` channel it never hears `pin` |
+| **A7 a member of the same anchor** (17.11.2026) | a device the anchor's computer paired with or pinned: the person's own, or a friend's that came with an invite | registers; dials any registered member whose full fingerprint it knows (that member's gate decides who gets in); passes bytes within the caps; gives its own signed record; asks `who` about a full fingerprint and gets that device's signed record (addresses, anchors). It cannot list the members, cannot read other members' streams, and being a member gives it nothing on `rpc` or `api` |
+| **A8 the anchor's owner** (17.11.2026) | the person whose computer is the anchor | sees metadata (who talks to whom, when, how many bytes, both IP addresses) and every fingerprint a member asks about (`who`); can refuse, delay or cut streams, and hold back a record or serve an older one that is still validly signed. After the pair-back its computer is paired with every joiner, so towards a joiner it is A3. It cannot read a stream, forge a record, or pair anyone with another device |
+
+A6 to A8 and what was done about them are in [the anchor and the internet](#the-anchor-and-the-internet-17112026).
 
 Design boundary: **a paired master gets trusted access to the worker's processor and memory** (that
 is ggml RPC). Until 15.11.2026 that was more than processor and memory: llama.cpp's rpc server ran
@@ -133,7 +138,154 @@ without the fix:
 | the worker api on 127.0.0.1 served any local process or app | `api.ts` (`viaGate`, `apiAuth`), `ApiServer.kt` (`ApiPeers` legs) |
 | a borrowed or unchecked owner-blind proof counted | `ui/engine.ts`, `attest.ts` |
 
-Still open: the rpc port and the master's tunnels on loopback have no key; a trickled handshake on
-the phone has no overall deadline; the phone's trust check does not tie the ledger key to the
-certificate; releases are not signed with a key kept off GitHub; the nightly backup artifact and
-the shared demo account need the owner's hand on GitHub and Supabase.
+Still open: the rpc port and the master's tunnels on loopback have no key; the phone's trust
+check does not tie the ledger key to the certificate; releases are not signed with a key kept off
+GitHub; the nightly backup artifact and the shared demo account need the owner's hand on GitHub
+and Supabase. A trickled handshake on the phone, open on this list until 17.11.2026, now has 20 s
+in all, as on a computer (`Gate.kt`, phone: in 0.6.0).
+
+## the anchor and the internet (17.11.2026)
+
+A computer that is an anchor ([ANCHOR.md](ANCHOR.md)) faces the internet. Review D4 read that
+surface before 0.6.0 with three attackers in mind: A6 a stranger on the internet, A7 a member of
+the same anchor and A8 the anchor's owner (the threat model above). It found no way for a stranger
+to get in or read anything; what it found was about keeping the network working and about
+removal. What changed is below, then what stays a limit.
+
+### what faces the internet
+
+When the anchor switch is on (or `kula-node share --anchor`, or `--map-port`):
+
+- **One TCP port: the gate's** (default 50551). The router is asked to map it (PCP, NAT-PMP,
+  UPnP-IGD), and over IPv6 the gate answers on the computer's global address if the router lets
+  it in. Nothing else is mapped. The api, `ggml-rpc-server`, `llama-server`, the page and the
+  share dashboard listen on 127.0.0.1. Two other listeners take a lan address but are never
+  mapped: the page's guest invites (only while they are on) and the model file handed to a
+  worker on the same wi-fi during a load.
+- **TLS 1.3 only.** An anchor or a mapped port will not start with `--no-tls` or `--secret`, so
+  a plain v1 hello hears `no v1`.
+- **The certificate is shown before any line**, to anyone who connects (a limit, below).
+- **`rpc` and `api`:** a paired certificate, or an open one-time code: the qr's, an invite's,
+  or a pair-back code that only the certificate it names can use. Codes are 64 bits, single
+  use, and live 10 minutes. On a computer the rpc guard reads every rpc connection
+  ([GATE.md](GATE.md#threat-model-in-short)).
+- **`anchor`:** members only, and never `pin`: a stranger hears `not paired` even while a code
+  is open, so nobody pairs through this door.
+
+### the handshake rule
+
+How many connections may sit in a handshake at once, on a computer's gate (`node/src/gate.ts`):
+
+- **32 in all.** The next one hears `NO overloaded` at once, before any hello.
+- **Internet addresses share at most 16 of them.** An internet address is one that is not
+  loopback and not in a private, shared (carrier NAT) or link-local range. The other 16 stay for
+  the home network and for streams through an anchor or a relay, so a flood from outside cannot
+  lock the home out.
+- **8 per address.** An internet IPv6 address counts by its /56, since one home or one rented
+  host gets a whole prefix. Every other address counts by itself. Loopback has no per-address
+  limit, since every anchor and relay stream arrives from 127.0.0.1.
+- **5 s per line and 20 s for the whole handshake**, however slowly its bytes come.
+- **64 KiB held.** A connection that pours more than 64 KiB while the gate awaits no line (before
+  its OK, or while the anchor waits 10 s for the target to accept) is cut.
+
+The phone's gate is never mapped. It is reached on the wi-fi and through the anchors it joined
+(those streams come from 127.0.0.1). It allows 32 handshakes in all and 5 s per line, and now
+20 s for the whole handshake (phone: in 0.6.0), so a member who trickles bytes holds a slot for
+20 s at most.
+
+### an invite is a full pairing both ways
+
+An anchor's invite is not a lighter kind of pairing. The joiner pairs with the anchor's gate with
+the invite's code and may then use the anchor's computer (`api` and `rpc`). When the joiner
+registers, the anchor pairs back with the second code, and **from then on the anchor's computer
+may use the joiner's**: run model layers on it and ask it for answers, without asking again, until
+someone removes it. So the page asks yes or no before joining and says this. The phone asks too
+and also asks whose computer it is, "my computer" or "a friend's computer"; the answer is kept
+with the anchor and decides the rpc seat (phone: in 0.6.0). An invite marked "a friend's" makes the
+joiner ring `circle` on the anchor (byte-capped); "mine" makes it `home`. A computer that joins
+keeps the anchor at ring `circle` until the person changes it.
+
+### removal: what cuts what, and how fast
+
+On the anchor's computer, a device is a **member** while it is in the gate's `paired` list **or**
+pinned (with `paired_at`) in the peer book. Both must go before the anchor turns it away.
+
+| the person does | what is cut | how fast |
+|---|---|---|
+| removes its access (`kula-node paired remove`, the dashboard, the page's "remove its access") | its next handshake on `rpc`/`api` hears `not paired`; its open rpc and api pipes are closed | the next handshake at once; open pipes at once from the share dashboard, otherwise within 2 s (`share` compares the list every 2 s) |
+| ... and it is no longer in the peer book either (in either order) | on the anchor: its control connection, its streams (both ends), and its `who` lines get no answer | within 5 s: the anchor asks again every 5 s and on every control line, whether or not anyone called `drop` |
+| forgets it in the peer book but leaves it paired | nothing: it is still a member, and still paired | — |
+| on a computer that joined an anchor: forgets the anchor on the page | it stops registering there, **and** the anchor's computer is taken off this computer's `paired` list (one signed ledger line), so it can no longer use this computer | as removing access, above |
+| on a phone that joined an anchor: forgets the anchor | it stops registering there. The anchor's computer keeps its access to the phone until it is removed under "devices that can use this phone" | removal there: refused at once, open connections closed |
+
+### logging
+
+- **The signed ledger** (`ledger.jsonl`) gets every refusal at the gate's handshake (`reject`,
+  with `peer` the plain IP and the same reason words), including a stranger's knock on the
+  anchor door (`channel: 'anchor'`), so the brain's gate watch sees it. A refusal that came
+  through an anchor leg arrives from 127.0.0.1, so its line also carries `fp`, the first 16 hex of
+  the caller's certificate.
+- **Refusals are rate-limited**, so a flood cannot fill the disk. There is one line per address
+  block (IPv4 /24, IPv6 /56) and reason per 10 s. Refusals that come in between are held and
+  written as one line whose `n` says how many it stands for. There are at most 32 such lines per
+  10 s in all; the rest wait for the next window, and nothing is lost. The gate watch and
+  `GET /trust` count a line as `n` refusals. The replay check keeps rings for the 4096 addresses
+  heard from most recently.
+- **The unsigned log** (the share log on the computer) gets register, leave, streams (who to whom
+  and how many bytes), a member's refusals after `OK -` (caps, bad requests) and the anchor's own
+  dials. These stay out of the ledger on purpose: `GET /trust` hands ledger lines to every paired
+  device, and the ledger would then show every member who talks to whom.
+
+### fixed in review D4
+
+| what an attacker could do | now | where |
+|---|---|---|
+| fill the disk with refusals (one signed line each) | rate-limited lines with `n` | `node/src/audit/auditor.ts` |
+| knock on the anchor door unseen by the gate watch | a signed `reject` line, `channel: 'anchor'` | `node/src/share.ts` |
+| hold all 32 handshake slots from one IPv6 host | 16 for internet addresses together, IPv6 by /56 | `node/src/gate.ts` |
+| pour bytes while no line is awaited | cut past 64 KiB | `node/src/gate.ts` |
+| stay connected to the anchor after being removed | cut within 5 s | `node/src/anchor.ts` |
+| stall the anchor with `record` lines | 16 at once, then 30 a minute, checked only within that | `node/src/anchor.ts` |
+| fill the 512-record store | records no member needs are evicted; a member's own record is never refused for space | `node/src/anchor.ts` |
+| friends' streams filling all 128 | friends together leave 32 for the person's own devices | `node/src/anchor.ts` |
+| a dishonest anchor flooding a member with `open`s | at most 32 being set up at once; the rest ignored (kula-node; the phone not yet) | `node/src/anchor.ts` |
+| grow memory with replay rings | 4096 rings at most | `node/src/audit/checks.ts` |
+| keep using a computer after it forgot the anchor | forgetting takes the anchor's access too | `node/src/ui/engine.ts` |
+| use a stolen invite first, unnoticed | the real joiner hears to tell the anchor's owner (computer, and phone: in 0.6.0) | `node/src/join.ts`, `Anchor.kt` |
+| join an anchor's own invite on the same computer | refused before the code is spent | `node/src/join.ts` |
+| hold a computer's rpc seat idle as a friend's device | the seat rule ([GATE.md](GATE.md#the-rpc-seat-17112026)) | `node/src/gate.ts`; `Gate.kt` (phone: in 0.6.0) |
+| join a scanned invite on the phone without asking | asked first, with whose computer it is (phone: in 0.6.0) | `PeerScan.tsx`, `Anchor.kt` |
+| lock the phone's gate with trickled handshakes | 20 s in all (phone: in 0.6.0) | `Gate.kt` |
+| lose a join when the app and the worker write `anchors.json` together | a file lock (phone: in 0.6.0) | `Anchor.kt` |
+| a fifth anchor silently pushing out the oldest | refused in plain words (phone: in 0.6.0) | `Anchor.kt` |
+
+### documented limits
+
+- **A flood from the internet** can still fill the 16 internet slots and keep far members out.
+  The home network keeps working.
+- **Tracking:** anyone who scans the port sees the gate's certificate and can follow a home
+  across address changes.
+- **`who`:** a member that knows a device's full fingerprint gets its signed record: its lan
+  address, public addresses and anchors. It cannot list devices, and the rate is limited. Each
+  member asks every joined anchor about every fingerprint it pinned once a minute, so each
+  anchor's owner learns that member's whole pinned list.
+- **A recent invite shows:** for 30 minutes after an invite was used or ran out, a stranger on
+  `rpc` or `api` hears `pin` instead of `not paired`.
+- **The anchor's owner** (A8) sees metadata, can hold back a record or serve an older validly
+  signed one, and can drop streams. It cannot read a stream, forge a record or pair anyone.
+- **A typed invite** names the anchor by 16 hex of its certificate, which is 64 bits. A gate
+  with a matching prefix that answers `paired` is accepted. It still cannot pair back without the
+  code.
+- **A member's own signed record can name any address**, so devices that pinned it will try a
+  TLS hello there.
+- **Rings:** a device paired the ordinary way (a qr, not an invite) has no ring in the peer book
+  and counts as the person's own, so it is not byte-capped and not a friend for the rpc seat until
+  someone sets it to `circle`. Only invites ask whose a device is. A certificate with no peer-book
+  record at all is byte-capped on the anchor but counts as own for the rpc seat.
+- **A stolen invite** used within its 10 minutes gives the thief the ring the invite named:
+  `home` for a "mine" invite.
+- **The phone:** Doze, network handover and TLS inside TLS are shown only on a real device. The
+  phone does not sign, give or take address records yet, and it has no ceiling on the `open`s it
+  sets up. On the phone, an anchor's computer counts as a friend's for the rpc seat only while
+  the anchor is joined as "a friend's computer"; once the anchor is forgotten, its computer (still
+  paired until removed) counts as the person's own.
