@@ -17,6 +17,7 @@ import { measureLink, heldBack, type Link } from '../link.js';
 import { isAnchorRoad, roadDialer, type PeerAnchor, type RoadContext } from '../road.js';
 import type { AnchorHub } from '../anchor.js';
 import { joinWithInvite, readJoined, joinedRoads, removeJoined, reachableFromOutside, type JoinedAnchor } from '../join.js';
+import { readMoves, type Move } from '../addressbook.js';
 import { peerTls, readPeers, writePeers, parsePeerText, upsertPeer, findPeer, probePeers, peersFile, whereIs, discover, reachedBy, isRing, ringOf, widestRing, WORLD_CLOSED, type AddrVia, type Peer, type PeerProbe, type Found, type PeerKind, type Ring } from '../peers.js';
 import { connectRemote, handshake, peekGate, GateRefused, type GatePeek, FP_MISMATCH, FP_PREFIX_MIN } from '../gate.js';
 import { Adb, isSerial, stateHelp, NO_ADB_HELP, type CableDevice } from './cable.js';
@@ -318,6 +319,9 @@ export interface EngineOptions {
   anchors?: () => PeerAnchor[];
   // the store of anchors this computer joined; default anchors.json beside peersFile (~/.kula-node)
   joinedFile?: string;
+  // the circle's address book (addressbook.ts); default addrbook.json beside peersFile. A device
+  // that moved (its signed record came through an anchor) is one note line
+  addressBookFile?: string;
 }
 
 // This computer as an anchor, its live counters (the brain reads them: godseye host.anchor):
@@ -1594,7 +1598,17 @@ export class Engine {
 
   // ---- status
 
+  // the address book's moves since the last look, one note each (nothing else of it on the page)
+  private movesSince = Date.now();
+  private pullMoves() {
+    const file = this.opts.addressBookFile ?? path.join(path.dirname(this.file()), 'addrbook.json');
+    let moves: Move[] = [];
+    try { moves = readMoves(file, this.movesSince); } catch { return; }
+    for (const m of moves) { this.movesSince = Math.max(this.movesSince, m.at); this.note(m.text); }
+  }
+
   status(): Status {
+    this.pullMoves();
     if (this.loaded && this.cluster) this.loaded.devices = this.cluster.devices.map((d) => ({ id: d.id, name: d.name, local: d.local, busy: d.busy, tps: d.tps, done: d.done }));
     return {
       loaded: this.loaded ? structuredClone(this.loaded) : null,

@@ -23,8 +23,9 @@ import type { Duplex } from 'node:stream';
 import { handshake, connectRemote, GateRefused, FP_MISMATCH, FP_PREFIX_MIN, PIN_TTL_MS, type ExtraCodes } from './gate.js';
 import { newPin, type GateIdentity } from './tls.js';
 import { candidates, cleanAddrs, readPeers, writePeers, upsertPeer, peerCode, widestRing, type Peer, type PeerAddr, type Ring } from './peers.js';
-import { joinAnchor, FP_RE, type AnchorHub, type AnchorEvent, type AnchorKind, type AnchorMembership } from './anchor.js';
+import { joinAnchor, FP_RE, type AnchorHub, type AnchorEvent, type AnchorKind, type AnchorMembership, type AnchorBook } from './anchor.js';
 import type { PeerAnchor } from './road.js';
+import type { AddrRecord } from './addrrecord.js';
 import { isLoopback, isPrivateAddress } from './policy.js';
 import { home } from './paths.js';
 
@@ -429,6 +430,8 @@ export interface LinkView { fp: string; name: string; at: string; state: LinkSta
 interface Link {
   a: JoinedAnchor; state: LinkState; why: string | null; m: AnchorMembership | null;
   timer: NodeJS.Timeout | null; tries: number; way: number;
+  busy: boolean;    // a register is under way
+  fresh: boolean;   // a new address came in meanwhile
 }
 
 export interface AnchorLinksOptions {
@@ -442,6 +445,18 @@ export interface AnchorLinksOptions {
   join?: typeof joinAnchor;  // tests
   pollMs?: number;           // the store is looked at again this often (a `peers add` in a terminal)
   retryMs?: number;          // the first wait after a failed register; doubles up to a minute
+  // the address book (addressbook.ts AddressBook): over every link this computer's own record is
+  // given, with the records of the other anchors it joined (so anchors learn each other), the
+  // pinned devices are asked about, and what comes back is checked and taken there
+  book?: LinkBook;
+  bookMs?: number;           // how often each link gives and asks again; 60 s
+}
+
+export interface LinkBook {
+  own(): AddrRecord | null;
+  held(fp: string): AddrRecord | null;
+  wants(): { fp: string; seq: number }[];
+  accept(x: unknown, via: string | null): unknown;
 }
 
 // Registers this computer with every anchor it joined and keeps it registered: a lost connection
@@ -481,8 +496,15 @@ export class AnchorLinks {
     for (const a of list) {
       this.openCode(a);
       const l = this.links.get(a.fp);
-      if (l) { l.a = a; continue; }
-      const link: Link = { a, state: 'registering', why: null, m: null, timer: null, tries: 0, way: 0 };
+      if (l) {
+        const moved = JSON.stringify(this.ways(l.a)) !== JSON.stringify(this.ways(a));
+        l.a = a;
+        // the anchor has a new address (the address book): a link that is not registered goes
+        // there now instead of on dialling the old one
+        if (moved && l.state !== 'registered') this.redial(l);
+        continue;
+      }
+      const link: Link = { a, state: 'registering', why: null, m: null, timer: null, tries: 0, way: 0, busy: false, fresh: false };
       this.links.set(a.fp, link);
       void this.connect(a.fp);
     }
@@ -512,21 +534,68 @@ export class AnchorLinks {
     return out;
   }
 
+  // A link to an anchor that has a new address: the old membership (which keeps dialling the old
+  // address) is closed and the new one dialled at once. A register under way finishes first; when
+  // it fails, its retry takes the new address.
+  private redial(l: Link) {
+    if (this.closed) return;
+    if (l.busy) { l.fresh = true; return; }
+    if (l.timer) { clearTimeout(l.timer); l.timer = null; }
+    const old = l.m;
+    l.m = null;
+    void old?.close();
+    l.way = 0;
+    l.tries = 0;
+    this.log(`anchor ${l.a.name}: its address changed (${hp(l.a.host, l.a.port)}); linking there`);
+    void this.connect(l.a.fp);
+  }
+
+  // The address book over one link: this computer's record and the other joined anchors' records
+  // are given, the pinned devices asked about, and what the anchor hands over is taken (checked
+  // there, never on the anchor's word).
+  private bookFor(fp: string): AnchorBook | undefined {
+    const b = this.o.book;
+    if (!b) return undefined;
+    return {
+      give: () => {
+        const out: AddrRecord[] = [];
+        const own = b.own();
+        if (own) out.push(own);
+        for (const other of this.links.keys()) {
+          if (other === fp) continue;
+          const r = b.held(other);
+          if (r) out.push(r);
+        }
+        return out;
+      },
+      wants: () => b.wants(),
+      take: (rec) => { b.accept(rec, fp); },
+      everyMs: this.o.bookMs,
+    };
+  }
+
   private async connect(fp: string): Promise<void> {
     const l = this.links.get(fp);
-    if (!l || this.closed) return;
+    if (!l || this.closed || l.busy) return;
     l.timer = null;
+    l.busy = true;
     const ways = this.ways(l.a);
     const ref = ways[l.way % ways.length];
     l.state = 'registering';
     try {
+      let mine: AnchorMembership | null = null;
       const m = await (this.o.join ?? joinAnchor)({
         anchor: { host: ref.host, port: ref.port, fp }, identity: this.o.identity, name: this.o.name, kind: this.o.kind, gatePort: this.o.gatePort, log: this.o.log,
+        book: this.bookFor(fp),
         onState: (s) => {
+          // a membership closed for a new address says nothing about the link any more
+          if (mine && l.m !== mine) return;
           l.state = s;
           l.why = s === 'lost' ? 'the connection to it was lost; trying again' : s === 'replaced' ? 'this computer registered there again from somewhere else; this connection stepped back' : null;
         },
       });
+      mine = m;
+      l.busy = false;
       if (this.closed || this.links.get(fp) !== l) { await m.close(); return; }
       l.m = m; l.state = 'registered'; l.why = null; l.tries = 0;
       // the store's own address first from now on
@@ -536,14 +605,17 @@ export class AnchorLinks {
         if (hit) { hit.host = ref.host; hit.port = ref.port; writeJoined(list, this.o.file); this.stamp = ''; }
       }
     } catch (e) {
+      l.busy = false;
       if (this.closed || this.links.get(fp) !== l) return;
       const refused = e instanceof GateRefused;
       l.state = refused ? 'refused' : 'lost';
       l.why = refused && e.reason === 'not paired'
         ? 'the anchor does not know this computer (any more): ask its owner for a new invite'
         : refused ? `the anchor said no: ${e.reason}` : `it does not answer at ${hp(ref.host, ref.port)} (${(e as Error).message})`;
+      // a new address came in while this try ran: the next try is there, soon
+      if (l.fresh) { l.fresh = false; l.tries = 0; l.way = 0; }
+      else l.way++;
       l.tries++;
-      l.way++;
       const delay = Math.min((this.o.retryMs ?? 2000) * 2 ** Math.min(l.tries - 1, 6), 60_000);
       l.timer = setTimeout(() => void this.connect(fp), delay);
       l.timer.unref();

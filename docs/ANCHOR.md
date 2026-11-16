@@ -68,6 +68,11 @@ C → S   one JSON line:
   side; the member gives up after two pings without an answer and reconnects, 1 s first, doubling
   up to 30 s.
 - The target has 10 s to accept a stream (`did not accept`).
+- On the control connection, the address book (below) has two more lines: right after
+  `registered` the anchor sends its own `{"t":"record","rec"}`; the member gives
+  `{"t":"record","rec"}` and asks `{"t":"who","fps":[…],"seqs":[…]}` (32 at most a line), and the
+  anchor answers with one `{"t":"record","rec"}` line for each record it holds that is newer than
+  the seq asked with. Old ends ignore lines they do not know.
 
 Refusals in JSON, after `OK -`:
 
@@ -153,8 +158,9 @@ Defaults, settable by the person (`share({ anchor: { … } })`, `AnchorHub.setCa
 
 - **No anchor without a reachable home.** If no circle computer has a public IPv4 with a port
   mapping or an open IPv6, there is nothing to dial. Carrier NAT on every home means no anchor.
-- **A single anchor whose address changes is lost** until a new invite or a second anchor (stage 6:
-  the address book). There is no DNS.
+- **A single anchor whose address changes is lost** until a new invite or a second anchor. With
+  a second anchor the new address comes round through the address book (below), as long as the
+  moved anchor is itself registered with the other one. There is no DNS.
 - **The anchor owner sees metadata** (above).
 - **A network change kills a loaded split.** TCP cannot move to a new address; apart mode resumes.
 - **Far split is slow and heavy** on uplink and mobile data: the weights cross the anchor.
@@ -185,6 +191,12 @@ Defaults, settable by the person (`share({ anchor: { … } })`, `AnchorHub.setCa
 | tunnels along a road (api and rpc), `probeOver`, `peekOver` | `node/src/gate.ts` |
 | far split: rpc along the road, each worker's own link in the estimate | `node/src/planner.ts`, `node/src/split.ts`, `node/src/sim.ts` |
 | roads tests: order, back to the lan, self, apart, network test, split | `node/test/roads.test.ts`, `node/test/sim-rtt.test.ts` |
+| an address record: sign, check (certificate = fingerprint, signature, shape) | `node/src/addrrecord.ts` |
+| the address book: own record, taking records, the peer book and joined anchors following, moves | `node/src/addressbook.ts`, `~/.kula-node/addrbook.json` |
+| carrying records and `who` on the anchor | `node/src/anchor.ts`, `AnchorHub.carry`, `answerWho` |
+| giving and asking over each link; a link following an anchor's new address | `node/src/join.ts`, `AnchorLinks` (`book`, `redial`) |
+| the note line on the page | `node/src/ui/engine.ts`, `pullMoves` |
+| address book tests: two anchors, kill one, the other's new port, forged, old and changed records | `node/test/address-book.test.ts` |
 
 ## roads (stage 3, 16.11.2026)
 
@@ -324,9 +336,84 @@ The phone is a member, never an anchor: its gate still answers `bad channel` to 
   (`modules/kula-llama/tools/anchor-fixture.mjs`: node/src's gate, AnchorHub and AnchorHost),
   `AnchorTest.kt`, and `src/__tests__/anchor-roads.test.ts`.
 
+## address book and a second anchor (stage 6, 16.11.2026)
+
+A home's address changes (a new address from the provider, a new router port). Without DNS or an
+outside service, the circle tells itself, through its anchors, and nobody has to be believed.
+
+### the record
+
+Each kula-node signs a small **address record** with its gate key, the key of the certificate
+whose SHA-256 is its pinned fingerprint:
+
+```
+{"k":"kula-addr","v":1,"fp","addrs":[{"host","port","via"}],"anchors":[{"fp","host","port","name"}],"seq","at","cert","sig"}
+```
+
+- `addrs`: where it answers now (its lan address, global ipv6, the router's port); at most 8.
+- `anchors`: the anchors it is registered with (its joined anchors); at most 4.
+- `seq` only grows: the signer takes max(last + 1, now in ms), so a lost file still signs newer.
+  A new record is signed only when `addrs` or `anchors` changed.
+- `cert`: its certificate (DER, base64). `sig`: over a fixed JSON array of the fields
+  (`recordText`), so key order and extra fields change nothing.
+- About 2 KB at most: one line on the control connection.
+
+The Ed25519 device key (`audit/key.ts`) is not used: nothing on the wire binds it to the pinned
+fingerprint, while the certificate's key is the fingerprint's own.
+
+### taking a record
+
+A record is taken only when all of these hold, on the computer that takes it:
+
+1. SHA-256 of `cert` is `fp`, and `sig` verifies with that certificate's key;
+2. `fp` is pinned here already: in the peer book, or an anchor this computer joined;
+3. its `seq` is newer than the one kept.
+
+The anchor that carried it is trusted for none of this: a record it changed fails the signature,
+an old one fails the seq, a stranger's fails the pin. A taken record changes the device's `addrs`
+and `anchors` in the peer book (a kept route to an address it no longer has is dropped); when the
+device is an anchor, its address in `~/.kula-node/anchors.json` and in every record that names it
+as an anchor. Roads and `AnchorLinks` then find it there.
+
+### how records go round
+
+- **Every node gives its own record** to every anchor it is registered with, when it registers
+  and again whenever the record changes (looked at every 60 s).
+- **An anchor gives its own record** to each member right after `registered`.
+- **A member asks** each anchor (`who`) about every fingerprint it pinned, with the seq it holds,
+  on register and every 60 s; the anchor answers only newer records.
+- **Anchors learn each other:** a member registered with two anchors gives each the other's
+  record. An anchor carries a record about the giver itself, about one of its members, or about
+  an anchor that the giver's own record names; it checks the signature only so as not to carry
+  rubbish, keeps the newest per fingerprint (512 at most, in memory) and hands one to a member
+  only when it is about a member or about an anchor a registered member names. `who` lines: 60 at
+  once, then 120 a minute, per member.
+
+### a second anchor
+
+- A member keeps registered with every anchor it joined (`AnchorLinks`), so each one can carry a
+  stream to it.
+- Roads try a device's anchors in the order its record names them, then the anchors this
+  computer joined; one that is down fails at once and the next starts (`pickRoute`), and a tunnel
+  whose anchor stopped picks again before its next connection (`roadDialer`).
+- **When anchor A moves**, A registers with anchor B (B's address did not change) and gives its
+  new record there. Every member asks B and takes it; its link to A, which kept dialling the old
+  address, goes to the new one at once (`redial`), and roads use A again. For this **A must be a
+  member of B**: the two anchors' owners invite each other's anchor once (the usual invite). If
+  no one who can still reach A is registered with B, A's new address cannot come round.
+
+### on the page
+
+Nothing new, unless a device's address changed: then one note line, "anchor-a moved: its new
+address came through anchor anchor-b" (or "it said its new address itself" when the device
+handed it over directly). The book keeps the last 20 moves in `addrbook.json`; the page's engine
+notes each once.
+
 ## next
 
 1. ~~Routes~~ (done 16.11.2026, "roads" above).
 2. ~~Join~~ (done 16.11.2026, "join" above).
 3. ~~The phone~~ (done 16.11.2026, above; on a real phone still to be shown).
-4. The circle's address book and a second anchor.
+4. ~~The circle's address book and a second anchor~~ (done 16.11.2026, above, on kula-node). The
+   phone does not sign, give or take records yet: it registers and is reached as before, and its
+   anchor client ignores the `record` line.

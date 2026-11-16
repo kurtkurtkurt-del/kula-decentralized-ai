@@ -8,8 +8,17 @@
 //             ← {t:"open", sid, from}               a member wants a stream to you: accept it
 //             → {t:"ping"}                          ← {t:"pong"}           (every 25 s)
 //             ← {t:"error", reason:"replaced"}      the same certificate registered again
+//             ← {t:"record", rec}                   right after registered: the anchor's own address record
+//             → {t:"record", rec}                   a record to carry (the member's own, another anchor's)
+//             → {t:"who", fps, seqs}                ← {t:"record", rec} for each one held that is newer
 //   dialer    → {t:"dial", to:<64 hex fp>}          ← {t:"ready"} | {t:"error", reason}
 //   target    → {t:"accept", sid}                   ← {t:"ready"} | {t:"error", reason}
+//
+// Address records (addrrecord.ts, docs/ANCHOR.md "address book") are signed by the device they
+// describe; the anchor checks the signature only so as not to carry rubbish, keeps the newest per
+// fingerprint, and hands one to a member only when it is about a member of this anchor or about
+// an anchor one of its registered members names. Whoever takes a record checks it again: the
+// anchor is never trusted for it.
 //
 // After "ready" the dialer's and the target's connections are piped raw: the dialer runs a
 // fresh gate handshake (TLS 1.3 between the two devices' own certificates) inside, so the
@@ -22,6 +31,7 @@ import { Duplex } from 'node:stream';
 import { randomBytes } from 'node:crypto';
 import { LineReader, pipeBoth, handshake, connectRemote, GateRefused, HANDSHAKE_MS } from './gate.js';
 import type { GateIdentity, Paired } from './tls.js';
+import { checkRecord, type AddrRecord } from './addrrecord.js';
 
 export interface AnchorCaps {
   streamsPerMember: number;  // open (and waiting) streams one member has dialed
@@ -69,10 +79,22 @@ export interface AnchorOptions {
   capped?: (fp: string) => boolean;
   acceptTimeoutMs?: number;
   controlSilenceMs?: number;
+  // this computer's own address record (addressbook.ts AddressBook.own): handed to every member
+  // when it registers, and to a `who` about this computer
+  record?: () => AddrRecord | null;
+  // `who` lines answered per member: a bucket of `burst`, refilled at `perMinute` (default 60, 120)
+  whoRate?: { burst: number; perMinute: number };
   // tests: every byte the anchor carries, as it sees it
   tap?: (dir: 'd→t' | 't→d', data: Buffer) => void;
+  // tests: a dishonest anchor changes the records it hands out
+  handOut?: (rec: AddrRecord) => unknown;
   now?: () => number;
 }
+
+// the most address records one anchor carries
+export const ANCHOR_MAX_RECORDS = 512;
+// fingerprints in one `who` line
+const WHO_MAX = 32;
 
 // Who may use this computer's anchor: a certificate in the gate's paired set (it paired with
 // this computer's code), or one this computer pinned and paired with as a master (peers.json,
@@ -159,6 +181,8 @@ export class AnchorHub {
   private readonly streams = new Map<string, Stream>();
   private readonly listeners = new Set<(e: AnchorEvent) => void>();
   private readonly dials = new DialBucket();
+  private readonly whos = new DialBucket();
+  private readonly records = new Map<string, AddrRecord>();
   private readonly days = new Map<string, { day: number; bytes: number }>();
   private readonly now: () => number;
   private closed = false;
@@ -296,6 +320,9 @@ export class AnchorHub {
       setTimeout(() => old.conn.destroy(), 200).unref();
     }
     send(socket, { t: 'registered' });
+    // this anchor's own record: a member that dialled it at an old address learns the new one here
+    const own = this.ownRecord();
+    if (own) send(socket, { t: 'record', rec: own });
     this.emit({ type: 'register', fp: who.fp, peer: who.peer, name: m.name, kind, at: this.now(), replaced: !!old });
     let why = 'closed';
     const silence = this.opts.controlSilenceMs ?? ANCHOR_CONTROL_SILENCE_MS;
@@ -305,6 +332,8 @@ export class AnchorHub {
       let o: any;
       try { o = JSON.parse(line); } catch { continue; }
       if (o?.t === 'ping') send(socket, { t: 'pong' });
+      else if (o?.t === 'record') this.carry(who.fp, o.rec);
+      else if (o?.t === 'who') this.answerWho(socket, who.fp, o);
     }
     if (this.registry.get(who.fp) === m) {
       this.registry.delete(who.fp);
@@ -313,6 +342,52 @@ export class AnchorHub {
     }
     socket.destroy();
   }
+
+  private ownRecord(): AddrRecord | null {
+    try { return this.opts.record?.() ?? null; } catch { return null; }
+  }
+
+  // Whether a record about `fp` may be carried and handed out: `fp` is a member of this anchor,
+  // or an anchor that a registered member's own record names (anchors learn each other this way).
+  private knows(fp: string): boolean {
+    if (this.opts.isMember(fp)) return true;
+    for (const m of this.registry.keys()) if (this.records.get(m)?.anchors.some((a) => a.fp === fp)) return true;
+    return false;
+  }
+
+  // A member gave a record: kept when it is signed by the certificate it names, about the giver
+  // itself, a member, or an anchor the giver's own record names, and newer than the one kept.
+  private carry(from: string, x: unknown): void {
+    const c = checkRecord(x);
+    if (!c.ok) return;
+    const rec = c.rec;
+    if (rec.fp === this.opts.self) return;
+    const named = this.records.get(from)?.anchors.some((a) => a.fp === rec.fp) ?? false;
+    if (rec.fp !== from && !named && !this.opts.isMember(rec.fp)) return;
+    const old = this.records.get(rec.fp);
+    if (old && old.seq >= rec.seq) return;
+    if (!old && this.records.size >= ANCHOR_MAX_RECORDS) return;
+    this.records.set(rec.fp, rec);
+  }
+
+  // `who`: the records held about the fingerprints asked for, each newer than the seq the member
+  // has, one line each. Only about members and the anchors members name; this anchor's own too.
+  private answerWho(socket: Duplex, from: string, o: any): void {
+    const r = this.opts.whoRate ?? { burst: 60, perMinute: 120 };
+    if (!this.whos.take(from, r.burst, r.perMinute, this.now())) return;
+    const fps: unknown[] = Array.isArray(o.fps) ? o.fps.slice(0, WHO_MAX) : [];
+    const seqs: unknown[] = Array.isArray(o.seqs) ? o.seqs : [];
+    fps.forEach((f, i) => {
+      if (typeof f !== 'string' || !FP_RE.test(f) || f === from) return;
+      const have = Number(seqs[i]) || 0;
+      const rec = f === this.opts.self ? this.ownRecord() : this.knows(f) ? this.records.get(f) ?? null : null;
+      if (!rec || rec.seq <= have) return;
+      send(socket, { t: 'record', rec: this.opts.handOut ? this.opts.handOut(rec) : rec });
+    });
+  }
+
+  // the record this anchor carries for a device (tests, the page); null when none
+  carried(fp: string): AddrRecord | null { return this.records.get(fp) ?? null; }
 
   private dayBytes(fp: string): { day: number; bytes: number } {
     const day = Math.floor(this.now() / DAY_MS);
@@ -452,7 +527,20 @@ export interface AnchorMemberOptions {
   retryMs?: number;            // first reconnect delay, doubles up to 30 s
   timeoutMs?: number;
   onState?: (state: 'registered' | 'lost' | 'replaced') => void;
+  // the address book (addressbook.ts) over this control connection: on every register and then
+  // every `everyMs` (default 60 s) the records in `give()` not given yet on this connection are
+  // given, and `wants()` is asked about (`who`); every record the anchor hands over goes to `take`
+  book?: AnchorBook;
 }
+
+export interface AnchorBook {
+  give(): AddrRecord[];                       // this device's own record first, then other anchors'
+  wants(): { fp: string; seq: number }[];     // what to ask about, with the seq already held
+  take(rec: unknown): void;                   // a record the anchor handed over (unchecked)
+  everyMs?: number;
+}
+
+export const ANCHOR_BOOK_MS = 60_000;
 
 export interface AnchorMembership {
   readonly registered: boolean;
@@ -513,6 +601,30 @@ export function joinAnchor(opts: AnchorMemberOptions): Promise<AnchorMembership>
     opts.onState?.('registered');
     const ping = setInterval(() => send(socket, { t: 'ping' }), pingMs);
     ping.unref();
+    // the address book: records given on this connection (fingerprint → seq), and the asking
+    const book = opts.book;
+    const given = new Map<string, number>();
+    const exchange = () => {
+      if (!book || socket.destroyed) return;
+      try {
+        for (const r of book.give()) {
+          if (!r || given.get(r.fp) === r.seq) continue;
+          given.set(r.fp, r.seq);
+          send(socket, { t: 'record', rec: r });
+        }
+        // the anchor itself is asked about too: its own record answers a seq that is behind
+        const want = book.wants();
+        for (let i = 0; i < want.length; i += WHO_MAX) {
+          const part = want.slice(i, i + WHO_MAX);
+          send(socket, { t: 'who', fps: part.map((w) => w.fp), seqs: part.map((w) => w.seq) });
+        }
+      } catch (e) {
+        log(`anchor: address book: ${(e as Error).message}`);
+      }
+    };
+    exchange();
+    const tick = book ? setInterval(exchange, book.everyMs ?? ANCHOR_BOOK_MS) : null;
+    tick?.unref();
     void (async () => {
       // the anchor answers every ping: two pings without a word mean the connection is dead
       while (!closed) {
@@ -521,9 +633,11 @@ export function joinAnchor(opts: AnchorMemberOptions): Promise<AnchorMembership>
         let m: any;
         try { m = JSON.parse(line); } catch { continue; }
         if (m?.t === 'open' && typeof m.sid === 'string') void accept(m.sid, String(m.from ?? ''));
+        else if (m?.t === 'record') { try { book?.take(m.rec); } catch {} }
         else if (m?.t === 'error' && m.reason === 'replaced') { replaced = true; break; }
       }
       clearInterval(ping);
+      if (tick) clearInterval(tick);
       reader.release();
       socket.destroy();
       if (control === socket) { control = null; registered = false; }

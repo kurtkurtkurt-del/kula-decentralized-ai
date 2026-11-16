@@ -17,6 +17,7 @@ import { peersFile, type PeerAddr } from './peers.js';
 import { AnchorHub, circleMembers, type AnchorCaps, type AnchorEvent } from './anchor.js';
 import { OneTimeCodes, AnchorHost, AnchorLinks, joinedFile, readJoined, joinedRoads, ringCapped, type Invite, type LinkView, type Whose } from './join.js';
 import type { PeerAnchor } from './road.js';
+import { AddressBook, bookFile } from './addressbook.js';
 import { freePort, startChild, type Child, exited } from './children.js';
 import { startApiServer, type ApiServer, apiAuth } from './api.js';
 import { loadOrCreateKey } from './audit/key.js';
@@ -287,10 +288,16 @@ export async function share(opts: ShareOptions): Promise<ShareHandle> {
   if (opts.dualStack !== false && !dualStack) log('the gate stays on ipv4 while v1 is on (--secret / --no-tls)');
   // the anchor: members are the devices paired with this gate and the ones this computer paired
   // with as a master (its peer book); it carries their bytes and learns who, when and how much
+  // the circle's address book (addressbook.ts): this computer's signed record of where it answers
+  // and which anchors it is registered with, and the records of the devices it pinned, taken from
+  // the anchors (checked here, never on an anchor's word)
+  const book = tlsServer
+    ? new AddressBook({ identity: tlsServer.identity, peersFile: peersFile(), joinedFile: joined, file: bookFile(path.dirname(joined)), addrs: () => (liveGate ? addrsOf(liveGate.port) : []), log })
+    : null;
   let anchor: AnchorHub | null = null;
   if (opts.anchor && tlsServer) {
     // the daily bytes are capped for friends' devices only (ring circle); the person's own are not
-    anchor = new AnchorHub({ self: tlsServer.identity.fp, isMember: circleMembers(tlsServer.paired, peersFile()), capped: ringCapped(peersFile()), caps: typeof opts.anchor === 'object' ? opts.anchor : undefined });
+    anchor = new AnchorHub({ self: tlsServer.identity.fp, isMember: circleMembers(tlsServer.paired, peersFile()), capped: ringCapped(peersFile()), caps: typeof opts.anchor === 'object' ? opts.anchor : undefined, record: () => book?.own() ?? null });
     const c = anchor.caps;
     log(`anchor on: ${c.streamsPerMember} streams per member, ${c.streamsTotal} in all; a friend's device ${c.dialBurst} dials at once then ${c.dialsPerMinute} a minute and ${Math.round(c.bytesPerDay / 1e9 * 10) / 10} GB a day, your own without either limit`);
   }
@@ -327,7 +334,7 @@ export async function share(opts: ShareOptions): Promise<ShareHandle> {
   // this computer as a member: registered with every anchor it joined while share runs
   let links: AnchorLinks | null = null;
   if (tlsServer) {
-    links = new AnchorLinks({ identity: tlsServer.identity, name, kind: 'pc', gatePort: gate.port, file: joined, codes: tlsServer.codes as OneTimeCodes, log });
+    links = new AnchorLinks({ identity: tlsServer.identity, name, kind: 'pc', gatePort: gate.port, file: joined, codes: tlsServer.codes as OneTimeCodes, log, book: book ?? undefined });
     links.start();
   }
   const newInvite = (whose: Whose = 'friend'): Invite => {
