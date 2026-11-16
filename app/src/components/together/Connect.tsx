@@ -4,8 +4,8 @@ import { router } from 'expo-router';
 import * as Clipboard from 'expo-clipboard';
 import { useLang } from '@/i18n';
 import { classify, explain } from '@/llm/errors';
-import { isRemote } from '@/llm/peers';
 import { type Peer } from '@/llm/store';
+import { peerWhere } from '@/components/models/PeerScan';
 import { tapDone } from '@/lib/haptics';
 import ScanSheet from '@/components/together/ScanSheet';
 import { takeCode, type Ping } from '@/components/together/tests';
@@ -58,7 +58,7 @@ export default function Connect({ peers, pings }: { peers: Peer[]; pings: Record
             <View style={[s.dot, ping && ping !== 'busy' && (ping.ok ? s.dotOk : s.dotOff)]} />
             <View style={s.rowText}>
               <Text style={s.name} numberOfLines={1}>{p.name.toLowerCase()}<Text style={s.kind}>  · {t(`peers.kind.${p.kind}`)}</Text></Text>
-              <Text style={s.meta} numberOfLines={1}>{[isRemote(p) ? `${t('peers.far')} ${p.relay!.code}` : `${p.host}:${p.port}`, p.ram ? `${Math.round((p.ram / 1024) * 10) / 10} gb` : '', p.bw ? `${p.bw} gb/s` : ''].filter(Boolean).join(' · ')}</Text>
+              <Text style={s.meta} numberOfLines={1}>{[peerWhere(p, t), p.ram ? `${Math.round((p.ram / 1024) * 10) / 10} gb` : '', p.bw ? `${p.bw} gb/s` : ''].filter(Boolean).join(' · ')}</Text>
             </View>
             <Text style={[s.ping, ping && ping !== 'busy' && !ping.ok && s.pingOff]} numberOfLines={1}>
               {ping === 'busy' ? '…' : ping ? (ping.ok ? `${ping.ms} ms` : t('peers.off')) : ''}

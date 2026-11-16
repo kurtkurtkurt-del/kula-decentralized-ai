@@ -293,9 +293,40 @@ On the page each device row says how it is reached now: **on this wi-fi**, **ove
 (a global ipv6 address or a router's port), or **through anchor X** (through this computer, when
 it is the anchor).
 
+## the phone (stage 5, 16.11.2026)
+
+The phone is a member, never an anchor: its gate still answers `bad channel` to `anchor`.
+
+- **Joining:** devices → scan or paste the anchor's invite (its qr json, or kula-node's base64url
+  line), or type it in the code field as `address code certificate-start`, e.g.
+  `203.0.113.5:50551 0123456789abcdef 9f86d081884c7d65`. The phone pairs with the anchor's gate with
+  `pin` (natively, `Anchor.join`), keeps the anchor in `files/gate/anchors.json` with the pair-back
+  code (derived from `pin` when typed) and as a peer (pinned, paired, `anchor: true`).
+- **While "share this phone" runs** (manual or auto), the worker registers with every joined
+  anchor (`Anchor.Links` in `WorkerService`), pings every 25 s, reconnects with backoff (1 s doubling
+  to 30 s) and at once on a network change (`ConnectivityManager` default-network callback), under
+  the existing foreground service, wake lock and wifi lock. A stream the anchor opens is piped into
+  the phone's gate on 127.0.0.1. Its gate opens the pair-back code for the anchor's certificate
+  only (`Gate.ExtraCodes`); the anchor pairs back through 'self' and the store forgets the code.
+  Joining while the phone is not shared asks the person to share it within 10 minutes.
+- **The phone as master:** a device's roads are host/port, its code's `addrs`, then anchors (the
+  device's own code's, then the ones this phone joined), tried 250 ms apart, the earliest that
+  shows the pinned certificate wins (`src/llm/roads.ts`, `pickRoad`; one at a time while a pairing
+  code is unspent). The road is kept on the peer (`route`) and both channels follow it: apart
+  mode's api tunnel and the split's rpc tunnels (`Gate.Tunnel(anchor=…)`, an SSLSocket inside the
+  SSLSocket to the anchor). Only hosted-relay peers stay out of split. A refused dial with
+  `too many dials` makes the tunnel wait up to a minute instead of failing llama.cpp.
+- **The rpc slot** on the phone's gate is held by the client certificate (v2), not the address.
+- The device rows say **on this wi-fi**, **over the internet** or **through anchor X**.
+- The phone's own share qr names its joined anchors (`anchors`), so a computer that pairs with it
+  on the wi-fi can later reach it through them.
+- Tests: `android/src/test/.../AnchorNodeTest.kt` against node's own anchor
+  (`modules/kula-llama/tools/anchor-fixture.mjs`: node/src's gate, AnchorHub and AnchorHost),
+  `AnchorTest.kt`, and `src/__tests__/anchor-roads.test.ts`.
+
 ## next
 
 1. ~~Routes~~ (done 16.11.2026, "roads" above).
 2. ~~Join~~ (done 16.11.2026, "join" above).
-3. The phone: dials the anchor and keeps the control connection while sharing.
+3. ~~The phone~~ (done 16.11.2026, above; on a real phone still to be shown).
 4. The circle's address book and a second anchor.

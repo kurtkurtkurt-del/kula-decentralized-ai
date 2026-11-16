@@ -2,8 +2,8 @@ import { Platform } from 'react-native';
 import * as Device from 'expo-device';
 import Constants from 'expo-constants';
 import { deviceId, lastPassport } from '@/data/passport';
-import { native, type PeerRelay, type PeerTls } from '@/llm/native';
-import { peerRelay, peerTls } from '@/llm/cluster';
+import { native, type PeerAnchorArg, type PeerRelay, type PeerTls } from '@/llm/native';
+import { peerRelay, peerRoad, peerTls } from '@/llm/cluster';
 import { learnPeer } from '@/llm/peers';
 import { chatLocal, engine, load, unload } from '@/llm/engine';
 import { share, type LocalModel, type Peer } from '@/llm/store';
@@ -32,13 +32,13 @@ export async function tunnelSpeed(port: number, mb: number): Promise<number> {
 // tls: a v3 peer's fingerprint (and pairing code until it is spent); relay: a peer far away.
 // The first answer may teach a code-only peer's certificate ("ok <fp>"): the later runs and
 // the tunnel use it, and the peer book keeps it.
-async function gateRtt(t: { host: string; port: number; secret: string; tls: PeerTls; relay: PeerRelay; peer: Peer | null }, runs: number): Promise<{ ms: number[]; error: string | null; tls: PeerTls }> {
+async function gateRtt(t: { host: string; port: number; secret: string; tls: PeerTls; relay: PeerRelay; anchor: PeerAnchorArg; peer: Peer | null }, runs: number): Promise<{ ms: number[]; error: string | null; tls: PeerTls }> {
   const n = native();
   const ms: number[] = [];
   let tls = t.tls;
   for (let i = 0; i < runs; i++) {
     const t0 = Date.now();
-    const answer = await n.probePeer(t.host, t.port, t.secret, 'api', tls, t.relay).catch((e: Error) => e.message);
+    const answer = await (t.anchor ? n.probePeer(t.host, t.port, t.secret, 'api', tls, t.relay, t.anchor) : n.probePeer(t.host, t.port, t.secret, 'api', tls, t.relay)).catch((e: Error) => e.message);
     const learned = answer?.startsWith('ok ') ? answer.slice(3) : null;
     if (answer && !learned) return { ms, error: answer, tls };
     ms.push(Date.now() - t0);
@@ -112,8 +112,9 @@ export async function runPhoneBench(model: LocalModel | null, peers: Peer[], opt
   const mine = share();
   const shared = mine ? (await n.workerStatus().catch(() => null))?.state === 'running' : false;
   const targets = peers.length
-    ? peers.map((p) => ({ id: p.id, name: p.name, host: p.host, port: p.port, secret: p.secret, tls: peerTls(p), relay: peerRelay(p), peer: p as Peer | null, loopback: false }))
-    : shared && mine ? [{ id: 'loopback', name: 'this phone (loopback)', host: '127.0.0.1', port: mine.port, secret: mine.secret, tls: null as PeerTls, relay: null as PeerRelay, peer: null as Peer | null, loopback: true }] : [];
+    // along the road the last probe kept (the wi-fi, a direct address, an anchor)
+    ? peers.map((p) => { const r = peerRoad(p); return { id: p.id, name: p.name, host: r.host, port: r.port, secret: p.secret, tls: peerTls(p), relay: peerRelay(p), anchor: r.anchor as PeerAnchorArg, peer: p as Peer | null, loopback: false }; })
+    : shared && mine ? [{ id: 'loopback', name: 'this phone (loopback)', host: '127.0.0.1', port: mine.port, secret: mine.secret, tls: null as PeerTls, relay: null as PeerRelay, anchor: null as PeerAnchorArg, peer: null as Peer | null, loopback: true }] : [];
   if (!targets.length) {
     skipped.push({ what: 'gate', why: 'no paired peer and this phone is not shared' });
     skipped.push({ what: 'tunnel', why: 'no paired peer and this phone is not shared' });
@@ -126,7 +127,7 @@ export async function runPhoneBench(model: LocalModel | null, peers: Peer[], opt
     if (g.error) continue;
     step('tunnel', t.name);
     try {
-      const port = await n.apiTunnel(t.host, t.port, t.secret, g.tls, t.relay);
+      const port = t.anchor ? await n.apiTunnel(t.host, t.port, t.secret, g.tls, t.relay, t.anchor) : await n.apiTunnel(t.host, t.port, t.secret, g.tls, t.relay);
       row.tunnel_mb_s = await tunnelSpeed(port, tunnelMb);
     } catch (err) {
       row.error = `tunnel: ${(err as Error).message}`;

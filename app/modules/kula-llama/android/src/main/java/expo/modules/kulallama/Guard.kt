@@ -144,22 +144,25 @@ object SizePolicy {
  * to be two steps; two peers arriving together could both pass the check.
  */
 class RpcSlot {
+  /** Who holds it, as shown (the address). */
   @Volatile var peer: String? = null
     private set
+  /** Who holds it, as decided: the client certificate in v2, else the address. */
+  private var holder: String? = null
   private var open = 0
 
-  /** Takes a slot for [p]; false when another address holds the channel. */
+  /** Takes a slot for [key] (shown as [shown]); false when another master holds the channel. */
   @Synchronized
-  fun take(p: String): Boolean {
-    if (peer != null && peer != p && open > 0) return false
-    peer = p; open++
+  fun take(key: String, shown: String = key): Boolean {
+    if (holder != null && holder != key && open > 0) return false
+    holder = key; peer = shown; open++
     return true
   }
 
   @Synchronized
   fun release() {
     if (open > 0) open--
-    if (open == 0) peer = null
+    if (open == 0) { peer = null; holder = null }
   }
 
   @Synchronized fun openCount() = open

@@ -2,7 +2,7 @@ import { linkPassport } from '@/data/passport';
 import { probeAll } from '@/llm/cluster';
 import { chatLocal, chatRemote, type Device, type Reply } from '@/llm/engine';
 import type { Message } from '@/llm/native';
-import { isPeerQr, isRelayCode, isRemote, parseRelayCode, takePeerQr } from '@/llm/peers';
+import { isInvite, isPeerQr, isRelayCode, isRemote, parseRelayCode, takePeerQr } from '@/llm/peers';
 import { rememberPeer, type LocalModel, type Peer } from '@/llm/store';
 
 // The tests on "see the power" (6.11.2026): what the together page can do for real once a
@@ -19,6 +19,8 @@ export type Taken = { kind: 'peer' | 'relay' | 'passport'; name: string };
  * reason ('notPeer' | 'self' | 'old' | 'noRelay' | a passport parse error).
  */
 export function takeCode(text: string): Taken {
+  // an anchor's invite is joined on the connected devices page (it pairs natively, later)
+  if (isInvite(text)) throw new Error('invite');
   if (isRelayCode(text)) {
     const p = parseRelayCode(text);
     rememberPeer(p);

@@ -9,6 +9,8 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.os.BatteryManager
+import android.net.ConnectivityManager
+import android.net.Network
 import android.net.nsd.NsdManager
 import android.net.nsd.NsdServiceInfo
 import android.net.wifi.WifiManager
@@ -45,6 +47,9 @@ class WorkerService : Service() {
   private var api: ApiServer? = null
   private var auditor: Auditor? = null
   private var relay: Relay.Worker? = null
+  /** The control connections to every anchor this phone joined (docs/ANCHOR.md), while it is shared. */
+  @Volatile private var anchors: Anchor.Links? = null
+  private var netWatch: ConnectivityManager.NetworkCallback? = null
   @Volatile private var relayUrl: String? = null
   @Volatile private var relayCode: String? = null
   @Volatile private var relayError: String? = null
@@ -104,6 +109,10 @@ class WorkerService : Service() {
     fun pairedFile(context: Context) = File(gateDir(context), "paired")
     /** When each paired master was last here (Seen in Unpair.kt). */
     fun seenFile(context: Context) = File(gateDir(context), "seen")
+    /** The anchors this phone joined (Anchor.kt): written by the app when the person joins, read here. */
+    fun anchorsFile(context: Context) = File(gateDir(context), "anchors.json")
+    /** The app joined or left an anchor: read the store again now. */
+    const val ACTION_ANCHORS = "expo.modules.kulallama.ANCHORS"
     fun modelsDir(context: Context) = File(context.filesDir, "models")
 
     /** Lasting worker id, in a file so both processes agree. */
@@ -151,6 +160,10 @@ class WorkerService : Service() {
         // file by itself; here its open connections are cut as well
         intent?.getStringExtra(EXTRA_FP)?.let { fp -> tls?.paired?.forget(fp); hosts?.reload(); seen?.reload(); dropRemoved() }
         if (running) writeStatus("running", peer = gate?.currentPeer, heldMb = residentMb())
+        return if (auto) START_STICKY else START_NOT_STICKY
+      }
+      ACTION_ANCHORS -> {
+        if (running) { anchors?.refresh(force = true); writeStatus("running", peer = gate?.currentPeer, heldMb = residentMb()) }
         return if (auto) START_STICKY else START_NOT_STICKY
       }
       ACTION_HOST_PIN -> if (running) {
@@ -229,6 +242,12 @@ class WorkerService : Service() {
             onError = { err -> relayCode = null; relayError = err; writeStatus("running", peer = gate?.currentPeer, heldMb = residentMb()) },
           ).also { it.start() }
         }
+        // far away without a relay: register with every anchor this phone joined (docs/ANCHOR.md);
+        // a stream the anchor opens reaches this gate on 127.0.0.1 like a relayed one, tls end to
+        // end. The pair-back codes open on this gate for each anchor's certificate only.
+        val kind = if (resources.configuration.smallestScreenWidthDp >= 600) "tablet" else "phone"
+        anchors = Anchor.Links(anchorsFile(this), identity, name, kind, port, tls?.codes).also { it.refresh(force = true) }
+        watchNetwork()
         advertise(port, name)
         writeStatus("running")
         if (Keeper.config(this).on) Keeper.arm(this)
@@ -303,6 +322,8 @@ class WorkerService : Service() {
         tls?.let { if (it.expired(System.currentTimeMillis())) it.spend() }
         // a master removed in the app while no intent reached us: its open connections go too
         runCatching { dropRemoved() }
+        // an anchor joined or left in the app while no intent reached us
+        runCatching { anchors?.refresh() }
         val peer = gate?.currentPeer ?: Native.workerPeer()
         val held = residentMb()
         writeStatus("running", peer = peer, heldMb = held)
@@ -351,6 +372,12 @@ class WorkerService : Service() {
     val code = relayCode
     if (url != null && code != null) json.put("relay", JSONObject().put("url", url).put("code", code))
     relayError?.let { json.put("relayError", it) }
+    // the joined anchors and how this phone stands with each (registered, lost, refused...)
+    anchors?.view()?.let { list ->
+      json.put("anchors", org.json.JSONArray().also { arr ->
+        list.forEach { v -> arr.put(JSONObject().put("fp", v.fp).put("name", v.name).put("at", v.at).put("state", v.state.name.lowercase()).put("why", v.why ?: JSONObject.NULL).put("waitingBack", v.waitingBack)) }
+      })
+    }
     statusFile(this).writeText(json.toString())
   }
 
@@ -422,8 +449,29 @@ class WorkerService : Service() {
     wifiLock = wifi.createWifiLock(mode, "kula:worker").apply { acquire() }
   }
 
+  /**
+   * A network change (wi-fi to mobile data and back): the control connections to the anchors are
+   * dead or on the old network, so they register again at once instead of after their backoff.
+   * The first onAvailable is the network the phone is on now, not a change.
+   */
+  private fun watchNetwork() {
+    val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+    val cb = object : ConnectivityManager.NetworkCallback() {
+      private var first = true
+      override fun onAvailable(network: Network) {
+        // every default network after the first is a change (even the same one coming back after a loss)
+        if (!first) { Log.i(TAG, "network changed: registering with the anchors again"); anchors?.kick() }
+        first = false
+      }
+    }
+    runCatching { cm.registerDefaultNetworkCallback(cb); netWatch = cb }.onFailure { Log.w(TAG, "network watch: ${it.message}") }
+  }
+
   private fun shutdown(why: String? = null) {
     running = false
+    anchors?.close()
+    netWatch?.let { cb -> runCatching { (getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager).unregisterNetworkCallback(cb) } }
+    netWatch = null
     relay?.stop()
     gate?.stop(); api?.stop()
     try { registration?.let { nsd?.unregisterService(it) } } catch (_: IllegalArgumentException) {}

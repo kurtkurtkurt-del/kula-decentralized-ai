@@ -8,7 +8,8 @@ import { classify, explain } from '@/llm/errors';
 import { tapDone } from '@/lib/haptics';
 import { hostErr, isHostQr, parseHostQr } from '@/llm/hosts';
 import { hasNative, llama } from '@/llm/native';
-import { isPeerQr, isRelayCode, parseRelayCode, takePeerQr } from '@/llm/peers';
+import { isInvite, isPeerQr, isRelayCode, isRemote, joinInvite, parseRelayCode, takePeerQr } from '@/llm/peers';
+import { anchorName, reachedBy, roadOf } from '@/llm/roads';
 import { rememberPeer, type Peer } from '@/llm/store';
 import { fonts, radius } from '@/theme/tokens';
 
@@ -50,6 +51,24 @@ export function usePeerAdd(onAdded?: (p: Peer | null) => void) {
         ]);
         return true;
       }
+      // an anchor's invite (docs/ANCHOR.md "join"): its code, or typed as address, code and the
+      // certificate's start. Joining pairs with the anchor natively, so the answer comes later
+      if (isInvite(text)) {
+        if (!hasNative()) throw new Error('nonative');
+        setErr(null);
+        setNote(t('peers.joining'));
+        joinInvite(text).then((r) => {
+          tapDone();
+          const name = r.name.toLowerCase();
+          setNote([t(r.again ? 'peers.joinedAgain' : 'peers.joined', { name }), !r.sharing && !r.again ? t('peers.joinShare', { name }) : ''].filter(Boolean).join('. '));
+          onAdded?.(r.peer);
+        }, (e: Error) => {
+          setNote(null);
+          // the anchor's refusal comes in plain words from the native join (Anchor.inviteWords)
+          setErr(e?.message && e.message !== 'notPeer' ? e.message : t('peers.err.notPeer'));
+        });
+        return true;
+      }
       if (isRelayCode(text)) {
         const p = parseRelayCode(text);
         rememberPeer(p);
@@ -84,6 +103,20 @@ export function usePeerAdd(onAdded?: (p: Peer | null) => void) {
   };
   const paste = async () => take((await Clipboard.getStringAsync().catch(() => '')) ?? '');
   return { take, paste, err, setErr, note, setNote };
+}
+
+/**
+ * Where a device row says it is (docs/ANCHOR.md): the relay and its code; through anchor X (no
+ * address of its own to show); or its address and "on this wi-fi" / "over the internet", from
+ * the road its last check answered on.
+ */
+export function peerWhere(p: Peer, t: ReturnType<typeof useLang>['t']): string {
+  if (isRemote(p)) return `${t('peers.far')} ${p.relay!.code}`;
+  const by = reachedBy(p);
+  if (by === 'anchor') return t('peers.via.anchor', { name: anchorName(p.route) ?? '' });
+  const r = roadOf(p);
+  const hp = `${r.host.includes(':') ? `[${r.host}]` : r.host}:${r.port}`;
+  return `${hp} · ${t(by === 'wifi' ? 'peers.via.wifi' : 'peers.via.internet')}`;
 }
 
 /** The full-screen camera; asks for the permission when it opens. onData returns whether the code was taken. */

@@ -4,6 +4,7 @@ import { CATALOG, modelUrl, type CatalogModel } from '@/llm/catalog';
 import { llama, type DownloadEvent } from '@/llm/native';
 import { factsFromMeta } from '@/llm/fit';
 import { cleanName, peerName } from '@/llm/peerName';
+import { cleanAddrs, cleanAnchors, cleanRoad } from '@/llm/roads';
 import { tapDone, tapFail } from '@/lib/haptics';
 import { rate } from '@/llm/progress';
 
@@ -55,6 +56,16 @@ export type Peer = {
   // far away, behind nat: reached through this relay with this code (docs/RELAY.md). only the
   // api channel crosses a relay, so such a peer takes part in apart mode and never in split
   relay?: { url: string; code: string } | null;
+  // more ways to the same gate, in the order its code gave them (v3 `addrs`: a global ipv6
+  // address, a router's mapped port); host/port stay the first way (docs/ANCHOR.md)
+  addrs?: PeerAddr[] | null;
+  // the anchors of the circle it registers with (v3 `anchors`): the last ways to try
+  anchors?: PeerAnchor[] | null;
+  // it offers the anchor role itself (its code said so: a computer, never a phone)
+  anchor?: boolean;
+  // the road it answered on at the last probe when that was not host/port (null: host/port did);
+  // both channels, api and rpc, follow it
+  route?: Road | null;
   kind: 'phone' | 'tablet' | 'pc';
   ram: number | null;    // MB free when it advertised
   bw: number | null;     // GB/s
@@ -62,6 +73,14 @@ export type Peer = {
   added_at: string;
   last_ok?: string | null;
 };
+// Roads (docs/ANCHOR.md; node/src/road.ts is the computer's twin): an address, or a stream through
+// an anchor of the circle named by its certificate. The phone keeps the anchor's own address on
+// the road (its record or the anchors this phone joined), so the native side needs no lookup.
+export type AddrVia = 'lan' | 'ipv6' | 'mapped';
+export type PeerAddr = { host: string; port: number; via: AddrVia };
+export type PeerAnchor = { fp: string; host: string; port: number; name?: string };
+export type AnchorRoad = { via: 'anchor'; anchor: string; host: string; port: number; name?: string };
+export type Road = PeerAddr | AnchorRoad;
 export type Mode = 'alone' | 'apart' | 'split';
 // visionModelId (10.11.2026): the vision model that reads photos (llm/vision.ts); null = the smallest downloaded one
 export type Settings = { modelId: string | null; ctx: number; temperature: number; maxTokens: number; lastMode: Mode; relayUrl: string; visionModelId: string | null };
@@ -352,6 +371,11 @@ function healPeer(o: Record<string, unknown>, id: string): Peer {
     pin: typeof o.pin === 'string' && o.pin.length <= 128 ? o.pin : null,
     paired_at: when(o.paired_at),
     relay: relayOf(o.relay),
+    // the roads (docs/ANCHOR.md): kept only when well formed, and only when there is one
+    ...(cleanAddrs(o.addrs).length ? { addrs: cleanAddrs(o.addrs) } : {}),
+    ...(cleanAnchors(o.anchors).length ? { anchors: cleanAnchors(o.anchors) } : {}),
+    ...(o.anchor === true ? { anchor: true } : {}),
+    ...(cleanRoad(o.route) ? { route: cleanRoad(o.route) } : {}),
     kind: o.kind === 'pc' || o.kind === 'tablet' ? o.kind : 'phone',
     ram: num(o.ram),
     bw: num(o.bw),

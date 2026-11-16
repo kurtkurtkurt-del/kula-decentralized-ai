@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import Storage from 'expo-sqlite/kv-store';
-import { peerRelay, peerTls } from '@/llm/cluster';
+import { peerRelay, peerRoad, peerTls } from '@/llm/cluster';
 import { llama } from '@/llm/native';
 import { peers as savedPeers, usePeers, type Peer } from '@/llm/store';
 import { accept, clusterReport, deviceReport, hostCheck, look, type ClusterReport, type TrustIO, type TrustNote } from '@/llm/trust';
@@ -73,7 +73,11 @@ async function get(url: string): Promise<{ status: number; body: unknown }> {
 export const nativeIO = (): TrustIO | null =>
   llama
     ? {
-        tunnel: (p) => llama!.apiTunnel(p.host, p.port, p.secret, peerTls(p), peerRelay(p)),
+        // along the road the last probe kept (the wi-fi, a direct address, an anchor)
+        tunnel: (p) => {
+          const r = peerRoad(p);
+          return r.anchor ? llama!.apiTunnel(r.host, r.port, p.secret, peerTls(p), peerRelay(p), r.anchor) : llama!.apiTunnel(r.host, r.port, p.secret, peerTls(p), peerRelay(p));
+        },
         get,
         verify: (...a) => llama!.verifyTrust(...a),
         now: () => Date.now(),

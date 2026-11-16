@@ -1,0 +1,150 @@
+package expo.modules.kulallama
+
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
+import org.junit.Test
+import java.io.File
+import java.net.InetAddress
+import java.net.ServerSocket
+import java.net.Socket
+
+// The phone's gate in the anchor network (docs/ANCHOR.md), without a computer: it is never an
+// anchor itself ("bad channel"), its rpc slot is held by the client certificate (every stream
+// through an anchor arrives from 127.0.0.1), the pair-back code opens for the anchor's
+// certificate only and once, a typed certificate start is checked at TLS, and the store of
+// joined anchors keeps only what is well formed. AnchorNodeTest runs the rest against node's own anchor.
+class AnchorTest {
+  private fun echo(): ServerSocket {
+    val echo = ServerSocket(0, 50, InetAddress.getByName("127.0.0.1"))
+    Thread { while (true) { val s = runCatching { echo.accept() }.getOrNull() ?: break; Thread { runCatching { s.getInputStream().copyTo(s.getOutputStream()) }; runCatching { s.close() } }.start() } }.apply { isDaemon = true }.start()
+    return echo
+  }
+  private fun freePort() = ServerSocket(0).use { it.localPort }
+
+  @Test
+  fun aPhoneIsNeverAnAnchor() {
+    val phone = GateIdentity.create("phone")
+    val master = GateIdentity.create("mac")
+    val port = freePort()
+    val gate = Gate.Server(port, null, { null }, null, Gate.TlsServer(phone, Paired(null).also { it.add(master.fp) }, null))
+    gate.start()
+    try {
+      // even a paired computer hears "bad channel" when it asks this phone to be its anchor
+      assertEquals("gate: NO bad channel", Gate.probe("127.0.0.1", port, "", "anchor", tls = Gate.TlsClient(master, phone.fp)))
+      val e = runCatching { Anchor.open(Anchor.Ref("127.0.0.1", port, phone.fp), master, 3000) }.exceptionOrNull()
+      assertEquals("gate: NO bad channel", e?.message)
+    } finally { gate.stop() }
+  }
+
+  @Test
+  fun theRpcSlotIsHeldByCertificateNotAddress() {
+    // two far masters both arrive from 127.0.0.1 (an anchor's stream is piped into the gate there)
+    val echo = echo()
+    val phone = GateIdentity.create("phone")
+    val a = GateIdentity.create("mac-a")
+    val b = GateIdentity.create("mac-b")
+    val port = freePort()
+    val gate = Gate.Server(port, null, { echo.localPort }, null, Gate.TlsServer(phone, Paired(null).also { it.add(a.fp); it.add(b.fp) }, null))
+    gate.start()
+    try {
+      val held = Gate.handshake(Socket("127.0.0.1", port), "", "rpc", Gate.TlsClient(a, phone.fp))
+      // the same master again (llama.cpp opens several connections): let in
+      assertNull(Gate.probe("127.0.0.1", port, "", "rpc", tls = Gate.TlsClient(a, phone.fp)))
+      // another certificate from the same address: busy while the first holds the slot
+      assertEquals("gate: NO busy", Gate.probe("127.0.0.1", port, "", "rpc", tls = Gate.TlsClient(b, phone.fp)))
+      // the api channel has no slot
+      assertNull(Gate.probe("127.0.0.1", port, "", "api", tls = Gate.TlsClient(b, phone.fp)))
+      held.close()
+      Thread.sleep(200)
+      assertNull(Gate.probe("127.0.0.1", port, "", "rpc", tls = Gate.TlsClient(b, phone.fp)))
+    } finally { gate.stop(); echo.close() }
+  }
+
+  @Test
+  fun aPairBackCodeOpensForTheAnchorsCertificateOnlyAndOnce() {
+    val phone = GateIdentity.create("phone")
+    val anchor = GateIdentity.create("anchor")
+    val other = GateIdentity.create("stranger")
+    val port = freePort()
+    val tls = Gate.TlsServer(phone, Paired(null), null)
+    val used = mutableListOf<String>()
+    tls.codes.add("0011223344556677", 60_000, only = anchor.fp, name = "berlin") { used.add(it) }
+    val gate = Gate.Server(port, null, { null }, null, tls)
+    gate.start()
+    try {
+      // another certificate with the right code: this code is not open for it, and no other is
+      assertEquals("gate: NO not paired", Gate.probe("127.0.0.1", port, "", "api", tls = Gate.TlsClient(other, phone.fp, "0011223344556677")))
+      // the anchor with a wrong code
+      assertEquals("gate: NO wrong pin", Gate.probe("127.0.0.1", port, "", "api", tls = Gate.TlsClient(anchor, phone.fp, "ffffffffffffffff")))
+      // the anchor with its code: paired (the api channel is closed here, which is after the pairing)
+      assertEquals("gate: NO channel closed", Gate.probe("127.0.0.1", port, "", "api", tls = Gate.TlsClient(anchor, phone.fp, "0011223344556677")))
+      assertTrue(tls.paired.contains(anchor.fp))
+      assertEquals("berlin", tls.paired.list().single().name)
+      assertEquals(listOf(anchor.fp), used)
+      assertFalse(tls.codes.has("0011223344556677"))
+      // the qr's own code was never touched
+      assertNull(tls.pin)
+    } finally { gate.stop() }
+    // once only, and a late try hears why
+    val c = Gate.ExtraCodes()
+    c.add("aaaaaaaaaaaaaaaa", 60_000, only = anchor.fp)
+    assertNotNull(c.take("aaaaaaaaaaaaaaaa", anchor.fp))
+    assertNull(c.take("aaaaaaaaaaaaaaaa", anchor.fp))
+    assertEquals(listOf("aaaaaaaaaaaaaaaa" to "pin used"), c.recent(anchor.fp))
+    // and one that ran out
+    var now = 1_000L
+    val t = Gate.ExtraCodes { now }
+    t.add("bbbbbbbbbbbbbbbb", 1000, only = anchor.fp)
+    now += 2000
+    assertEquals(emptyList<String>(), t.open(anchor.fp))
+    assertEquals(listOf("bbbbbbbbbbbbbbbb" to "pin expired"), t.recent(anchor.fp))
+  }
+
+  @Test
+  fun aTypedCertificateStartIsCheckedAtTls() {
+    val anchor = GateIdentity.create("anchor")
+    val phone = GateIdentity.create("phone")
+    val port = freePort()
+    val pin = Gate.newPin()
+    val tls = Gate.TlsServer(anchor, Paired(null), pin)
+    val gate = Gate.Server(port, null, { null }, null, tls)
+    gate.start()
+    try {
+      // the wrong start: refused before the code is spent
+      assertEquals("gate: fingerprint mismatch", Gate.probe("127.0.0.1", port, "", "api", tls = Gate.TlsClient(phone, "", pin, "0".repeat(16))))
+      assertEquals(pin, tls.pin)
+      // the right start pairs with the code and learns the whole certificate
+      var seen: String? = null
+      val e = runCatching { Gate.handshake(Socket("127.0.0.1", port), "", "api", Gate.TlsClient(phone, "", pin, anchor.fp.take(16)), seen = { seen = it }) }.exceptionOrNull()
+      assertEquals("gate: NO channel closed", e?.message)
+      assertEquals(anchor.fp, seen)
+      assertTrue(tls.paired.contains(phone.fp))
+      // paired now: a typed start of 16 hex is identity enough for "paired" without a code
+      assertEquals("gate: NO channel closed", Gate.probe("127.0.0.1", port, "", "api", tls = Gate.TlsClient(phone, "", null, anchor.fp.take(16))))
+      // but fewer than 16 is not
+      assertEquals("gate: NO not paired", Gate.probe("127.0.0.1", port, "", "api", tls = Gate.TlsClient(phone, "", null, anchor.fp.take(8))))
+    } finally { gate.stop() }
+  }
+
+  @Test
+  fun theStoreKeepsOnlyWellFormedAnchors() {
+    val dir = java.nio.file.Files.createTempDirectory("kula-anchors").toFile()
+    val f = File(dir, "anchors.json")
+    f.writeText("""[
+      {"fp":"${"a".repeat(64)}","name":"berlin","host":"203.0.113.5","port":50551,"addrs":[{"host":"2001:db8::5","port":50551,"via":"ipv6"},{"host":"evil.example","port":1,"via":"mapped"}],"joined_at":1,"hpin":"0123456789abcdef","hpinExp":99},
+      {"fp":"short","name":"x","host":"1.2.3.4","port":1},
+      {"fp":"${"b".repeat(64)}","name":"x","host":"not an ip","port":1}
+    ]""")
+    val list = Anchor.readJoined(f)
+    assertEquals(1, list.size)
+    assertEquals(listOf(Anchor.Addr("2001:db8::5", 50551, "ipv6")), list[0].addrs)
+    assertEquals(listOf(Anchor.Ref("203.0.113.5", 50551, "a".repeat(64)), Anchor.Ref("2001:db8::5", 50551, "a".repeat(64))), list[0].ways())
+    Anchor.updateJoined(f) { l -> l.map { it.copy(hpin = null, hpinExp = null) } }
+    assertNull(Anchor.readJoined(f)[0].hpin)
+    assertTrue(Anchor.removeJoined(f, "A".repeat(64)))
+    assertEquals(emptyList<Anchor.Joined>(), Anchor.readJoined(f))
+  }
+}

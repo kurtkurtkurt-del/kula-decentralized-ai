@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { lastPassport } from '@/data/passport';
 import { native, type LoadResult, type Message } from '@/llm/native';
-import { modelKey, peerArgs, peerRelay, peerTls, planSplit, probeAll, splitSummary, type Plan, type SplitPart } from '@/llm/cluster';
+import { modelKey, peerArgs, peerRelay, peerRoad, peerTls, planSplit, probeAll, splitSummary, type Plan, type SplitPart } from '@/llm/cluster';
 import { measuredFor } from '@/bench/store';
 import { type LocalModel, type Mode, type Peer, mmprojPath, registerEngine, saveSettings, saveUxFlags } from '@/llm/store';
 import { assign, estimateAlone, pickDevice } from '@/llm/sim/model';
@@ -90,7 +90,9 @@ export async function load(model: LocalModel, mode: Mode, ctx: number, peers: Pe
       // every peer loads the same file (its own download when missing), in parallel
       await Promise.all(ok.map(async (p) => {
         try {
-          const port = await llama.apiTunnel(p.host, p.port, p.secret, peerTls(p), peerRelay(p));
+          // along the road the probe kept: the wi-fi, a direct internet address, or an anchor
+          const r = peerRoad(p);
+          const port = r.anchor ? await llama.apiTunnel(r.host, r.port, p.secret, peerTls(p), peerRelay(p), r.anchor) : await llama.apiTunnel(r.host, r.port, p.secret, peerTls(p), peerRelay(p));
           set({ loading: `loading on ${p.name}` });
           await apiLoad(port, model, ctx);
           devices.push(ofPeer(model, p, port));

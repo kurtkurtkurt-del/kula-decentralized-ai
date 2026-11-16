@@ -9,7 +9,15 @@ export type LoadResult = { loadMs: number; localLayers: number; layers: number; 
 export type DoneEvent = { id: number; tokens: number; ms: number; firstMs: number; tps: number; stopped: boolean; error: string | null; images?: number };
 export type DownloadEvent = { id: string; got: number; total: number; state: 'running' | 'retrying' | 'checking' | 'done' | 'error' | 'cancelled'; error: string | null };
 export type PeerFound = { serviceName: string; name: string; host: string | null; port: number; id: string | null; ram: number | null; bw: number | null; kind: string; v: string | null };
-export type WorkerStatus = { state: 'stopped' | 'starting' | 'running' | 'error'; error: string | null; peer: string | null; heldMb: number; ramMb: number; bandwidth: number; throttled: boolean; connects: number; rejects: number; id: string; batteryUnrestricted: boolean; fp?: string | null; pin?: string | null; paired?: number; relay?: { url: string; code: string } | null; relayError?: string | null; mode?: 'auto' | 'manual' | null; why?: string | null; pairFor?: string | null };
+export type WorkerStatus = { state: 'stopped' | 'starting' | 'running' | 'error'; error: string | null; peer: string | null; heldMb: number; ramMb: number; bandwidth: number; throttled: boolean; connects: number; rejects: number; id: string; batteryUnrestricted: boolean; fp?: string | null; pin?: string | null; paired?: number; relay?: { url: string; code: string } | null; relayError?: string | null; mode?: 'auto' | 'manual' | null; why?: string | null; pairFor?: string | null; anchors?: AnchorLink[] | null };
+/** How the shared phone stands with one anchor it joined (Anchor.kt Links): registered, or why not. */
+export type AnchorLink = { fp: string; name: string; at: string; state: 'registering' | 'registered' | 'lost' | 'replaced' | 'refused'; why: string | null; waitingBack: boolean };
+/** An anchor this phone joined (the store, gate/anchors.json). waitingBack: the anchor has not paired back yet and its code is still open. */
+export type JoinedAnchor = { fp: string; name: string; host: string; port: number; addrs: { host: string; port: number; via: string }[]; joinedAt: number; waitingBack: boolean };
+/** The anchor a road goes through (docs/ANCHOR.md): its own address and its certificate; null for a direct road. */
+export type PeerAnchorArg = { host: string; port: number; fp: string } | null;
+/** An anchor's invite for the native join (src/llm/peers.ts parseInvite). */
+export type InviteArg = { fp: string; fpPrefix: string | null; pin: string; hpin: string | null; name: string; ways: { host: string; port: number; via: string }[] };
 /**
  * `{fp, pin?}` picks protocol v2 (tls, pinned certificate); null means protocol v1 with the secret.
  * An empty fp means "learn it": a peer added by a relay code alone shows its certificate on
@@ -18,7 +26,7 @@ export type WorkerStatus = { state: 'stopped' | 'starting' | 'running' | 'error'
 export type PeerTls = { fp: string; pin?: string | null } | null;
 /** A peer far away: the relay to go through and the worker's code there. */
 export type PeerRelay = { url: string; code: string } | null;
-export type PeerArg = { host: string; port: number; secret: string; weight: number; fp?: string | null; pin?: string | null };
+export type PeerArg = { host: string; port: number; secret: string; weight: number; fp?: string | null; pin?: string | null; anchor?: PeerAnchorArg };
 /** A wi-fi as the phone sees it without a location permission; ssid only when it could be read. */
 export type HomeNet = { subnet: string; gateway: string | null; domain: string | null; ssid: string | null };
 /** A computer added by scanning its chat page's QR: waiting = its one-time code is still open. */
@@ -71,8 +79,13 @@ type Module = {
   /** A vision model that is not the loaded one, loaded next to it for one answer about photos, then freed. Same events as generate. */
   describeImages(modelPath: string, mmprojPath: string, ctx: number, messages: Message[], images: string[], maxSide: number, maxTokens: number): number;
   /** null when the peer answered; otherwise the gate's reason. With `relay` the probe goes through the relay (api only), and the learned fingerprint comes back as "ok <fp>". */
-  probePeer(host: string, port: number, secret: string, channel: 'rpc' | 'api', tls: PeerTls, relay?: PeerRelay): Promise<string | null>;
-  apiTunnel(host: string, port: number, secret: string, tls: PeerTls, relay?: PeerRelay): Promise<number>;
+  probePeer(host: string, port: number, secret: string, channel: 'rpc' | 'api', tls: PeerTls, relay?: PeerRelay, anchor?: PeerAnchorArg): Promise<string | null>;
+  apiTunnel(host: string, port: number, secret: string, tls: PeerTls, relay?: PeerRelay, anchor?: PeerAnchorArg): Promise<number>;
+  // anchors (docs/ANCHOR.md, 16.11.2026): join one with its invite, the joined ones, leave one
+  /** Pairs with the anchor's gate with the invite's code and keeps it; throws the refusal in plain words. */
+  joinAnchor?(invite: InviteArg): Promise<{ fp: string; name: string; host: string; port: number; via: string; again: boolean; sharing: boolean }>;
+  joinedAnchors?(): Promise<JoinedAnchor[]>;
+  forgetAnchor?(fp: string): Promise<JoinedAnchor[]>;
   /** The security report: a worker's GET /trust checked natively (TrustVerify.kt): its certificate against the pin, its key id, every ledger line's chain and signature from `expectPrev` on. */
   verifyTrust(pinnedFp: string | null, certB64: string | null, id: string | null, alg: string | null, pubB64: string | null, lines: string[], expectPrev: string | null): Promise<TrustVerified>;
   gateFingerprint(): Promise<string>;

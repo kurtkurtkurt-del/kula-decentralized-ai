@@ -10,7 +10,7 @@ import { tapSelect } from '@/lib/haptics';
 import { hasNative, llama, type PeerFound } from '@/llm/native';
 import { isRemote } from '@/llm/peers';
 import { forgetPeer, usePeers, type Peer } from '@/llm/store';
-import { ScanModal, usePeerAdd } from '@/components/models/PeerScan';
+import { peerWhere, ScanModal, usePeerAdd } from '@/components/models/PeerScan';
 import { VERDICT_COLOR } from '@/theme/audit';
 import { colors, fonts, radius } from '@/theme/tokens';
 
@@ -76,7 +76,7 @@ export default function PeersScreen() {
         <View key={p.id} style={styles.row}>
           <View style={styles.rowText}>
             <Text style={styles.name} numberOfLines={1}>{p.name.toLowerCase()}<Text style={styles.kind}>  · {t(`peers.kind.${p.kind}`)}</Text></Text>
-            <Text style={styles.meta}>{[isRemote(p) ? `${t('peers.far')} ${p.relay!.code}` : `${p.host}:${p.port}`, p.ram ? `${Math.round(p.ram / 1024 * 10) / 10} gb` : '', p.bw ? `${p.bw} gb/s` : ''].filter(Boolean).join(' · ')}</Text>
+            <Text style={styles.meta}>{[peerWhere(p, t), p.ram ? `${Math.round(p.ram / 1024 * 10) / 10} gb` : '', p.bw ? `${p.bw} gb/s` : ''].filter(Boolean).join(' · ')}</Text>
             <Text style={[styles.meta, ok[p.id] === true && styles.okText, ok[p.id] === false && styles.offText]}>{ok[p.id] === null ? '…' : ok[p.id] ? t('peers.ok') : ok[p.id] === false ? t('peers.off') : ''}</Text>
           </View>
           <Badge verdict={peerBadge(audit, p.host)} label={t(`audit.verdict.${peerBadge(audit, p.host)}`)} />

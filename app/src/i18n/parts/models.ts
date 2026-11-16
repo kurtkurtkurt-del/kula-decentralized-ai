@@ -183,4 +183,14 @@ export const models = {
   'peers.typeHint': { en: 'or paste the code here', de: 'oder den code hier einfügen', tr: 'ya da kodu buraya yapıştır' },
   'peers.add': { en: 'add', de: 'hinzufügen', tr: 'ekle' },
   'peers.share': { en: 'share this phone instead', de: 'stattdessen dieses telefon teilen', tr: 'bunun yerine bu telefonu paylaş' },
+  // how a device is reached now (docs/ANCHOR.md, 16.11.2026): the road its last check answered on
+  'peers.via.wifi': { en: 'on this wi-fi', de: 'in diesem wlan', tr: 'bu wi-fi’de' },
+  'peers.via.internet': { en: 'over the internet', de: 'über das internet', tr: 'internet üzerinden' },
+  'peers.via.anchor': { en: 'through anchor {name}', de: 'über anker {name}', tr: '{name} çapası üzerinden' },
+  // joining an anchor with its invite (a computer of the circle that carries streams for its members)
+  'peers.joining': { en: 'joining the anchor…', de: 'anker wird beigetreten…', tr: 'çapaya katılınıyor…' },
+  'peers.joined': { en: 'joined {name}: your devices away from home reach this phone through it while it is shared, and this phone reaches them', de: '{name} beigetreten: deine geräte unterwegs erreichen dieses telefon darüber, solange es geteilt ist, und dieses telefon sie', tr: '{name} çapasına katıldın: bu telefon paylaşıldığı sürece evden uzaktaki cihazların ona onun üzerinden ulaşır, bu telefon da onlara' },
+  'peers.joinedAgain': { en: 'already joined {name}: this phone stays linked to it. an invite works once, so this one is not needed here', de: '{name} schon beigetreten: dieses telefon bleibt damit verbunden. eine einladung gilt einmal, diese wird hier nicht gebraucht', tr: '{name} çapasına zaten katıldın: bu telefon ona bağlı kalıyor. bir davet bir kez geçer, bu davete burada gerek yok' },
+  'peers.joinShare': { en: 'share this phone within 10 minutes so {name} can pair back with it', de: 'teile dieses telefon innerhalb von 10 minuten, damit {name} sich zurück koppeln kann', tr: '{name} geri eşleşebilsin diye bu telefonu 10 dakika içinde paylaş' },
+  'peers.err.invite': { en: 'that is an anchor’s invite: add it under connected devices', de: 'das ist die einladung eines ankers: unter verbundene geräte hinzufügen', tr: 'bu bir çapa daveti: bağlı cihazlar altında ekle' },
 } as const;

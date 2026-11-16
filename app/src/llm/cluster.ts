@@ -2,8 +2,9 @@ import { llama, native, type PeerArg, type PeerFound, type PeerRelay, type PeerT
 import { DEFAULT_BW, DEFAULT_EFF, LOCAL_SHARE, planShares, withMeasured, type Estimate, type SimNet } from '@/llm/sim/model';
 import { measuredFor } from '@/bench/store';
 import { modelProfile, NETWORKS, workerFromPeer } from '@/llm/sim/profiles';
-import { isRemote, learnPeer } from '@/llm/peers';
-import { peers as savedPeers, touchPeer, type LocalModel, type Mode, type Peer } from '@/llm/store';
+import { isRemote, learnPeer, myAnchors } from '@/llm/peers';
+import { pickRoad, roadArgs, roadsOf, sameRoad } from '@/llm/roads';
+import { peers as savedPeers, touchPeer, type LocalModel, type Mode, type Peer, type PeerAnchor, type Road } from '@/llm/store';
 
 // The planner (after PrivateLM's cluster_service.dart, 31.10.2026): before a load, which
 // peers answer, how the model is shared between them, and whether sharing is worth it.
@@ -24,10 +25,18 @@ export type Plan = {
 
 export { LOCAL_SHARE, WORKER_SHARE } from '@/llm/sim/model';
 
-/** Why a peer far away cannot take part in split mode: every token would cross the internet, and only the api channel is relayed. */
+/** Why a peer behind the hosted relay cannot take part in split mode: only the api channel is relayed. A peer reached through an anchor can (docs/ANCHOR.md). */
 export const REMOTE_NO_SPLIT = 'remote';
 
-export async function probeAll(list: Peer[], channel: 'rpc' | 'api' = 'rpc'): Promise<{ ok: Peer[]; bad: { peer: Peer; why: string }[] }> {
+/**
+ * Asks every peer whether it can be used now, on `channel`. A peer behind the hosted relay is
+ * asked on api through the relay, never on rpc. Every other peer is asked along its roads
+ * (roads.ts: the wi-fi address, the code's direct internet addresses, then the anchors, 250 ms
+ * apart, the pinned certificate decides) and comes back with the road that answered as its
+ * `route` (null: host/port did), which the tunnels then follow, the split's rpc included.
+ * `mine`: the anchors this phone joined (read from the native store when not given).
+ */
+export async function probeAll(list: Peer[], channel: 'rpc' | 'api' = 'rpc', mine?: PeerAnchor[]): Promise<{ ok: Peer[]; bad: { peer: Peer; why: string }[] }> {
   // a relayed peer is never probed for split: it is skipped before the native side, with its own reason
   const far = channel === 'rpc' ? list.filter(isRemote) : [];
   const near = channel === 'rpc' ? list.filter((p) => !isRemote(p)) : list;
@@ -35,15 +44,30 @@ export async function probeAll(list: Peer[], channel: 'rpc' | 'api' = 'rpc'): Pr
   const n = native();
   const ok: Peer[] = [];
   const bad: { peer: Peer; why: string }[] = far.map((peer) => ({ peer, why: REMOTE_NO_SPLIT }));
+  const anchors = mine ?? (near.some((p) => !isRemote(p) && p.fp) ? await myAnchors() : []);
   await Promise.all(near.map(async (peer) => {
-    const answer = await n.probePeer(peer.host, peer.port, peer.secret, channel, peerTls(peer), peerRelay(peer)).catch((e: Error) => e.message);
+    let answer: string | null;
+    let route: Road | null = null;
+    if (isRemote(peer)) {
+      answer = await n.probePeer(peer.host, peer.port, peer.secret, channel, peerTls(peer), peerRelay(peer)).catch((e: Error) => e.message);
+    } else {
+      const roads = roadsOf(peer, anchors);
+      const probe = (road: Road) => {
+        const a = roadArgs({ host: peer.host, port: peer.port, route: road });
+        return n.probePeer(a.host, a.port, peer.secret, channel, peerTls(peer), null, a.anchor);
+      };
+      // one road: asked as before; more: the staggered pick (one at a time while a pairing code is unspent)
+      const r = roads.length > 1 ? await pickRoad(roads, probe, { serial: !!peer.pin }) : roads.length ? await probe(roads[0]).then((why) => ({ road: why ? null : roads[0], why }), (e: Error) => ({ road: null, why: e.message })) : { road: null, why: 'no road' };
+      answer = r.road ? null : r.why ?? 'unreachable';
+      route = r.road && !sameRoad(r.road, roads[0]) ? r.road : null;
+    }
     // "ok <fp>": a relayed, code-only peer answered and this is its certificate
     const learned = answer?.startsWith('ok ') ? answer.slice(3) : null;
     if (answer && !learned) bad.push({ peer, why: answer });
     else {
       const taught = learned ? { ...peer, fp: learned, pin: null } : peer.pin ? { ...peer, pin: null } : peer;
-      ok.push(taught);
-      touchPeer(peer.id, { last_ok: new Date().toISOString() });
+      ok.push(isRemote(peer) ? taught : { ...taught, route });
+      touchPeer(peer.id, { last_ok: new Date().toISOString(), ...(isRemote(peer) ? {} : { route }) });
       learnPeer(peer, learned);
     }
   }));
@@ -117,7 +141,14 @@ export const peerTls = (p: Pick<Peer, 'fp' | 'pin' | 'relay'>): PeerTls => (p.fp
 /** The road to a peer far away, or null on the lan. */
 export const peerRelay = (p: Pick<Peer, 'relay'>): PeerRelay => p.relay ?? null;
 
-export const peerArgs = (plan: Plan): PeerArg[] => plan.used.map((p) => ({ host: p.host, port: p.port, secret: p.secret, weight: p.assignedMb, fp: p.fp ?? null, pin: p.pin ?? null }));
+/** The native side's view of a peer's road: the address to dial, or the anchor to go through (roads.ts). */
+export const peerRoad = (p: Pick<Peer, 'host' | 'port' | 'route'>) => roadArgs(p);
+
+/** One tunnel per used peer, along the road its probe kept: through an anchor the split's rpc goes through it too. */
+export const peerArgs = (plan: Plan): PeerArg[] => plan.used.map((p) => {
+  const r = roadArgs(p);
+  return { host: r.host, port: r.port, secret: p.secret, weight: p.assignedMb, fp: p.fp ?? null, pin: p.pin ?? null, ...(r.anchor ? { anchor: r.anchor } : {}) };
+});
 
 /** One device's share of a split. `id` and `local` come when the endpoints were named with peer ids:
  *  the peer's id, or 'local' for this phone (kula-node's id for its own part). */

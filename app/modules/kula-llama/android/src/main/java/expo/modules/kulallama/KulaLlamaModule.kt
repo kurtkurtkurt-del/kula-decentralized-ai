@@ -43,6 +43,25 @@ class KulaLlamaModule : Module() {
     val code = m["code"] as? String ?: return null
     return Relay.Ref(url, code)
   }
+  /** `{host, port, fp}` of the anchor a peer is reached through (docs/ANCHOR.md), null for a direct road. */
+  private fun anchorOf(m: Map<String, Any?>?): Anchor.Ref? {
+    val fp = (m?.get("fp") as? String)?.lowercase()?.takeIf { Anchor.isFp(it) } ?: return null
+    val host = m["host"] as? String ?: return null
+    val port = (m["port"] as? Number)?.toInt()?.takeIf { it in 1..65535 } ?: return null
+    return Anchor.Ref(host, port, fp)
+  }
+  private fun joinedList(): List<Map<String, Any?>> {
+    val now = System.currentTimeMillis()
+    return Anchor.readJoined(WorkerService.anchorsFile(context)).map { j ->
+      mapOf("fp" to j.fp, "name" to j.name, "host" to j.host, "port" to j.port,
+        "addrs" to j.addrs.map { mapOf("host" to it.host, "port" to it.port, "via" to it.via) },
+        "joinedAt" to j.joinedAt.toDouble(), "waitingBack" to (j.hpin != null && (j.hpinExp ?: 0L) > now))
+    }
+  }
+  /** The worker reads the store of joined anchors again (only when it runs: an intent must not start it). */
+  private fun tellWorkerAnchors() {
+    if (WorkerService.isRunning(context)) runCatching { context.startService(Intent(context, WorkerService::class.java).setAction(WorkerService.ACTION_ANCHORS)) }
+  }
   private var discovery: Discovery? = null
   private var downloader: ModelDownloader? = null
   private var bound = false
@@ -105,19 +124,21 @@ class KulaLlamaModule : Module() {
 
     // --- model ------------------------------------------------------------------------
     AsyncFunction("loadModel") { path: String, ctx: Int, threads: Int, peers: List<Map<String, Any?>>, localWeight: Double ->
-      // peers: [{host, port, secret, weight, fp?, pin?}] → one tunnel each, llama connects to 127.0.0.1
+      // peers: [{host, port, secret, weight, fp?, pin?, anchor?}] → one tunnel each, llama connects to
+      // 127.0.0.1; a peer whose road is an anchor is reached through it (split follows the road)
       tunnels.values.forEach { it.stop() }; tunnels.clear()
       val endpoints = ArrayList<String>()
       val weights = ArrayList<Float>()
       for (p in peers) {
-        val host = p["host"] as String
-        val port = (p["port"] as Number).toInt()
+        val host = p["host"] as? String ?: ""
+        val port = (p["port"] as? Number)?.toInt() ?: 0
         val secret = p["secret"] as? String ?: ""
         val tls = tlsOf(p)
-        Gate.probe(host, port, secret, "rpc", tls = tls)?.let { throw CodedException("peer $host: $it") }
-        val t = Gate.Tunnel(host, port, secret, "rpc", tls)
+        @Suppress("UNCHECKED_CAST") val anchor = anchorOf(p["anchor"] as? Map<String, Any?>)
+        Gate.probe(host, port, secret, "rpc", tls = tls, anchor = anchor)?.let { throw CodedException("peer ${anchor?.let { "${tls?.fp?.take(8)}… through anchor" } ?: host}: $it") }
+        val t = Gate.Tunnel(host, port, secret, "rpc", tls, anchor = anchor)
         val local = t.start()
-        tunnels["$host:$port"] = t
+        tunnels[if (anchor != null) "rpc:anchor:${tls?.fp}@${anchor.fp}" else "$host:$port"] = t
         endpoints.add("127.0.0.1:$local")
         weights.add(((p["weight"] as? Number)?.toFloat() ?: 1f))
       }
@@ -244,12 +265,46 @@ class KulaLlamaModule : Module() {
 
     // --- peers --------------------------------------------------------------------------
     /** `tls` is `{fp, pin?}` for a v3 peer (protocol v2 over tls), null for a v2 peer (the secret). */
-    AsyncFunction("probePeer") { host: String, port: Int, secret: String, channel: String, tls: Map<String, Any?>?, relay: Map<String, Any?>? -> Gate.probe(host, port, secret, channel, tls = tlsOf(tls), relay = relayOf(relay)) }
-    /** Opens (or reuses) an `api` tunnel to a peer; JS talks HTTP to 127.0.0.1:<port>. With `relay` the road is the relay. */
-    AsyncFunction("apiTunnel") { host: String, port: Int, secret: String, tls: Map<String, Any?>?, relay: Map<String, Any?>? ->
+    /** With `anchor` ({host, port, fp}) the probe goes through that anchor to the peer's pinned certificate (both channels). */
+    AsyncFunction("probePeer") { host: String, port: Int, secret: String, channel: String, tls: Map<String, Any?>?, relay: Map<String, Any?>?, anchor: Map<String, Any?>? ->
+      Gate.probe(host, port, secret, channel, tls = tlsOf(tls), relay = relayOf(relay), anchor = anchorOf(anchor))
+    }
+    /** Opens (or reuses) an `api` tunnel to a peer; JS talks HTTP to 127.0.0.1:<port>. With `relay` the road is the relay, with `anchor` that anchor. */
+    AsyncFunction("apiTunnel") { host: String, port: Int, secret: String, tls: Map<String, Any?>?, relay: Map<String, Any?>?, anchor: Map<String, Any?>? ->
       val r = relayOf(relay)
-      val key = if (r != null) "api:relay:${r.code}@${r.url}" else "api:$host:$port"
-      tunnels[key]?.localPort ?: Gate.Tunnel(host, port, secret, "api", tlsOf(tls), r).let { t -> t.start().also { tunnels[key] = t } }
+      val a = anchorOf(anchor)
+      val t0 = tlsOf(tls)
+      val key = if (a != null) "api:anchor:${t0?.fp}@${a.fp}" else if (r != null) "api:relay:${r.code}@${r.url}" else "api:$host:$port"
+      tunnels[key]?.localPort ?: Gate.Tunnel(host, port, secret, "api", t0, r, anchor = a).let { t -> t.start().also { tunnels[key] = t } }
+    }
+    // --- anchors (docs/ANCHOR.md): joining one with its invite, the store, leaving ----------
+    /**
+     * An anchor's invite as src/llm/peers.ts parseInvite read it: `{fp, fpPrefix?, pin, hpin?, name, ways:[{host, port, via}]}`.
+     * Pairs with the anchor's gate (the pin proof), keeps it in the store, and tells a running
+     * worker, which registers there and opens the pair-back code for the anchor only. Throws the
+     * plain words of node/src/join.ts inviteWords. Returns `{fp, name, host, port, again, sharing}`.
+     */
+    AsyncFunction("joinAnchor") { invite: Map<String, Any?> ->
+      @Suppress("UNCHECKED_CAST")
+      val ways = (invite["ways"] as? List<Map<String, Any?>>).orEmpty().mapNotNull { w ->
+        val h = w["host"] as? String ?: return@mapNotNull null
+        val p = (w["port"] as? Number)?.toInt() ?: return@mapNotNull null
+        Anchor.Addr(h, p, (w["via"] as? String) ?: "mapped")
+      }
+      val inv = Anchor.Invite((invite["fp"] as? String ?: "").lowercase(), invite["fpPrefix"] as? String, (invite["pin"] as? String ?: "").lowercase(),
+        (invite["hpin"] as? String)?.lowercase(), invite["name"] as? String ?: "", ways)
+      if (inv.pin.isEmpty()) throw CodedException("this is not an invite: it has no one-time code")
+      val r = try { Anchor.join(inv, identity, WorkerService.anchorsFile(context)) } catch (e: Exception) { throw CodedException(e.message ?: "join failed") }
+      tellWorkerAnchors()
+      mapOf("fp" to r.anchor.fp, "name" to r.anchor.name, "host" to r.at.host, "port" to r.at.port, "via" to r.at.via, "again" to r.again, "sharing" to WorkerService.isRunning(context))
+    }
+    /** The anchors this phone joined: `[{fp, name, host, port, addrs, joinedAt, waitingBack}]`. */
+    AsyncFunction("joinedAnchors") { joinedList() }
+    /** Leaves an anchor: forgotten here; the worker drops its control connection. Returns the list after. */
+    AsyncFunction("forgetAnchor") { fp: String ->
+      Anchor.removeJoined(WorkerService.anchorsFile(context), fp.lowercase())
+      tellWorkerAnchors()
+      joinedList()
     }
     /** The security report on the phone (docs/AUDIT.md): a worker's GET /trust checked here, certificate, key id and every ledger signature (TrustVerify.kt). */
     AsyncFunction("verifyTrust") { pinnedFp: String?, certB64: String?, id: String?, alg: String?, pubB64: String?, lines: List<String>, expectPrev: String? ->
@@ -294,6 +349,13 @@ class KulaLlamaModule : Module() {
         // auto: "let my computers use this phone" (Keeper.kt); why: the reason it last stopped by itself
         "mode" to (if (alive) s.optString("mode", "manual") else null), "why" to s.optString("why").ifEmpty { null }?.takeIf { !alive },
         "pairFor" to s.optString("pairFor").ifEmpty { null }?.takeIf { alive },
+        // how this phone stands with each joined anchor while shared (Anchor.Links)
+        "anchors" to s.optJSONArray("anchors")?.takeIf { alive }?.let { arr ->
+          (0 until arr.length()).mapNotNull { arr.optJSONObject(it) }.map { o ->
+            mapOf("fp" to o.optString("fp"), "name" to o.optString("name"), "at" to o.optString("at"), "state" to o.optString("state"),
+              "why" to o.optString("why").takeIf { !o.isNull("why") }, "waitingBack" to o.optBoolean("waitingBack"))
+          }
+        },
       )
     }
 
