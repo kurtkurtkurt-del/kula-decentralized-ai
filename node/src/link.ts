@@ -17,17 +17,26 @@ export interface Link {
 export const LINK_MB = 8;
 const RTT_ROUNDS = 5;
 
+// An anchor that held the test back ("too many dials": the tunnel waited, gate.ts Tunnel) makes
+// the wait look like transfer time, a far too low MB/s (2.1 in T1b). Such a reading is not a
+// reading: the error says so and the device keeps the link it had (engine.ts measure).
+export const LINK_HELD_BACK = 'the anchor held the test back (too many connections at once), so the speed would read too low: the last measure is kept';
+export const heldBack = (l: Pick<Link, 'error'>): boolean => l.error === LINK_HELD_BACK;
+
 // `dial`: the device's road (road.ts roadDialer: an address or through an anchor); without it
 // host:port. Through an anchor the numbers are both legs together, which is what a split pays.
+// `waited` (the tunnel's count of waits for the anchor): above 0 after the test, no numbers.
 type LinkTarget = { host: string; port: number; secret: string; dial?: Dialer };
+type LinkTunnel = { port: number; close(): Promise<void>; waited?: () => number };
 export async function measureLink(
   p: LinkTarget,
   tls: TlsClient | null,
-  opts: { mb?: number; rounds?: number; timeoutMs?: number; open?: (p: LinkTarget, tls: TlsClient | null) => Promise<{ port: number; close(): Promise<void> }> } = {},
+  opts: { mb?: number; rounds?: number; timeoutMs?: number; open?: (p: LinkTarget, tls: TlsClient | null) => Promise<LinkTunnel> } = {},
 ): Promise<Link> {
   const at = new Date().toISOString();
-  const open = opts.open ?? (async (q, t) => { const tun = q.dial ? Tunnel.over(q.dial, q.secret, 'api', t) : new Tunnel(q.host, q.port, q.secret, 'api', t); return { port: await tun.listen(), close: () => tun.close() }; });
-  let tunnel: { port: number; close(): Promise<void> } | null = null;
+  const open = opts.open ?? (async (q, t) => { const tun = q.dial ? Tunnel.over(q.dial, q.secret, 'api', t) : new Tunnel(q.host, q.port, q.secret, 'api', t); return { port: await tun.listen(), close: () => tun.close(), waited: () => tun.waits }; });
+  let tunnel: LinkTunnel | null = null;
+  const waited = () => (tunnel?.waited?.() ?? 0) > 0;
   // a device that does not answer must not hold up a load: the whole test gets 8 s
   let timer: NodeJS.Timeout | undefined;
   const late = new Promise<never>((_, no) => { timer = setTimeout(() => no(new Error(`no answer within ${Math.max(1, Math.round((opts.timeoutMs ?? 8000) / 1000))} s`)), opts.timeoutMs ?? 8000); });
@@ -45,9 +54,11 @@ export async function measureLink(
     // the first request may still open the connection behind the tunnel: the median leaves it out
     ms.sort((a, b) => a - b);
     const rttMs = ms[Math.floor(ms.length / 2)];
+    if (waited()) return { mbps: null, rttMs: null, at, error: LINK_HELD_BACK };
     return { mbps: Math.round(mbps * 10) / 10, rttMs: Math.round(rttMs * 10) / 10, at, error: null };
   } catch (e) {
-    return { mbps: null, rttMs: null, at, error: (e as Error).message };
+    // a test that ran out of time while the anchor held it back says why
+    return { mbps: null, rttMs: null, at, error: waited() ? LINK_HELD_BACK : (e as Error).message };
   } finally {
     clearTimeout(timer);
     late.catch(() => {});

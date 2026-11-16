@@ -848,6 +848,9 @@ export class Tunnel {
   port = 0;
   // one line per wait for the anchor; tests catch it
   log: (line: string) => void = (line) => console.log(line);
+  // how many times a connection waited for the anchor (too many dials): a speed timed through
+  // this tunnel while it waited counts the wait as transfer time (link.ts measureLink)
+  waits = 0;
 
   constructor(
     readonly host: string | Dialer,
@@ -886,6 +889,7 @@ export class Tunnel {
           const left = TUNNEL_WAIT_MS - (Date.now() - started);
           if (tooManyDials(e) && !local.destroyed && left > 0) {
             const ms = Math.min(pause, left);
+            this.waits++;
             this.log(`waiting for the anchor: too many dials, retrying in ${ms} ms`);
             pause = Math.min(pause * 2, TUNNEL_WAIT_MAX_MS);
             if (await waitOnLocal(local, ms)) continue;

@@ -6,7 +6,7 @@
 // aborts the whole process on a worker that does not answer, so only peers that
 // answered are handed to it.
 import { REMOTE_NO_SPLIT, peerTls, dialOf, candidates, type Peer } from './peers.js';
-import { probe as gateProbe, probeOver, type ProbeResult, type TlsClient } from './gate.js';
+import { probe as gateProbe, probeOver, TOO_MANY_DIALS, type ProbeResult, type TlsClient } from './gate.js';
 import type { GateIdentity } from './tls.js';
 import { isAnchorRoad, openRoad, pickRoute, roadContext, roads, roadWords, type RoadContext } from './road.js';
 import { DEFAULT_BW, DEFAULT_EFF, LOCAL_SHARE, MB, planShares, RPC_ROUND_TRIPS, withMeasured, WORKER_SHARE, type Estimate, type SimModel, type SimNet } from './sim.js';
@@ -120,6 +120,28 @@ export function planSplit(input: PlanInput): Plan {
 
 export type ProbeFn = (host: string, port: number, secret: string, channel: 'rpc' | 'api', timeoutMs: number, tls?: TlsClient | null) => Promise<ProbeResult>;
 
+// An anchor that says "too many dials" (a friend's device over its dial bucket, anchor.ts) is
+// waited for at the probe as the tunnel waits at the load (gate.ts Tunnel): again after 250 ms,
+// doubling, for 5 s in all. Still refused: the worker is left out with this reason, not dropped
+// without a word (a model that does not fit alone would then read "too big").
+export const PROBE_WAIT_FIRST_MS = 250;
+export const PROBE_WAIT_MS = 5000;
+export const ANCHOR_LIMITING = "the anchor is limiting this device's connections right now";
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+export async function probeWaiting(once: () => Promise<ProbeResult>, waitMs = PROBE_WAIT_MS): Promise<ProbeResult> {
+  const started = Date.now();
+  let pause = PROBE_WAIT_FIRST_MS;
+  for (;;) {
+    const r = await once();
+    if (r.ok || r.reason !== TOO_MANY_DIALS) return r;
+    const left = waitMs - (Date.now() - started);
+    if (left <= 0) return { ok: false, reason: ANCHOR_LIMITING };
+    await sleep(Math.min(pause, left));
+    pause *= 2;
+  }
+}
+
 // Probes every wanted peer on the rpc channel (2 s) along its road (road.ts: its lan address, an
 // internet address, or through an anchor) and plans with the ones that answered. Unreachable
 // peers are in `skipped` with the gate's reason. A peer behind the hosted relay is skipped before
@@ -143,7 +165,7 @@ export async function planWithProbe(opts: Omit<PlanInput, 'peers' | 'skipped'> &
     const road = peer.route;
     if (isAnchorRoad(road)) {
       if (!ctx) return { peer, r: { ok: false, reason: 'no identity for an anchor' } };
-      return { peer, r: await probeOver(() => openRoad(road, peer, ctx, ms), peer.secret, 'rpc', ms, tls) };
+      return { peer, r: await probeWaiting(() => probeOver(() => openRoad(road, peer, ctx, ms), peer.secret, 'rpc', ms, tls)) };
     }
     const d = dialOf(peer);
     return { peer, r: await probe(d.host, d.port, peer.secret, 'rpc', ms, tls) };

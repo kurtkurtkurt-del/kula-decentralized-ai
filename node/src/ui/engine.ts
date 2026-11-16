@@ -13,7 +13,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { openApart, openPeerDevice, startLlamaServer, type Cluster, type Message, type ModelRef, type Reply, type StartBackend, type WireMessage } from '../apart.js';
-import { measureLink, type Link } from '../link.js';
+import { measureLink, heldBack, type Link } from '../link.js';
 import { isAnchorRoad, roadDialer, type PeerAnchor, type RoadContext } from '../road.js';
 import type { AnchorHub } from '../anchor.js';
 import { joinWithInvite, readJoined, joinedRoads, removeJoined, reachableFromOutside, type JoinedAnchor } from '../join.js';
@@ -902,6 +902,11 @@ export class Engine {
     if (p.relay) throw new Error('a device far away (relay) is not measured: split needs the lan');
     // along its road: through an anchor the numbers are both legs together, what a split pays
     const link = await (this.opts.measureLink ?? measureLink)({ ...p, dial: roadDialer(p, this.roads()) }, peerTls(p, this.identity()));
+    // the anchor held the test back: its number would be the wait, not the network; the old link stays
+    if (heldBack(link)) {
+      this.note(`${p.name}: the network was not measured: ${link.error}`);
+      return this.rowOf(p.id);
+    }
     const { list } = upsertPeer(readPeers(file), { ...p, link });
     writePeers(list, file);
     this.note(link.error ? `${p.name}: the network could not be measured: ${link.error}` : `${p.name}: ${link.mbps} MB/s, ${link.rttMs} ms over the network`);
