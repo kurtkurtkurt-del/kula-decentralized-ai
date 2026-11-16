@@ -112,10 +112,29 @@
 //   string is null, never a guess. A usable one keeps at and ok as they are; why is cut to 40
 //   (anything but a string is ''; no branch reads it); text is cut to 300, the most the trust
 //   branch's ownerBlindCheck reads, so a long red proof stays red instead of turning unreadable.
+//   the anchor network (16.11.2026). A device's via is a short word as before, so 'anchor' passes
+//   as it is. A device's through (the anchor it is reached through): absent stays absent; a
+//   usable id gets peerId's reading (a stand-in where an id needs one, the same as the device it
+//   names), anything else is null. A device's anchor (it offers the role): absent stays absent,
+//   true and false are kept, anything else is false.
+//   the host's anchor (this computer's own anchor counters): absent stays absent; one that is not
+//   an object is null. on keeps true and false, anything else is false; reachable keeps true and
+//   false, anything else is null; the counts are clamped:
+//     links                      0 .. 1 000 000          0
+//     bytesDay                   0 .. 1e15 (1 PB)        0
+//     capDay                     0 .. 1e15 (1 PB)        null (no limit, or not a number)
+//   the host's gate (its own gate's refusals, from its own ledger): absent stays absent; one that
+//   is not an object is null. hours keeps the last 26 entries whose start is a usable time (an
+//   entry that is not an object, or without one, is dropped first); an hour's by is cleaned like
+//   a rejectsDay (its first 40 keys are looked at; a key over 200 chars or a shape key is
+//   skipped; a value that is not a finite number drops its entry); counts are clamped:
+//     a by value, far            0 .. 1 000 000 000      the by entry is dropped; far 0
+//     nets                       0 .. 1 000 000          0
+//   guard keeps the last 5 entries whose t is a usable time, why cut to 200 ('' when not a string).
 //   the engine's loaded.sees and a trust's upTo are not in the Snapshot type and no branch reads
 //   them: they are dropped.
 import { sha256Hex } from '../hash.js';
-import type { EyeDevice, EyeHealth, EyeModel, EyeProject, EyeTrust, EyeWork, EyeWorker, Snapshot } from '../types.js';
+import type { EyeDevice, EyeGate, EyeHealth, EyeModel, EyeProject, EyeTrust, EyeWork, EyeWorker, Snapshot } from '../types.js';
 
 export const TIME_MAX = 8.64e15;     // the largest ms a Date can hold (ECMAScript)
 export const ID_MAX = 200;           // an id longer than this is not one of ours
@@ -158,6 +177,12 @@ const TEMP_MIN = -30;                // a phone battery's °C: a reading outside
 const TEMP_MAX = 120;
 const ATTEST_WHY = 40;               // an owner-blind proof's why: one of attest.ts's Why words (at most 10)
 const ATTEST_TEXT = 300;             // ... and its text: the trust branch reads no longer one
+const LINKS_MAX = 1e6;               // the host anchor's links
+const BYTES_MAX = 1e15;              // the host anchor's bytesDay and capDay: 1 PB
+const GATE_HOURS = 26;               // the host gate's hours kept, the newest
+const GATE_BY_MAX = 40;              // reasons looked at in one hour's by
+const NETS_MAX = 1e6;                // the host gate's distinct networks
+const GATE_GUARD = 5;                // the host gate's rpc guard refusals kept, the newest
 
 /** an object (an array too: typeof; the callers check further) */
 export const isObj = (x: unknown): x is Record<string, unknown> => !!x && typeof x === 'object';
@@ -239,19 +264,26 @@ const shapeKey = (k: string): boolean => k === '__proto__' || k === 'constructor
 
 // ---- the builders, one per shape
 
+/** refusal counts by reason word, a plain object: the first `max` keys of an object are looked at,
+ *  a key that is no reason word is skipped, a value that is not a finite number drops its entry */
+function reasonCounts(raw: unknown, max: number): Record<string, number> {
+  const out: Record<string, number> = {};   // a plain object, as the notes and views use
+  if (isObj(raw)) {
+    for (const [w, n] of Object.entries(raw).slice(0, max)) {
+      if (w.length > REASON || shapeKey(w)) continue;   // not a reason word
+      const c = capped(n, 0, COUNT_MAX);                 // past the cap: the cap, never silence
+      if (c !== null) out[w] = c;                        // not a number: unknown, the entry is dropped
+    }
+  }
+  return out;
+}
+
 function trustOf(raw: Record<string, unknown>): EyeTrust {
   const lines = list(raw.lines)
     .filter((l): l is string => typeof l === 'string')
     .slice(-LEDGER_LINES_MAX)
     .map((l) => l.slice(0, LEDGER_LINE_MAX));
-  const rejectsDay: Record<string, number> = {};   // a plain object, as the notes and views use
-  if (isObj(raw.rejectsDay)) {
-    for (const [w, n] of Object.entries(raw.rejectsDay).slice(0, DAY_MAX)) {
-      if (w.length > REASON || shapeKey(w)) continue;   // not a reason word
-      const c = capped(n, 0, COUNT_MAX);                 // past the cap: the cap, never silence
-      if (c !== null) rejectsDay[w] = c;                 // not a number: unknown, the entry is dropped
-    }
-  }
+  const rejectsDay = reasonCounts(raw.rejectsDay, DAY_MAX);
   const rejectsLast: { t: number; why: string; peer: string }[] = [];
   for (const r of list(raw.rejectsLast).slice(-LEDGER_LINES_MAX)) {
     if (!isObj(r) || !isTime(r.t)) continue;
@@ -338,7 +370,39 @@ function devOf(raw: Record<string, unknown>, id: string): EyeDevice {
     // only when the snapshot has it (an older one does not)
     ...('health' in raw ? { health: healthOf(raw.health) } : {}),
     ...('worker' in raw ? { worker: workerOf(raw.worker) } : {}),
+    // the anchor network (16.11.2026): only when the snapshot has them (an older one does not)
+    ...('through' in raw ? { through: peerId(raw.through) } : {}),
+    ...('anchor' in raw ? { anchor: bool2(raw.anchor) } : {}),
   };
+}
+
+/** the host's anchor counters: an object, else null; counts clamped, capDay null when not a number */
+function hostAnchorOf(raw: unknown): NonNullable<Snapshot['host']['anchor']> | null {
+  if (!isObj(raw)) return null;
+  return {
+    on: bool2(raw.on),
+    reachable: bool3(raw.reachable),
+    links: capped(raw.links, 0, LINKS_MAX) ?? 0,
+    bytesDay: capped(raw.bytesDay, 0, BYTES_MAX) ?? 0,
+    capDay: capped(raw.capDay, 0, BYTES_MAX),
+  };
+}
+
+/** the host's gate: an object, else null; the last 26 hours with a usable start, the last 5 guard
+ *  refusals with a usable t, counts clamped */
+function hostGateOf(raw: unknown): EyeGate | null {
+  if (!isObj(raw)) return null;
+  const hours: EyeGate['hours'] = [];
+  for (const h of list(raw.hours)) {
+    if (!isObj(h) || !isTime(h.start)) continue;
+    hours.push({ start: h.start, by: reasonCounts(h.by, GATE_BY_MAX), far: capped(h.far, 0, COUNT_MAX) ?? 0 });
+  }
+  const guard: EyeGate['guard'] = [];
+  for (const g of list(raw.guard)) {
+    if (!isObj(g) || !isTime(g.t)) continue;
+    guard.push({ t: g.t, why: word(g.why, REASON) });
+  }
+  return { hours: hours.slice(-GATE_HOURS), nets: capped(raw.nets, 0, NETS_MAX) ?? 0, guard: guard.slice(-GATE_GUARD) };
 }
 
 function devicesOf(raw: unknown): EyeDevice[] {
@@ -490,6 +554,8 @@ function hostOf(raw: unknown): Snapshot['host'] {
       : null;
   }
   if (h && h.diskFreeMb !== undefined) host.diskFreeMb = capped(h.diskFreeMb, 0, DISK_MB_MAX);
+  if (h && h.anchor !== undefined) host.anchor = hostAnchorOf(h.anchor);
+  if (h && h.gate !== undefined) host.gate = hostGateOf(h.gate);
   return host;
 }
 

@@ -22,7 +22,7 @@ export const BRANCHES: BranchMeta[] = [
   { n: 2, id: 'memory', name: 'memory', what: 'what happened and why, kept on this computer: the decision log. the phones keep their own signed ledgers.' },
   { n: 3, id: 'forecast', name: 'forecast', what: 'will guess when each device is free and how fast it will be tonight, from what it saw before.' },
   { n: 4, id: 'learning', name: 'learning loop', what: 'will compare each guess with what really happened in the morning and tune itself.' },
-  { n: 5, id: 'connections', name: 'connections', what: 'how each device is reached: a usb cable, the wi-fi or a relay. no server outside, no relay by default.' },
+  { n: 5, id: 'connections', name: 'connections', what: 'how each device is reached: a usb cable, the wi-fi, straight over the internet or through an anchor of your own circle. no server outside.' },
   { n: 6, id: 'planner', name: 'planner', what: 'where the model sits: one phone, a copy on each (apart) or one model across them (split), and why.' },
   { n: 7, id: 'executor', name: 'executor', what: 'who is answering now and how fast; in apart mode the fastest free device answers.' },
   { n: 8, id: 'trust', name: 'trust and verification', what: 'one answer for the whole cluster: is every link tls with the certificate pinned, does each device prove who it is, what did its gate refuse, does its signed ledger hold together.' },
@@ -39,7 +39,12 @@ export interface EyeDevice {
   id: string;
   name: string;
   kind: string;                    // phone, pc, …
-  via: 'cable' | 'wifi' | 'relay' | 'internet';   // internet: its gate answered only at a global ipv6 address or its router's port
+  // internet: its gate answered only at a global ipv6 address or its router's port; anchor
+  // (16.11.2026): reached through an always-on computer of the circle that passes the bytes on
+  // (tls end to end, it carries ciphertext only); relay stays the hosted relay
+  via: 'cable' | 'wifi' | 'relay' | 'internet' | 'anchor';
+  through?: string | null;         // via 'anchor': the anchor's device id; null: not said; absent: an older look
+  anchor?: boolean;                // this device offers the anchor role; absent: an older look
   where: string;                   // how it is reached, in words (an address, "usb cable", …)
   // which kind of address its pinned certificate answered at (docs/INTERNET.md): its lan
   // address, a global ipv6 address, or a port its router mapped; null on a cable or a relay.
@@ -159,11 +164,30 @@ export interface Snapshot {
     power?: { battery: number | null; charging: boolean | null; hot: boolean | null } | null;
     /** free disk where this computer fetches models, MB (13.11.2026, scan D M3); null: could not say; absent: an older look */
     diskFreeMb?: number | null;
+    /** this computer as an anchor of the circle (16.11.2026), the engine's live counters: on (it
+     *  offers the role), reachable (its gate answered from outside; null: not known), links (devices
+     *  holding a link to it now), bytesDay (bytes it passed on in the last day, ciphertext) and
+     *  capDay (its daily limit in bytes; null: none). null: could not say; absent: an engine without anchors */
+    anchor?: { on: boolean; reachable: boolean | null; links: number; bytesDay: number; capDay: number | null } | null;
+    /** this computer's own gate refusals, from the reject lines of its own signed ledger
+     *  (ui/godseye-feed.ts hostGate); null: no ledger read yet; absent: an older look */
+    gate?: EyeGate | null;
   };
   devices: EyeDevice[];
   work: EyeWork;
   models: EyeModel[];
   projects: EyeProject[];
+}
+
+/** This computer's gate as its own ledger saw it (16.11.2026). Counts only: no address of anyone
+ *  who knocked ever reaches the eye. */
+export interface EyeGate {
+  // UTC hours, oldest first, at most 26, the last one still running. by: refusals by reason
+  // (every 'rpc guard: …' reason counted under 'rpc guard'); far: refusals from an address that
+  // is not private (not lan, loopback, link-local or carrier-grade nat)
+  hours: { start: number; by: Record<string, number>; far: number }[];
+  nets: number;                         // distinct public source networks in those hours (ipv4 /24, ipv6 /48), a count only
+  guard: { t: number; why: string }[];  // the last 5 rpc guard refusals, oldest first
 }
 
 // ---- what a branch shows and how it lives
@@ -192,6 +216,7 @@ export interface DeviceHint {
   tonight?: { guess: 'likely' | 'maybe' | 'unlikely' | 'unknown'; p: number; hours: number[] };   // hours: the chance per hour 22:00..06:00
   tps?: { file: string; tps: number; n: number; at?: number }[];   // measured tok/s per model file, n answers behind it, at: when it was last folded (ms)
   link?: { srtt: number; rttvar: number };   // senses: its link's usual round trip and variation, ms (RFC 6298)
+  loss?: { hi: number };           // connections: the upper end of the 80% Wilson interval of its missed probe share, 0..1
 }
 
 /** A line a branch wants in the live feed. */
