@@ -50,13 +50,16 @@
 // always-on computer of the person's own circle (its row id in the snapshot's `through`) that
 // passes the bytes on and cannot read them (tls end to end). No server outside. The stat counts
 // them ('· n anchor'). The notes keep per device `thru`, the last anchor id it was routed through
-// (an id only, never an address): set while its row says via 'anchor' through a usable id, cleared
-// once it answers over another kind; a file without it loads as null and v stays 1. How many
+// (an id only, never an address): set while its row says via 'anchor' through a usable id that is
+// a row of the look, cleared once it answers over another kind or via 'anchor' through a null id,
+// and cleared for every device whose anchor is absent from the look (an absent anchor may be
+// forgotten or cut from the list: that is not "not answering"); a file without it loads as null
+// and v stays 1. How many
 // readings in a row each device missed lives in memory (from the notes' last kind on start). A
 // switch to an anchor is the feed line "X is now reached through anchor Y (was wifi)". Three cards,
 // each only a probe or opening a panel; an anchor this computer cannot name reads "an anchor":
 //   connections:through:<Y>     warn 1   reachable devices via anchor through Y, one card per Y
-//   connections:anchor-down:<Y> warn 3   Y missed its last 3 readings (or left the look) and a
+//   connections:anchor-down:<Y> warn 3   Y, a row of the look, missed its last 3 readings and a
 //                                        device last routed through Y is not reachable; goes when
 //                                        either answers once; one feed line when it shows, one when it goes
 //   connections:one-anchor      suggest 1  exactly one anchor known (rows with anchor, plus this
@@ -66,7 +69,7 @@
 // P1b (16.11.2026): a row's `through` is 'self' when this computer is the anchor. Its through card
 // (keyed 'self') reads "X is reached through this computer (its anchor)"; it never sets `thru` (it
 // clears it) and never gives an anchor-down card (this computer is up by definition; a 'self' left in
-// older notes is passed over); for one-anchor it counts as this computer's own anchor, once, beside
+// older notes is cleared); for one-anchor it counts as this computer's own anchor, once, beside
 // host.anchor.on. A row's `throughName` (the anchor's name the engine knows) names an anchor that is
 // not a row of the look: an anchor's name is its row's, else a throughName a row of the look gives
 // for that id, else the notes', else "an anchor". A row through a null id with a throughName gets a
@@ -83,7 +86,9 @@
 // is not a move (the switch line says that). The notes keep per device `nb`, at most NB_MAX
 // entries of [h, first, last, n]: h the first 12 hex of sha256(id|block), first and last the look
 // times it answered from that block, n how many answers; never an address or a block. A full list
-// drops the entry seen least recently. A file without nb loads with an empty list; an empty list is
+// drops the entry seen least recently. The hash is not readable at a glance, not secret: the id is
+// in the same file, so trying the 65,536 ipv4 /16 blocks turns an entry back into its block; the
+// notes stay on this computer. A file without nb loads with an empty list; an empty list is
 // not written. A device's first block says nothing. A later unseen block gives one feed line a day
 // at most per device, "X answered from a network it was not seen on before (its pinned certificate
 // matched)", and, only when the device was settled before it (at most 2 blocks, at least 20
@@ -524,8 +529,9 @@ export function create(ctx: BranchCtx): Branch {
   /** "X", "X, Z" or "X, Z (+n more)" */
   const fewNames = (ns: string[]) => `${ns.slice(0, 2).join(', ')}${ns.length > 2 ? ` (+${ns.length - 2} more)` : ''}`;
 
-  /** The anchor-down cards of this look, from the rows and the notes: an anchor Y that missed its
-   *  last 3 readings or left the look, with at least one row last routed through Y not reachable. */
+  /** The anchor-down cards of this look, from the rows and the notes: an anchor Y of the look that
+   *  missed its last 3 readings, with at least one row last routed through Y not reachable. An
+   *  absent Y gives nothing (observe cleared every thru pointing at it). */
   function anchorDown(now: Snapshot, here: Set<string>): { y: string; card: Suggestion }[] {
     const lost = new Map<string, { id: string; name: string }[]>();   // Y -> unreachable rows through it, first-seen order
     const taken = new Set<string>();
@@ -540,15 +546,14 @@ export function create(ctx: BranchCtx): Branch {
     }
     const out: { y: string; card: Suggestion }[] = [];
     for (const [y, ds] of lost) {
-      const gone = !here.has(y);
-      if (!gone && (miss.get(y) ?? 0) < 3) continue;
+      if (!here.has(y) || (miss.get(y) ?? 0) < 3) continue;
       const yT = anchorWords(y);
       const who = ds.length <= 2 ? names(ds) : fewNames(ds.map((d) => d.name));
       out.push({ y, card: {
         id: cardId('connections', 'anchor-down', y), kind: 'warn', weight: 3,
         title: `${yT} is not answering: ${who} cannot be reached`,
         why: `they were last reached through ${yT}. they return when ${anchorName(y) ?? 'it'} answers or on this wi-fi. seen from this computer only.`,
-        action: { do: 'probe', devices: [...(gone ? [] : [y]), ...ds.map((d) => d.id)] }, label: 'look again',
+        action: { do: 'probe', devices: [y, ...ds.map((d) => d.id)] }, label: 'look again',
       } });
     }
     return out;
@@ -717,6 +722,11 @@ export function create(ctx: BranchCtx): Branch {
       const at = now.at;
       let changed = false;
       const here = new Set<string>();
+      const lookIds = new Set<string>();     // every row id of this look, before the rows are taken in
+      for (const raw of listOf(now.devices).slice(0, MAX_DEVICES)) {
+        const id = idOf(objOf(raw)?.id);
+        if (id) lookIds.add(id);
+      }
       for (const raw of listOf(now.devices).slice(0, MAX_DEVICES)) {
         const d = objOf(raw);
         if (!d) continue;
@@ -732,14 +742,16 @@ export function create(ctx: BranchCtx): Branch {
           changed = true;
         }
         if (e.name !== name) { e.name = name; changed = true; }
-        // the anchor it is routed through: its row says so; answering over another kind clears it
-        // through this computer: no anchor-down can come from it, so the last other anchor is forgotten
+        // the anchor it is routed through: its row says so, and only an anchor that is a row of this
+        // look (an absent one may be forgotten or cut from the list: not "not answering"); through
+        // this computer, through an absent anchor, or answering over another kind or through a null
+        // id clears it, so a later anchor-down card never names an anchor it no longer went through
         const through = kindOf(d.via) === 'anchor' ? idOf(d.through) : null;
-        if (through === SELF) {
+        if (through === SELF || (through !== null && through !== id && !lookIds.has(through))) {
           if (e.thru !== null) { e.thru = null; changed = true; }
         } else if (through !== null && through !== id) {
           if (e.thru !== through) { e.thru = through; changed = true; }
-        } else if (e.thru !== null && d.reachable === true && kindOf(d.via) !== 'anchor') {
+        } else if (e.thru !== null && d.reachable === true && (kindOf(d.via) !== 'anchor' || through === null)) {
           e.thru = null;
           changed = true;
         }
@@ -794,6 +806,11 @@ export function create(ctx: BranchCtx): Branch {
         k.last = at;
         if (reach) noteBlock(id, e, d, at);
         changed = true;
+      }
+      // an anchor absent from this look: no device keeps it as the anchor it went through (also
+      // those not in the look, and a 'self' left in older notes)
+      for (const e of devs.values()) {
+        if (e.thru !== null && !lookIds.has(e.thru)) { e.thru = null; changed = true; }
       }
       // the cap: drop vanished devices first, the oldest seen first; never one this look holds
       if (devs.size > MAX_DEVICES) {
@@ -898,7 +915,7 @@ export function create(ctx: BranchCtx): Branch {
         suggestions.push({
           id: cardId('connections', 'moved', id), kind: 'warn', weight: 2,
           title: movedWords(e.name || id),
-          why: 'its certificate is the one pinned from its qr, so it holds the same key: normal after a move or a new provider. '
+          why: 'its certificate is the one pinned from its qr, so it holds the same key: normal after a move or a new provider, or its provider gave it a new address. '
             + 'if nobody moved it, its key may have been copied: ask its owner, or pair again. the brain compares address blocks; it cannot say where.',
           action: { do: 'open', panel: 'branch', branch: 'trust' }, label: 'trust',
         });

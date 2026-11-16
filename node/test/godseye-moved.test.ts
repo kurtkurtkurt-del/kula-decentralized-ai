@@ -84,7 +84,7 @@ test('a settled computer on a new /16 gets the card: weight 2, 24 h, opens trust
   assert.equal(card.kind, 'warn');
   assert.equal(card.weight, 2);
   assert.equal(card.title, 'den answered from a network it was not seen on before (its pinned certificate matched)');
-  assert.equal(card.why, 'its certificate is the one pinned from its qr, so it holds the same key: normal after a move or a new provider. '
+  assert.equal(card.why, 'its certificate is the one pinned from its qr, so it holds the same key: normal after a move or a new provider, or its provider gave it a new address. '
     + 'if nobody moved it, its key may have been copied: ask its owner, or pair again. the brain compares address blocks; it cannot say where.');
   assert.deepEqual(card.action, { do: 'open', panel: 'branch', branch: 'trust' });
   assert.ok(cleanCard(card), 'the eye keeps the card as the branch wrote it');

@@ -6,7 +6,9 @@
 // loads, and a snapshot without the new fields gives none of it. P1b: a device through 'self' (this
 // computer is the anchor) reads "through this computer (its anchor)", never gives anchor-down and
 // counts once for one-anchor; a throughName names an anchor that is not a row of the look, or one
-// with a null id (its card keyed by the name, no anchor-down); the notes keep ids only.
+// with a null id (its card keyed by the name, no anchor-down); the notes keep ids only. VERDICT 1
+// DO 4: an anchor absent from the look gives no anchor-down card and is forgotten as a device's
+// last anchor; a reachable row via anchor through a null id clears the old one.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
@@ -144,29 +146,62 @@ test('anchor-down: shows on the third missed reading of the anchor while a devic
   assert.deepEqual(c.feed.slice(-1), ['anchor den answers again']);
 });
 
-test('anchor-down: an anchor that left the look counts at once; the device answering takes the card away', () => {
+test('anchor-down: an anchor that left the look is not "not answering": no card, and the devices through it forget it', () => {
   const { c, step } = branch();
   step(snap([den({ checkedAt: 1 }), far({ id: 'p1', checkedAt: 1 }), far({ id: 'p2', name: 'tab', checkedAt: 1 })], at(0)));
-  let v = step(snap([
-    far({ id: 'p1', checkedAt: 2, reachable: false, reason: 'no route' }),
-    far({ id: 'p2', name: 'tab', checkedAt: 2, reachable: false, reason: 'no route' }),
-  ], at(10)));
-  const d = card(v, 'connections:anchor-down:a1');
-  assert.equal(d.title, 'anchor den is not answering: pixel and tab cannot be reached');   // den's name from the notes
-  assert.deepEqual(d.action, { do: 'probe', devices: ['p1', 'p2'] }, 'den is not in the look: only the devices are probed');
-  // both answer on this wi-fi: thru is cleared, the card goes, one line
-  v = step(snap([dev({ id: 'p1', checkedAt: 3 }), dev({ id: 'p2', name: 'tab', checkedAt: 3 })], at(20)));
-  assert.equal(card(v, 'connections:anchor-down:a1'), undefined);
-  assert.deepEqual(c.feed.filter((l) => /anchor den/.test(l)), [
-    'anchor den is not answering: pixel and tab cannot be reached',
-    'nothing reached through anchor den is cut off now',
-  ]);
+  const thruOf = (id: string) => (c.stored as any).dev.find((x: any) => x[0] === id)[1].thru;
+  assert.equal(thruOf('p1'), 'a1');
+  let v: any;
+  for (let i = 2; i <= 6; i++) {
+    v = step(snap([
+      far({ id: 'p1', checkedAt: i, reachable: false, reason: 'no route' }),
+      far({ id: 'p2', name: 'tab', checkedAt: i, reachable: false, reason: 'no route' }),
+    ], at(70 * i)));
+    assert.ok(!ids(v).some((x: string) => x.startsWith('connections:anchor-down')), ids(v).join(','));
+  }
+  assert.equal(thruOf('p1'), undefined, 'den left the look: p1 forgets it');
+  assert.equal(thruOf('p2'), undefined);
+  // den comes back and misses three readings, p1 cut off through its row's wifi fallback: still no
+  // card, p1 no longer counts as last routed through den
+  for (let i = 7; i <= 10; i++) {
+    v = step(snap([
+      den({ checkedAt: i, reachable: false, reason: 'connect timeout' }),
+      dev({ id: 'p1', checkedAt: i, reachable: false, reason: 'connect timeout' }),
+    ], at(70 * i)));
+  }
+  assert.equal(card(v, 'connections:anchor-down:a1'), undefined, ids(v).join(','));
+  assert.ok(!c.feed.some((l) => /not answering|cut off now/.test(l)), c.feed.join('|'));
 });
 
-test('anchor-down: an unknown anchor reads "an anchor"', () => {
+test('anchor-down: a reachable row via anchor through a null id clears the old anchor; a later outage names no wrong anchor', () => {
+  const { c, step } = branch();
+  step(snap([den({ checkedAt: 1 }), far({ checkedAt: 1 })], at(0)));             // p1 through den: thru a1
+  const thruOf = () => (c.stored as any).dev.find((x: any) => x[0] === 'p1')[1].thru;
+  assert.equal(thruOf(), 'a1');
+  step(snap([den({ checkedAt: 2 }), far({ through: null, checkedAt: 2 })], at(70)));   // still via anchor, which one unknown
+  assert.equal(thruOf(), undefined, 'the old thru is cleared');
+  let v: any;
+  for (let i = 3; i <= 6; i++) {
+    v = step(snap([
+      den({ checkedAt: i, reachable: false, reason: 'connect timeout' }),
+      far({ through: null, checkedAt: i, reachable: false }),
+    ], at(70 * i)));
+  }
+  assert.ok(!ids(v).some((x: string) => x.startsWith('connections:anchor-down')), ids(v).join(','));
+  // an unreachable row through a null id keeps what it had (it says nothing new)
+  const k = branch();
+  k.step(snap([den({ checkedAt: 1 }), far({ checkedAt: 1 })], at(0)));
+  k.step(snap([den({ checkedAt: 2 }), far({ through: null, checkedAt: 2, reachable: false })], at(70)));
+  assert.equal((k.c.stored as any).dev.find((x: any) => x[0] === 'p1')[1].thru, 'a1');
+});
+
+test('anchor-down: an anchor of the look this computer cannot name reads "an anchor"', () => {
   const { step } = branch();
-  step(snap([far({ through: 'zz9', checkedAt: 1 })], at(0)));
-  const v = step(snap([far({ through: 'zz9', checkedAt: 2, reachable: false })], at(10)));
+  step(snap([den({ id: 'zz9', name: '', checkedAt: 1 }), far({ through: 'zz9', checkedAt: 1 })], at(0)));
+  let v: any;
+  for (let i = 2; i <= 4; i++) {
+    v = step(snap([den({ id: 'zz9', name: '', checkedAt: i, reachable: false }), far({ through: 'zz9', checkedAt: i, reachable: false })], at(10 * i)));
+  }
   assert.equal(card(v, 'connections:anchor-down:zz9').title, 'an anchor is not answering: pixel cannot be reached');
   assert.match(card(v, 'connections:anchor-down:zz9').why, /^they were last reached through an anchor\. they return when it answers/);
 });
@@ -235,9 +270,12 @@ test('the notes: thru is an id only, survives a restart, and an old notes file (
   assert.deepEqual(Object.keys(p1), ['name', 'seen', 'kind', 'at', 'k', 'sw', 'thru']);
   assert.ok(!('thru' in file.dev.find((x: any) => x[0] === 'a1')[1]), 'no thru: today\'s shape');
   assert.doesNotMatch(JSON.stringify(file), /\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}|through den/, 'no address in the notes');
-  // a restart: the anchor left the look, the device is cut off: the remembered thru names the anchor
+  // a restart: the anchor misses three readings, the device is cut off: the remembered thru names the anchor
   const two = branch(file);
-  const v = two.step(snap([dev({ checkedAt: 5, reachable: false })], at(100)));
+  let v: any;
+  for (let i = 5; i <= 7; i++) {
+    v = two.step(snap([den({ checkedAt: i, reachable: false }), dev({ checkedAt: i, reachable: false })], at(100 * i)));
+  }
   assert.equal(card(v, 'connections:anchor-down:a1').title, 'anchor den is not answering: pixel cannot be reached');
   // an old file: today's shape before 16 Nov, no thru key
   const old = { v: 1, dev: [['p1', { name: 'pixel', seen: at(0), kind: 'wifi', at: 1, k: [['wifi', { ring: '1111', ms: [12, 12, 12, 12], last: at(0) }]], sw: [] }]] };
@@ -339,7 +377,7 @@ test('throughName with a null id: the name in the title, a card keyed by the nam
   assert.ok(!ids(n).some((x: string) => x.startsWith('connections:through')), ids(n).join(','));
 });
 
-test('throughName for an id not in the look: the name in the through card, the switch line and anchor-down; the notes keep the id', () => {
+test('throughName for an id not in the look: the name in the through card and the switch line; no anchor-down, no thru', () => {
   const { c, step } = branch();
   step(snap([dev({ checkedAt: 1 })], at(0)));
   let v = step(snap([far({ through: 'zz9', throughName: 'cabin', checkedAt: 2 })], at(100)));
@@ -347,13 +385,12 @@ test('throughName for an id not in the look: the name in the through card, the s
   assert.equal(t.title, 'pixel is reached through anchor cabin');
   assert.match(t.why, /cabin passes the bytes on/);
   assert.deepEqual(c.feed, ['pixel is now reached through anchor cabin (was wifi)']);
-  v = step(snap([far({ through: 'zz9', throughName: 'cabin', checkedAt: 3, reachable: false })], at(200)));
-  const d = card(v, 'connections:anchor-down:zz9');
-  assert.ok(d, ids(v).join(','));
-  assert.equal(d.title, 'anchor cabin is not answering: pixel cannot be reached');
-  assert.match(d.why, /they return when cabin answers/);
+  for (let i = 3; i <= 6; i++) {
+    v = step(snap([far({ through: 'zz9', throughName: 'cabin', checkedAt: i, reachable: false })], at(100 * i)));
+    assert.ok(!ids(v).some((x: string) => x.startsWith('connections:anchor-down')), ids(v).join(','));
+  }
   const p1 = (c.stored as any).dev.find((x: any) => x[0] === 'p1')[1];
-  assert.equal(p1.thru, 'zz9');
+  assert.ok(!('thru' in p1), 'zz9 is not a row of the look: not kept as the anchor it went through');
   assert.ok(!JSON.stringify(c.stored).includes('cabin'), 'ids only, never a name of an anchor');
   // a row of the look names the anchor: its own name wins over a throughName
   const r = branch().step(snap([den({ checkedAt: 1 }), far({ throughName: 'old name', checkedAt: 1 })], at(0)));
