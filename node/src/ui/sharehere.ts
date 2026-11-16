@@ -4,9 +4,19 @@
 // that device may run model layers here through the gate. The gate binds the network on
 // purpose (it is the only door in, behind tls and the pairing); llama.cpp's programs stay
 // on 127.0.0.1 behind it, as with the terminal command.
+//
+// "make this computer an anchor" (docs/ANCHOR.md, a switch under it, off by default): sharing
+// then runs with the anchor hub on, the gate on ipv6 and ipv4, and the router asked for the gate
+// port; the page says in plain words what the router answered and makes invites for far devices.
+// The switch is a setting (~/.kula-node/anchor.json): kula-node ui starts sharing with it again
+// after a restart, and the computer stays awake while it is on (sharing keeps it awake).
+import fs from 'node:fs';
 import path from 'node:path';
 import { share as startShare, type ShareHandle, type ShareOptions } from '../share.js';
-import type { AnchorHub } from '../anchor.js';
+import type { AnchorCaps, AnchorHub } from '../anchor.js';
+import type { Mapping } from '../portmap.js';
+import { reachableFromOutside, linkWords, isWhose, type Invite, type LinkView, type Whose } from '../join.js';
+import { ANCHOR_CAPS } from '../anchor.js';
 import { home } from '../paths.js';
 import { WINDOWS_FIREWALL_NOTE } from '../llama.js';
 import { keepAwake, type KeepAwake } from '../awake.js';
@@ -29,6 +39,127 @@ export const WINDOWS_PUBLIC_NOTE = 'windows calls this wi-fi a public network, s
 
 export const SHARE_PORT = 50551;
 
+// ---- the anchor switch: its setting and its plain words
+
+export interface AnchorSetting { on: boolean; caps?: Partial<AnchorCaps> }
+
+export const anchorSettingFile = (dir: string = home()): string => path.join(dir, 'anchor.json');
+
+export function readAnchorSetting(file: string): AnchorSetting {
+  try {
+    const o = JSON.parse(fs.readFileSync(file, 'utf8'));
+    return { on: o?.on === true, ...(o?.caps && typeof o.caps === 'object' ? { caps: o.caps } : {}) };
+  } catch {
+    return { on: false };
+  }
+}
+
+export function writeAnchorSetting(file: string, s: AnchorSetting): void {
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const tmp = `${file}.${process.pid}.tmp`;
+  fs.writeFileSync(tmp, JSON.stringify(s, null, 2) + '\n', { mode: 0o600 });
+  fs.renameSync(tmp, file);
+}
+
+// what the router answered: it mapped the port; it did not answer; it said no; it mapped, but the
+// address it reports is itself private or shared (carrier nat: no door from the internet)
+export type MapState = 'mapped' | 'silent' | 'refused' | 'cgnat';
+
+export function mapState(pm: { asked: boolean; mapping: Mapping | null; why: string | null } | null | undefined): MapState | null {
+  if (!pm?.asked) return null;
+  if (pm.mapping) return pm.mapping.behindAnotherNat ? 'cgnat' : 'mapped';
+  if (pm.why && /\b(pcp|nat-pmp|upnp):/.test(pm.why)) return 'refused';
+  return 'silent';
+}
+
+export const CGNAT_WORDS = 'your provider does not give this home a public address: this computer cannot be an anchor from outside; it can still be a member of another anchor.';
+
+const hp = (h: string, port: number) => `${h.includes(':') ? `[${h}]` : h}:${port}`;
+
+export interface AnchorWordsInput {
+  on: boolean; live: boolean; map: MapState | null; why: string | null;
+  external: string | null; ipv6: string[]; lan: string | null; port: number | null;
+  reachable: boolean | null; members: number;
+}
+
+// The anchor's state in plain words, for every state the switch can be in.
+export function anchorWords(a: AnchorWordsInput): string {
+  if (!a.on) return 'off. turned on, your devices that are away from home (a phone on mobile data, a laptop at a friend\'s) reach each other through this computer.';
+  if (!a.live) return 'starting: sharing this computer and asking the router for a door…';
+  const port = a.port ?? SHARE_PORT;
+  const lan = a.lan ? ` (${a.lan.replace(/:\d+$/, '')})` : '';
+  const byHand = `open TCP port ${port} to this computer${lan} by hand in the router's settings (often called "port forwarding"), then make an invite.`;
+  const parts: string[] = [];
+  if (a.map === 'mapped') parts.push(a.external ? `the router opened the door: from the internet this computer answers at ${a.external}.` : `the router opened port ${port}, but did not say its address on the internet.`);
+  else if (a.map === 'cgnat') parts.push(CGNAT_WORDS);
+  else if (a.map === 'refused') parts.push(`the router said no${a.why ? ` (${a.why})` : ''}: ${byHand}`);
+  else parts.push(`no answer from the router: ${byHand}`);
+  if (a.ipv6.length) parts.push(`over ipv6 it may also answer at ${a.ipv6[0]}, if the router lets it in.`);
+  if (a.reachable) parts.push('reached from outside: a device came in from the internet.');
+  else if (a.map !== 'cgnat' || a.ipv6.length) parts.push('not confirmed from outside yet: that shows once a device registers here from away from this network.');
+  if (a.members) parts.push(`${a.members} device${a.members === 1 ? ' holds its' : 's hold their'} link to it now.`);
+  return parts.join(' ');
+}
+
+export interface InviteView {
+  whose: Whose;
+  code: string;               // the text to copy (kula-node peers add <code>, or "paste a code")
+  exp: number;
+  lanOnly: boolean;            // no address from outside: works on this network only
+  typed: { address: string; code: string; certificate: string };
+  words: string;
+}
+
+export function inviteView(inv: Invite): InviteView {
+  const until = new Date(inv.exp).toTimeString().slice(0, 5);
+  return {
+    whose: inv.whose, code: inv.code, exp: inv.exp, lanOnly: inv.lanOnly, typed: inv.typed,
+    words: `for ${inv.whose === 'mine' ? 'a computer of yours (no daily limit)' : 'a friend\'s computer (its bytes through here are limited a day)'}; works once, until ${until}. on the other computer: devices → add a device → paste a code (or kula-node peers add <code>). to type it instead: address ${inv.typed.address}, code ${inv.typed.code}, certificate ${inv.typed.certificate}, and tick "an anchor's invite".`
+      + (inv.lanOnly ? ' it carries only this network\'s address: no door from the internet yet.' : ''),
+  };
+}
+
+export interface AnchorShareView {
+  on: boolean;                 // the switch (a setting)
+  live: boolean;               // the hub runs now
+  map: MapState | null;
+  external: string | null;     // where the internet reaches it (the router's address and port)
+  ipv6: string[];
+  lan: string | null;
+  reachable: boolean | null;   // true only once a member registered from a non-private address
+  members: number;
+  words: string;
+  invite: InviteView | null;   // the invite still open
+  capGb: number;               // what a friend's device may pass a day (the person's own: no limit)
+}
+
+// The anchor part of the share view, from a running share (or none).
+export function anchorShareView(h: ShareHandle | null, setting: AnchorSetting): AnchorShareView {
+  const hub = h?.anchor ?? null;
+  const pm = h?.portMap?.() ?? null;
+  const m = pm?.mapping ?? null;
+  const addrs = h?.addrs?.() ?? [];
+  const lanA = addrs.find((a) => a.via === 'lan');
+  const members = hub ? hub.members() : [];
+  const input: AnchorWordsInput = {
+    on: setting.on, live: !!hub, map: hub ? mapState(pm) : null, why: pm?.why ?? null,
+    external: m?.externalIp && !m.behindAnotherNat ? hp(m.externalIp, m.externalPort) : null,
+    ipv6: addrs.filter((a) => a.via === 'ipv6').map((a) => hp(a.host, a.port)),
+    lan: lanA ? hp(lanA.host, lanA.port) : h?.host ? hp(h.host, h.gatePort) : null,
+    port: h?.gatePort ?? null,
+    reachable: hub ? (reachableFromOutside(members) ? true : null) : null,
+    members: members.length,
+  };
+  const inv = hub ? h?.openInvite?.() ?? null : null;
+  const cap = (hub as { caps?: { bytesPerDay?: number } } | null)?.caps?.bytesPerDay ?? setting.caps?.bytesPerDay ?? ANCHOR_CAPS.bytesPerDay;
+  return {
+    on: input.on, live: input.live, map: input.map, external: input.external, ipv6: input.ipv6, lan: input.lan, reachable: input.reachable, members: input.members,
+    words: anchorWords(input), invite: inv ? inviteView(inv) : null, capGb: Math.round((cap / 1e9) * 10) / 10,
+  };
+}
+
+export interface JoinedView { name: string; state: LinkView['state']; words: string }
+
 export interface ShareView {
   on: boolean;
   starting: boolean;
@@ -40,6 +171,8 @@ export interface ShareView {
   error: string | null;
   note: string | null;        // windows: what the firewall will ask
   paired: number;             // devices that may already use this computer without a code
+  anchor: AnchorShareView;    // "make this computer an anchor"
+  joined: JoinedView[];       // the anchors this computer joined, and its link to each
 }
 
 export type ShareStarter = (opts: ShareOptions) => Promise<ShareHandle>;
@@ -50,8 +183,13 @@ export class ShareHere {
   private error: string | null = null;
   private awake: KeepAwake | null = null;
   private publicNet = false;
+  private setting: AnchorSetting;
 
-  constructor(private opts: { port?: number; models?: string; name?: string; start?: ShareStarter; log?: (s: string) => void; awake?: () => KeepAwake; netCategories?: () => Promise<string[] | null> } = {}) {}
+  constructor(private opts: { port?: number; models?: string; name?: string; start?: ShareStarter; log?: (s: string) => void; awake?: () => KeepAwake; netCategories?: () => Promise<string[] | null>; settingFile?: string } = {}) {
+    this.setting = readAnchorSetting(this.settingFile());
+  }
+
+  private settingFile(): string { return this.opts.settingFile ?? anchorSettingFile(); }
 
   view(): ShareView {
     const h = this.handle;
@@ -61,6 +199,8 @@ export class ShareHere {
       code: c?.pin ?? null, codeExpiresAt: c?.exp ?? null, error: this.error,
       note: process.platform === 'win32' ? (this.publicNet ? `${WINDOWS_PUBLIC_NOTE}\n\n${WINDOWS_FIREWALL_NOTE}` : WINDOWS_FIREWALL_NOTE) : null,
       paired: h?.paired() ?? 0,
+      anchor: anchorShareView(h, this.setting),
+      joined: (h?.links?.() ?? []).map((l) => ({ name: l.name, state: l.state, words: linkWords(l) })),
     };
   }
 
@@ -80,6 +220,7 @@ export class ShareHere {
     if (this.handle) return this.view();
     if (!this.starting) {
       this.error = null;
+      const anchor = this.setting.on;
       this.starting = (async () => {
         try {
           this.handle = await (this.opts.start ?? startShare)({
@@ -88,11 +229,14 @@ export class ShareHere {
             name: this.opts.name,
             noQr: true,
             dashboard: false,
-            // the local network only: no ipv6 socket, so no global ipv6 address in the qr and no
-            // way in from the internet where a router lets ipv6 through (the button says wi-fi)
-            dualStack: false,
+            // without the anchor: the local network only, no ipv6 socket, so no global ipv6 address
+            // in the qr and no way in from the internet where a router lets ipv6 through (the button
+            // says wi-fi). With it: ipv6 and ipv4, and the router asked for the gate port
+            dualStack: anchor,
+            ...(anchor ? { mapPort: true, anchor: this.setting.caps && Object.keys(this.setting.caps).length ? this.setting.caps : true } : {}),
           });
-          this.opts.log?.(`sharing this computer on port ${this.handle.gatePort}`);
+          this.opts.log?.(`sharing this computer on port ${this.handle.gatePort}${anchor ? ', as an anchor' : ''}`);
+          if (anchor) this.opts.log?.(`anchor: ${anchorShareView(this.handle, this.setting).words}`);
           // no sleep while it lends itself: a sleeping worker drops out mid-answer (awake.ts)
           this.awake = (this.opts.awake ?? (() => keepAwake(this.opts.log)))();
           const cats = await (this.opts.netCategories ?? windowsNetworkCategories)();
@@ -110,13 +254,76 @@ export class ShareHere {
     return this.view();
   }
 
-  async stop(): Promise<ShareView> {
+  // `byPerson`: the person pressed stop: the anchor goes off too (it needs sharing), so it does
+  // not come back by itself at the next start of kula. kula closing keeps the setting.
+  async stop(byPerson = false): Promise<ShareView> {
     if (this.starting) await this.starting;
+    if (byPerson && this.setting.on) this.saveSetting({ ...this.setting, on: false });
     const h = this.handle;
     this.handle = null;
     this.awake?.stop();
     this.awake = null;
     if (h) { await h(); this.opts.log?.('stopped sharing this computer'); }
     return this.view();
+  }
+
+  private saveSetting(s: AnchorSetting) {
+    this.setting = s;
+    try { writeAnchorSetting(this.settingFile(), s); } catch (e) { this.opts.log?.(`anchor: the setting could not be kept: ${(e as Error).message}`); }
+  }
+
+  // The switch. On: sharing (re)starts with the anchor; off: sharing goes on without it (a
+  // restart: the gate's socket and the router's door change). Kept as a setting.
+  async setAnchor(on: boolean): Promise<ShareView> {
+    if (this.starting) await this.starting;
+    if (on === this.setting.on && (!on || this.handle?.anchor)) return this.view();
+    this.saveSetting({ ...this.setting, on });
+    this.opts.log?.(on ? 'anchor: turned on' : 'anchor: turned off');
+    const sharing = !!this.handle;
+    if (sharing) await this.stop();
+    if (on || sharing) await this.start();
+    return this.view();
+  }
+
+  // kula-node ui started: the anchor was on when it last ran, so it is on again (it needs sharing)
+  async resume(): Promise<ShareView> {
+    if (this.setting.on && !this.handle) return this.start();
+    return this.view();
+  }
+
+  // A new invite for a far device (the old one stops working). Only while the anchor is on.
+  // `whose`: the person's own computer (never byte-capped) or a friend's (capped a day).
+  invite(whose: Whose = 'friend'): InviteView {
+    const h = this.handle;
+    if (!h?.anchor || !h.invite) throw new Error('turn on "make this computer an anchor" first');
+    if (!isWhose(whose)) throw new Error('whose device: mine or friend');
+    return inviteView(h.invite(whose));
+  }
+
+  // "a friend's device may pass up to N GB a day through this computer": kept with the switch and
+  // set on the running anchor at once (the person's own devices are never capped)
+  setFriendCap(gb: number): ShareView {
+    if (!Number.isFinite(gb) || gb <= 0 || gb > 100_000) throw new Error('a number of GB above 0');
+    const bytesPerDay = Math.round(gb * 1e9);
+    this.saveSetting({ ...this.setting, caps: { ...(this.setting.caps ?? {}), bytesPerDay } });
+    this.handle?.anchor?.setCaps({ bytesPerDay });
+    this.opts.log?.(`anchor: a friend's device may pass up to ${gb} GB a day`);
+    return this.view();
+  }
+
+  // the open invite's text for its qr; null when none is open
+  inviteText(): string | null {
+    const inv = this.handle?.anchor ? this.handle.openInvite?.() ?? null : null;
+    return inv ? inv.text : null;
+  }
+
+  // a computer joined an anchor (the store changed): the running share registers there now;
+  // without sharing nothing registers, so sharing starts (the anchor reaches this computer only
+  // through its gate)
+  async joined(): Promise<ShareView> {
+    if (this.starting) await this.starting;
+    if (this.handle) { this.handle.rejoin?.(); return this.view(); }
+    this.opts.log?.('joined an anchor: sharing this computer so the anchor can reach it');
+    return this.start();
   }
 }

@@ -19,6 +19,7 @@ import { DashboardState, type DeviceView } from './dashboard/state.js';
 import { startDashboard, BATCH_PROMPTS, type Dashboard } from './dashboard/server.js';
 import { selfView, peerActions, ledgerActions, hostName, DASHBOARD_PORT } from './dashboard/wire.js';
 import { deviceId } from './share.js';
+import { joinWithInvite, joinedFile } from './join.js';
 import { simModelOf } from './gguf.js';
 import { readBenches } from './bench.js';
 import { measuredTps } from './benchcore.js';
@@ -52,6 +53,16 @@ export async function peersCommand(sub: string | undefined, rest: string[], flag
     try { peer = parsePeerText(text, relayOf(flags)); } catch (e) { console.error(`peers add: ${(e as Error).message}`); return 2; }
     if (peer.relay && !peer.fp && !peer.pin) console.error('note: a relay code alone cannot pair; add the worker\'s pairing code after it (123456 <pin>) or scan its full code');
     if (str(flags.name)) peer.name = str(flags.name)!;
+    // an anchor's invite (docs/ANCHOR.md "join"): pair with it now, keep it among the joined
+    // anchors; a running share (terminal or page) registers there and the anchor pairs back
+    if (peer.anchor && peer.hpin && peer.pin) {
+      try {
+        const j = await joinWithInvite({ peer, identity: identity(), peersFile: file, joinedFile: joinedFile(path.dirname(file)) });
+        console.log(`joined the anchor ${j.peer.name} at ${j.at.host.includes(':') ? `[${j.at.host}]` : j.at.host}:${j.at.port} (certificate ${j.peer.fp!.slice(0, 16)}…).`);
+        console.log('this computer registers there while it shares: run kula-node share (or the page\'s share this computer) within 10 minutes, so the anchor can pair back.');
+        return 0;
+      } catch (e) { console.error(`peers add: ${(e as Error).message}`); return 1; }
+    }
     const { list, added } = upsertPeer(readPeers(file), peer);
     writePeersSafe(list, file);
     console.log(`${added ? 'added' : 'updated'}: ${row(peer)}`);

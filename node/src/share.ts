@@ -12,9 +12,11 @@ import { loadOrCreateIdentity, newPin, Paired } from './tls.js';
 import { findLlama, TAG } from './llama.js';
 import { home, expandHome } from './paths.js';
 import { lanIPv4, globalIPv6, freeRamMB, measureBandwidth, detectGpu } from './sysinfo.js';
-import { startPortMapper, mapLine, type PortMapper } from './portmap.js';
+import { startPortMapper, mapLine, type PortMapper, type Mapping } from './portmap.js';
 import { peersFile, type PeerAddr } from './peers.js';
 import { AnchorHub, circleMembers, type AnchorCaps, type AnchorEvent } from './anchor.js';
+import { OneTimeCodes, AnchorHost, AnchorLinks, joinedFile, readJoined, joinedRoads, ringCapped, type Invite, type LinkView, type Whose } from './join.js';
+import type { PeerAnchor } from './road.js';
 import { freePort, startChild, type Child, exited } from './children.js';
 import { startApiServer, type ApiServer, apiAuth } from './api.js';
 import { loadOrCreateKey } from './audit/key.js';
@@ -49,6 +51,9 @@ export interface ShareOptions {
   // be an anchor for this computer's circle (docs/ANCHOR.md): members that cannot reach each
   // other talk through this gate. true: the default caps; an object: those caps. needs tls.
   anchor?: boolean | Partial<AnchorCaps>;
+  // the store of anchors this computer joined (join.ts); default ~/.kula-node/anchors.json.
+  // share registers with each of them while it runs
+  joinedFile?: string;
 }
 
 // The qr the phone scans. v2 carries the shared secret (protocol v1); v3 carries
@@ -69,6 +74,8 @@ export interface PeerPayload {
   // every way to this gate, lan first (docs/INTERNET.md); host/port stay the lan way, so an
   // old reader of the qr still works
   addrs?: PeerAddr[];
+  // the anchors this computer registers with (join.ts): a device far away reaches it through them
+  anchors?: PeerAnchor[];
   kind: 'pc';
   ram: number;
   bw: number;
@@ -104,6 +111,16 @@ export type ShareHandle = (() => Promise<void>) & {
   qr(): string; code(): { pin: string; exp: number } | null;
   paired(): number;   // devices that may come in without a code (~/.kula-node/paired)
   anchor?: AnchorHub | null;  // with the anchor option: its registry, caps and own dials (dialLocal)
+  // with the anchor on: a new invite (the old one stops working) and the one still open
+  invite?(whose?: Whose): Invite;
+  openInvite?(): Invite | null;
+  // what the router said when asked for the gate port (asked: --map-port / the anchor)
+  portMap?(): { asked: boolean; mapping: Mapping | null; why: string | null };
+  // every way in: the lan, global ipv6 (dual-stack), the router's port
+  addrs?(): PeerAddr[];
+  // the anchors this computer joined, and how its link to each one is
+  links?(): LinkView[];
+  rejoin?(): void;   // read the store of joined anchors again now (it is also looked at every 5 s)
 };
 
 export async function share(opts: ShareOptions): Promise<ShareHandle> {
@@ -118,7 +135,7 @@ export async function share(opts: ShareOptions): Promise<ShareHandle> {
   if (opts.relay && opts.tls === false) throw new Error('--relay needs tls: the handshake crosses the relay and must be end to end (drop --no-tls)');
   // the internet must never meet v1: it proves no identity and carries prompts in plain text
   if (opts.mapPort && (opts.tls === false || opts.secret)) throw new Error('--map-port needs tls only: drop --no-tls and --secret (v1 must not face the internet)');
-  if (opts.anchor && opts.tls === false) throw new Error('an anchor needs tls: members are known by their certificates (drop --no-tls)');
+  if (opts.anchor && (opts.tls === false || opts.secret)) throw new Error('an anchor needs tls only: members are known by their certificates (drop --no-tls and --secret)');
   const useTls = opts.tls !== false;
   if (!useTls) log('tls is off (--no-tls): v1 only, prompts and answers cross the network in plain text');
   // v1 needs a secret in a qr. With tls the qr carries none, so unless one was given
@@ -236,11 +253,15 @@ export async function share(opts: ShareOptions): Promise<ShareHandle> {
   const showPaired = () => { if (tlsServer) state.paired(pairedDevices(tlsServer.paired, seen, ledgerFile)); };
   let relay: RelayWorker | null = null;
   let qrText = ''; // the last qr printed: the dashboard shows the same one
+  const joined = opts.joinedFile ?? joinedFile();
   const printQr = (port: number) => {
     const common = { k: 'kula-peer' as const, id, name, host: host ?? '0.0.0.0', port, kind: 'pc' as const, ram, bw, gpu: gpu.name, vram: gpu.vramMB };
     const payload: PeerPayload = tlsServer ? { ...common, v: 3, fp: tlsServer.identity.fp, pin: tlsServer.pin ?? undefined } : { ...common, v: 2, secret: secret! };
     const addrs = tlsServer ? addrsOf(port) : [];
     if (addrs.length > 1) payload.addrs = addrs;
+    // a device that pairs here can later reach this computer through the anchors it joined
+    const via = tlsServer ? joinedRoads(readJoined(joined)) : [];
+    if (via.length) payload.anchors = via.slice(0, 4);
     if (relay?.code && opts.relay) payload.relay = { url: opts.relay, code: relay.code };
     const text = JSON.stringify(payload);
     qrText = text;
@@ -252,7 +273,8 @@ export async function share(opts: ShareOptions): Promise<ShareHandle> {
   if (useTls) {
     const identity = loadOrCreateIdentity(home(), key, log);
     const paired = new Paired(path.join(home(), 'paired'));
-    tlsServer = { identity, paired, pin: newPin(), pinExpiresAt: Date.now() + PIN_TTL_MS };
+    // codes beside the qr's own: an anchor's invites, the pair-back codes of the anchors joined (join.ts)
+    tlsServer = { identity, paired, pin: newPin(), pinExpiresAt: Date.now() + PIN_TTL_MS, codes: new OneTimeCodes() };
     // the code is spent by the phone that used it, or by time; the next qr gets a fresh one
     tlsServer.onPinUsed = () => { tlsServer!.pin = newPin(); tlsServer!.pinExpiresAt = Date.now() + PIN_TTL_MS; log('pairing code used or expired; a new qr follows'); printQr(opts.port); };
     goneSince = removedSince(paired);
@@ -267,9 +289,10 @@ export async function share(opts: ShareOptions): Promise<ShareHandle> {
   // with as a master (its peer book); it carries their bytes and learns who, when and how much
   let anchor: AnchorHub | null = null;
   if (opts.anchor && tlsServer) {
-    anchor = new AnchorHub({ self: tlsServer.identity.fp, isMember: circleMembers(tlsServer.paired, peersFile()), caps: typeof opts.anchor === 'object' ? opts.anchor : undefined });
+    // the daily bytes are capped for friends' devices only (ring circle); the person's own are not
+    anchor = new AnchorHub({ self: tlsServer.identity.fp, isMember: circleMembers(tlsServer.paired, peersFile()), capped: ringCapped(peersFile()), caps: typeof opts.anchor === 'object' ? opts.anchor : undefined });
     const c = anchor.caps;
-    log(`anchor on: ${c.streamsPerMember} streams per member, ${c.streamsTotal} in all, ${c.dialsPerMinute} dials a minute, ${Math.round(c.bytesPerDay / 1e9 * 10) / 10} GB a day per dialing member`);
+    log(`anchor on: ${c.streamsPerMember} streams per member, ${c.streamsTotal} in all, ${c.dialsPerMinute} dials a minute; a friend's device ${Math.round(c.bytesPerDay / 1e9 * 10) / 10} GB a day, your own without limit`);
   }
   const short = (fp: string | null) => (fp ? `${fp.slice(0, 16)}…` : '?');
   const onAnchor = (e: AnchorEvent) => {
@@ -283,11 +306,41 @@ export async function share(opts: ShareOptions): Promise<ShareHandle> {
   liveGate = gate;
   // the router's door to the gate, when the person asked for one (--map-port)
   let mapper: PortMapper | null = null;
+  let mapWhy: string | null = null;
   if (opts.mapPort) {
     log(`asking the router for port ${gate.port} (pcp, nat-pmp, upnp)`);
     const m = await startPortMapper({ internalPort: gate.port, gateway: opts.gateway ?? null }, log).catch((e) => ({ mapper: null, why: (e as Error).message }));
     mapper = m.mapper;
+    mapWhy = m.why ?? null;
     log(mapLine(mapper?.mapping() ?? null, m.why ?? undefined));
+  }
+  // the anchor's invites and pair-backs (join.ts): a device that used an invite is paired back
+  // through this computer's own hub once it registers
+  let anchorHost: AnchorHost | null = null;
+  if (anchor && tlsServer) {
+    anchorHost = new AnchorHost({
+      identity: tlsServer.identity, codes: tlsServer.codes as OneTimeCodes, hub: anchor, peersFile: peersFile(), id, name, log,
+      // the terminal shows the next invite once one is used (the page asks for one itself)
+      onUsed: () => { if (!opts.noQr) setTimeout(() => printInvite(), 100).unref(); },
+    });
+  }
+  // this computer as a member: registered with every anchor it joined while share runs
+  let links: AnchorLinks | null = null;
+  if (tlsServer) {
+    links = new AnchorLinks({ identity: tlsServer.identity, name, kind: 'pc', gatePort: gate.port, file: joined, codes: tlsServer.codes as OneTimeCodes, log });
+    links.start();
+  }
+  const newInvite = (whose: Whose = 'friend'): Invite => {
+    if (!anchorHost) throw new Error('this computer is not an anchor: share with the anchor on (kula-node share --anchor, or the page\'s switch)');
+    const all = addrsOf(gate.port);
+    const far = all.filter((a) => a.via !== 'lan');
+    return anchorHost.invite(far.length ? far : all, { ram, bw }, whose);
+  };
+  function printInvite() {
+    let inv: Invite;
+    try { inv = newInvite(); } catch (e) { log(`anchor: ${(e as Error).message}`); return; }
+    const until = new Date(inv.exp).toTimeString().slice(0, 5);
+    console.log(`\nanchor invite for a friend's computer (once, until ${until}${inv.lanOnly ? '; this network only: the router opened no door' : ''}; its bytes are capped a day; your own computer: afterwards kula-node peers ring <it> home). on the other computer:\n  kula-node peers add ${inv.code}\nor type: address ${inv.typed.address}, code ${inv.typed.code}, certificate ${inv.typed.certificate}\n`);
   }
   log(`gate listening on ${gate.dualStack ? '[::]' : gate.bound}:${gate.port}${gate.dualStack ? ' (ipv6 and ipv4)' : ''}${tlsServer ? (v1Open(secret, tlsServer) ? ' (v1 and v2 tls)' : ' (v2 tls only)') : ' (v1 only, no tls)'}`);
   if (opts.relay) {
@@ -314,6 +367,7 @@ export async function share(opts: ShareOptions): Promise<ShareHandle> {
   }
   state.setGatePort(gate.port);
   printQr(gate.port);
+  if (anchorHost && !opts.noQr) printInvite();
 
   // the dashboard: the peer book, the ledger, a chat box against the local api
   let dashboard: Dashboard | null = null;
@@ -379,6 +433,8 @@ export async function share(opts: ShareOptions): Promise<ShareHandle> {
     bonjour.destroy();
     await relay?.close();
     await mapper?.stop();
+    await links?.close();
+    anchorHost?.close();
     anchor?.close();
     await gate.close();
     if (api) await api.close();
@@ -393,6 +449,12 @@ export async function share(opts: ShareOptions): Promise<ShareHandle> {
     qr: () => qrText,
     paired: () => tlsServer?.paired.size ?? 0,
     anchor,
+    invite: newInvite,
+    openInvite: () => anchorHost?.current() ?? null,
+    portMap: () => ({ asked: !!opts.mapPort, mapping: mapper?.mapping() ?? null, why: mapWhy }),
+    addrs: () => addrsOf(gate.port),
+    links: () => links?.view() ?? [],
+    rejoin: () => links?.refresh(true),
     // a code that ran out by time is renewed here, so whoever asks never shows a dead one
     code: () => {
       if (!tlsServer) return null;

@@ -241,10 +241,12 @@
           <label class="field"><span>code</span><input id="add-pin" placeholder="16 letters and digits after “code”" spellcheck="false"></label>
           <label class="field"><span>certificate <em>optional</em></span><input id="add-fp" placeholder="the 16 after “certificate”, to be sure" spellcheck="false"></label>
           <label class="field"><span>name <em>optional</em></span><input id="add-name" placeholder="my phone"></label>
+          <label class="switch"><input type="checkbox" id="add-anchor" role="switch"><span>an anchor's invite (a computer far away: its certificate start is needed)</span></label>
           <button type="button" class="primary" id="add-type">pair</button>
         </div>
         <div class="tab-body" data-body="paste" hidden>
-          <label class="field"><span>the qr text, a code, or host:port:secret</span><textarea id="add-text" rows="3" spellcheck="false" placeholder='{"k":"kula-peer",…}'></textarea></label>
+          <p class="hint">an anchor's invite goes here too: this computer joins that anchor and can then reach your circle through it when far from home.</p>
+          <label class="field"><span>the qr text, a code, an anchor's invite, or host:port:secret</span><textarea id="add-text" rows="3" spellcheck="false" placeholder='{"k":"kula-peer",…}'></textarea></label>
           <label class="field"><span>relay <em>for a six digit code only</em></span><input id="add-relay" placeholder="wss://relay.example" spellcheck="false"></label>
           <button type="button" class="primary" id="add-paste">add</button>
         </div>
@@ -256,6 +258,21 @@
         <p><button type="button" class="pill" id="share-toggle">start sharing</button></p>
         <img id="share-qr" class="invite-qr host-qr" alt="this computer's sharing qr code" hidden>
         <p class="hint" id="share-line" aria-live="polite"></p>
+        <!-- "make this computer an anchor" (docs/ANCHOR.md): off by default, kept across restarts -->
+        <label class="switch"><input type="checkbox" id="anchor-on" role="switch"><span>make this computer an anchor</span></label>
+        <p class="hint">your devices away from home (a phone on mobile data, a laptop at a friend's) then reach each other through this computer. it stays on, and awake, until you turn it off. the anchor sees who talks to whom and how much, never what is said.</p>
+        <p class="hint" id="anchor-line" aria-live="polite"></p>
+        <div id="anchor-invite" hidden>
+          <div class="row"><label class="field"><span>a friend's device may pass up to … GB a day through this computer <em>your own devices: no limit</em></span><input id="anchor-cap" type="number" min="0.1" step="0.5" inputmode="decimal"></label>
+          <button type="button" class="pill" id="anchor-cap-set">keep</button></div>
+          <div class="row"><label class="field"><span>whose computer is it for?</span><select id="anchor-whose"><option value="friend">a friend's</option><option value="mine">mine</option></select></label>
+          <button type="button" class="pill" id="anchor-invite-new">invite a computer</button></div>
+          <img id="anchor-qr" class="invite-qr host-qr" alt="the anchor's invite as a qr code" hidden>
+          <label class="field" id="anchor-code-box" hidden><span>the invite: copy it to the other computer</span><textarea id="anchor-code" rows="3" readonly spellcheck="false"></textarea></label>
+          <p id="anchor-copy-row" hidden><button type="button" class="pill" id="anchor-copy">copy</button></p>
+          <p class="hint" id="anchor-invite-line" aria-live="polite"></p>
+        </div>
+        <p class="hint" id="anchor-joined" aria-live="polite"></p>
       </details>
       <p class="msg" id="add-msg" role="status"></p>
     </section>

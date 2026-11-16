@@ -47,6 +47,17 @@ export interface TlsServer {
   // when `pin` stops working (unix ms); unset: no expiry (tests, dev-gate)
   pinExpiresAt?: number | null;
   onPinUsed?: () => void;
+  // more one-time codes beside `pin` (join.ts OneTimeCodes, docs/ANCHOR.md "join"): an anchor's
+  // invite code, a member's pair-back code. `open` lists the codes open for this certificate now,
+  // `recent` the ones that were used or ran out a short while ago (for the plain refusal), `take`
+  // spends one (false: it is no longer open)
+  codes?: ExtraCodes;
+}
+
+export interface ExtraCodes {
+  open(fp: string): string[];
+  recent?(fp: string): { pin: string; why: string }[];
+  take(pin: string, fp: string): boolean;
 }
 
 // The master's side of v2: its identity, the worker's fingerprint from the qr
@@ -489,13 +500,17 @@ export async function startGateServer(opts: GateServerOptions): Promise<GateServ
     const ch = parts[1] as Channel;
     const paired = t.paired.has(fpC);
     let pin = t.pin;
+    // the other one-time codes open for this certificate (an invite, a pair-back), and the ones
+    // just used or run out, so a late try hears why
+    const extra = paired ? [] : t.codes?.open(fpC) ?? [];
+    const gone = paired ? [] : t.codes?.recent?.(fpC) ?? [];
     if (!paired && pin !== null && t.pinExpiresAt != null && Date.now() > t.pinExpiresAt) {
       // the code is spent by time: the next qr shows a new one
       t.pin = null; pin = null;
       t.onPinUsed?.();
-      return refuse('pin expired');
+      if (!extra.length && !gone.length) return refuse('pin expired');
     }
-    if (!paired && pin === null) return refuse('not paired');
+    if (!paired && pin === null && !extra.length && !gone.length) return refuse('not paired');
     const nonceS = nonce();
     writeLine(socket, `${nonceS} ${paired ? 'paired' : 'pin'}`);
     let proof: string;
@@ -507,16 +522,26 @@ export async function startGateServer(opts: GateServerOptions): Promise<GateServ
       if (proof !== '-') return refuse('bad proof');
       okLine = 'OK -';
     } else {
-      if (!sameHex(proof, pinProofClient(pin!, nonceC, nonceS, ch, fpS, fpC))) return refuse('wrong pin');
-      // the code must still be the open one now: a second handshake that waited with the same
-      // code while the first paired (or the code ran out or was replaced) is refused (review 1.5)
-      if (t.pin !== pin || (t.pinExpiresAt != null && Date.now() > t.pinExpiresAt)) return refuse('pin used');
-      // the first connection with the right code pairs the client and spends the code
-      t.paired.add(fpC);
-      t.pin = null;
-      emit({ type: 'pair', channel: ch, peer, at: Date.now(), v: 2, fp: fpC });
-      t.onPinUsed?.();
-      okLine = `OK ${pinProofServer(pin!, nonceC, nonceS, ch, fpS, fpC)}`;
+      const proves = (c: string) => sameHex(proof, pinProofClient(c, nonceC, nonceS, ch, fpS, fpC));
+      if (pin !== null && proves(pin)) {
+        // the code must still be the open one now: a second handshake that waited with the same
+        // code while the first paired (or the code ran out or was replaced) is refused (review 1.5)
+        if (t.pin !== pin || (t.pinExpiresAt != null && Date.now() > t.pinExpiresAt)) return refuse('pin used');
+        // the first connection with the right code pairs the client and spends the code
+        t.paired.add(fpC);
+        t.pin = null;
+        emit({ type: 'pair', channel: ch, peer, at: Date.now(), v: 2, fp: fpC });
+        t.onPinUsed?.();
+        okLine = `OK ${pinProofServer(pin, nonceC, nonceS, ch, fpS, fpC)}`;
+      } else {
+        const hit = extra.find(proves);
+        if (!hit) return refuse(gone.find((g) => proves(g.pin))?.why ?? 'wrong pin');
+        // single use as well: whoever took it first (it may have run out meanwhile)
+        if (!t.codes!.take(hit, fpC)) return refuse('pin used');
+        t.paired.add(fpC);
+        emit({ type: 'pair', channel: ch, peer, at: Date.now(), v: 2, fp: fpC });
+        okLine = `OK ${pinProofServer(hit, nonceC, nonceS, ch, fpS, fpC)}`;
+      }
     }
     await admitted(socket, peer, ch, okLine, reader.release(), 2, fpC, refuse, handshakeDone);
   };

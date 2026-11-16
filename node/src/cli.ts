@@ -6,6 +6,7 @@ import { loadOrCreateIdentity } from './tls.js';
 import { loadOrCreate as loadDeviceKey } from './audit/key.js';
 import { setup, planSetup, findLlama, candidates, TAG, WINDOWS_FIREWALL_NOTE } from './llama.js';
 import { share } from './share.js';
+import { anchorShareView } from './ui/sharehere.js';
 import { home, packageRoot } from './paths.js';
 import { version, isPacked } from './build.js';
 import { ledgerCommand } from './ledgercmd.js';
@@ -46,6 +47,10 @@ usage:
                         upnp), renew it while sharing and remove it on stop; the qr then carries the
                         router's address too. tls only. no other machine is asked (docs/INTERNET.md)
       --gateway <ip>    the router to ask (default: the system's default route)
+      --anchor          be an anchor of your circle (docs/ANCHOR.md): devices away from home reach each
+                        other through this computer. asks the router for the port (as --map-port),
+                        says in plain words whether the internet can reach it, and prints an invite
+                        (once, 10 minutes) for another computer: kula-node peers add <invite>. tls only
   kula-node probe <host> <port> <secret> [--json]   handshake on both channels, print OK/NO
       secret "env" reads $KULA_SECRET (a secret typed here shows in ps); "-" is none
       --fp <hex> [--pin <code>]   probe over tls (v2) against that certificate fingerprint; secret may be "-"
@@ -332,6 +337,8 @@ export async function main(argv: string[]): Promise<number> {
     const secret = got.secret;
     if (flags['no-tls'] === true && typeof flags.relay === 'string') { console.error('--relay needs tls: drop --no-tls'); return 2; }
     if (flags['map-port'] === true && (flags['no-tls'] === true || secret)) { console.error('--map-port needs tls only: drop --no-tls and --secret (v1 must not face the internet)'); return 2; }
+    if (flags.anchor === true && (flags['no-tls'] === true || secret)) { console.error('--anchor needs tls only: drop --no-tls and --secret (members are known by their certificates)'); return 2; }
+    if (flags.anchor === true && flags['ipv4-only'] === true) console.error('note: --ipv4-only: the anchor is then reached over ipv4 only (a router port)');
     if (flags['no-tls'] === true) console.error('warning: --no-tls: v1 only, prompts and answers cross the network in plain text');
     if (process.platform === 'win32') console.error(WINDOWS_FIREWALL_NOTE);
     const stop = await share({
@@ -346,9 +353,15 @@ export async function main(argv: string[]): Promise<number> {
       relay: typeof flags.relay === 'string' ? flags.relay : undefined,
       dashboard: flags['no-dashboard'] === true ? false : flags.dashboard !== undefined ? num(flags.dashboard, 50580) : undefined,
       dualStack: flags['ipv4-only'] !== true,
-      mapPort: flags['map-port'] === true,
+      // an anchor asks the router for its door too
+      mapPort: flags['map-port'] === true || flags.anchor === true,
       gateway: typeof flags.gateway === 'string' ? flags.gateway : undefined,
+      ...(flags.anchor === true ? { anchor: true } : {}),
     });
+    if (flags.anchor === true) {
+      const a = anchorShareView(stop, { on: true });
+      console.log(`\nanchor: ${a.words}\n`);
+    }
     await new Promise<void>((resolve) => {
       const done = () => { stop().finally(resolve); };
       process.once('SIGINT', done);

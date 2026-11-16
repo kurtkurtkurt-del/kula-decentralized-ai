@@ -16,9 +16,9 @@ import { openApart, openPeerDevice, startLlamaServer, type Cluster, type Message
 import { measureLink, type Link } from '../link.js';
 import { isAnchorRoad, roadDialer, type PeerAnchor, type RoadContext } from '../road.js';
 import type { AnchorHub } from '../anchor.js';
-import { isPrivateAddress, isLoopback } from '../policy.js';
+import { joinWithInvite, readJoined, joinedRoads, removeJoined, reachableFromOutside, type JoinedAnchor } from '../join.js';
 import { peerTls, readPeers, writePeers, parsePeerText, upsertPeer, findPeer, probePeers, peersFile, whereIs, discover, reachedBy, isRing, ringOf, widestRing, WORLD_CLOSED, type AddrVia, type Peer, type PeerProbe, type Found, type PeerKind, type Ring } from '../peers.js';
-import { connectRemote, handshake, peekGate, GateRefused, type GatePeek, FP_MISMATCH } from '../gate.js';
+import { connectRemote, handshake, peekGate, GateRefused, type GatePeek, FP_MISMATCH, FP_PREFIX_MIN } from '../gate.js';
 import { Adb, isSerial, stateHelp, NO_ADB_HELP, type CableDevice } from './cable.js';
 import { loadOrCreateIdentity, fingerprint, Paired, type GateIdentity } from '../tls.js';
 import { Ledger, sha256Hex } from '../audit/ledger.js';
@@ -311,16 +311,20 @@ export interface EngineOptions {
   // this computer's own anchor while share runs with it on (docs/ANCHOR.md): devices registered
   // there are reached in one hop ('self' roads), and engine.anchor() reads its counters
   anchorHub?: () => AnchorHub | null;
-  // the anchors this computer is registered with: the last roads to every device
+  // the anchors this computer is registered with: the last roads to every device. Default: the
+  // store of joined anchors (join.ts), `joinedFile`
   anchors?: () => PeerAnchor[];
+  // the store of anchors this computer joined; default anchors.json beside peersFile (~/.kula-node)
+  joinedFile?: string;
 }
 
 // This computer as an anchor, its live counters (the brain reads them: godseye host.anchor):
 // on (it offers the role now), reachable (a member registered from an address that is not
 // private, so the gate answers from outside; null: not known), links (members holding their
 // link to it now), bytesDay (what it passed on today, ciphertext, every member together) and
-// capDay (the daily limit per dialing member in bytes).
-export interface AnchorView { on: boolean; reachable: boolean | null; links: number; bytesDay: number; capDay: number | null }
+// capDay (a friend's device's daily limit in bytes; the person's own devices have none),
+// memberMaxDay (the most one capped member passed today, to hold against capDay).
+export interface AnchorView { on: boolean; reachable: boolean | null; links: number; bytesDay: number; capDay: number | null; memberMaxDay: number }
 
 // What a model takes in memory, run whole: the file, the kv cache for ctx, some slack.
 export function needMb(size: number, kvMbPer1k: number, ctx: number): number {
@@ -487,23 +491,33 @@ export class Engine {
     let hub: AnchorHub | null = null;
     try { hub = this.opts.anchorHub?.() ?? this.hub?.() ?? null; } catch {}
     let anchors: PeerAnchor[] = [];
-    try { anchors = this.opts.anchors?.() ?? []; } catch {}
+    try { anchors = this.opts.anchors ? this.opts.anchors() : joinedRoads(readJoined(this.joinedFile())); } catch {}
     return { identity: this.identity(), hub, anchors };
   }
   private hub: (() => AnchorHub | null) | null = null;
+  private joinedFile(): string { return this.opts.joinedFile ?? path.join(path.dirname(this.file()), 'anchors.json'); }
 
   /** The page's share (ui/sharehere.ts) hands in its anchor here when it runs with one. */
   attachAnchor(get: () => AnchorHub | null): void { this.hub = get; }
 
+  /** Told when this computer joined an anchor (the page then shares, so it can register there). */
+  attachJoin(f: (a: JoinedAnchor) => void): void { this.onJoin = f; }
+  private onJoin: ((a: JoinedAnchor) => void) | null = null;
+
   /** This computer as an anchor of the circle: its live counters (AnchorView). */
   anchor(): AnchorView {
     const hub = this.roads().hub as AnchorHub | null;
-    if (!hub || typeof hub.stats !== 'function') return { on: false, reachable: null, links: 0, bytesDay: 0, capDay: null };
+    if (!hub || typeof hub.stats !== 'function') return { on: false, reachable: null, links: 0, bytesDay: 0, capDay: null, memberMaxDay: 0 };
     const members = hub.members();
     const st = hub.stats();
+    const day = Object.values(st.bytesToday);
+    // capDay is a friend's daily cap: memberMaxDay is the most a capped member (ring circle) passed
+    // today; the person's own devices (ring home) and this computer's own dials are never capped
+    const own = this.identity().fp;
+    const capped = (fp: string) => fp !== own && (typeof hub.capped === 'function' ? hub.capped(fp) : true);
+    const perMember = Object.entries(st.bytesToday).filter(([fp]) => capped(fp)).map(([, b]) => b);
     // reached from outside is said only when a member came in from an address that is not private
-    const outside = members.some((m) => m.peer !== 'self' && !isLoopback(m.peer) && !isPrivateAddress(m.peer));
-    return { on: true, reachable: outside ? true : null, links: members.length, bytesDay: Object.values(st.bytesToday).reduce((a, b) => a + b, 0), capDay: hub.caps.bytesPerDay ?? null };
+    return { on: true, reachable: reachableFromOutside(members) ? true : null, links: members.length, bytesDay: day.reduce((a, b) => a + b, 0), capDay: hub.caps.bytesPerDay ?? null, memberMaxDay: perMember.length ? Math.max(...perMember) : 0 };
   }
 
   // the device a certificate belongs to in the peer book: its row id and name
@@ -807,6 +821,8 @@ export class Engine {
   async addPeer(text: string, opts: { name?: string; relay?: string } = {}): Promise<PeerRow> {
     const peer = parsePeerText(text, opts.relay || process.env.KULA_RELAY || undefined);
     if (opts.name?.trim()) peer.name = opts.name.trim().slice(0, 60);
+    // an anchor's invite (docs/ANCHOR.md "join"): pair with it and join, never kept as a plain peer
+    if (peer.anchor && peer.hpin && peer.pin) return this.joinAnchor(peer);
     const file = this.file();
     const { list, added } = upsertPeer(readPeers(file), peer);
     writePeers(list, file);
@@ -819,7 +835,7 @@ export class Engine {
   // one-time code; optionally the start of the certificate. One tls handshake with the code
   // learns the certificate (the code's proof covers both certificates, so a device in the
   // middle fails it), the start shown on the phone must match, and the peer is kept paired.
-  async pairByHand(input: { address: string; pin: string; fp?: string; name?: string }): Promise<PeerRow> {
+  async pairByHand(input: { address: string; pin: string; fp?: string; name?: string; anchor?: boolean }): Promise<PeerRow> {
     const m = HOST_PORT.exec(String(input.address ?? '').trim());
     if (!m) throw new Error('address must look like 192.168.1.20:50551');
     const host = m[1].replace(/^\[|\]$/g, '');
@@ -829,6 +845,13 @@ export class Engine {
     if (!/^[0-9a-f]{8,64}$/.test(pin)) throw new Error('the code is the 16 letters and digits after "code" on the phone');
     const fpStart = String(input.fp ?? '').replace(/[\s-]/g, '').toLowerCase();
     if (fpStart && !/^[0-9a-f]{4,64}$/.test(fpStart)) throw new Error('the certificate is hex (0-9, a-f)');
+    // an anchor's invite, typed: its address, its code and the start of its certificate (16 or more)
+    if (input.anchor === true) {
+      if (fpStart.length < FP_PREFIX_MIN) throw new Error(`an anchor's invite needs the start of its certificate: ${FP_PREFIX_MIN} letters and digits or more`);
+      const now = new Date().toISOString();
+      const peer: Peer = { id: `${host}:${port}`, name: input.name?.trim().slice(0, 60) || '', host, port, secret: '', fp: null, pin, paired_at: null, relay: null, anchor: true, kind: 'pc', ram: null, bw: null, added_at: now, last_ok: null };
+      return this.joinAnchor(peer, fpStart);
+    }
     const fp = await this.pinPair(host, port, pin, fpStart || null);
     if (fpStart && !fp.startsWith(fpStart)) throw new Error('the certificate does not match what the phone shows: not pairing');
     const now = new Date().toISOString();
@@ -849,6 +872,23 @@ export class Engine {
     // measured right away: the planner needs its network before a split (a phone answers GET /blob too)
     await this.measure(peer.id).catch(() => {});
     return this.rowOf(peer.id);
+  }
+
+  // Joins an anchor with its invite (join.ts): pairs with its gate with the invite's code, keeps it
+  // in the peer book and among the joined anchors; the page's share then registers there and the
+  // anchor pairs back. Its roads are this computer's from now on (roads(): the joined anchors).
+  private async joinAnchor(peer: Peer, fpPrefix: string | null = null): Promise<PeerRow> {
+    const j = await joinWithInvite({ peer, fpPrefix, identity: this.identity(), peersFile: this.file(), joinedFile: this.joinedFile() });
+    this.reach.set(j.peer.id, { r: { ok: true }, at: Date.now() });
+    const at = `${j.at.host.includes(':') ? `[${j.at.host}]` : j.at.host}:${j.at.port}`;
+    this.note(`joined the anchor ${j.peer.name} at ${at}: this computer registers there while it shares, and the anchor pairs back`);
+    try { this.onJoin?.(j.anchor); } catch {}
+    return this.rowOf(j.peer.id);
+  }
+
+  /** The anchors this computer joined (the store, join.ts): name, where, whether the pair-back is still to come. */
+  joinedAnchors(): { fp: string; name: string; at: string; waitingBack: boolean }[] {
+    return readJoined(this.joinedFile()).map((a) => ({ fp: a.fp.slice(0, 16), name: a.name, at: `${a.host.includes(':') ? `[${a.host}]` : a.host}:${a.port}`, waitingBack: !!a.hpin && (a.hpinExp ?? 0) > Date.now() }));
   }
 
   // the network to a paired device, measured now (link.ts) and kept on its record
@@ -929,6 +969,8 @@ export class Engine {
     if (!g) return false;
     const row = this.deviceRow(g);
     writePeers(list.filter((p) => !g.includes(p)), file);
+    // an anchor this computer joined: forgetting it leaves it (no more registering there)
+    for (const p of g) if (p.fp && removeJoined(this.joinedFile(), p.fp)) this.note(`left the anchor ${row.name}`);
     for (const p of g) {
       this.reach.delete(p.id); this.held.delete(p.id); this.workers.delete(p.id); this.trusts.delete(p.id); this.heard.delete(p.id); this.heardAt.delete(p.id);
       if (p.cable) this.jobs.delete(p.cable.serial);

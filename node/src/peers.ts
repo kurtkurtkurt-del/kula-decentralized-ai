@@ -55,6 +55,9 @@ export interface Peer {
   anchors?: PeerAnchor[] | null;
   // it offers the anchor role itself (its code said so)
   anchor?: boolean;
+  // an anchor's invite (join.ts): the second one-time code, the one the anchor pairs back with.
+  // Only while joining: never kept in the peer book
+  hpin?: string | null;
   // the road it answered on at the last probe when that was not host/port (null: host/port did):
   // an address, or through an anchor (road.ts); both channels, api and rpc, follow it
   route?: Road | null;
@@ -225,6 +228,7 @@ export function parsePeerText(text: string, relayUrl?: string): Peer {
     ...(addrs.length ? { addrs } : {}),
     ...(anchors.length ? { anchors } : {}),
     ...(obj.v === 3 && obj.anchor === true ? { anchor: true } : {}),
+    ...(obj.v === 3 && obj.anchor === true && typeof obj.hpin === 'string' && PIN.test(obj.hpin) ? { hpin: obj.hpin.toLowerCase() } : {}),
     kind,
     ram: num(obj.ram),
     bw: num(obj.bw),
@@ -240,7 +244,7 @@ export function parsePeerText(text: string, relayUrl?: string): Peer {
 export function peerCode(p: Peer): string {
   const { id, name, host, port, secret, kind, ram, bw } = p;
   const o = p.fp
-    ? { k: 'kula-peer', v: 3, id, name, host, port, ...(p.addrs?.length ? { addrs: p.addrs } : {}), ...(p.anchors?.length ? { anchors: p.anchors } : {}), ...(p.anchor ? { anchor: true } : {}), fp: p.fp, pin: p.pin ?? undefined, relay: p.relay ?? undefined, kind, ram, bw }
+    ? { k: 'kula-peer', v: 3, id, name, host, port, ...(p.addrs?.length ? { addrs: p.addrs } : {}), ...(p.anchors?.length ? { anchors: p.anchors } : {}), ...(p.anchor ? { anchor: true } : {}), fp: p.fp, pin: p.pin ?? undefined, ...(p.anchor && p.hpin ? { hpin: p.hpin } : {}), relay: p.relay ?? undefined, kind, ram, bw }
     : { k: 'kula-peer', v: 2, id, name, host, port, secret, kind, ram, bw };
   return Buffer.from(JSON.stringify(o), 'utf8').toString('base64url');
 }

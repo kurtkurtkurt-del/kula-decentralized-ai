@@ -197,6 +197,16 @@ export async function startUi(opts: UiOptions): Promise<UiServer> {
   const shareHere = opts.share ?? new ShareHere({ log });
   // a device registered with this computer's anchor (sharing with the anchor on) is one hop away
   if (typeof engine.attachAnchor === 'function') engine.attachAnchor(() => (typeof shareHere.anchorHub === 'function' ? shareHere.anchorHub() : null));
+  // joined an anchor: this computer registers there through its share (started when off)
+  if (typeof engine.attachJoin === 'function') engine.attachJoin(() => { if (typeof shareHere.joined === 'function') void shareHere.joined().catch(() => {}); });
+  // the anchor was on when kula last ran: it is on again (docs/ANCHOR.md)
+  if (typeof shareHere.resume === 'function') void shareHere.resume().catch((e) => log(`anchor: ${(e as Error).message}`));
+  // the share view with the joined anchors even while not sharing (then nothing registers there)
+  const shareView = () => {
+    const v = shareHere.view();
+    if (v.joined?.length || typeof engine.joinedAnchors !== 'function') return v;
+    return { ...v, joined: engine.joinedAnchors().map((a) => ({ name: a.name, state: 'off', words: `${a.name}: not linked while this computer does not share (share this computer to register there)` })) };
+  };
   const token = opts.token ?? loadOrCreateToken();
   if (opts.prefix !== undefined && !PREFIX_RE.test(opts.prefix)) throw new Error('the prefix must be 24 hex characters');
   const prefix = opts.prefix ?? randomBytes(12).toString('hex');
@@ -321,8 +331,10 @@ export async function startUi(opts: UiOptions): Promise<UiServer> {
       if (route === 'nearby') return json(res, 200, engine.nearby());
       if (route === 'hostpair') return json(res, 200, engine.hostPair());
       // "share this computer": its state and code, and the qr another device scans (no-store: the code changes)
-      if (route === 'share') return json(res, 200, shareHere.view());
+      if (route === 'share') return json(res, 200, shareView());
       if (route === 'share.svg') { const t = shareHere.qr(); return t ? send(res, 200, qrSvg(t), TYPES['.svg'], { 'cache-control': 'no-store' }) : send(res, 404, 'not sharing'); }
+      // the anchor's open invite as a qr (the text itself comes with POST share/invite and GET share)
+      if (route === 'share/invite.svg') { const t = shareHere.inviteText(); return t ? send(res, 200, qrSvg(t), TYPES['.svg'], { 'cache-control': 'no-store' }) : send(res, 404, 'no invite open'); }
       if (route === 'hostpair.svg') { const t = engine.hostPairPayload(); return t ? send(res, 200, qrSvg(t), TYPES['.svg'], { 'cache-control': 'no-store' }) : send(res, 404, 'no qr open'); }
       if (route === 'models') return json(res, 200, engine.models());
       if (route === 'lineup') return json(res, 200, engine.lineup());
@@ -455,7 +467,7 @@ export async function startUi(opts: UiOptions): Promise<UiServer> {
     }
     if (route === 'peers/add') {
       try {
-        if (typeof body?.address === 'string') return json(res, 200, await engine.pairByHand({ address: body.address, pin: body.pin, fp: body.fp, name: body.name }));
+        if (typeof body?.address === 'string') return json(res, 200, await engine.pairByHand({ address: body.address, pin: body.pin, fp: body.fp, name: body.name, anchor: body.anchor === true }));
         if (typeof body?.text !== 'string' || !body.text.trim()) return json(res, 400, { error: 'paste the code from the phone' });
         return json(res, 200, await engine.addPeer(body.text, { name: typeof body.name === 'string' ? body.name : undefined, relay: typeof body.relay === 'string' ? body.relay : undefined }));
       } catch (e) { return fail(e); }
@@ -465,7 +477,23 @@ export async function startUi(opts: UiOptions): Promise<UiServer> {
     if (route === 'cable/use') { try { return json(res, 200, engine.useCable(body?.serial)); } catch (e) { return fail(e); } }
     if (route === 'cable/pair') { try { return json(res, 200, await engine.pairCable(body?.serial, body?.code)); } catch (e) { return fail(e); } }
     if (route === 'share/start') { const v = await shareHere.start(); return json(res, v.error ? 500 : 200, v); }
-    if (route === 'share/stop') return json(res, 200, await shareHere.stop());
+    // the person's stop: the anchor goes off with it (it needs sharing)
+    if (route === 'share/stop') return json(res, 200, await shareHere.stop(true));
+    // "make this computer an anchor": the switch (kept as a setting), and an invite for a far device
+    // body: on (the switch) and/or capGb (what a friend's device may pass a day; the person's own: no limit)
+    if (route === 'share/anchor') {
+      const hasCap = body?.capGb !== undefined;
+      if (typeof body?.on !== 'boolean' && !hasCap) return json(res, 400, { error: 'on: true or false, or capGb' });
+      if (hasCap) { try { shareHere.setFriendCap(Number(body.capGb)); } catch (e) { return fail(e); } }
+      const v = typeof body?.on === 'boolean' ? await shareHere.setAnchor(body.on) : shareHere.view();
+      return json(res, v.error ? 500 : 200, v);
+    }
+    // an invite asks whose device it is for: mine (never byte-capped) or a friend's (capped)
+    if (route === 'share/invite') {
+      const whose = body?.whose ?? 'friend';
+      if (whose !== 'mine' && whose !== 'friend') return json(res, 400, { error: 'whose: mine or friend' });
+      try { return json(res, 200, shareHere.invite(whose)); } catch (e) { return fail(e, 409); }
+    }
     if (route === 'hostpair/new') return json(res, 200, engine.openHostPair());
     if (route === 'hostpair/close') return json(res, 200, engine.closeHostPair());
     if (route === 'nearby/look') { try { return json(res, 200, await engine.look()); } catch (e) { return fail(e, 500); } }

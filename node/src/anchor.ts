@@ -58,6 +58,11 @@ export interface AnchorOptions {
   self: string;                       // this computer's certificate fingerprint (its own dials)
   isMember: (fp: string) => boolean;  // circleMembers() in share
   caps?: Partial<AnchorCaps>;
+  // whether a dialing member's bytes a day are capped (16.11.2026, the person's decision): a
+  // friend's device is, the person's own (ring home) is not. Asked again on every check, so a
+  // ring changed meanwhile counts at once. Default: every member is capped. The stream and dial
+  // caps hold for everyone (they guard against a broken device).
+  capped?: (fp: string) => boolean;
   acceptTimeoutMs?: number;
   controlSilenceMs?: number;
   // tests: every byte the anchor carries, as it sees it
@@ -166,6 +171,12 @@ export class AnchorHub {
   }
 
   isMember(fp: string): boolean { return fp !== this.opts.self && this.opts.isMember(fp); }
+
+  // the daily byte cap applies to this dialing member (never to this computer's own dials)
+  capped(fp: string): boolean {
+    if (fp === this.opts.self) return false;
+    try { return this.opts.capped ? this.opts.capped(fp) : true; } catch { return true; }
+  }
 
   on(f: (e: AnchorEvent) => void): () => void { this.listeners.add(f); return () => { this.listeners.delete(f); }; }
 
@@ -316,7 +327,7 @@ export class AnchorHub {
     if (!FP_RE.test(to)) return refuse('bad dial');
     if (!d.self) {
       if (!this.dials.take(d.fp, this.caps.dialsPerMinute, now)) return refuse('too many dials');
-      if (this.dayBytes(d.fp).bytes >= this.caps.bytesPerDay) return refuse('byte limit');
+      if (this.capped(d.fp) && this.dayBytes(d.fp).bytes >= this.caps.bytesPerDay) return refuse('byte limit');
       if (this.streamsOf(d.fp) >= this.caps.streamsPerMember) return refuse('too many streams');
     }
     if (this.streams.size >= this.caps.streamsTotal) return refuse('full');
@@ -354,8 +365,8 @@ export class AnchorHub {
       s.bytes += c.length;
       const day = this.dayBytes(d.fp);
       day.bytes += c.length;
-      // over the day's bytes: this member's running streams are cut too
-      if (!d.self && day.bytes > this.caps.bytesPerDay) {
+      // over the day's bytes: this member's running streams are cut too (a capped member only)
+      if (!d.self && day.bytes > this.caps.bytesPerDay && this.capped(d.fp)) {
         for (const o of this.streams.values()) if (o.from === d.fp) for (const l of o.legs) l.destroy();
       }
     };
@@ -365,7 +376,7 @@ export class AnchorHub {
     leg.conn.on('data', (c: Buffer) => count('t→d', c));
     await pipeBoth(d.conn, leg.conn, restD, restT);
     this.streams.delete(sid);
-    const over = !d.self && this.dayBytes(d.fp).bytes > this.caps.bytesPerDay;
+    const over = !d.self && this.dayBytes(d.fp).bytes > this.caps.bytesPerDay && this.capped(d.fp);
     if (over) this.emit({ type: 'refuse', fp: d.fp, peer: d.peer, at: this.now(), reason: 'byte limit', to });
     this.emit({ type: 'close', sid, from: d.fp, to, peer: d.peer, at: this.now(), ms: this.now() - s.at, bytes: s.bytes });
   }

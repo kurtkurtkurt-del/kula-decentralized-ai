@@ -276,13 +276,15 @@ test('the engine\'s rows: via anchor, through the anchor\'s row, the anchor offe
     assert.equal(rows.find((r) => r.id === 'a')!.where, `127.0.0.1:${w.A.gate.port}`, 'a device reached directly keeps its address');
     // this computer as the anchor: the worker registered here
     const v = e.anchor();
-    assert.deepEqual({ ...v, bytesDay: 0 }, { on: true, reachable: null, links: 1, bytesDay: 0, capDay: 5_000_000_000 });
+    assert.deepEqual({ ...v, bytesDay: 0, memberMaxDay: 0 }, { on: true, reachable: null, links: 1, bytesDay: 0, capDay: 5_000_000_000, memberMaxDay: 0 });
+    // the most one dialing member passed today: never more than all of them together (anchor-join.test.ts counts it)
+    assert.ok(v.memberMaxDay <= v.bytesDay);
     // through this computer's own anchor
     fs.writeFileSync(peersFile, JSON.stringify([w.peer({ anchors: [], route: { via: 'anchor', anchor: 'self' } })]));
     const self = e.peers()[0];
     assert.deepEqual([self.via, self.through, self.where], ['anchor', 'self', 'through this computer (its anchor)']);
     // no anchor here: off
-    assert.deepEqual(new Engine({ peersFile, pairedFile: path.join(dir, 'paired'), identity: w.M.identity, llama: null }).anchor(), { on: false, reachable: null, links: 0, bytesDay: 0, capDay: null });
+    assert.deepEqual(new Engine({ peersFile, pairedFile: path.join(dir, 'paired'), identity: w.M.identity, llama: null }).anchor(), { on: false, reachable: null, links: 0, bytesDay: 0, capDay: null, memberMaxDay: 0 });
   } finally { await w.close(); }
 });
 

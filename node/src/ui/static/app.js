@@ -1328,7 +1328,11 @@ function renderDevices() {
       const paired = w.cable ? '' : g.cable?.installed === false ? ' · kula is not installed' : ' · not paired yet';
       lines.push(`cable · ${st}${reach}${paired}`);
     }
-    if (w.wifi) lines.push(`wi-fi · ${w.wifi.where} · ${w.wifi.ok ? `ready${w.wifi.ms ? ` (${w.wifi.ms} ms)` : ''}` : w.wifi.ok === false ? (fresh ? 'heard here, not answering' : 'not reachable') : fresh ? 'heard on this wi-fi' : 'not checked'}`);
+    // how it is reached now, in plain words: on this wi-fi, over the internet, through an anchor
+    const rw = g.cable || w.cable ? null : reachWords(g.peers[0]);
+    if (rw) lines.push(rw);
+    const wayLabel = g.peers[0]?.via === 'anchor' ? 'anchor' : g.peers[0]?.reachedBy === 'ipv6' || g.peers[0]?.reachedBy === 'mapped' ? 'internet' : 'wi-fi';
+    if (w.wifi) lines.push(`${wayLabel} · ${w.wifi.where} · ${w.wifi.ok ? `ready${w.wifi.ms ? ` (${w.wifi.ms} ms)` : ''}` : w.wifi.ok === false ? (fresh ? 'heard here, not answering' : 'not reachable') : fresh ? 'heard on this wi-fi' : 'not checked'}`);
     if (w.relay) lines.push(`relay · ${w.relay.where} · ${w.relay.ok ? 'reachable' : w.relay.ok === false ? 'not reachable' : 'not checked'}`);
     if ([g.cableOn, g.wifiOn, g.relayOn].filter(Boolean).length > 1) lines.push(`talks over ${g.via === 'cable' ? 'the cable' : 'wi-fi'} now`);
     const p0 = g.peers[0];
@@ -1523,7 +1527,18 @@ function viaTag(p) {
   if (p.far) return el('small', 'via', 'relay');
   // reached through an anchor of the circle (16.11.2026): its name, or this computer when it is the anchor
   if (p.via === 'anchor') return el('small', 'via', `through ${p.throughName || 'an anchor'}`);
+  if (p.reachedBy === 'ipv6' || p.reachedBy === 'mapped') return el('small', 'via', 'internet');
   return el('small', 'via', 'wi-fi');
+}
+
+// How a device is reached, in plain words (16.11.2026): on this wi-fi, over the internet (a global
+// ipv6 address or a router's port), through an anchor of the circle (this computer's own or another).
+function reachWords(p) {
+  if (!p || p.cable) return null;
+  if (p.far) return 'through the relay';
+  if (p.via === 'anchor') return p.through === 'self' ? 'through this computer (its anchor)' : `through anchor ${p.throughName || 'of the circle'}`;
+  if (p.reachedBy === 'ipv6' || p.reachedBy === 'mapped') return 'over the internet';
+  return 'on this wi-fi';
 }
 
 async function refreshAll() {
@@ -1726,7 +1741,63 @@ function renderShare(v) {
     img.hidden = true; shareCode = null;
     line.textContent = v.error ? `could not start: ${v.error}` : v.on ? `sharing as ${v.name}` : '';
   }
+  renderAnchor(v);
 }
+// ---- make this computer an anchor (docs/ANCHOR.md): the switch, what the router said, the invite
+let anchorInviteCode = null;
+function renderAnchor(v) {
+  const a = v.anchor;
+  const sw = $('anchor-on');
+  if (!a) { sw.disabled = !!v.starting; return; }
+  sw.checked = !!a.on;
+  sw.disabled = !!v.starting;
+  $('anchor-line').textContent = v.starting && a.on ? 'starting: sharing this computer and asking the router for a door…' : a.words;
+  $('anchor-invite').hidden = !(a.on && a.live);
+  if (document.activeElement !== $('anchor-cap') && a.capGb) $('anchor-cap').value = String(a.capGb);
+  const inv = a.invite;
+  const img = $('anchor-qr');
+  if (inv) {
+    if (anchorInviteCode !== inv.code) { anchorInviteCode = inv.code; img.src = `${apiUrl('share/invite.svg')}?t=${encodeURIComponent(String(inv.exp))}`; $('anchor-code').value = inv.code; }
+    img.hidden = false;
+    $('anchor-code-box').hidden = false;
+    $('anchor-copy-row').hidden = false;
+    $('anchor-invite-line').textContent = inv.words;
+  } else {
+    img.hidden = true; anchorInviteCode = null;
+    $('anchor-code-box').hidden = true;
+    $('anchor-copy-row').hidden = true;
+    $('anchor-code').value = '';
+    $('anchor-invite-line').textContent = a.on && a.live ? 'no invite open: each invite lets one computer join, once, for 10 minutes.' : '';
+  }
+  const joined = v.joined || [];
+  $('anchor-joined').textContent = joined.length ? `anchors this computer joined: ${joined.map((j) => j.words).join(' · ')}` : '';
+}
+$('anchor-on').addEventListener('change', async () => {
+  const on = $('anchor-on').checked;
+  $('anchor-on').disabled = true;
+  $('anchor-line').textContent = on ? 'turning it on: sharing this computer and asking the router for a door…' : 'turning it off…';
+  try { renderShare(await postJson('share/anchor', { on })); } catch (e) { $('anchor-line').textContent = e.message; refreshShare(); }
+});
+$('anchor-invite-new').addEventListener('click', async () => {
+  try {
+    const whose = $('anchor-whose').value === 'mine' ? 'mine' : 'friend';
+    await postJson('share/invite', { whose });
+    feed('connections', `made an anchor invite for ${whose === 'mine' ? 'a computer of yours' : 'a friend\'s computer'} (once, 10 minutes)`);
+    await refreshShare();
+  } catch (e) { $('anchor-invite-line').textContent = e.message; }
+});
+$('anchor-cap-set').addEventListener('click', async () => {
+  const capGb = Number($('anchor-cap').value);
+  if (!(capGb > 0)) return $('anchor-cap').focus();
+  try { renderShare(await postJson('share/anchor', { capGb })); $('anchor-invite-line').textContent = `a friend's device may now pass up to ${capGb} GB a day through this computer; yours have no limit.`; }
+  catch (e) { $('anchor-invite-line').textContent = e.message; }
+});
+$('anchor-copy').addEventListener('click', async () => {
+  const t = $('anchor-code').value;
+  if (!t) return;
+  try { await navigator.clipboard.writeText(t); $('anchor-invite-line').textContent = 'copied. send it to the other computer: it works once, for 10 minutes.'; }
+  catch { $('anchor-code').select(); $('anchor-invite-line').textContent = 'select the text above and copy it (ctrl/cmd + c).'; }
+});
 async function refreshShare() {
   try { renderShare(await getJson('share')); } catch (e) { $('share-line').textContent = e.message; }
 }
@@ -1795,6 +1866,14 @@ function addMsg(text, kind = '') { const m = $('add-msg'); m.textContent = text;
 
 async function added(row) {
   $('add').open = false;
+  if (row.anchor) {
+    // an anchor's invite: this computer joined it; its share registers there and the anchor pairs back
+    addMsg(`joined the anchor ${row.name}. this computer shares itself now and registers there; the anchor pairs back within a few seconds. away from home, your devices reach each other through it.`, 'ok');
+    feed('connections', `joined the anchor ${row.name}`);
+    await refreshPeers(false);
+    refreshShare();
+    return;
+  }
   addMsg(`added ${row.name}${row.reach ? (row.reach.ok ? ', reachable' : `, but not reachable now: ${row.reach.reason}`) : ''}.`, row.reach && !row.reach.ok ? 'bad' : 'ok');
   if (settings.mode === 'phone' || !settings.peers.length) settings.peers = [row.id];
   else if (!settings.peers.includes(row.id)) settings.peers.push(row.id);
@@ -1807,8 +1886,11 @@ async function added(row) {
 $('add-type').addEventListener('click', async () => {
   addMsg('pairing…');
   try {
-    const row = await postJson('peers/add', { address: $('add-address').value.trim(), pin: $('add-pin').value.trim(), fp: $('add-fp').value.trim(), name: $('add-name').value.trim() });
+    const anchor = $('add-anchor').checked;
+    if (anchor) addMsg('joining the anchor…');
+    const row = await postJson('peers/add', { address: $('add-address').value.trim(), pin: $('add-pin').value.trim(), fp: $('add-fp').value.trim(), name: $('add-name').value.trim(), anchor });
     $('add-pin').value = '';
+    $('add-anchor').checked = false;
     await added(row);
   } catch (e) { addMsg(e.message, 'bad'); }
 });

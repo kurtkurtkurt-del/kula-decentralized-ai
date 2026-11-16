@@ -7,7 +7,7 @@ and 4 of [INTERNET.md](INTERNET.md). The gate it lives in is described in [GATE.
 ## what it is
 
 An **anchor** is an always-on circle computer whose gate can be reached from the internet: a
-router port mapping (`kula-node share --map-port`) or an open IPv6 address. The other devices dial
+router port mapping (`kula-node share --anchor`, or the page's switch, below) or an open IPv6 address. The other devices dial
 out to it and keep one connection open. When device C wants device B and neither can reach the
 other (a phone on mobile data, a laptop behind a hotel's wi-fi), C asks the anchor for a stream to
 B. The anchor tells B, B opens a stream back, and the anchor pipes the two together.
@@ -113,14 +113,27 @@ you choose who may see that you were online and when.
 
 ## caps
 
-Defaults, settable by the person (`share({ anchor: { … } })`, `AnchorHub.setCaps`):
+Defaults, settable by the person (`share({ anchor: { … } })`, `AnchorHub.setCaps`, the page):
 
 | cap | default | when reached |
 |---|---|---|
 | streams per member (open and waiting) | 16 | `too many streams` |
 | streams in all | 128 | `full` (the anchor computer's own dials count here too) |
 | dials a minute, per member | 30 | `too many dials` |
-| bytes a day, per dialing member, both ways | 5 GB (UTC day) | new streams `byte limit`, and the member's running streams are cut |
+| bytes a day, per dialing **friend's** device, both ways | 5 GB (UTC day) | new streams `byte limit`, and the member's running streams are cut |
+
+- **The byte cap is for friends' devices only** (the person's decision, 16.11.2026). A dialing
+  member whose record in the anchor computer's peer book is ring `circle` (or `world`) is capped;
+  the person's own devices (ring `home`) never are. A member without a record yet (it paired with
+  an invite, the pair-back has not run) is capped until it has one. The ring is read again
+  whenever the peer book changes, so `kula-node peers ring <device> home|circle` or the page's
+  ring setting counts at the next check (`AnchorOptions.capped`, `ringCapped` in `node/src/join.ts`).
+- The stream and dial caps hold for everyone: they guard against a broken device, not a friend.
+- The page sets the friend cap next to the switch: "a friend's device may pass up to N GB a day
+  through this computer". It is kept with the switch (`~/.kula-node/anchor.json`) and set on the
+  running anchor at once.
+- `engine.anchor()` says `capDay` (the friend cap) and `memberMaxDay` (the most one capped member
+  passed today), so the brain can hold the two against each other.
 
 - **No idle cut.** An rpc stream sits idle between chats, and cutting it kills the loaded model.
   Dead legs are found by TCP keepalive (30 s) on every anchor leg and by the loss of the control
@@ -152,7 +165,14 @@ Defaults, settable by the person (`share({ anchor: { … } })`, `AnchorHub.setCa
 | membership: paired list or peer book | `node/src/anchor.ts`, `circleMembers` |
 | a member's side: register and keep the control connection | `node/src/anchor.ts`, `joinAnchor` |
 | a stream to a member, ready for the gate handshake | `node/src/anchor.ts`, `dialAnchor` |
-| turning it on | `share({ anchor: true \| caps })` in `node/src/share.ts` (no CLI flag yet) |
+| turning it on | `share({ anchor: true \| caps })` in `node/src/share.ts`; `kula-node share --anchor`; the page's switch (`node/src/ui/sharehere.ts`) |
+| one-time codes beside the gate's own (invites, pair-back codes) | `node/src/join.ts` `OneTimeCodes`, `TlsServer.codes` in `node/src/gate.ts` |
+| the invite and the pair-back | `node/src/join.ts`, `AnchorHost` |
+| joining: pairing with the invite, the store of joined anchors | `node/src/join.ts`, `joinWithInvite`, `~/.kula-node/anchors.json` |
+| staying registered with every joined anchor while sharing | `node/src/join.ts`, `AnchorLinks` (started by `share`) |
+| whose bytes are capped (ring) | `node/src/join.ts`, `ringCapped`; `AnchorHub.capped` |
+| the switch, its setting, what the router said in plain words | `node/src/ui/sharehere.ts` (`anchorWords`, `anchorShareView`) |
+| join tests: three homes, codes, pair-back, typed entry, router words, the switch, the page | `node/test/anchor-join.test.ts` |
 | events (register, leave, open, close, refuse) | the gate's `onAnchor`, apart from `GateEvent` |
 | tests | `node/test/anchor.test.ts`: three gates on 127.0.0.1 |
 | roads: an address or `{via:'anchor', anchor:<fp>\|'self'}`, the staggered pick, `openRoad`, `roadDialer` | `node/src/road.ts` |
@@ -180,16 +200,97 @@ Defaults, settable by the person (`share({ anchor: { … } })`, `AnchorHub.setCa
   anchor) and the estimate sums the round trips per worker over its own link
   (`RPC_ROUND_TRIPS` 1.1, measured 16.11.2026). The plan says per device how it is reached and
   what its link costs a token.
-- **Not wired yet:** `share` from the page does not turn the anchor on, and nothing records which
-  anchors this computer registered with: both come with stage 4 (join).
+- **Wired by stage 4 (join, below):** the page's switch turns the anchor on ('self' roads), and the
+  engine's anchors come from the store of joined anchors.
 
 The gate's `rpc` channel is now held by **certificate** in v2 (by address in v1): every stream
 through an anchor or a relay arrives from 127.0.0.1, and two far masters must not share the slot.
 
+## join (stage 4, 16.11.2026)
+
+### make a computer an anchor
+
+- **On the page:** devices → share this computer → **make this computer an anchor** (a switch, off
+  by default). Sharing (re)starts with the anchor hub on (default caps), the gate on ipv6 and ipv4,
+  and the router asked for the gate port (PCP, NAT-PMP, UPnP-IGD: [INTERNET.md](INTERNET.md)).
+  Turning it off restarts sharing as before (this network only); stopping sharing turns it off.
+- **In a terminal:** `kula-node share --anchor` (implies `--map-port`, tls only). It prints what
+  the router said and an invite (for a friend's computer), and a new invite each time one is used.
+- **It stays on:** the switch is a setting (`~/.kula-node/anchor.json`); `kula-node ui` starts
+  sharing with the anchor again after a restart. Sharing keeps the computer awake
+  ([awake.ts](../node/src/awake.ts)), so it is awake for as long as the anchor is on.
+
+What the page says, by state:
+
+| state | words (shortened) |
+|---|---|
+| off | "off. turned on, your devices that are away from home … reach each other through this computer." |
+| starting | "starting: sharing this computer and asking the router for a door…" |
+| the router mapped the port | "the router opened the door: from the internet this computer answers at 203.0.113.5:50551." |
+| the router mapped, but did not say its address | "the router opened port 50551, but did not say its address on the internet." |
+| no answer from the router | "no answer from the router: open TCP port 50551 to this computer (192.168.1.5) by hand in the router's settings (often called "port forwarding"), then make an invite." |
+| the router refused | "the router said no (pcp: not authorized): open TCP port … by hand …" |
+| carrier NAT (the address the router reports is itself private or shared) | "your provider does not give this home a public address: this computer cannot be an anchor from outside; it can still be a member of another anchor." |
+| a global ipv6 address | "… over ipv6 it may also answer at [2001:db8::5]:50551, if the router lets it in." |
+| not confirmed | "not confirmed from outside yet: that shows once a device registers here from away from this network." |
+| confirmed | "reached from outside: a device came in from the internet." Only once a member registered from an address that is neither private nor loopback (`engine.anchor().reachable`); no outside service is asked. |
+
+### invite a computer
+
+With the anchor on: **invite a computer**, after saying whose it is (mine / a friend's). The invite
+is the anchor's `kula-peer` v3 code (`peerCode`): its certificate fingerprint, its addresses from
+outside (the router's mapped address, global ipv6; only the lan address when there is none, and
+the page says so), a one-time code `pin`, `anchor: true` and a second one-time code `hpin`. It is
+shown as text to copy and as a qr, works **once, for 10 minutes**, and a new invite kills the one
+before. The typed form is printed beside it: address, code, the certificate's first 16 hex.
+
+"Mine" makes the joiner ring `home` in the anchor's peer book (never byte-capped); "a friend's"
+ring `circle` (capped, above). The person can change it later like any ring.
+
+### join an anchor
+
+On the other computer: devices → add a device → **paste a code** (or `kula-node peers add <invite>`),
+or **type it** with the address, the code, the certificate start (16 hex or more) and "an anchor's
+invite" ticked. Then:
+
+1. It pairs with the anchor's gate with `pin` (the usual pin proof, which covers both
+   certificates; the anchor's certificate is pinned from the invite, or checked against the typed
+   start at TLS before the code is spent). The anchor is now in its peer book (`anchor: true`,
+   ring `circle` until the person says otherwise) and in `~/.kula-node/anchors.json`.
+2. While it shares (the page starts sharing for it when it was off; a terminal runs
+   `kula-node share`), it **registers** with every joined anchor and stays registered
+   (`AnchorLinks`: reconnects with backoff, along the invite's addresses).
+3. Its gate opens `hpin` for **the anchor's certificate only**. When it registers, the anchor dials
+   it through its own hub (the in-process hop) and pairs with `hpin`: the far version of the host
+   qr. Now each is pinned and paired on the other side; the anchor keeps it in its peer book,
+   reached through `'self'`. A typed invite has no `hpin`: both sides derive it from `pin`
+   (`pairBackCode`).
+4. Its engine takes the joined anchors as its roads (`EngineOptions.anchors`), and its share qr
+   names them (`anchors`), so a device that pairs with it on the wi-fi can later reach it through
+   them. Forgetting the anchor on the page leaves it.
+
+What the joiner hears when it does not work:
+
+| the anchor's gate said | words |
+|---|---|
+| `pin used` | "this invite was used already: each invite works once. ask for a new one." |
+| `pin expired` (ran out, or a newer invite replaced it) | "this invite ran out (it works for 10 minutes). ask for a new one." |
+| `wrong pin` | "the code does not match the anchor's invite: check it, or ask for a new invite." |
+| `not paired` (no invite open) | "the anchor has no invite open: ask for a new one." |
+| another certificate at TLS | "the certificate does not match what the anchor shows: not joining" (typed), or the next address is tried |
+| nothing answers | "the anchor does not answer at …: is it on, and is its door open from where you are?" |
+
+The gate remembers a used or expired invite code for 30 minutes, only to say which of these it
+was. Besides the qr's own code it keeps any number of such one-time codes (`TlsServer.codes`), each
+spent by the first pairing, and a pair-back code only for the one certificate it names.
+
+On the page each device row says how it is reached now: **on this wi-fi**, **over the internet**
+(a global ipv6 address or a router's port), or **through anchor X** (through this computer, when
+it is the anchor).
+
 ## next
 
 1. ~~Routes~~ (done 16.11.2026, "roads" above).
-2. Join: the anchor's invite (the `kula-peer` v3 code with `anchor: true` and a second code for the
-   pair-back), "make this computer an anchor" in the app, carrier NAT said plainly.
+2. ~~Join~~ (done 16.11.2026, "join" above).
 3. The phone: dials the anchor and keeps the control connection while sharing.
 4. The circle's address book and a second anchor.
