@@ -202,8 +202,11 @@ may use the joiner's**: run model layers on it and ask it for answers, without a
 someone removes it. So the page asks yes or no before joining and says this. The phone asks too
 and also asks whose computer it is, "my computer" or "a friend's computer"; the answer is kept
 with the anchor and decides the rpc seat (phone: in 0.6.0). An invite marked "a friend's" makes the
-joiner ring `circle` on the anchor (byte-capped); "mine" makes it `home`. A computer that joins
-keeps the anchor at ring `circle` until the person changes it.
+joiner ring `circle` on the anchor (byte-capped). Since 17.11.2026 an invite marked "mine" makes it
+`circle` too, with a claim, until the person says "yes, it is mine" on the anchor's devices page
+([below](#after-the-brains-round-17112026)). A computer that joins asks the same question as the
+phone, "my computer" or "a friend's computer", and keeps the anchor at ring `home` or `circle` by
+the answer; `kula-node peers add` in a terminal does not ask and keeps it `circle`.
 
 ### removal: what cuts what, and how fast
 
@@ -276,16 +279,175 @@ pinned (with `paired_at`) in the peer book. Both must go before the anchor turns
 - **A typed invite** names the anchor by 16 hex of its certificate, which is 64 bits. A gate
   with a matching prefix that answers `paired` is accepted. It still cannot pair back without the
   code.
-- **A member's own signed record can name any address**, so devices that pinned it will try a
-  TLS hello there.
+- **A member's own signed record can name any address** outside the few this computer never dials
+  (loopback, link-local, multicast: refused since 17.11.2026, below), so devices that pinned it will
+  try a TLS hello there. A friend's device can no longer name private lan addresses to them (below);
+  the person's own devices can.
 - **Rings:** a device paired the ordinary way (a qr, not an invite) has no ring in the peer book
   and counts as the person's own, so it is not byte-capped and not a friend for the rpc seat until
   someone sets it to `circle`. Only invites ask whose a device is. A certificate with no peer-book
   record at all is byte-capped on the anchor but counts as own for the rpc seat.
-- **A stolen invite** used within its 10 minutes gives the thief the ring the invite named:
-  `home` for a "mine" invite.
+- **A stolen invite** used within its 10 minutes pairs the thief as a friend's device (`circle`,
+  byte-capped), whatever the invite said; since 17.11.2026 a "mine" invite only adds a claim the
+  person must confirm (below).
 - **The phone:** Doze, network handover and TLS inside TLS are shown only on a real device. The
   phone does not sign, give or take address records yet. On the phone, an anchor's computer counts
   as a friend's for the rpc seat while the anchor is joined as "a friend's computer"; forgetting the
   anchor also removes its computer's access to the phone (and any separate pairing with that same
   computer, as on kula-node). The phone sets up at most 32 `open`s from an anchor at once.
+
+## after the brain's round (17.11.2026)
+
+The brain's round after 0.6.0 ([BEYIN.md](BEYIN.md#the-brain-and-the-anchor-network-16112026))
+was read for security before it was pushed: the new code, the parts review D4 had not read
+(`Guard.kt`, `app/src/llm/roads.ts`, the page's owner check, `PeerScan`), the address records and
+the stolen "mine" invite. Nothing was run for the read; one probe confirmed F1. There was no high
+finding. Three medium findings (two of them already in 0.6.0) and two low ones were fixed before
+the push, each with a test that fails without the fix. The person decided two of the fixes
+(17.11.2026).
+
+### F1: a signed record could make this computer dial its own loopback and lan
+
+- **The attack (in 0.6.0):** a pinned friend's device, a joined anchor or a copied key signs an
+  address record whose `addrs` or `anchors` name `127.0.0.1:<port>` or `192.168.x.y:<port>`. This
+  computer took it and, on every probe round, opened TCP there and sent a TLS hello. A failed try
+  starts the next at once, so the signer could time when its own address was dialed and learn
+  whether the port was open: a slow scan of the victim's loopback and lan. No attacker bytes were
+  sent and nothing came back; the pinned certificate still decides who answers.
+- **Now:** a record that names any address or anchor this computer must never dial is refused
+  whole ("an address this computer must not dial"; `undialable` in `node/src/policy.ts`): loopback,
+  `0.0.0.0/8`, `::`, link-local (`169.254/16`, `fe80::/10`) and multicast and above (`224.0.0.0` up,
+  `ff00::/8`), also written as ipv4-mapped ipv6. A lan address is not one of them. The probe:
+  before, the record was taken and the listener counted 2 connects; after, refused and 0. Only tests
+  whose homes all answer on 127.0.0.1 may allow loopback (`allowLoopback`); no production path sets
+  it.
+- **Friends' lan addresses** (the person's decision): for a device that is not the person's own
+  (its ring is not `home`), a taken record loses every address labelled `lan` **or** in a private
+  range (10/8, 172.16/12, 192.168/16, 100.64/10, fc00::/7, …), whatever the record calls it, since
+  the label is the device's own word; and its anchors at private addresses, unless this computer
+  joined that anchor at that very host and port itself. The person's own devices keep theirs. When
+  a device's ring changes, its held record is applied again, so a device confirmed as the person's
+  own gets its lan addresses back, and one turned a friend's loses them. So F1's lan residual is
+  closed for friends. A visiting friend is reached on the wi-fi by discovery or through the anchor,
+  not by the address in its record; a friend's anchor whose lan address changes is reached by its
+  outside address only.
+
+### F3 and "yes, it is mine"
+
+- **The attack (in 0.6.0):** whoever saw a "mine" invite within its 10 minutes and used it first was
+  written to the anchor's peer book as ring `home`: no daily limit, and private work may go there.
+  The real joiner heard only `pin used`. And a friend already paired as `circle` who used a "mine"
+  invite had its ring overwritten to `home`.
+- **Now:** an invite never changes the ring of a device already in the peer book. A new device is
+  always written `circle`. When the invite said "mine", the record also gets a **claim**: when it
+  paired back, and the address it registered from. The anchor's devices page shows on that row:
+  "its invite said it is yours. it joined at HH:MM from <address> (this network | the internet),
+  certificate <16 hex>. is it yours? until you say yes it is limited like a friend's device", with
+  **yes, it is mine** and **no**. The device picks its own name, so the time, the address and the
+  certificate are what the person checks. Yes makes every record of that device `home`; no leaves
+  it `circle` and says "if you do not know it, press remove its access, then forget it". Any ring
+  the person sets answers the claim too. The claim never reaches the brain's look.
+- **The route:** `POST peers/mine {id, yes}` sits beside `peers/ring`, behind the same owner check
+  (a guest is refused) and same-origin check. A device without a claim gets 409, so the route cannot
+  lift a friend; an unknown id gets 404; a second answer gets 409.
+- **The words:** the invite on the anchor and the phone's and computer's "joined" messages say to
+  press "yes, it is mine" on that row, and that until then it is limited like a friend's.
+- **Limit:** a thief on the same wi-fi reads "this network"; the certificate start is then the only
+  other check.
+
+### a computer joining an anchor asks whose it is
+
+As the phone already did: before it joins, the page asks "my computer" or "a friend's computer"
+(or cancel), and the join is refused without an answer. "My computer" keeps the anchor at ring
+`home` on this computer, "a friend's" at `circle`. Before, a computer kept every anchor it joined
+as `circle`, and under the friends' rule above it would no longer learn its own anchor's lan
+address from records. `kula-node peers add` in a terminal does not ask and keeps `circle`;
+`kula-node peers ring <anchor> home` changes it.
+
+### F4: an unreadable peer book wiped the address book
+
+- **The bug (new in this round):** forgotten devices now leave the address book (their lan and
+  public addresses go from `addrbook.json` at start, on every ask, every 60 s, and before a record
+  is taken). But the peer book's reader said "nothing pinned" for a file it could not read, so a
+  corrupt `peers.json`, or `EBUSY` during a rename on Windows, deleted every record and its seq
+  floor; asked again with seq 0, an anchor could hand back any old signed record, a rollback to
+  stale addresses.
+- **Now:** when the peer book or the joined store is there but cannot be read or is not a list,
+  nothing changes: no prune, nothing asked, and a record is refused ("the peer book could not be
+  read"), logged once each time it breaks. An absent file is still empty.
+
+### F5: anchor names in the black box
+
+An anchor known only by name (`throughName`, from another device's record) and the name of the
+friend's device behind the anchor's busiest day (`memberMaxName`) are now scrubbed from the black
+box like device names (`secretScan` in `node/src/godseye/boxfacts.ts`). `memberMaxName` appears
+in the cap cards' title and why, and so in the feed lines that quote a card's title (you accepted,
+you rejected, you undid); cards are not written to the box, and those feed lines reach it scrubbed
+of the name (`node/test/godseye-eye-box.test.ts`).
+
+### F2: the brain's softer rule for a gate on the internet
+
+A burst of strangers' knocks on a device's own gate gives a card instead of red only when that
+gate really faces the internet (it offers the anchor role, is reached straight over the internet,
+or has an address outside the lan). The first version also counted a device reached through an
+anchor, which is behind its home's router: a member of the same anchor hammering it would have
+read as "scanners". Wrong codes, replays, the rpc guard and any other reason stay red
+([BEYIN.md](BEYIN.md#the-brain-and-the-anchor-network-16112026)).
+
+### the brain's new routes and changes
+
+The brain's cards may now carry three more changes: `cap` (a friend's daily limit through this
+anchor), `anchor` (make this computer an anchor) and `cancel` (a waiting night project). They go
+through `POST brain/apply` as before, and accept has two new routes beside it, `brain/reject` and
+`brain/undo` ([BEYIN.md](BEYIN.md#accepting-and-rejecting-a-card-17112026)). All of them sit behind
+the same checks:
+
+- the owner only (a guest gets 403) and a same-origin POST (else 403);
+- the card must be live and its action equal to what the page sent (else 404 or 409);
+- the action is cleaned first: `gb` and `from` finite, above 0, at most 100000; `on` only `true`;
+  `project` a string of 1 to 200 characters;
+- each kind checks that the state is still what the card saw (the cap, the anchor switch, the
+  project waiting), else 409 and nothing runs; an undo checks that nothing moved since, else 409;
+- `anchor` (it opens a port to the internet) and `cancel` (no undo) need the confirm sent back
+  (else 400). An anchor that fails to start turns the switch back off (500).
+
+Tests: `node/test/ui-brain-cards.test.ts`, `node/test/godseye-rings.test.ts`,
+`node/test/address-book.test.ts`, `node/test/anchor-join.test.ts`.
+
+### read, no finding
+
+`Guard.kt` (url policy, the rpc slot, api peers, endpoints); `app/src/llm/roads.ts`; the page's
+owner check (host check, random prefix, same-origin POST); card text (escaped on the page, names
+cleaned and cut in `guard.ts`); `PeerScan`'s `take()` (called only from typed text, paste and the
+camera, never from a deep link; invites and host qrs ask first); record tampering (signature and
+fingerprint checked). Not read: the body of `app/src/llm/cluster.ts`, Kotlin's `Gate.kt` and
+`Anchor.kt` (the phone issues no invites and signs, gives and takes no address records: checked
+again by search), and how `share.ts` wires `onPairedBack`. The page never shows who used an
+invite.
+
+### low, parked (no fix this round)
+
+- **A seq at the maximum:** a record may carry a seq up to 2^53−1, so a copied key can sign one
+  nobody can ever out-number. It gives nothing the key does not already give, and a cap on seq would
+  refuse honest devices with a fast clock.
+- **An equal seq with a different body** (a copied key): the first one seen wins at each holder; it
+  is never noticed or logged.
+- **An anchor serving an old record, or withholding one:** a record has no expiry, and nothing
+  floors a device whose record this computer does not hold. The effect is stale addresses only; a
+  second anchor is the remedy, and the brain's one-road card shows where there is none.
+- **The port map after a crash:** on routers that answer UPnP error 725 the lease is permanent and
+  stays for ever; the PCP nonce is new for each process, so after a restart the router may say "not
+  authorized" for up to an hour. Later: keep the nonce and the mapping, delete them at the next
+  start.
+- **Notes of forgotten devices** in the brain's connections branch (`hr` and the others) stay until
+  the device cap pushes them out. Later: drop a device's notes after 7 days absent.
+- **`pin expired` means two things** at the gate: unproved, and proved knowledge of a spent code,
+  and it is counted with the strangers. `pin used` never raises a check or a card, though it is the
+  late sign of a stolen invite. It needs the same on the phone's gate.
+- **`pasaport://share?start=1`** starts sharing on the phone without a press. The pairing code is
+  still needed.
+- **The brain's level refit** for a device's own gate is not tied to facing the internet: a day of
+  steady knocking from inside reads as a new level. It is the same rule as this computer's gate,
+  and one feed line says it.
+- **A friend's daily bytes** through an anchor are counted in memory and start again when sharing
+  restarts.

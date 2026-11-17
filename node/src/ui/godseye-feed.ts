@@ -53,7 +53,11 @@ let liveSeen: { file: string; seen: FileSeen } | null = null;
 // (PRIVATE below) counts as far, and its network (ipv4 /24, ipv6 /48) is kept only as a short
 // sha256 so that hostGate can say how many distinct networks knocked. At most NETS_HOUR networks
 // are kept per hour (a scan wider than that reads as at least that many); at most GATE_BY_MAX
-// reasons per hour (a reason past them still counts as far).
+// reasons per hour (a reason past them still counts as far). An hour in which no verified line of
+// any kind was seen (share writes a health line every 60 s, so a running gate always writes) was
+// not seen at all: hostGate leaves it out instead of saying 0, and gatewatch's gateStep treats a
+// missing hour as unseen (17.11.2026, P0 step 7: ten silent days read as zeros made the same
+// knocking as before look like a rise on the first day back).
 const HOUR = 3_600_000;
 const GATE_HOURS = 26;               // host.gate's hours, the last one running
 const GATE_BY_MAX = 40;              // reasons kept per hour (guard.ts looks at no more)
@@ -62,8 +66,10 @@ const NETS_HOUR = 10_000;            // network hashes kept per hour
 const REASON_MAX = 200;              // a reason or a guard's why is cut here (guard.ts REASON)
 const N_MAX = 1_000_000_000;         // a reject line's `n` (the refusals it stands for) is cut here
 const REJECT_LINE = /^\{"t":(\d{1,16}),"kind":"reject",/;
+const ANY_LINE = /^\{"t":(\d{1,16}),/;
 type GateHour = { by: Map<string, number>; far: number; nets: Set<string> };
 const gateHours = new Map<number, GateHour>();
+const gateSeen = new Set<number>();  // hours (their start) in which a verified line of any kind was seen
 let gateGuard: { t: number; why: string }[] = [];
 let gateNewest = -1;                 // the newest reject t counted
 const PRIVATE = new net.BlockList();
@@ -116,8 +122,11 @@ function gateFold(lines: string[], problems: Problem[], floor: number | null): v
   const bad = new Set(problems.map((p) => p.n));   // verifyLines numbers the lines from 1
   const first = hourOf(Date.now()) - (GATE_HOURS - 1) * HOUR;
   for (let i = 0; i < lines.length; i++) {
+    if (bad.has(i + 1)) continue;
+    const any = ANY_LINE.exec(lines[i]);
+    if (any && Number(any[1]) >= first) gateSeen.add(hourOf(Number(any[1])));
     const m = REJECT_LINE.exec(lines[i]);
-    if (!m || bad.has(i + 1)) continue;
+    if (!m) continue;
     const t = Number(m[1]);
     if (t < first || (floor !== null && t <= floor)) continue;
     let o: unknown;
@@ -139,20 +148,24 @@ function gateFold(lines: string[], problems: Problem[], floor: number | null): v
     if (t > gateNewest) gateNewest = t;
   }
   for (const s of gateHours.keys()) if (s < first) gateHours.delete(s);
+  for (const s of gateSeen) if (s < first) gateSeen.delete(s);
 }
 
 /** This computer's gate over the last 26 UTC hours (the last one running), from the reject lines
- *  hostLedger verified; null until hostLedger has read a ledger. Counts only, no address. Its own
- *  export, because hostLedger returns early when nothing changed. */
+ *  hostLedger verified; null until hostLedger has read a ledger. Counts only, no address. A
+ *  finished hour without any verified line was not seen and is left out; the running hour is
+ *  always there. Its own export, because hostLedger returns early when nothing changed. */
 export function hostGate(now = Date.now()): EyeGate | null {
   if (!ledgerKeyId) return null;
   const last = hourOf(now);
   const first = last - (GATE_HOURS - 1) * HOUR;
   for (const s of gateHours.keys()) if (s < first) gateHours.delete(s);
+  for (const s of gateSeen) if (s < first) gateSeen.delete(s);
   const hours: EyeGate['hours'] = [];
   const nets = new Set<string>();
   for (let s = first; s <= last; s += HOUR) {
     const h = gateHours.get(s);
+    if (s < last && !h && !gateSeen.has(s)) continue;   // no line of any kind: not seen
     hours.push({ start: s, by: h ? Object.fromEntries(h.by) : {}, far: h ? h.far : 0 });
     if (h) for (const n of h.nets) nets.add(n);
   }
@@ -197,7 +210,7 @@ export function hostLedger(file = ledgerFile()): Snapshot['host']['ledger'] {
   try {
     const key = loadOrCreate();
     const keyId = createHash('sha256').update(key.publicKey.export({ type: 'spki', format: 'der' })).digest('hex');
-    if (keyId !== ledgerKeyId) { rotatedSeen.clear(); liveSeen = null; ledgerKeyId = keyId; gateHours.clear(); gateGuard = []; gateNewest = -1; }
+    if (keyId !== ledgerKeyId) { rotatedSeen.clear(); liveSeen = null; ledgerKeyId = keyId; gateHours.clear(); gateSeen.clear(); gateGuard = []; gateNewest = -1; }
     const floor = gateNewest;   // a fold from byte 0 in this pass counts only rejects newer than this
     let prev = GENESIS;
     let count = 0;
@@ -236,8 +249,17 @@ export function hostLedger(file = ledgerFile()): Snapshot['host']['ledger'] {
 // 'anchor' (reached through an anchor of the circle) passes as it is, its `through` names the
 // anchor's row ('self' when this computer is the anchor, null when the anchor is not in the peer
 // book), its `throughName` the anchor's name, and `anchor: true` marks a row that offers the role.
-type AnchorRow = Omit<PeerRow, 'via'> & { via?: PeerRow['via'] | 'anchor'; through?: string | null; throughName?: string | null; anchor?: boolean };
-type AnchorLook = { on?: unknown; reachable?: unknown; links?: unknown; bytesDay?: unknown; capDay?: unknown; memberMaxDay?: unknown };
+// `roads` (17.11.2026): the row's road counts (engine.ts deviceRow), counts only.
+type AnchorRow = Omit<PeerRow, 'via'> & { via?: PeerRow['via'] | 'anchor'; through?: string | null; throughName?: string | null; anchor?: boolean; roads?: { lan: number; direct: number; anchors: number } };
+type AnchorLook = { on?: unknown; reachable?: unknown; links?: unknown; bytesDay?: unknown; capDay?: unknown; memberMaxDay?: unknown; since?: unknown; refused?: unknown; removed?: unknown; memberMaxName?: unknown };
+
+// the measured round trip and its time, from the record's link (link.ts); only when there is one
+function linkOf(p: PeerRow): Pick<EyeDevice, 'linkRttMs' | 'linkAt'> {
+  const l = p.link;
+  if (!l || typeof l !== 'object') return {};
+  const at = typeof l.at === 'string' ? Date.parse(l.at) : NaN;
+  return { linkRttMs: typeof l.rttMs === 'number' && Number.isFinite(l.rttMs) && !l.error ? l.rttMs : null, linkAt: Number.isFinite(at) ? at : null };
+}
 const via = (p: PeerRow): EyeDevice['via'] => {
   if ((p as AnchorRow).via === 'anchor') return 'anchor';
   const v = p.via ?? (p.cable ? 'cable' : p.far ? 'relay' : 'wifi');
@@ -290,6 +312,9 @@ export function deviceOf(p: PeerRow, trust: TrustLook | null = null): EyeDevice 
     ...(a.through !== undefined ? { through: a.through } : {}),
     ...(a.throughName !== undefined ? { throughName: a.throughName } : {}),
     ...(a.anchor !== undefined ? { anchor: a.anchor } : {}),
+    // its roads, counted (never an address), and the measured link (P0, 17.11.2026)
+    ...(a.roads !== undefined ? { roads: a.roads ? { lan: a.roads.lan, direct: a.roads.direct, anchors: a.roads.anchors } : null } : {}),
+    ...linkOf(p),
   };
 }
 
@@ -297,14 +322,19 @@ export function deviceOf(p: PeerRow, trust: TrustLook | null = null): EyeDevice 
 // it, null when it throws or says nothing; plain fields only (guard.ts cleans them). memberMaxDay
 // (the most any single member passed today) only when the engine says it
 function anchorOf(engine: Engine): Pick<Snapshot['host'], 'anchor'> {
-  const e = engine as Engine & { anchor?: () => AnchorLook | null | undefined };
+  const e = engine as Engine & { anchor?: (o?: { detail?: boolean }) => AnchorLook | null | undefined };
   if (typeof e.anchor !== 'function') return {};
   let r: AnchorLook | null | undefined = null;
-  try { r = e.anchor(); } catch { r = null; }
+  try { r = e.anchor({ detail: true }); } catch { r = null; }
   if (!r || typeof r !== 'object') return { anchor: null };
+  // since, refused, removed and memberMaxName (P0, 17.11.2026) only when the engine says them
   return { anchor: {
     on: r.on, reachable: r.reachable, links: r.links, bytesDay: r.bytesDay, capDay: r.capDay,
     ...(r.memberMaxDay !== undefined ? { memberMaxDay: r.memberMaxDay } : {}),
+    ...(r.since !== undefined ? { since: r.since } : {}),
+    ...(r.refused !== undefined ? { refused: r.refused && typeof r.refused === 'object' ? { ...(r.refused as Record<string, unknown>) } : r.refused } : {}),
+    ...(r.removed !== undefined ? { removed: r.removed } : {}),
+    ...(r.memberMaxName !== undefined ? { memberMaxName: r.memberMaxName } : {}),
   } as NonNullable<Snapshot['host']['anchor']> };
 }
 

@@ -396,6 +396,63 @@ test('a four-to-seven char project title never reaches the box', () => {
   assert.ok(feed.some((r) => (r.x as { text: string }).text.includes('[…]')), 'the title was cut out of the feed');
 });
 
+// F5 (17 Nov): an anchor known by name only (a record's anchors[].name, chosen by a pinned device)
+// is quoted by connections' route-switch feed line; the box keeps the line without the name
+test('an anchor\'s throughName and the anchor\'s memberMaxName are scrubbed; a route switch through it keeps no name in the box', () => {
+  const dir = fresh('through-name');
+  const s = { current: snapOf([dev('p1', { via: 'wifi', checkedAt: 900 })], 1000) };
+  const eye = new GodsEye({ snapshot: () => s.current, dir: fresh('notes'), box: { dir } });
+  eye.tick();
+  s.current = snapOf([dev('p1', { via: 'anchor', through: null, throughName: 'zeynep-desk-home', checkedAt: 1900 })], 2000);
+  eye.tick();
+  const live = JSON.stringify(eye.view().events.map((e) => e.text));
+  assert.ok(live.includes('is now reached through anchor zeynep-desk-home'), `the live feed names the switch: ${live}`);
+  const feed = recordsKind(dir, 'feed').map((r) => (r.x as { text: string }).text);
+  const sw = feed.filter((t) => t.includes('is now reached through'));
+  assert.equal(sw.length, 1, `the switch line is in the box: ${JSON.stringify(feed)}`);
+  assert.ok(sw[0].includes('[…]'), sw[0]);
+  assert.ok(!boxText(dir).includes('zeynep-desk-home'), 'the anchor\'s name is not in the box');
+
+  const s0 = snapOf([dev('p1', { through: null, throughName: 'zeynep-desk-home' })], 1000, {
+    host: { name: 'mac', freeMb: 4000, anchor: { on: true, reachable: true, links: 1, bytesDay: 0, capDay: null, memberMaxName: 'friends-phone-x' } },
+  });
+  const got = new Set(secretsOf(s0 as never));
+  assert.ok(got.has('zeynep-desk-home'), 'throughName is a secret');
+  assert.ok(got.has('friends-phone-x'), 'memberMaxName is a secret');
+});
+
+// D2 (17 Nov): the anchor-cap card's title names the friend's device (memberMaxName), and the
+// accept and undo lines quote the title; the box keeps those lines without the name
+test("accepting and undoing trust:anchor-cap quotes a title holding memberMaxName; the box's feed records do not hold the name", () => {
+  const dir = fresh('cap-accept');
+  const name = 'sntl-friends-phone-x';
+  const cap = 2e9;
+  const s = snapOf([dev('p1')], 1000, {
+    host: { name: 'mac', freeMb: 4000, anchor: { on: true, reachable: true, links: 1, bytesDay: 1.01 * cap, capDay: cap, memberMaxDay: 1.01 * cap, memberMaxName: name } },
+  });
+  const eye = new GodsEye({ snapshot: () => s, dir: fresh('notes'), box: { dir } });
+  eye.tick();
+  const c = eye.card('trust:anchor-cap');
+  assert.ok(c, `the cap card: ${JSON.stringify(eye.view().cards.map((x) => x.id))}`);
+  assert.ok(c.title.includes(name), `the title names the device: ${c.title}`);
+  eye.applied(c.id, 'the limit is 4 GB', { do: 'cap', gb: 2, from: 4 });
+  assert.equal(eye.pendingUndo()?.id, c.id, 'the accept can be undone');
+  assert.ok(eye.undone('the limit is 2 GB again'));
+  eye.tick();
+  const live = eye.view().events.map((e) => e.text);
+  assert.ok(live.some((t) => t.startsWith('you accepted: ') && t.includes(name)), `the live feed quotes the title: ${JSON.stringify(live)}`);
+  assert.ok(live.some((t) => t.startsWith('you undid: ') && t.includes(name)), `the live feed quotes the title: ${JSON.stringify(live)}`);
+  const feed = recordsKind(dir, 'feed').map((r) => (r.x as { text: string }).text);
+  for (const head of ['you accepted: ', 'you undid: ']) {
+    const lines = feed.filter((t) => t.startsWith(head));
+    assert.equal(lines.length, 1, `one ${head} line in the box: ${JSON.stringify(feed)}`);
+    assert.ok(lines[0].includes('[…]'), lines[0]);
+    assert.ok(!lines[0].includes(name), lines[0]);
+  }
+  assert.equal(recordsKind(dir, 'act').filter((r) => (r.x as { action: string }).action === 'apply').length, 1, 'the accept is an act');
+  assert.ok(!boxText(dir).includes(name), "the friend's device name is not in the box");
+});
+
 test('no branch ever quotes a ledger line, a certificate, a public key or a refused peer', () => {
   const ledger = 'sntl-ledger-line-never-quoted';
   const cert = 'sntl-certificate-never-quoted';

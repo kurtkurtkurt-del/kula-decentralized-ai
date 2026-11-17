@@ -360,3 +360,198 @@ test('no faster-split card while the far fit is assumed and a far seat has no li
   assert.equal(planner.farGuessed(learned.split!), false);
   assert.ok(fasterCard(learned));
 });
+
+// Y with galaxy far over a measured link of 100 ms and a learned hopRtt (k 1): the point is
+// 1000 / (520 + 100) = 1.61 tok/s, at least alone (1) × GAIN; farRange's lo is 1.61 / (1 + q)
+test('a measured far split: the faster-split card needs the far range low end at alone, not only the point (DECISIONS 2 d)', () => {
+  const s = snap({ devices: [dev({ id: 'p2', name: 'galaxy', via: 'internet', ramMb: 4000, linkRttMs: 100, linkAt: AT })], models: [Y] });
+  const f = () => fieldOf(s, {}, MEASURED_Y());
+  // q 0.7: lo 0.95, below alone: no card, though the point is 1.61 >= 1.15
+  const wide = { ks: [1, 1, 1], errs: [0.7, 0.7, 0.7, 0.7] };
+  const w = planner.plan(s, f(), Y as any, true, undefined, undefined, wide);
+  assert.equal(w.split!.far!.link, true);
+  assert.equal(w.split!.far!.assumed, false);
+  assert.equal(w.split!.tps, r1(1000 / 620));
+  assert.ok(w.split!.tps! >= w.alone!.tps! * decide.GAIN);
+  assert.ok(planner.farRange(w.split!, undefined, wide)!.lo < w.alone!.tps!);
+  assert.equal(fasterCard(w), undefined, JSON.stringify(w.cards.map((x: any) => x.id)));
+  // q 0.4: lo 1.15, at or above alone: the card
+  const tight = { ks: [1, 1, 1], errs: [0.4, 0.4, 0.4, 0.4] };
+  const t = planner.plan(s, f(), Y as any, true, undefined, undefined, tight);
+  assert.ok(planner.farRange(t.split!, undefined, tight)!.lo >= t.alone!.tps!);
+  assert.ok(fasterCard(t), JSON.stringify(t.cards.map((x: any) => x.id)));
+  // assumed (no hopRtt yet): the widened range's lo 1000 / (520 + 116) × 0.94 = 1.48 >= 1: the card
+  const a = planner.plan(s, f(), Y as any, true);
+  assert.equal(a.split!.far!.assumed, true);
+  assert.ok(planner.farRange(a.split!, undefined)!.lo >= a.alone!.tps!);
+  assert.ok(fasterCard(a));
+  // the probe-priced chain (no measured link) stays as today: the point rule, though its range's lo is below alone
+  const p = snap({ devices: [dev({ id: 'p2', name: 'galaxy', via: 'internet', ramMb: 4000 })], models: [Y] });
+  const pr = planner.plan(p, fieldOf(p, senses([{ id: 'p2', link: { srtt: 100, rttvar: 10 } }]), MEASURED_Y()), Y as any, true, undefined, wide);
+  assert.equal(pr.split!.far!.link, undefined);
+  assert.ok(planner.farRange(pr.split!, wide)!.lo < pr.alone!.tps!);
+  assert.ok(fasterCard(pr));
+});
+
+// ---- the measured link (17 Nov, P2): a far seat with a linkRttMs at most 7 days old is priced from it,
+// 1.1 round trips per token in the range 0.95–1.16 while assumed; its own fit hopRtt
+const DAY = 24 * 3600_000;
+const R = 50;
+const farMeasured = (via: string, o: Record<string, unknown> = {}) =>
+  snap({ devices: [dev({ id: 'p2', name: 'galaxy', via, ramMb: 4000, linkRttMs: R, linkAt: AT - 3600_000, ...o })], models: [X] });
+
+test('a far seat with a fresh measured link costs 1.1 x its round trip, range 1.16 to 0.95 widened by RTT_NOISE', () => {
+  assert.equal(decide.RTT_TRIPS, 1.1);
+  assert.equal(decide.RTT_TRIPS_LO, 0.95);
+  assert.equal(decide.RTT_TRIPS_HI, 1.16);
+  assert.equal(decide.RTT_NOISE, 0.06);
+  const N = decide.RTT_NOISE;
+  for (const via of ['internet', 'anchor']) {
+    // the probe's srtt (P2, 200 ms) is there too: the measured link wins
+    for (const peeks of [{}, senses([{ id: 'p2', link: P2 }])]) {
+      const f = fieldOf(farMeasured(via), peeks);
+      assert.equal(f.seats.find((x: any) => x.id === 'p2').rtt, R);
+      for (const k of [undefined, 0.5]) {
+        const p = decide.split(f, X, 1, k)!;
+        assert.deepEqual(seatIds(p), ['local', 'p2'], via);
+        assert.equal(p.tps, r1(1000 / (C + 1.1 * R)), `${via} k ${k}`);
+        // while assumed, an answer's own scatter too: the slow end × (1 − N), the fast end × (1 + N)
+        assert.deepEqual(p.far, { lo: (1000 / (C + 1.16 * R)) * (1 - N), hi: (1000 / (C + 0.95 * R)) * (1 + N), assumed: true, link: true });
+        // a learned probe fit does not price a measured link
+        assert.deepEqual(decide.split(f, X, 1, k, 0.25), p);
+      }
+      // a learned measured-link fit: one number, not assumed
+      const q = decide.split(f, X, 1, undefined, 0.25, 1.3)!;
+      assert.deepEqual(q.far, { lo: 1000 / (C + 1.3 * R), hi: 1000 / (C + 1.3 * R), assumed: false, link: true });
+      assert.equal(q.tps, r1(1000 / (C + 1.3 * R)));
+      assert.equal(planner.farGuessed(decide.split(f, X, 1)!), false, 'a measured link is not a guess');
+    }
+  }
+});
+
+test('a measured link older than 7 days, null, or on a near seat changes nothing', () => {
+  const probe = decide.split(fieldOf(farOnly('internet'), senses([{ id: 'p2', link: P2 }])), X, 1, 1)!;
+  const none = decide.split(fieldOf(farOnly('internet'), {}), X, 1, 1)!;
+  for (const o of [{ linkAt: AT - 8 * DAY }, { linkRttMs: null }, { linkRttMs: 0 }, { linkAt: null }, { linkAt: AT + 10 * 60_000 }, { linkRttMs: NaN }]) {
+    const fp = fieldOf(farMeasured('internet', o), senses([{ id: 'p2', link: P2 }]));
+    assert.equal('rtt' in fp.seats.find((x: any) => x.id === 'p2'), false, JSON.stringify(o));
+    assert.deepEqual(decide.split(fp, X, 1, 1), probe, JSON.stringify(o));
+    assert.deepEqual(decide.split(fieldOf(farMeasured('internet', o), {}), X, 1, 1), none, JSON.stringify(o));
+  }
+  // exactly 7 days old is still used
+  assert.equal(fieldOf(farMeasured('internet', { linkAt: AT - 7 * DAY }), {}).seats.find((x: any) => x.id === 'p2').rtt, R);
+  // a near seat keeps its pricing
+  const s = snap({ devices: [dev({ ramMb: 4000, linkRttMs: 5, linkAt: AT }), dev({ id: 'p2', name: 'galaxy', ramMb: 4000, linkRttMs: 7, linkAt: AT })], models: [X] });
+  const t = snap({ devices: [dev({ ramMb: 4000 }), dev({ id: 'p2', name: 'galaxy', ramMb: 4000 })], models: [X] });
+  for (const k of [undefined, 1, 0.5]) assert.deepEqual(decide.split(fieldOf(s), X, 1, k, 0.25, 2), decide.split(fieldOf(t), X, 1, k), `k ${k}`);
+});
+
+test('a split with one measured far link and one probed: no link flag, each priced in its own unit', () => {
+  // pixel far by probe (srtt 20), galaxy far with a measured link of 50; each phone cap 3000, host 5600
+  const s = snap({ devices: [dev({ via: 'internet', ramMb: 2000 }), dev({ id: 'p2', name: 'galaxy', via: 'anchor', ramMb: 2000, linkRttMs: R, linkAt: AT })], models: [X] });
+  const f = fieldOf(s);
+  const p = decide.split(f, X, 1, 1)!;
+  assert.deepEqual(seatIds(p).sort(), ['local', 'p1', 'p2']);
+  const c = p.chain!.computeMs;
+  assert.equal(p.far!.link, undefined);
+  assert.equal(p.far!.assumed, true);
+  near(p.far!.lo, 1000 / (c + 1 * 20 + 1.16 * R), 1e-9);
+  near(p.far!.hi, 1000 / (c + 0.25 * 20 + 0.95 * R), 1e-9);
+  assert.equal(p.tps, r1(1000 / (c + 20 + 1.1 * R)));
+  // the probe fit learned, the measured one not: still assumed
+  assert.equal(decide.split(f, X, 1, 1, 0.3)!.far!.assumed, true);
+  assert.equal(decide.split(f, X, 1, 1, 0.3, 1)!.far!.assumed, false);
+});
+
+// a split loaded over this computer and p2 (far, measured link R, probe srtt 200)
+const farSplitR = (done: number, tps: number | null, o: Record<string, unknown> = {}) => snap({
+  devices: [dev({ id: 'p2', name: 'galaxy', via: 'anchor', ramMb: 4000, linkRttMs: R, linkAt: AT, ...o })], models: [X],
+  work: {
+    loaded: loaded(X, 'split', [here(tps, done), on('p2', 'galaxy', null, done)], {
+      parts: [{ id: 'local', name: 'this computer', local: true, mb: 3000, layers: 18 }, { id: 'p2', name: 'galaxy', local: false, mb: 3000, layers: 18 }],
+    }),
+  },
+});
+
+test('a chain whose far links are all measured teaches hopRtt only; loadedChain says the round trips', () => {
+  const s = farSplitR(3, 2.5);
+  const c = decide.loadedChain(s, fieldOf(s, {}), X)!;
+  near(c.computeMs, C, 1e-9);
+  assert.deepEqual(c.far, [true]);
+  assert.deepEqual(c.rtt, [R]);
+  assert.deepEqual(c.links, [{ srtt: R, rttvar: 0 }], 'no srtt: the measured link stands in');
+  assert.deepEqual(decide.loadedChain(s, fieldOf(s, senses([{ id: 'p2', link: P2 }])), X)!.links, [P2]);
+
+  const preset = () => ({ v: 1, last: X.id, speeds: SPEEDS() });
+  const b = branch(senses([{ id: 'p2', link: P2 }]), preset());
+  for (let d = 3; d <= 6; d++) b.look(farSplitR(d, 2.5));
+  const n = b.notes();
+  assert.equal(n.hop, undefined);
+  assert.equal(n.hopFar, undefined, 'the probe fit learns nothing from a measured chain');
+  assert.equal(n.hopRtt.ks.length, 3);
+  // k = (1000 / 2.5 - 350) / 50 = 1
+  for (const k of n.hopRtt.ks) near(k, 1, 1e-9);
+
+  // the same chain without a fresh measured link teaches hopFar as before
+  const o = branch(senses([{ id: 'p2', link: P2 }]), preset());
+  for (let d = 3; d <= 6; d++) o.look(farSplitR(d, 2.5, { linkAt: AT - 8 * DAY }));
+  assert.equal(o.notes().hopRtt, undefined);
+  for (const k of o.notes().hopFar.ks) near(k, 0.25, 1e-9);
+
+  // a mixed chain (pixel far by probe, galaxy measured): hopFar, galaxy's round trip in the compute at 1.1
+  const s3 = (done: number) => snap({
+    devices: [dev({ via: 'internet', ramMb: 4000 }), dev({ id: 'p2', name: 'galaxy', via: 'anchor', ramMb: 4000, linkRttMs: R, linkAt: AT })], models: [X],
+    work: {
+      loaded: loaded(X, 'split', [here(2.5, done), on('p1', 'pixel', null, done), on('p2', 'galaxy', null, done)], {
+        parts: [{ id: 'local', name: 'this computer', local: true, mb: 2000, layers: 12 }, { id: 'p1', name: 'pixel', local: false, mb: 2000, layers: 12 }, { id: 'p2', name: 'galaxy', local: false, mb: 2000, layers: 12 }],
+      }),
+    },
+  });
+  const m = branch(senses(), preset());
+  m.look(s3(3));
+  m.look(s3(4));
+  const c3 = 1400 / 8.4 + 1400 / 25.2 + 1400 / 21;
+  near(m.notes().hopFar.ks[0], (400 - c3 - 1.1 * R) / 20, 1e-9);
+  assert.equal(m.notes().hopRtt, undefined);
+});
+
+test('the far card says "from the measured link", assumed then learned; hopRtt survives a reload', () => {
+  // W over pixel (far, measured 40 ms): c = 83.333; lo 1000 / (c + 46.4) × 0.94, hi 1000 / (c + 38) × 1.06
+  const SR = snap({ devices: [dev({ ramMb: 4000, via: 'internet', linkRttMs: 40, linkAt: AT }), dev({ id: 'p2', name: 'galaxy', via: 'internet', ramMb: 4000, linkRttMs: 60, linkAt: AT })], models: [W] });
+  const v: any = branch(sensesW(), { v: 1, last: W.id, speeds: SPEEDS_W() }).look(SR, decide.SHOW);
+  const c = cardOf(v, 'far');
+  assert.ok(c, JSON.stringify(v.suggestions.map((x: any) => x.id)));
+  assert.equal(c.title, `far devices: split likely ${r1((1000 / (CW + 46.4)) * 0.94)}\u{2013}${r1((1000 / (CW + 38)) * 1.06)} tok/s, apart ~12 tok/s each`);
+  assert.equal(c.title, 'far devices: split likely 7.2\u{2013}8.7 tok/s, apart ~12 tok/s each');
+  assert.equal(c.why, 'each token waits about one round trip to each far worker (pixel). from the measured link (about 1.1 round trips per token), 0 of 3 far split answers watched. apart keeps each answer on one device, 2 at once. you choose.');
+  assert.deepEqual(cleanCard(c), c);
+
+  // learned: kRtt 1 and four errs (q 0.4): est 1000 / (83.333 + 40) = 8.1, 8.1 / 1.4 to 8.1 / 0.6
+  const H = { ks: [1, 1, 1], errs: [0.1, 0.2, 0.3, 0.4] };
+  const b = branch(sensesW(), { v: 1, last: W.id, speeds: SPEEDS_W(), hopRtt: H, hopFar: { ks: [9, 9, 9], errs: [0.9] } });
+  const l = cardOf(b.look(SR, decide.SHOW), 'far');
+  const est = 1000 / (CW + 40);
+  assert.equal(l.title, `far devices: split likely ${r1(est / 1.4)}\u{2013}${r1(est / 0.6)} tok/s, apart ~12 tok/s each`);
+  assert.equal(l.why, 'each token waits about one round trip to each far worker (pixel). from the measured link, learned from the last 4 far split answers watched. apart keeps each answer on one device, 2 at once. you choose.');
+  assert.deepEqual(b.notes()?.hopRtt ?? H, H);
+  // the words of a split card with a measured far link
+  const S = planner.plan(SR, fieldOf(SR, sensesW(), MEASURED_W()), W as any, true).split!;
+  assert.match(planner.farWords(SR, S, undefined), / far devices: split likely 7\.2\u{2013}8\.7 tok\/s; each token waits about one round trip to each far worker \(pixel\), from the measured link \(about 1\.1 round trips per token\), 0 of 3 far split answers watched\.$/u);
+  // probes only: the old words
+  assert.match(planner.farWords(SW, planner.plan(SW, fieldOf(SW, sensesW(), MEASURED_W()), W as any, true).split!, undefined), /assumed from probes/);
+
+  // an old notes file without hopRtt loads; hopRtt survives a reload
+  const preset = { v: 1, last: X.id, speeds: SPEEDS() };
+  const r = branch({}, structuredClone(preset));
+  r.look(farSplitR(3, 2.5));
+  r.look(farSplitR(4, 2.5));
+  assert.equal(r.notes().hopRtt.ks.length, 1);
+  const again = branch({}, structuredClone(r.notes()));
+  again.look(farSplitR(3, 2.5));
+  again.look(farSplitR(4, 2.5));
+  assert.equal(again.notes().hopRtt.ks.length, 2);
+  const odd = branch({}, { ...structuredClone(preset), hopRtt: { ks: [-1], errs: [] } });
+  odd.look(farSplitR(3, 2.5));
+  odd.look(farSplitR(4, 2.5));
+  assert.equal(odd.notes().hopRtt.ks.length, 1);
+});

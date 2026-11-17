@@ -184,6 +184,10 @@ The anchor network (the person's own always-on computers passing bytes between f
 server outside; the anchor itself is `docs/ANCHOR.md`, written in its own session) gave the brain five small packages.
 It still only watches, warns and suggests: no new signal bars a device, turns its verdict, closes
 a port or switches anything off. A look without the new fields makes the same report as before.
+On 17.11.2026 a second round wired it to the real engine, gave it the measured link and the
+anchor's own counts, and added the cards below; the same day the cards that carry a change got
+accept and reject, and nothing they carry happens without the person's accept
+([accepting and rejecting a card](#accepting-and-rejecting-a-card-17112026)).
 
 **The snapshot contract** (`node/src/godseye/types.ts`; `branches/guard.ts` cleans every new field,
 and absent stays absent). No address of anyone reaches the eye.
@@ -193,22 +197,54 @@ and absent stays absent). No address of anyone reaches the eye.
 | `devices[].via: 'anchor'`, `through`, `throughName` | the device is reached through an anchor of the circle; `through` is that anchor's row id, `'self'` when this computer is the anchor, null when the anchor is not in the peer book; `throughName` its name for the cards (notes keep ids only) | the engine's peer rows (anchor stage 2, kula-main 1e3669b0), read by `ui/godseye-feed.ts` through a widened row |
 | `devices[].anchor` | this device offers the anchor role | the engine's peer rows, as above |
 | `host.anchor` | this computer as an anchor: on, reachable from outside (or not known), links held now, bytes passed on in the last day by all members together (ciphertext, the owner's own devices too), `capDay` the daily limit of one friend's device (circle or world; the owner's own devices have none), and `memberMaxDay`, the most one friend's device passed today (asked of the anchor side, may be absent; without it the brain makes no cap card) | `engine.anchor()` when the engine has one; absent otherwise |
-| `host.gate` | this computer's own gate refusals per UTC hour (at most 26, the last one running): by reason (every `rpc guard: …` under `rpc guard`), how many came from a non-private address (`far`), how many distinct outside networks (`nets`, a count of hashed ipv4 /24 and ipv6 /48 blocks), the last 5 rpc guard refusals | the feed, today, from the reject lines of this computer's own signed ledger, verified in the same pass (`hostGate`); each line counted once, an unchanged ledger costs a 26-entry copy |
+| `host.gate` | this computer's own gate refusals per UTC hour (at most 26, the last one running): by reason (every `rpc guard: …` under `rpc guard`), how many came from a non-private address (`far`), how many distinct outside networks (`nets`, a count of hashed ipv4 /24 and ipv6 /48 blocks), the last 5 rpc guard refusals. A finished hour in which the ledger holds no verified line of any kind (share writes one every 60 s while it runs) was not seen and is left out, not counted as 0 (17.11.2026: ten days off read as zeros made the usual knocking look like a rise on the first day back) | the feed, today, from the reject lines of this computer's own signed ledger, verified in the same pass (`hostGate`); each line counted once, an unchanged ledger costs a 26-entry copy |
 | hint `loss: { hi }` | for a device reached from afar with at least 10 probes: the upper end of the 80% Wilson interval of its missed probes | the connections branch, for the planner |
+| `devices[].roads` (17.11.2026) | the roads this computer has to the device, counted: distinct lan addresses, distinct addresses outside the lan (a global ipv6 address, a mapped port) and distinct anchors. Counts only, never an address | the engine's peer rows (`road.ts` `roads()`, now worked out once per `peers()` call instead of reading `anchors.json` for every row) |
+| `devices[].linkRttMs`, `linkAt` (17.11.2026) | the round trip the engine measured to the device (`link.ts`: one request and its answer on an open connection, both legs together through an anchor) and when; null when the measure gave none | the record's `link`, read by `ui/godseye-feed.ts` |
+| `host.anchor.since`, `refused`, `removed`, `memberMaxName` (17.11.2026) | when the anchor last started (every count is since then, at most today, UTC); today's refusals to members and to this computer's own dials by a fixed word (too many dials, byte limit, too many streams, full, not here, did not accept, dialer gone, target gone; anything else `other`, so no free text reaches a card); members whose access was removed today; the name of the friend's device behind `memberMaxDay`, cut to 80, for the cap cards' title and why (and so the feed lines that quote the title, scrubbed from the box) | counters in `anchor.ts` (`stats()`, memory only, never a fingerprint), through `engine.anchor()` |
 
-The phone's look (`app/src/eye/snapshot.ts`) carries none of these yet, so on the phone none of
-what follows shows.
+**From the real engine.** `node/test/godseye-anchor-e2e.test.ts` starts three gates on 127.0.0.1,
+each its own home, and drives a real Engine and AnchorHub into the eye: C sees B through anchor A
+(`through` is A's row id, no ip in `where`), A sees its member through `'self'`, and a friend's
+device past a 1 MB cap gives `trust:anchor-cap` and `refused['byte limit']` of at least 1, while
+the same device as the person's own gives neither. After ten looks no file under the eye's
+directory holds an ip literal or 64 hex.
+
+The phone's look (`app/src/eye/snapshot.ts`) now says how a device is reached (`wifi`, `internet`,
+`anchor` or `relay`, from `app/src/llm/roads.ts`) and, through an anchor, `through` and
+`throughName`; before 17.11 it said `wifi` for every device not on a relay. It carries no roads, no
+measured link and no anchor or gate counts, so the cards that need them do not show on the phone.
 
 **Routes** (connections). An anchor is assumed at 300 ms, sometimes dropping, until probes say
 otherwise; the branch's tile counts `· n anchor`. The notes keep per device the id of the last
-anchor it went through, never an address. Three cards, each only a probe or opening a page; an
-anchor this computer cannot name reads "an anchor":
+anchor it went through, never an address. Five cards, each a probe or opening a page except
+one-anchor's change (below); an anchor this computer cannot name reads "an anchor":
 
 | card | weight | shows when | title |
 |---|---|---|---|
 | `connections:through:<Y>` | warn 1 | a reachable device goes through anchor Y (one card per anchor) | "X is reached through anchor Y": Y passes the bytes on and cannot read them; apart and split both work |
 | `connections:anchor-down:<Y>` | warn 3 | Y, a device of the look, missed its last 3 probes and a device last routed through Y cannot be reached; goes when either answers once. A Y absent from the look (forgotten, or cut from the list) is not "not answering": no card, and the devices that went through it forget it | "anchor Y is not answering: X and Z cannot be reached" (seen from this computer only) |
-| `connections:one-anchor` | suggest 1 | exactly one anchor known and at least one far device | "only one anchor (Y): if it goes, far devices lose each other": a second always-on computer in another home keeps the circle up |
+| `connections:one-anchor` | suggest 1 | exactly one anchor known and at least one far device | "only one anchor (Y): if it goes, far devices lose each other": a second always-on computer in another home keeps the circle up. When this computer's anchor role is off and the one anchor is a far row, the card carries "make this an anchor" (17.11.2026, accepted after a second "really?" tap); otherwise it opens devices |
+| `connections:one-road:<X>` (17.11.2026) | suggest 1; warn 2 when Y missed at least once and the interval's upper end is 20% or more | a reachable far device whose roads say direct + anchors = 1, while two or more anchors are known (with one, one-anchor already says it). Y is its one road: the anchor it goes through, or for its one internet address the device itself | "X has one road from here: …": "Y missed a of n probes in 7 days, 80% interval lo–hi%, seen from this computer only", or that Y was not probed from here in 7 days. Opens devices |
+| `connections:anchor-unconfirmed` (17.11.2026) | suggest 1 | this computer offers the anchor role, `reachable` is not true, and it has done so for 6 hours or more | "this computer's anchor is not confirmed from outside": "nothing reached it from another network yet; not confirmed is not closed." Opens devices |
+
+**The one-road interval.** For the one-road card the notes keep, per device that offers the anchor
+role, that a row goes through, or that is far and says its roads, its probes by the hour: at most
+168 entries of [hour, probes, missed], counts only. Probes come in bursts and outages last minutes
+to hours, so probes are not independent trials. bench8 (`node/test/brain-bench/bench8.ts`: 28-day
+traces of an anchor that is up 99%, 90% and 70% of the time, outages in blocks, seeds 1 to 5)
+scored three ways of stating the 80% interval over each 7-day window:
+
+| way | held the truth | seeds covering at 99 / 90 / 70% up |
+|---|---|---|
+| Wilson over probes (the `loss` hint's way) | 2–9% of windows | 0, 0, 0 of 5 |
+| Wilson over hours | 73–86% | 4, 3, 2 of 5 |
+| Wilson over 4-hour blocks (shipped) | 94.5% | 5, 5, 5 of 5, at a mean width of 5.2 / 10.9 / 17.8% |
+
+The rule was 4 of 5 seeds at every level; only the blocks meet it. The outage shape in the bench is
+invented: with outages of 240 minutes on average at 90% up, the blocks held the truth in 70% of the
+windows (3 of 5 seeds), so the card keeps "seen from this computer only". A warn needs at least
+one miss: with none, fewer than 7 blocks already give an upper end of 19% or more.
 
 A switch is one feed line ("X is now reached through anchor Y (was wifi)"). The older internet card
 no longer says only apart works there: apart and split both do, a split waiting about one round
@@ -237,6 +273,32 @@ The 16 Nov proxy measurements (46 / 32 / 17.7 / 12.9 / 7.7 tok/s at 0 / 10 / 30 
 round trip) are a test (`godseye-hop-points.test.ts`): k = 1 against the true round trip fits them
 within 10%. The heavy bench's numbers did not move.
 
+**The far estimate from the measured link** (17.11.2026). The engine already timed a true round
+trip to each device (`link.ts`), but the look dropped it, so the brain priced far hops from the
+probe's handshake and gave a range about four times wide. Now a far worker whose `linkRttMs` is at
+most 7 days old is priced from it: **1.1 round trips per token**, the fit of the 16 Nov points (they
+fit 0.95 to 1.16). While that is assumed, the range runs from 1.16 (slow end) to 0.95 (fast end),
+widened by 6% each way for an answer's own scatter (`RTT_NOISE`; the fit's ends hold only its own
+spread). A split whose far workers all have a measured link teaches its own fit, `hopRtt`, after
+three answers, so the units never mix with `hopFar`; a far worker without a fresh reading is priced
+from the probe exactly as before. The cards say which it is: "from the measured link (about 1.1
+round trips per token)" or "assumed from probes". Because 1.1 is the best estimate and not a
+pessimistic end, a split priced so gets the faster-split card only when the range's slow end (times
+slack) also reaches the fastest place alone.
+
+| | from the probe (before) | from the measured link (now) |
+|---|---|---|
+| the real points (`godseye-hop-points`: compute 15.5 ms a token, round trips 13.3 / 37.0 / 104.8 ms, answers at 32.5 / 18.4 / 7.8 tok/s) | first estimate off 55–71% | off 2.2 / 3.3 / 2.6% |
+| bench9 (one far worker, two, and an anchor's two legs; 100 homes each): median error of the first estimate | 64.3% | 5.4% |
+| bench9: after 3 answers | 5.3% | 4.7% |
+| bench9: the first stated range holds the answer | 63.3% | 88% (one 87%, two 94%, anchor 83%) |
+
+The range's 6% was picked on bench9: 8% held 94% of first answers, over the bench's 92% cap
+(neither too narrow, under 70%, nor too wide); 6% is inside it overall and at least 65% in each
+scenario. bench9 is partly circular (its truth uses the same formula as the estimator), so the real
+points are the proof; the card says "likely", never "8 in 10", while the link cost is assumed.
+bench3, bench5 and bench6 did not move.
+
 **Gate watch** (trust, `branches/gatewatch.ts`). This computer's own gate, from `host.gate`. Every
 refusal reason is a stranger (no hello, tls, not paired, … someone without a pairing knocked), a
 guess (a code or proof that was not theirs), the rpc guard (a paired device sent the split's rpc a
@@ -255,11 +317,47 @@ sits beside the host's ledger check:
 | `trust:rpc-guard:<id>` | 3 | a device says its own gate cut one; its verdict does not change (it defended itself) |
 | `trust:gate-guess` | 3 | 5 or more wrong codes in the last 24 hours: someone may be guessing; all refused |
 | `trust:gate-burst` | 2 | more knocking from outside the lan than usual for this hour of day (burst.ts's fit, unchanged, on each finished hour's `far` count, kept in trust's notes under `~gate`); also, learning or not, 1000 or more in the running hour. A new level (the gate opened to the internet after quiet learning: the 24 newest finished hours, and each 6-hour quarter of them, above 3 × their usual) starts the fit again on those 24 hours, with one feed line "a new level: learning what is usual again"; one loud hour stays a burst |
-| `trust:anchor-cap` | 2 | a friend's device passed its daily limit through this computer as an anchor (`memberMaxDay` against `capDay`; the owner's own devices have no limit and no card); without `memberMaxDay` no card. It stays while above 0.95 of it. Nothing is switched off |
+| `trust:anchor-cap` | 2 | a friend's device passed its daily limit through this computer as an anchor (`memberMaxDay` against `capDay`; the owner's own devices have no limit and no card); without `memberMaxDay` no card. It stays while above 0.95 of it. Its words follow what the anchor does (17.11.2026; before, it said "nothing was switched off", which was wrong): at the limit "the anchor refuses its new streams until 00:00 UTC", past it "the anchor refuses its new streams and cut its running ones until 00:00 UTC", then "the brain switched nothing". It names the device when `memberMaxName` is there |
+| `trust:anchor-near-cap` (17.11.2026) | 1 (suggest) | the same friend's device at 0.8 of its cap or more while the cap card is off: the GB left, "counted since sharing last started", and "a split load passes about the model's size through the anchor" |
+| `trust:anchor-refusing` (17.11.2026) | 2 | today's `refused` holds `full`, `too many streams` or `too many dials`: the counts by word and what each means (all streams taken, or friends' devices held all of theirs; one device at its most streams; a friend's device dialing faster than its limit, where one refused connection stops a split load) |
+| `trust:device-burst:<id>` (17.11.2026) | 2 | a device's own gate that faces the internet, knocked on by strangers only, more than usual (below) |
 
-Every card only opens the trust page; one feed line when it comes and one when it goes. The
+The cap cards carry a change since 17.11.2026: a friend's daily limit to twice what the card saw,
+in whole GB, after the person accepts (below). Every other card here only opens the trust page; one
+feed line when a card comes and one when it goes. `not here` refusals and members removed today give
+one calm feed line instead, no card ("nothing to do"); the counts start again at 00:00 UTC, so about
+one a day. The anchor's counts are memory only: they start again when sharing restarts. The
 thresholds (the tail, the 1000, the 5 guesses) were not measured against a real router's scanner
 rate. `nets` is "about": a scanner farm in one block is one network, a carrier-grade nat is many people.
+
+**A device's own gate on the internet** (trust, 17.11.2026; a changed rule). In 0.6.0 every anchor
+and every mapped port faces scanners, and a device's own gate had no new-level refit and turned the
+device red on any burst, so the brain would say no to the anchor itself. bench4 has two new
+scenarios: `opened` (0.2 refusals an hour, then from hour 168 six an hour with scanner sweeps) and
+`opened+guess` (the same plus 10 wrong codes in one hour). Two steps:
+
+- **(a) a new level** (`branches/level.ts`): each device keeps its last 24 finished hours, and when
+  the whole day and each 6-hour quarter of it are above 3 × the usual (the rule of this computer's
+  gate), its fit starts again on them, with one feed line "a new level of refusals: learning what is
+  usual again". It is not tied to facing the internet: a day of steady knocking from inside also
+  reads as a new level, as at this computer's gate.
+- **(b) strangers only, on a gate that faces the internet**: the device offers the anchor role, it
+  is reached straight over the internet, or this computer knows an address of it outside the lan
+  (`roads.direct` above 0). A burst whose day holds only strangers' reasons (no hello, tls, not
+  paired, …) keeps the refused check ok and gives the card `trust:device-burst:<id>` instead of red.
+  Five or more wrong codes, a replay, an rpc guard refusal, or any other reason in the day keep it
+  red, as before. Being reached **through an anchor is not enough**: a device behind its home's
+  router is not open to scanners, so knocks at its gate come from its lan or from a member of the
+  same anchor, and those stay red (the security read caught that the first version counted it).
+
+| `opened`, 5 seeds, from 72 hours after opening | false red hours a device-week |
+|---|---|
+| before | 158.2 |
+| (a) alone | 32.2 |
+| (a) and (b) | 0.00 |
+
+`opened+guess` is red in the attack hour on 5 of 5 seeds under all three, and the older scenarios
+(B1–B6) did not move. Leaving "through an anchor" out of (b) did not move the `opened` numbers.
 
 **A moved address** (connections). When a settled device (at most 2 address blocks, at least 20
 answers over them, first to last at least 3 days) answers with its pinned certificate from a public
@@ -276,21 +374,138 @@ compares blocks; it does not say where.
 Tests: `godseye-anchor-contract`, `godseye-gatefeed`, `godseye-routes`, `godseye-far-split`,
 `godseye-hop-points`, `godseye-gatewatch`, `godseye-moved` (all `node/test/*.test.ts`). Eight older
 assertions (hop-wire, split-order) that priced an internet seat like a near link now use wifi seats;
-far pricing is tested on its own.
+far pricing is tested on its own. Since 17.11.2026 also `godseye-anchor-e2e`, `godseye-roads-risk`,
+`godseye-trust-burst`, `godseye-bench4`, `godseye-bench8` and `godseye-bench9`.
 
 **What waits**
 
-- The unit of the prior: the proxy run that logs `gate.probe`'s ms beside tok/s at 0 / 10 / 30 / 50
-  / 100 ms, then the choice of a far prior of 0.25. If the 16 Nov round trips were one-way, the
-  0.25 high end is wrong; that run shows it.
-- A scanner burst at a far device's own gate still turns that device red and keeps it from seats
-  (trust.ts). Softening it needs a bench4 scenario with internet noise first.
-- "X and Z cannot reach each other" for pairs without this computer: needs the circle's address book.
+- The unit of the prior, for far workers still priced from the probe: the proxy run that logs
+  `gate.probe`'s ms beside tok/s at 0 / 10 / 30 / 50 / 100 ms, then the choice of a far prior of
+  0.25. If the 16 Nov round trips were one-way, the 0.25 high end is wrong; that run shows it.
+- "X and Z cannot reach each other" for pairs without this computer: needs the other devices'
+  views (the circle's address book).
 - A paired device arriving at this gate from a new address: the connect lines carry no fingerprint,
   so only devices this computer probes are watched for a move.
 - Other devices' anchor bytes and caps; a metered-data flag on phones (the app is not part of this).
-- The anchor's own refusals (too many streams, full, too many dials, byte limit) are logged in
-  share, not in the signed ledger yet, so the gate watch does not see them.
+- The anchor's own refusals are counted in memory (`anchor.ts` `stats()`) and shown by the anchor
+  cards, but are still not in the signed ledger, so the gate watch does not see them and a restart
+  of sharing starts the counts (and a friend's daily bytes) again. Low; it stays so.
+- "Will hit the cap at HH:MM": a load passes gigabytes at once, so a rate forecast would not be
+  calibrated. The near-cap card stands in for it.
+- This computer refused at an anchor it joined: that link's state lives in `ui/sharehere.ts`, not
+  in the engine, and needs its own way into the look.
+- A split stops on a network change: TCP cannot move; it needs rpc reconnect through
+  `tools/patches`.
+- The phone signing its own address records: Kotlin and a real device.
+- The 19/9 outlier: each load's plan lines now say this computer's memory speed as measured at that
+  load (17.11.2026); the next real loads show whether that reading is the cause.
+- The scanner thresholds and the moved-address thresholds: they need a real router.
+- One device's records with an equal seq and a different body (a copied key): anchors hand over
+  only newer records, so it is rarely seen, and nothing logs it.
 - The moved address: the first public block says nothing; the card and the once-a-day line live in
   memory (a restart forgets them); a device that once had 3 or more blocks never counts as settled
   again (entries do not age); documentation test-net ranges count as public.
+- The one-road interval's outage shape is invented (240-minute outages: 70%, above); a real
+  anchor's week of probes shows it.
+- From the accept and reject cards: a "this device is mine" card (`{ do: 'mine' }`, with a confirm;
+  it needs `claim` in the look, which drops it today), so the devices panel still asks; a card for
+  the trust page's ledger-gap accept; unpair, forget and ring cards; a "rest" list in the engine for
+  the limits cards; reasons for a reject; branch thresholds that learn from rejects (when the box
+  holds about 30 accepts and rejects and replay-bench can score it); undo on the phone, and `cap`,
+  `anchor` and `cancel` on the phone.
+
+## accepting and rejecting a card (17.11.2026)
+
+The person's decision (17.11.2026): the brain sends cards that carry a change instead of being
+only passive, a tap accepts the change, and a card can be rejected too; for every branch. It is the
+first step from watching toward deciding, and still nothing happens without a tap. The eye still
+does nothing itself: an accept asks kula's engine, the same way the person's own buttons do.
+
+**Which cards carry a change.** A *change card* is one whose action is `load`, `unload`, `fetch`, or
+one of three new kinds (`node/src/godseye/types.ts`, `change.ts`):
+
+| kind | what accept does (the engine call) | refused as stale (409) when | confirm | undo |
+|---|---|---|---|---|
+| `cap` | a friend's daily GB through this anchor (`shareHere.setFriendCap`) | the cap is no longer the one the card saw | no | back to the old cap |
+| `anchor` | makes this computer an anchor (`shareHere.setAnchor(true)`) | it is an anchor already | "really?" | off |
+| `cancel` | cancels a night project (`projects.cancel`) | the project is no longer waiting | "really?" | none |
+
+The cards that carry one:
+
+| card | accept |
+|---|---|
+| `planner:split`, `apart`, `alone` | load (as before) |
+| `planner:barred:<d>` | load the split without it; when the others cannot hold it, unload |
+| `models:pick`, `bigger`, `tight` | load or unload (as before) |
+| `models:fetch`, `models:vision` | fetch (vision without llama.cpp still opens settings) |
+| `executor:slow:<d>` | load without it (as before) |
+| `executor:rest:<d>` | load without it; when it is the only one answering, unload |
+| `executor:failing:<d>` | apart with two or more devices: load without it; a split part: look again |
+| `review:private-chat`, `review:world-in-cluster` | load on home devices only; with no home way, unload |
+| `review:send-private:<p>`, `review:send-circle:<p>` | cancel the night project while it waits; once it runs, only a look |
+| `trust:anchor-cap`, `trust:anchor-near-cap` | `cap`: the friends' daily limit to twice the cap the card saw, in whole GB |
+| `connections:one-anchor` | `anchor` on, only when this computer's role is off and the one known anchor is a far row (the person said yes to this card, 17.11.2026: it opens a port to the internet, so it asks "really?") |
+
+**What stays manual, and why.** About twenty cards stay knowledge: they keep their one "look" or
+"open" button and ×, with no accept or reject (the person agreed, 17.11.2026).
+
+- **Unpair, forget and ring changes:** no card has the evidence for a cut. `connections:moved` stays
+  so: the honest change would be unpair, on weak evidence (an address block). Lifting a device to
+  the person's own comes only with "yes, it is mine" on the devices page.
+- **The trust warnings** (gate-guard, rpc-guard, gate-guess, gate-burst, device-burst,
+  anchor-refusing): all of it was refused already; the only changes would loosen a security bound or
+  cut the person's own devices. `trust:owner-blind`: the 11 Nov decision lets friends see personal
+  data, and dropping a friend's device is not the brain's call.
+- **Limits** (heat, battery, throttled, slow): the change is `executor:rest` or `planner:barred`
+  for the same device; outside a load there is nothing to change.
+- **The advisor:** fixing or planning a project needs the person's own request; `advisor:first`
+  points at another card, and two buttons for one change invite a double apply.
+- **Connections:** anchor-down, internet and through only look again (no tap brings a road back);
+  one-road and anchor-unconfirmed name a change on another device, or none. `planner:far` compares
+  and says "you choose"; the split and apart cards carry the change.
+
+**On the card.** A change card shows `does`, one sentence of what accept changes and whether it can
+be undone, built by the eye from the action itself, so it cannot disagree with it ("Raises the daily
+limit of each friend's device through this computer from 5 GB to 10 GB; undo sets 5 GB again.").
+The `cancel` sentence never quotes the project's title: that is the person's own request. Under it,
+the branch's record: "you accepted k of its last n" over 30 days. Then **accept** and **reject**;
+for `anchor` and `cancel` accept turns into "really? [yes, do it] [no]", and the server refuses
+those without the confirm (400). `anchor`'s sentence says it opens a port to the internet and
+starts sharing this computer (a running share restarts, which drops open streams); if sharing cannot
+start, the switch goes back off, sharing is put back as it was and the card stays. A port mapping
+that fails does not turn it back off: the anchor stays on with no door from outside.
+
+**Reject.** × stays the quiet hide on every card, and a hidden card shows again once its reason
+goes and comes back. Reject is only on change cards, and it sticks: it is kept by card id and the
+kind of action (do, model, mode) in the eye's notes (`cards`), so it outlives the card going and
+coming back and a restart. A suggestion hides 7 days, and 30 days from the second reject on; a
+warning hides 24 hours, always, so a warning the person needs is not hidden long. A card that says
+another kind of action is a new card. The only teaching in this first version: a suggestion
+rejected twice comes back at weight 1; warnings keep their weight, and no branch threshold moves.
+A reject has no reason text (a tap stays a tap; free text would need scrubbing).
+
+**Accountability and undo.** Every accept, reject and undo is a line in the feed under the card's
+branch ("you accepted: <title>: <word>", "you rejected: …", "you undid: …") and an act in the black
+box, also when the card went while the change ran (the accept uses the card the person tapped).
+After an accept that can be undone, a bar above the cards says "you accepted: … [undo]" for
+10 minutes. The undo is one deep and in memory only; the next accept ends it. It puts the cap back,
+turns the anchor off and puts sharing back as it was (stopped again when it was off before the
+accept), or loads what was loaded before (or unloads); `fetch` and `cancel` have none,
+and their sentence says so before the tap. An undo is refused (409) when the state moved since: the
+cap changed, another model was loaded, or a load is running. An undo counts as a reject, so the card
+does not come straight back. Raising a friend's cap lets a device already cut today in again on its
+next stream (`node/test/ui-brain-cards.test.ts`).
+
+**The routes.** `POST brain/apply` (the new kinds, the stale checks and the confirm), and new beside
+it `brain/reject` and `brain/undo`. All three are the owner's: a guest gets 403, and a POST from
+another origin 403, as for every route that changes something ([SECURITY.md](SECURITY.md)).
+
+**The phone.** The phone draws and carries out cards too (`app/src/eye/`, `components/brain/Eye.tsx`).
+A change card there has accept and reject; for `load`, `unload` and `fetch` it says in its own
+words, in the reader's language, what accept does on the phone (the shared sentence speaks of the
+computer and its undo). `cap`, `anchor`, `cancel` and any card that asks "really?" say "only the
+computer can do this one" and keep reject. The phone keeps no undo.
+
+Tests: `node/test/godseye-accept-reject.test.ts` (the eye), `node/test/ui-brain-cards.test.ts`
+(the routes), the branches' own tests for each card's action, and `app/src/__tests__/eye-render`
+and `eye-run` (the phone).

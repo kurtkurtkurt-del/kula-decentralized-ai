@@ -48,6 +48,21 @@ describe('the phone\'s look', () => {
     expect(JSON.stringify(s)).not.toMatch(/deadbeef|abab|ABCD-1234|123456/);
   });
 
+  it('the road it is reached on now: an anchor names the anchor (no address, no fingerprint), the internet is not the wi-fi', () => {
+    const desk = peer({ id: 'c1', name: 'Desk', kind: 'pc', host: '192.168.1.9', fp: 'cd'.repeat(32) });
+    const far = peer({ id: 'p2', name: 'Far', host: '192.168.7.20', fp: 'ef'.repeat(32), route: { via: 'anchor', anchor: 'cd'.repeat(32), host: '81.2.3.4', port: 50552, name: 'desk at home' } });
+    const s = phoneSnapshot(input({ peers: [desk, far] }));
+    expect(s.devices[1]).toMatchObject({ id: 'p2', via: 'anchor', through: 'c1', throughName: 'Desk', where: 'through Desk' });
+    expect(s.devices[0]).toMatchObject({ via: 'wifi', through: null, throughName: null });
+    expect(JSON.stringify(s)).not.toMatch(/81\.2\.3\.4|192\.168\.7\.20|cdcd|efef/);
+    expect(clean(structuredClone(s))).toEqual(s);
+    // an anchor not paired here: no id, the road's own name
+    expect(phoneSnapshot(input({ peers: [far] })).devices[0]).toMatchObject({ via: 'anchor', through: null, throughName: 'desk at home', where: 'through desk at home' });
+    // its gate answered only at a global ipv6 address
+    const v6 = peer({ route: { host: '2001:db8::5', port: 50551, via: 'ipv6' } });
+    expect(phoneSnapshot(input({ peers: [v6] })).devices[0]).toMatchObject({ via: 'internet', through: null });
+  });
+
   it('reach: the freshest word wins, from the security report, a card\'s probe or the engine', () => {
     const answered = { ...freshNote(), at: AT - 60_000, answered: true };
     const failed = { ...freshNote(), at: AT - 30_000, answered: false, error: 'no answer in time' };

@@ -27,7 +27,9 @@ import { Engine, hostLabel, type LoadEvent } from './engine.js';
 import { ChatStore, ID_RE } from './store.js';
 import { ProjectRunner } from './projects.js';
 import { GodsEye } from '../godseye/index.js';
-import { sameAction } from '../godseye/eye.js';
+import { sameAction, sameDismissal } from '../godseye/eye.js';
+import { canUndo, needsConfirm } from '../godseye/change.js';
+import type { SuggestAction, UndoAction } from '../godseye/types.js';
 import { kulaSnapshot } from './godseye-feed.js';
 import { openBox } from '../godseye/box.js';
 import { replayBox } from '../godseye/replay.js';
@@ -185,6 +187,12 @@ export function readJson(req: http.IncomingMessage, limit: number): Promise<any>
 
 const posNum = (v: unknown, d: number, max: number) => { const n = Number(v); return Number.isFinite(n) && n > 0 ? Math.min(n, max) : d; };
 
+/** a brain card's action that cannot run as the card says: with the http answer's code (409: the
+ *  state moved since the card was drawn, 500: kula could not do it) */
+class Refused extends Error {
+  constructor(readonly code: number, message: string) { super(message); }
+}
+
 export async function startUi(opts: UiOptions): Promise<UiServer> {
   const log = opts.log ?? (() => {});
   const engine = opts.engine;
@@ -206,6 +214,104 @@ export async function startUi(opts: UiOptions): Promise<UiServer> {
     const v = shareHere.view();
     if (v.joined?.length || typeof engine.joinedAnchors !== 'function') return v;
     return { ...v, joined: engine.joinedAnchors().map((a) => joinedWithoutLink(a.name, v)) };
+  };
+
+  // the brain's cards (11.11.2026; accept, reject and undo 17.11.2026, DECISIONS 5): the one way a
+  // card's action, or the undo of the last accept, reaches kula's engine. Each kind first checks that
+  // the state is still what the card saw (else a Refused 409 and nothing runs), then does exactly what
+  // the person's own button does. noop: the state already was what the action asks (nothing written).
+  const runAction = async (a: SuggestAction | UndoAction, id: string): Promise<{ word: string; noop?: true }> => {
+    switch (a.do) {
+      case 'load': {
+        if (engine.status().loading) throw new Error('already loading: wait, or stop it');
+        // in the background like the person's own load; the page follows it in status
+        // here:false (apart only, finding C1): the card leaves this computer out, as it says
+        // finding E1: a card's device list is exact, as the page's picked devices are (all: true);
+        // [] is "this computer alone", never "every paired device"
+        // finding D2: the card is hidden by the caller before the load has run; a load that fails
+        // shows it again at the next view (only the person's next tap loads, nothing here retries)
+        engine.load({ model: a.model, mode: a.mode, peers: a.devices, ctx: a.ctx, all: true, here: a.here }, () => {})
+          .catch((e) => {
+            log(`brain card ${id}: ${(e as Error)?.message ?? String(e)}`);
+            eye?.unhide(id, `the load failed: ${(e as Error)?.message ?? String(e)}`, a);
+          });
+        return { word: `loading ${a.model} (${a.mode})` };
+      }
+      case 'unload': await engine.unload(); return { word: 'unloaded' };
+      case 'fetch': {
+        const r = engine.fetchModel(a.model);
+        if (!r.started) throw new Error(r.why ?? 'not started');
+        return { word: `fetching ${a.model}` };
+      }
+      case 'probe': await engine.probe(a.devices); return { word: 'looked again' };
+      case 'open': return { word: 'opened' };   // only moves the page
+      // a friend's daily limit through this anchor: only from the cap the card saw (finite, > 0 by cleanAction)
+      case 'cap': {
+        let now: number | null = null;
+        try { now = engine.anchor().capDay; } catch {}
+        if (now === null) throw new Refused(409, 'this computer is not an anchor now: look again');
+        if (now === Math.round(a.gb * 1e9)) return { word: `already ${a.gb} GB a day`, noop: true };
+        if (now !== Math.round(a.from * 1e9)) throw new Refused(409, 'the daily limit changed since you saw it: look again');
+        shareHere.setFriendCap(a.gb);
+        return { word: `a friend's device may pass ${a.gb} GB a day` };
+      }
+      // the anchor switch, as share/anchor turns it. On: a share that cannot start is a 500 and the
+      // switch goes back to what it was, so a failed accept leaves nothing turned on (the card was
+      // never hidden: the caller hides it only after this returns). A share that ran before the
+      // accept runs again after a failed one (verdict B1): the restart took it down.
+      case 'anchor': {
+        const was = shareHere.view();
+        const before = was.anchor;
+        if (a.on) {
+          if (before.live) throw new Refused(409, 'this computer is an anchor already');
+          const v = await shareHere.setAnchor(true);
+          if (v.error || !v.anchor.live) {
+            if (!before.on) await shareHere.setAnchor(false).catch(() => {});
+            if (was.on && !shareHere.view().on) await shareHere.start().catch(() => {});
+            throw new Refused(500, v.error ?? 'the anchor did not start');
+          }
+          return { word: 'this computer is an anchor now' };
+        }
+        if (!before.on) throw new Refused(409, 'the anchor is off already');
+        const v = await shareHere.setAnchor(false);
+        if (v.error) throw new Refused(500, v.error);
+        return { word: 'the anchor is off' };
+      }
+      // a night project, only while it still waits (cancelled, running, done or missed: stale)
+      case 'cancel': {
+        const p = projects.get(a.project);
+        if (!p || p.state !== 'waiting') throw new Refused(409, 'that night project is no longer waiting: look again');
+        projects.cancel(p.id);
+        return { word: 'cancelled the night project' };  // never its title: the person's own request text goes to the feed and box
+      }
+    }
+  };
+
+  // what undoes an accept, captured before the change runs (DECISIONS 5 §4): the cap back to what the
+  // card saw, the anchor off, the model as it was loaded (or unloaded). fetch and cancel have none.
+  const undoOf = (a: SuggestAction): UndoAction | null => {
+    if (!canUndo(a)) return null;
+    if (a.do === 'cap') return { do: 'cap', gb: a.from, from: a.gb };
+    if (a.do === 'anchor') return { do: 'anchor', on: false };
+    if (a.do !== 'load' && a.do !== 'unload') return null;
+    const l = engine.status().loaded;
+    if (!l) return { do: 'unload' };
+    const devices = l.devices.filter((d) => !d.local).map((d) => d.id);
+    const here = l.mode === 'apart' && devices.length > 0 && !l.devices.some((d) => d.local) ? { here: false as const } : {};
+    return { do: 'load', model: l.model.id, mode: l.mode, devices, ctx: l.ctx, ...here };
+  };
+
+  // the last accept of a change card (the eye keeps its undo; this is what it changed), for the undo's
+  // check that nothing moved since: another model loaded, a load running. cap and anchor: runAction checks.
+  // sharing: whether this computer shared before the accept, so an anchor's undo puts it back (verdict B1)
+  let accepted: { id: string; a: SuggestAction; sharing: boolean } | null = null;
+  const movedSince = (a: SuggestAction): string | null => {
+    if (a.do !== 'load' && a.do !== 'unload') return null;
+    const st = engine.status();
+    if (st.loading) return 'a load is running: wait, or stop it';
+    const l = st.loaded;
+    if (a.do === 'unload') return l ? 'a model was loaded since' : null;
+    return l && (l.model.id === a.model || l.model.file === a.model) && l.mode === a.mode ? null : 'another model was loaded since';
   };
   const token = opts.token ?? loadOrCreateToken();
   if (opts.prefix !== undefined && !PREFIX_RE.test(opts.prefix)) throw new Error('the prefix must be 24 hex characters');
@@ -376,6 +482,10 @@ export async function startUi(opts: UiOptions): Promise<UiServer> {
     const limit = route === 'chat' ? CHAT_BODY : /^chats\/[0-9a-f]+$/.test(route) ? CHATS_BODY : 4 << 20;
     try { body = await readJson(req, limit); } catch (e) { return json(res, (e as Error).message === 'body too large' ? 413 : 400, { error: (e as Error).message === 'body too large' ? `too big: a message takes at most 3 photos, shrunk (${route === 'chat' ? CHAT_BODY >> 20 : limit >> 20} MB in all)` : (e as Error).message }); }
     const fail = (e: unknown, code = 400) => json(res, code, { error: (e as Error).message });
+    // a brain card's action that did not run: its own code (a 409 with the fresh view), else 400
+    const refused = (e: unknown) => (e instanceof Refused
+      ? json(res, e.code, { error: e.message, ...(e.code === 409 && eye ? { view: eye.view() } : {}) })
+      : fail(e));
 
     if (route === 'invite') return json(res, 200, await setInvite(body?.on === true));
     // data controls: each wants the word typed back, so a stray post cannot wipe anything
@@ -424,33 +534,49 @@ export async function startUi(opts: UiOptions): Promise<UiServer> {
       if (a.do !== 'open' && !sameAction(body?.action, a)) {
         return json(res, 409, { error: 'this card changed since you saw it: look again', view: eye.view() });
       }
-      let word: string;
-      try {
-        if (a.do === 'load') {
-          if (engine.status().loading) throw new Error('already loading: wait, or stop it');
-          // in the background like the person's own load; the page follows it in status
-          // here:false (apart only, finding C1): the card leaves this computer out, as it says
-          // finding E1: a card's device list is exact, as the page's picked devices are (all: true);
-          // [] is "this computer alone", never "every paired device"
-          // finding D2: the card is hidden below before the load has run; a load that fails shows it
-          // again at the next view (only the person's next tap loads, nothing here retries)
-          engine.load({ model: a.model, mode: a.mode, peers: a.devices, ctx: a.ctx, all: true, here: a.here }, () => {})
-            .catch((e) => {
-              log(`brain card ${card.id}: ${(e as Error)?.message ?? String(e)}`);
-              eye.unhide(card.id, `the load failed: ${(e as Error)?.message ?? String(e)}`, a);
-            });
-          word = `loading ${a.model} (${a.mode})`;
-        } else if (a.do === 'unload') { await engine.unload(); word = 'unloaded'; }
-        else if (a.do === 'fetch') {
-          const r = engine.fetchModel(a.model);
-          if (!r.started) throw new Error(r.why ?? 'not started');
-          word = `fetching ${a.model}`;
-        } else if (a.do === 'probe') { await engine.probe(a.devices); word = 'looked again'; }
-        else word = 'opened';   // 'open' only moves the page
-      } catch (e) { return fail(e); }
-      eye.applied(card.id, word);
-      log(`brain card applied: ${card.id}: ${word}`);
-      return json(res, 200, { ok: true, word, view: eye.view() });
+      // anchor (it faces the internet) and cancel (no undo) take a second tap: the page sends its kind back
+      if (needsConfirm(a) && body?.confirm !== a.do) return json(res, 400, { error: `confirm first: send confirm "${a.do}"` });
+      const undo = card.change ? undoOf(a) : null;   // before the change, or it would undo to itself
+      const sharing = shareHere.view().on;
+      let ran: { word: string; noop?: true };
+      try { ran = await runAction(a, card.id); } catch (e) { return refused(e); }
+      if (card.change) accepted = { id: card.id, a, sharing };
+      eye.applied(card.id, ran.word, ran.noop ? null : undo, card);
+      log(`brain card applied: ${card.id}: ${ran.word}`);
+      return json(res, 200, { ok: true, word: ran.word, view: eye.view() });
+    }
+    // reject: only a card that changes something; it stays hidden (7 days, 30 from the second time, a
+    // warning 24 hours) even when it goes and comes back. × (dismiss) is the quiet hide of any card.
+    if (route === 'brain/reject') {
+      if (!eye) return json(res, 404, { error: 'no brain here' });
+      const card = eye.card(String(body?.id ?? ''));
+      if (!card) return json(res, 404, { error: 'that card is gone' });
+      if (!card.change || !card.action) return json(res, 400, { error: 'this card changes nothing to reject: × hides it' });
+      // the kind of change the person turned down (do, model, mode) is the one the card says now
+      if (!sameDismissal(body?.action, card.action)) return json(res, 409, { error: 'this card changed since you saw it: look again', view: eye.view() });
+      if (!eye.reject(card.id)) return json(res, 404, { error: 'that card is gone' });
+      log(`brain card rejected: ${card.id}`);
+      return json(res, 200, { ok: true, view: eye.view() });
+    }
+    // undo: the last accept, for ten minutes, while nothing moved since (else 409 and nothing runs);
+    // it counts as a reject, so the card does not come straight back
+    if (route === 'brain/undo') {
+      if (!eye) return json(res, 404, { error: 'no brain here' });
+      const u = eye.pendingUndo();
+      if (!u || !accepted || accepted.id !== u.id) return json(res, 404, { error: 'nothing to undo' });
+      if (String(body?.id ?? '') !== u.id) return json(res, 409, { error: 'the last accept is another card: look again', view: eye.view() });
+      const moved = movedSince(accepted.a);
+      if (moved) return json(res, 409, { error: `${moved}: the undo would undo that too`, view: eye.view() });
+      let ran: { word: string; noop?: true };
+      try { ran = await runAction(u.action, u.id); } catch (e) { return refused(e); }
+      // the anchor off restarts sharing without it: a computer that did not share before stops again
+      if (u.action.do === 'anchor' && !accepted.sharing) {
+        await shareHere.stop().catch((e) => log(`brain card undo: sharing did not stop: ${(e as Error).message}`));
+      }
+      eye.undone(ran.word);
+      accepted = null;
+      log(`brain card undone: ${u.id}: ${ran.word}`);
+      return json(res, 200, { ok: true, word: ran.word, view: eye.view() });
     }
     if (route === 'invite/new') return json(res, 200, await rotateInvite());
     // settings › model › vision model: which model reads photos (null: the smallest here), and fetching one
@@ -467,9 +593,11 @@ export async function startUi(opts: UiOptions): Promise<UiServer> {
     }
     if (route === 'peers/add') {
       try {
-        if (typeof body?.address === 'string') return json(res, 200, await engine.pairByHand({ address: body.address, pin: body.pin, fp: body.fp, name: body.name, anchor: body.anchor === true }));
+        // whose: for an anchor's invite, the person's answer, my computer or a friend's (the engine refuses a join without it)
+        const whose = typeof body?.whose === 'string' ? body.whose : undefined;
+        if (typeof body?.address === 'string') return json(res, 200, await engine.pairByHand({ address: body.address, pin: body.pin, fp: body.fp, name: body.name, anchor: body.anchor === true, whose }));
         if (typeof body?.text !== 'string' || !body.text.trim()) return json(res, 400, { error: 'paste the code from the phone' });
-        return json(res, 200, await engine.addPeer(body.text, { name: typeof body.name === 'string' ? body.name : undefined, relay: typeof body.relay === 'string' ? body.relay : undefined }));
+        return json(res, 200, await engine.addPeer(body.text, { name: typeof body.name === 'string' ? body.name : undefined, relay: typeof body.relay === 'string' ? body.relay : undefined, whose }));
       } catch (e) { return fail(e); }
     }
     // phones on a usb cable: "use" starts and returns at once (GET cable shows the steps);
@@ -503,6 +631,16 @@ export async function startUi(opts: UiOptions): Promise<UiServer> {
     }
     if (route === 'peers/ring') {
       try { return engine.setRing(String(body?.id ?? ''), String(body?.ring ?? '')) ? json(res, 200, { ok: true }) : json(res, 404, { error: 'no such device' }); } catch (e) { return fail(e, 400); }
+    }
+    // the person's answer to a "mine" invite (17.11.2026): only a device with a claim, the owner only
+    // (like peers/ring: a guest is refused above, a POST from another origin before that)
+    if (route === 'peers/mine') {
+      const id = String(body?.id ?? '');
+      const yes = body?.yes === true;
+      const r = engine.confirmMine(id, yes);
+      if (r === null) return json(res, 404, { error: 'no such device' });
+      if (!r) return json(res, 409, { error: 'nothing to answer: its invite did not say it is yours, or it was answered already' });
+      return json(res, 200, { ok: true, ring: engine.peers().find((p) => p.id === id || (p.routes ?? []).includes(id))?.ring ?? (yes ? 'home' : 'circle') });
     }
     if (route === 'projects/new') { try { return json(res, 200, projects.create(body)); } catch (e) { return fail(e); } }
     if (route === 'projects/cancel') { const p = projects.cancel(String(body?.id ?? '')); return p ? json(res, 200, p) : json(res, 404, { error: 'no such project' }); }

@@ -124,8 +124,25 @@ test('a part limits says should rest gets no executor card; the host\'s own rest
   assert.deepEqual(ids(v), ['executor:rest:local']);
   const c = v.suggestions[0];
   assert.equal(c.title, 'mac should rest (limits)');
-  assert.deepEqual(c.action, { do: 'open', panel: 'branch', branch: 'limits' });
+  assert.deepEqual(c.action, { do: 'unload' }, 'the only one answering: unload (DECISIONS 5, E2)');
+  assert.equal(c.label, 'unload');
   assert.equal(c.why, 'it is the one answering M; nothing is stopped by the brain.');
+});
+
+test('planner:barred (E2): a part that should rest while the others cannot hold the model without it: unload', () => {
+  const pl = branch(planner.create, { limits: { hints: [{ id: 'p1', no: 'should rest (limits)' }] } });
+  let t = 1_000_000;
+  let v: any = null;
+  for (let i = 0; i < decide.SHOW; i++) {
+    t += 5_000;
+    pl.b.observe(snap({ at: t, devices: [dev({ checkedAt: t })], work: { loaded: split(true) } }), null);
+    v = pl.b.view();
+  }
+  const c = v.suggestions.find((x: any) => x.id === 'planner:barred:p1');
+  assert.ok(c, `cards: ${JSON.stringify(ids(v))}`);
+  assert.deepEqual(c.action, { do: 'unload' });
+  assert.equal(c.label, 'unload');
+  assert.equal(c.why, 'the others do not hold the model without it: stop it, or wait.');
 });
 
 test('chain: limits sees the part working 25 busy minutes, and the real planner bars it: split without it', () => {

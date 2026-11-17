@@ -248,15 +248,17 @@ whether the connection came through an anchor or not.
   pinned list (above).
 - **The owner** can hold back a record, serve an older validly signed one, and drop streams; it
   cannot read, forge or pair.
-- **A member's own record can name any address**, and devices that pinned it will try a TLS hello
-  there.
+- **A member's own record can name any address** but loopback, link-local and multicast (refused,
+  17.11.2026), and devices that pinned it will try a TLS hello there. A friend's device's private
+  addresses are dropped (above); the person's own devices' are kept.
 - **A recent invite shows:** for 30 minutes after an invite was used or ran out, a stranger hears
   `pin` instead of `not paired` on `rpc` and `api`.
 - **A typed invite** pins only 16 hex (64 bits) of the anchor's certificate before it pairs; a
   gate with a matching prefix that answers `paired` is accepted, but cannot pair back without the
   code.
-- **A stolen invite** used within its 10 minutes gives the thief the ring the invite named
-  (`home` for "mine").
+- **A stolen invite** used within its 10 minutes pairs the thief as a friend's device (`circle`,
+  capped). A "mine" invite adds only a claim the person answers on the devices page (17.11.2026,
+  under join).
 - **A device paired the ordinary way** (a qr, not an invite) has no ring in the peer book and
   counts as the person's own: not byte-capped and not a friend for the seat until someone sets
   its ring to `circle`. Only invites ask whose a device is. A certificate with no peer-book record
@@ -359,8 +361,15 @@ the page says so), a one-time code `pin`, `anchor: true` and a second one-time c
 shown as text to copy and as a qr, works **once, for 10 minutes**, and a new invite kills the one
 before. The typed form is printed beside it: address, code, the certificate's first 16 hex.
 
-"Mine" makes the joiner ring `home` in the anchor's peer book (never byte-capped); "a friend's"
-ring `circle` (capped, above). The person can change it later like any ring.
+"A friend's" makes the joiner ring `circle` in the anchor's peer book (capped, above). Since
+17.11.2026 "mine" does not make it `home` by itself: the joiner is written `circle` too, with a
+claim, and its row in devices on the anchor's page says "its invite said it is yours. it joined at
+HH:MM from <address> (this network | the internet), certificate <16 hex>. is it yours? until you
+say yes it is limited like a friend's device", with **yes, it is mine** and **no**. Yes makes it
+`home` (never byte-capped); no leaves it a friend's. Whoever used the invite chose its name, so
+check the time, the address and the certificate (a thief on the same wi-fi also reads "this
+network"). An invite never changes the ring of a device already in the peer book. The person can
+change the ring later like any ring, and that answers the claim too.
 
 ### join an anchor
 
@@ -370,8 +379,10 @@ invite" ticked. Then:
 
 1. It pairs with the anchor's gate with `pin` (the usual pin proof, which covers both
    certificates; the anchor's certificate is pinned from the invite, or checked against the typed
-   start at TLS before the code is spent). The anchor is now in its peer book (`anchor: true`,
-   ring `circle` until the person says otherwise) and in `~/.kula-node/anchors.json`.
+   start at TLS before the code is spent). The anchor is now in its peer book (`anchor: true`)
+   and in `~/.kula-node/anchors.json`, at ring `home` when the person answered "my computer" and
+   `circle` for "a friend's computer" (17.11.2026; `kula-node peers add` does not ask and keeps
+   `circle`).
 2. While it shares (the page starts sharing for it when it was off; a terminal runs
    `kula-node share`), it **registers** with every joined anchor and stays registered
    (`AnchorLinks`: reconnects with backoff, along the invite's addresses).
@@ -388,8 +399,11 @@ invite" ticked. Then:
 
 **An invite is a full pairing both ways** (17.11.2026). After step 3 the anchor's computer may use
 the joiner (run model layers on it, ask it for answers) without asking again. So the page asks
-yes or no before it joins: "joining starts sharing this computer, and the anchor's computer may
-use it". A computer's own invite pasted on that same computer is refused before its code is spent.
+before it joins: "joining starts sharing this computer, and the anchor's computer may use it", and,
+since 17.11.2026 as the phone does, whose computer it is: **my computer**, **a friend's computer**
+or cancel. Without an answer it does not join. After "my computer", the joined message adds: "if the anchor is your own, press 'yes, it is mine' on this computer's row in its devices;
+until then it limits this computer like a friend's." A computer's own invite pasted on that same
+computer is refused before its code is spent.
 
 What the joiner hears when it does not work:
 
@@ -440,7 +454,9 @@ The phone is a member, never an anchor: its gate still answers `bad channel` to 
   this phone"). It also asks whose computer it is: **my computer**, **a friend's computer**, or
   cancel. The answer is kept with the anchor in `anchors.json` (`whose`; an entry from before the
   question counts as a friend's) and decides the rpc seat (below). Joining the same anchor again
-  takes the new answer. Forgetting a joined anchor on the phone stops registering there but does
+  takes the new answer. After "my computer" the joined message also says to press "yes, it is
+  mine" on this phone's row in devices on that computer; until then the anchor limits the phone
+  like a friend's (17.11.2026, in English, German and Turkish). Forgetting a joined anchor on the phone stops registering there but does
   not remove the anchor's computer from "devices that can use this phone".
 - **Four anchors at most** (phone: in 0.6.0): a fifth invite is refused in plain words before its
   code is spent ("forget one of them first"); the store no longer drops the oldest silently. An
@@ -490,7 +506,21 @@ A record is taken only when all of these hold, on the computer that takes it:
 
 1. SHA-256 of `cert` is `fp`, and `sig` verifies with that certificate's key;
 2. `fp` is pinned here already: in the peer book, or an anchor this computer joined;
-3. its `seq` is newer than the one kept.
+3. its `seq` is newer than the one kept;
+4. (17.11.2026) none of its addresses or anchors is one this computer must never dial: loopback,
+   `0.0.0.0/8`, `::`, link-local or multicast. Such a record is refused whole, since dialing there
+   on every probe round would let the signer learn which of this computer's own ports are open
+   ([SECURITY.md](SECURITY.md#f1-a-signed-record-could-make-this-computer-dial-its-own-loopback-and-lan));
+5. (17.11.2026) the peer book and the joined store can be read. While one cannot, nothing is taken,
+   asked or pruned, so a broken file never wipes the seq floors.
+
+**A friend's device's lan addresses are not kept** (the person's decision, 17.11.2026). For a
+device whose ring is not `home`, a taken record loses every lan or other private address, whatever
+the record labels it, and its anchors at private addresses (unless this computer joined that anchor
+at that very host and port itself). So a friend's device is never reached at a lan address from its
+record: on the same wi-fi it is found by discovery, or through the anchor. The person's own devices
+keep theirs, and a device whose ring changes has its held record applied again. A forgotten device
+leaves the book, with its addresses.
 
 The anchor that carried it is trusted for none of this: a record it changed fails the signature,
 an old one fails the seq, a stranger's fails the pin. A taken record changes the device's `addrs`

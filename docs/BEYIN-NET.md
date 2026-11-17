@@ -1,7 +1,9 @@
 # beyin-net: brain to brain
 
 Design and proof of the layer between homes, 11.11.2026. No networking yet: how the words
-travel (cable, Wi-Fi, later the direct internet path) is another piece of work. This page is
+travel is another piece of work. Since kula 0.6.0 devices in different homes do reach each other
+over the internet, straight or through an anchor ([ANCHOR.md](ANCHOR.md)), but beyin-net's words
+do not use that yet. This page is
 what the words are and what each brain does with them. Code: `node/src/godseye/net/` (pure,
 imports nothing, not even node's crypto). Tests: `node/test/beyin-net.test.ts` (the parts) and
 `node/test/beyin-net-sim.test.ts` (twenty homes, four time zones, three days).
@@ -9,8 +11,10 @@ imports nothing, not even node's crypto). Tests: `node/test/beyin-net.test.ts` (
 ## the picture
 
 - **A home is a cell.** Its phones and computers are one AI: a model can be split across them
-  (split mode) because they sit a few milliseconds apart. A model is **never split across
-  homes**: the latency would kill it, and a layer's activations say too much.
+  (split mode) because they sit a few milliseconds apart. beyin-net **never splits a model across
+  homes**: a layer's activations say too much. (Since 0.6.0 kula's own planner can put a far
+  device of the circle in a split, over the internet or through an anchor; the brain prices it and
+  leaves that choice to the person, [BEYIN.md](BEYIN.md#the-brain-and-the-anchor-network-16112026).)
 - **Across homes only work is shared**, the way apart mode shares it at home: whole jobs, or
   pieces of a job that stand alone (summarise these 200 pages one by one, translate these
   paragraphs, label these photos, run this eval set).

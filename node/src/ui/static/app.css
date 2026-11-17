@@ -977,6 +977,20 @@ ul.wiz-steps li::before { content: "› "; color: var(--meta); }
 .bc-go { white-space: nowrap; }
 .bc-go[disabled] { opacity: 0.6; cursor: default; }
 .bc-more { display: block; margin: 6px auto 0; font-size: 12px; }
+/* change cards (17.11.2026): what accept changes, the branch's record, accept / reject, "really?", the undo bar */
+.bc-does { font-size: 12.5px; color: var(--words); line-height: 1.45; margin: 0 0 4px; overflow-wrap: anywhere; }
+.bc-rec { font: 11px var(--mono); color: var(--meta); margin: 0 0 8px; }
+.bc-btns { display: inline-flex; gap: 6px; flex-shrink: 0; }
+.bc-no { white-space: nowrap; color: var(--mute); }
+.bc-no[disabled] { opacity: 0.6; cursor: default; }
+.bc-accept, .bc-yes { border-color: var(--accent); }
+.bm-sel.bc .f.bc-really > span:first-child { color: var(--words); font-size: 12.5px; }
+.bc-err { color: var(--red); overflow-wrap: anywhere; }
+.bc-undo { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; margin: 0 0 8px; padding: 8px 12px; border: 1px solid color-mix(in srgb, var(--sage) 40%, transparent); border-radius: 14px; background: color-mix(in srgb, var(--sage) 8%, var(--card)); font-size: 12.5px; }
+.bc-undo-t { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
+.bc-undo .bc-err { flex-basis: 100%; order: 3; font-size: 11.5px; }
+.bc-undo-go { white-space: nowrap; padding: 4px 12px; font-size: 12.5px; }
+.bc-undo-go[disabled] { opacity: 0.6; cursor: default; }
 /* the cards make the top taller than the window (12.11.2026): the panel itself scrolls then (it was
    overflow: hidden, so the map, the branch card and the feed under the cards could not be reached),
    and the feed keeps a height of its own instead of being squeezed to its header */

@@ -996,3 +996,94 @@ test('a line fault after a shorter fault clears its restart marker: the next sta
   assert.match(check(b.view(), 'ledger').text, /started over/);
   assert.equal(events.filter((e) => /started over/.test(e)).length, 1, 'the marker did not linger');
 });
+
+// P3 (17.11.2026): a device's own gate on the internet. (a) level.ts: a rate that stays raised for a
+// whole day refits the device's fit, with one feed line. (b) a stranger-only burst on a gate that
+// faces the internet is a card, not a red check; wrong codes, a replay and the rpc guard stay red.
+const LEVEL_LINE = /^pixel's gate: a new level of refusals: learning what is usual again$/;
+
+test('P3 a: 72 quiet hours, then 6 strangers every hour for five days: one new-level line, the refit learns it, the check is ok again', () => {
+  const d = device();
+  d.add();
+  const { b, events, notes } = branch();
+  const t0 = 1_000_000_000;
+  b.observe(snap([eyeDev(d, trustOf(d, { at: t0 }))]) as any, null);
+  hourByHour(b, d, t0, 72);
+  let total = 0;
+  const reds: number[] = [];
+  for (let i = 73; i <= 72 + 120; i++) {
+    total += 6;
+    b.observe(snap([eyeDev(d, trustOf(d, { at: t0 + i * H, rejectsDay: { 'not paired': total } }))]) as any, null);
+    if (b.view().report!.verdict === 'bad') reds.push(i);
+  }
+  assert.equal(events.filter((e) => LEVEL_LINE.test(e)).length, 1, `one new-level line: ${JSON.stringify(events)}`);
+  assert.ok(reds.length > 0 && reds.at(-1)! < 72 + 48, `red only before the refit learned the level: ${reds}`);
+  assert.equal(b.view().report!.verdict, 'ok');
+  assert.equal(check(b.view(), 'refused').ok, true);
+  assert.equal(notes().p1.level.length, 24, 'the last 24 finished hours are kept, no more');
+  // the kept hours survive a restart, and a gap in the looks clears them (they must follow each other)
+  const r2 = branch(notes());
+  assert.equal(r2.notes().p1.level.length, 24);
+  r2.b.observe(snap([eyeDev(d, trustOf(d, { at: t0 + 200 * H, rejectsDay: { 'not paired': total } }))]) as any, null);
+  assert.deepEqual(r2.notes().p1.level, []);
+});
+
+test('P3 b: a stranger-only burst on a gate that faces the internet is a card, not red; a lan-only gate, wrong codes, a replay and the rpc guard stay red', () => {
+  const d = device();
+  d.add();
+  const t0 = 1_000_000_000;
+  const strangers = [1, 2, 3].map((t) => ({ t, why: 'not paired', peer: '203.0.113.7' }));
+  /** 72 quiet hours, then one hour with `day` refused, on a device with `o` */
+  const run = (o: Record<string, unknown>, day: Record<string, number>, last = strangers) => {
+    const r = branch();
+    r.b.observe(snap([eyeDev(d, trustOf(d, { at: t0 }), o)]) as any, null);
+    for (let i = 1; i <= 72; i++) r.b.observe(snap([eyeDev(d, trustOf(d, { at: t0 + i * H }), o)]) as any, null);
+    r.b.observe(snap([eyeDev(d, trustOf(d, { at: t0 + 72 * H + 1000, rejectsDay: day, rejectsLast: last }), o)]) as any, null);
+    return r;
+  };
+  const cardOf = (v: any) => (v.suggestions ?? []).find((c: any) => c.id === 'trust:device-burst:p1');
+  for (const o of [{ via: 'internet' }, { via: 'anchor', roads: { lan: 0, direct: 1, anchors: 1 } }, { anchor: true }, { roads: { lan: 1, direct: 1, anchors: 0 } }]) {
+    const { b, events } = run(o, { 'not paired': 4, 'no hello': 2 });
+    const v = b.view();
+    assert.equal(v.report!.verdict, 'ok', JSON.stringify(o));
+    assert.equal(check(v, 'refused').ok, true);
+    assert.match(check(v, 'refused').text, /all from strangers\. its gate faces the internet/);
+    const c = cardOf(v);
+    assert.ok(c, JSON.stringify(o));
+    assert.equal(c.kind, 'warn');
+    assert.equal(c.weight, 2);
+    assert.match(c.why, /^6 refusals in the last hour, at this hour of day usually about 0\.1, all from strangers \(not paired ×4, no hello ×2\)/);
+    assert.ok(!JSON.stringify(v).includes('203.0.113.7') && !JSON.stringify(events).includes('203.0.113.7'), 'no peer address');
+    assert.deepEqual(events, ["more knocking on pixel's gate than usual: 6 refusals in the last hour, at this hour of day usually about 0.1, all from strangers"]);
+    if (o.via === 'internet') {
+      // the burst hour finishes: still a card ("still above"); a finished quiet hour: gone, one line
+      b.observe(snap([eyeDev(d, trustOf(d, { at: t0 + 73 * H + 1000, rejectsDay: { 'not paired': 4, 'no hello': 2 } }), o)]) as any, null);
+      assert.equal(b.view().report!.verdict, 'ok');
+      assert.match(cardOf(b.view()).why, /^6 refusals in the last finished hour/);
+      b.observe(snap([eyeDev(d, trustOf(d, { at: t0 + 74 * H + 1000, rejectsDay: { 'not paired': 4, 'no hello': 2 } }), o)]) as any, null);
+      assert.equal(cardOf(b.view()), undefined);
+      assert.deepEqual(events.slice(1), ["pixel: the knocking on its gate is back to its usual"]);
+    }
+  }
+  // the same burst on a gate this computer reaches on the lan only, or through an anchor only (a
+  // device behind its home's router: its knocks come from its lan or a member of the anchor): red
+  for (const o of [{}, { roads: { lan: 2, direct: 0, anchors: 0 } }, { anchor: false }, { via: 'anchor' }, { via: 'anchor', roads: { lan: 1, direct: 0, anchors: 1 } }]) {
+    const { b } = run(o, { 'not paired': 6 });
+    assert.equal(b.view().report!.verdict, 'bad', JSON.stringify(o));
+    assert.equal(cardOf(b.view()), undefined);
+  }
+  // on a gate that faces the internet, anything but strangers keeps it red
+  const net = { via: 'internet' };
+  const red = (day: Record<string, number>, last = strangers) => {
+    const { b } = run(net, day, last);
+    assert.equal(b.view().report!.verdict, 'bad', JSON.stringify(day));
+    assert.equal(cardOf(b.view()), undefined, JSON.stringify(day));
+    return check(b.view(), 'refused').text as string;
+  };
+  assert.match(red({ 'not paired': 5, 'wrong pin': 1 }), /^6 refusals in the last hour/);
+  assert.equal(red({ 'wrong pin': 5, 'not paired': 1 }), '5 wrong codes today: someone may be guessing. all were refused');
+  assert.match(red({ 'not paired': 5, replay: 1 }), /replayed a recorded handshake/);
+  assert.match(red({ 'not paired': 5, 'rpc guard: op 7': 1 }), /^6 refusals in the last hour/);
+  // a reason the day leaves out but the last few name: not strangers only
+  assert.match(red({ 'not paired': 6 }, [...strangers, { t: 4, why: 'bad proof', peer: 'x' }]), /^6 refusals in the last hour/);
+});

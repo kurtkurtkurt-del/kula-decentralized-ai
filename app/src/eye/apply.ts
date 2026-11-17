@@ -28,8 +28,13 @@ export type PhoneEnv = {
   openBranch: (b: BranchId) => void;
 };
 
-/** What a tap does: the kind for the button's word, and the work, which says what it did. */
-export type PhoneAct = { kind: SuggestAction['do']; run: () => Promise<string> };
+/** What accept changes on this phone, for the card's sentence in the reader's language
+ *  (eye.does.<key>): the shared eye's `does` speaks of the computer and its undo, the phone has neither. */
+export type PhoneDoes = { key: 'alone' | 'apart' | 'split' | 'unload' | 'fetch'; vars?: Record<string, string> };
+
+/** What a tap does: the kind for the button's word, and the work, which says what it did; a change
+ *  (load, unload, fetch) also says what accept changes. */
+export type PhoneAct = { kind: SuggestAction['do']; run: () => Promise<string>; does?: PhoneDoes };
 
 /** An apart or split load that ran on this phone with every device the card named left out (a
  *  split's plan.used empty): not what the card promised (finding D2). The model stays loaded
@@ -70,6 +75,7 @@ export function route(a: SuggestAction | null, env: PhoneEnv): PhoneAct | null {
       const ctx = a.ctx ?? env.ctx();
       return {
         kind: 'load',
+        does: { key: mode, vars: mode === 'alone' ? { model: model.name } : { model: model.name, list: peers.map((p) => p.name).join(', ') } },
         run: async () => {
           if (env.busy()) throw new Error('already loading');
           const used = new Set(await env.load(model, mode, ctx, peers));
@@ -82,6 +88,7 @@ export function route(a: SuggestAction | null, env: PhoneEnv): PhoneAct | null {
       if (!env.native) return null;
       return {
         kind: 'unload',
+        does: { key: 'unload' },
         run: async () => {
           if (!env.loaded()) return 'nothing was loaded';
           await env.unload();
@@ -92,7 +99,7 @@ export function route(a: SuggestAction | null, env: PhoneEnv): PhoneAct | null {
       if (!env.native) return null;
       const c = env.catalog.find((m) => m.id === a.model);
       if (!c || localOf(env, c.id)) return null;
-      return { kind: 'fetch', run: async () => { await env.fetch(c); return `fetching ${c.name}`; } };
+      return { kind: 'fetch', does: { key: 'fetch', vars: { model: c.name } }, run: async () => { await env.fetch(c); return `fetching ${c.name}`; } };
     }
     case 'probe': {
       const want = new Set(a.devices);
@@ -113,6 +120,7 @@ export function route(a: SuggestAction | null, env: PhoneEnv): PhoneAct | null {
       }
       return { kind: 'open', run: async () => { env.open(PAGES[a.panel as keyof typeof PAGES]); return 'opened'; } };
     default:
+      // cap, anchor and cancel (17.11.2026): the computer's engine only; the card says so and keeps reject
       return null;
   }
 }

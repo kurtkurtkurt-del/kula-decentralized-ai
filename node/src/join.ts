@@ -22,7 +22,7 @@ import { createHmac } from 'node:crypto';
 import type { Duplex } from 'node:stream';
 import { handshake, connectRemote, GateRefused, FP_MISMATCH, FP_PREFIX_MIN, PIN_TTL_MS, type ExtraCodes } from './gate.js';
 import { newPin, type GateIdentity } from './tls.js';
-import { candidates, cleanAddrs, readPeers, writePeers, upsertPeer, peerCode, widestRing, type Peer, type PeerAddr, type Ring } from './peers.js';
+import { candidates, cleanAddrs, readPeers, writePeers, upsertPeer, peerCode, widestRing, ringOf, type Peer, type PeerAddr, type Ring } from './peers.js';
 import { joinAnchor, FP_RE, type AnchorHub, type AnchorEvent, type AnchorKind, type AnchorMembership, type AnchorBook } from './anchor.js';
 import type { PeerAnchor } from './road.js';
 import type { AddrRecord } from './addrrecord.js';
@@ -136,6 +136,8 @@ export function reachableFromOutside(members: { peer: string }[]): boolean {
 // whose device an invite is for: the person's own, or a friend's
 export type Whose = 'mine' | 'friend';
 export const isWhose = (v: unknown): v is Whose => v === 'mine' || v === 'friend';
+// the page joins an anchor only on the person's answer (17.11.2026, as the phone asks)
+export const WHOSE_ASK_WORDS = 'say whose computer the anchor is: my computer or a friend\'s computer';
 
 export interface Invite {
   whose: Whose;
@@ -168,7 +170,7 @@ export interface AnchorHostOptions {
 // This computer as an anchor: its invites and the pair-back with whoever used one.
 export class AnchorHost {
   private last: { invite: Invite; pin: string; used: boolean } | null = null;
-  private readonly backs = new Map<string, { hpin: string; exp: number; busy: boolean; ring: Ring }>();
+  private readonly backs = new Map<string, { hpin: string; exp: number; busy: boolean; mine: boolean }>();
   private readonly off: () => void;
   private readonly now: () => number;
 
@@ -181,8 +183,9 @@ export class AnchorHost {
 
   // A new invite; the one before it stops working. `addrs`: the ways in from outside (the caller
   // falls back to the lan address when there is none, and the invite then says lanOnly).
-  // `whose`: the person says whose device will use it: their own (ring home, never byte-capped) or
-  // a friend's (ring circle, capped); kept on the record the pair-back writes, changeable later.
+  // `whose`: the person says whose device will use it: their own or a friend's. Either way the
+  // pair-back writes ring circle (capped); "mine" adds a claim, and the person confirms it on this
+  // computer's page before the device is home (never byte-capped). Changeable later.
   invite(addrs: PeerAddr[], info: { ram?: number | null; bw?: number | null } = {}, whose: Whose = 'friend'): Invite {
     const ways = cleanAddrs(addrs);
     if (!ways.length) throw new Error('this computer has no address another device could use: is it on a network?');
@@ -195,7 +198,7 @@ export class AnchorHost {
     this.o.codes.add(pin, ttl, {
       onUsed: (fp) => {
         entry.used = true;
-        this.backs.set(fp, { hpin, exp: this.now() + ttl, busy: false, ring: whose === 'mine' ? 'home' : 'circle' });
+        this.backs.set(fp, { hpin, exp: this.now() + ttl, busy: false, mine: whose === 'mine' });
         this.log(`anchor: the invite was used by ${fp.slice(0, 16)}…; pairing back once it registers here`);
         this.o.onUsed?.(fp);
         const m = this.o.hub.members().find((x) => x.fp === fp);
@@ -245,7 +248,9 @@ export class AnchorHost {
         if (!(e instanceof GateRefused && e.reason === 'channel closed')) throw e;
       }
       this.backs.delete(fp);
-      const peer = recordPairedBack(this.o.peersFile, fp, name, kind, b.ring);
+      // "mine": a claim the person answers on this computer's page; the address it registered from
+      const from = (this.o.hub.members().find((m) => m.fp === fp)?.peer ?? '').replace(/^::ffff:/i, '').slice(0, 64);
+      const peer = recordPairedBack(this.o.peersFile, fp, name, kind, b.mine ? { at: new Date(this.now()).toISOString(), from } : null);
       this.log(`anchor: paired back with ${peer.name} (${fp.slice(0, 16)}…): it can be used from here, through this computer's anchor`);
       this.o.onPairedBack?.(peer);
     } catch (e) {
@@ -262,18 +267,22 @@ export class AnchorHost {
   }
 }
 
-// The member in the anchor's peer book: pinned, paired, reached through this computer's anchor,
-// with the ring the invite said (the person's own: home; a friend's: circle). A record it already
-// has (by certificate) is kept and told so.
-export function recordPairedBack(file: string, fp: string, name: string, kind: AnchorKind, ring: Ring = 'circle'): Peer {
+// The member in the anchor's peer book: pinned, paired, reached through this computer's anchor.
+// A new one is always circle (a friend's seat, capped): the device picks its own name, so an
+// invite that said "mine" adds only a claim, and the person lifts it to home on this computer's
+// page (17.11.2026, the person's decision). A record it already has (by certificate) is kept and
+// told so, with the ring it had and no new claim: an invite never changes the ring of a device
+// already in the book (F3: a friend's device using a "mine" invite stays circle).
+export function recordPairedBack(file: string, fp: string, name: string, kind: AnchorKind, claim: { at: string; from: string } | null = null): Peer {
   const list = readPeers(file);
   const now = new Date().toISOString();
   const old = list.find((p) => p.fp?.toLowerCase() === fp);
   const peer: Peer = old
-    ? { ...old, pin: null, paired_at: old.paired_at ?? now, last_ok: now, ring, route: old.host ? old.route ?? null : { via: 'anchor', anchor: 'self' } }
+    ? { ...old, pin: null, paired_at: old.paired_at ?? now, last_ok: now, ring: ringOf(old), route: old.host ? old.route ?? null : { via: 'anchor', anchor: 'self' } }
     : {
       id: `anchor:${fp.slice(0, 16)}`, name: (name || `computer ${fp.slice(0, 8)}`).slice(0, 60), host: '', port: 0, secret: '', fp, pin: null, paired_at: now,
-      route: { via: 'anchor', anchor: 'self' }, kind, ring, ram: null, bw: null, added_at: now, last_ok: now,
+      route: { via: 'anchor', anchor: 'self' }, kind, ring: 'circle', ram: null, bw: null, added_at: now, last_ok: now,
+      ...(claim ? { claim: { at: claim.at, from: claim.from } } : {}),
     };
   writePeers(upsertPeer(list, peer).list, file);
   return peer;
@@ -364,13 +373,18 @@ export function joinedAgainWords(name: string): string {
 // Pairs with the anchor's gate using the invite's `pin`, along its addresses in order; keeps the
 // anchor in the peer book (paired, pinned, `anchor: true`) and in the store of joined anchors with
 // the pair-back code, which the member's gate opens once it registers (AnchorLinks).
+// `whose`: the person's answer on this computer, whose computer the anchor is (17.11.2026, as the
+// phone asks): their own (ring home here) or a friend's (circle). It sets only how this computer
+// treats the anchor; the invite itself never picks a ring. Absent (the cli): a friend's, as before.
 export async function joinWithInvite(o: {
   peer: Peer; fpPrefix?: string | null; identity: GateIdentity; peersFile: string; joinedFile: string;
   timeoutMs?: number; connect?: (host: string, port: number, timeoutMs: number) => Promise<Duplex>; ttlMs?: number;
+  whose?: Whose;
 }): Promise<JoinResult> {
   const p = o.peer;
   const pin = p.pin;
   if (!pin) throw new Error('this is not an invite: it has no one-time code');
+  if (o.whose !== undefined && !isWhose(o.whose)) throw new Error(WHOSE_ASK_WORDS);
   const fpPrefix = String(o.fpPrefix ?? '').replace(/[\s-]/g, '').toLowerCase();
   if (fpPrefix && !/^[0-9a-f]+$/.test(fpPrefix)) throw new Error('the certificate is hex (0-9, a-f)');
   if (!p.fp && fpPrefix.length < FP_PREFIX_MIN) throw new Error(`type the start of the anchor's certificate too (${FP_PREFIX_MIN} letters and digits or more)`);
@@ -412,7 +426,7 @@ export async function joinWithInvite(o: {
   const peer: Peer = {
     ...rest,
     name: p.name || `anchor ${fp.slice(0, 8)}`,
-    fp, pin: null, paired_at: now, last_ok: now, anchor: true, kind: 'pc', ring: p.ring ?? 'circle',
+    fp, pin: null, paired_at: now, last_ok: now, anchor: true, kind: 'pc', ring: o.whose === 'mine' ? 'home' : 'circle',
     route: at.host === first.host && at.port === first.port ? null : at,
   };
   writePeers(upsertPeer(readPeers(o.peersFile), peer).list, o.peersFile);

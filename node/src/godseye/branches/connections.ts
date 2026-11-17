@@ -64,7 +64,10 @@
 //                                        either answers once; one feed line when it shows, one when it goes
 //   connections:one-anchor      suggest 1  exactly one anchor known (rows with anchor, plus this
 //                                        computer's host.anchor.on) and at least one far device
-//                                        (internet or anchor); through Steady (SHOW 3 / HIDE 4)
+//                                        (internet or anchor); through Steady (SHOW 3 / HIDE 4).
+//                                        It opens devices; when host.anchor.on is false and the one
+//                                        anchor is a far row it carries { do: 'anchor', on: true }
+//                                        (DECISIONS 5, E2: the person accepts, after a "really?")
 // A snapshot without the new fields gives none of it.
 // P1b (16.11.2026): a row's `through` is 'self' when this computer is the anchor. Its through card
 // (keyed 'self') reads "X is reached through this computer (its anchor)"; it never sets `thru` (it
@@ -95,6 +98,27 @@
 // answers over them, first to last at least 3 days), the card
 //   connections:moved:<id>      warn 2     for 24 h from that look (in memory), opens trust
 // The feed day and the card's time live in memory: a restart forgets them.
+//
+// Roads risk (17.11.2026, P1). The snapshot's `roads` (P0) counts the roads this computer has to a
+// device: lan addresses, direct internet addresses and anchors. The notes keep per device `hr`, its
+// probes by the hour of the look's at: at most HR_MAX entries [h, n, m], h the whole hours since 1970
+// (UTC), n readings taken in that hour, m of them missed; counts only, never an address. It is kept
+// for a row that offers the anchor role (anchor true), a row another row of the look goes through,
+// or a far row that says its roads (a snapshot with the new fields), and once kept it keeps counting; an hour older than HR_MAX hours before
+// the look, or after it (a bad clock), is dropped. A file without hr loads with none, and none is
+// not written. Two cards, each opening a panel only:
+//   connections:one-road:<X>      suggest 1 (warn 2 when Y missed at least once and the interval's
+//        upper end is 20% or more)
+//        a far device, reachable, whose roads say direct + anchors = 1, while two or more anchors are
+//        known (as one-anchor counts them; with one, one-anchor says it). Y is its one road: the
+//        anchor it goes through (an id of a row, not this computer, not a null id: there is nothing
+//        to count of those) or, for its one direct address, the device itself. The why says "Y
+//        missed a of n probes in 7 days, 80% interval lo–hi%, seen from this computer only", the
+//        interval by ONE_ROAD_WAY, 4-hour blocks (bench8 scored three ways: test/brain-bench/bench8.ts), or that
+//        Y was not probed from here in 7 days.
+//   connections:anchor-unconfirmed suggest 1   host.anchor.on, its reachable not true, and its
+//        since 6 hours or more before the look: "nothing reached it from another network yet; not
+//        confirmed is not closed".
 import type { Branch, BranchCtx, BranchView, DeviceHint, EyeDevice, Snapshot, Suggestion } from '../types.js';
 import { reachWord } from './util.js';
 import { Steady, cardId, names } from './decide.js';
@@ -121,6 +145,11 @@ const SETTLED_ANSWERS = 20;          // ... at least this many answers over them
 const SETTLED_MS = 3 * 24 * 3600_000; // ... first to last at least this long
 const MOVED_MS = 24 * 3600_000;      // the moved card lasts this long from the look that saw it
 const PARSE_MAX = 100;               // a where longer than this is cut before parsing
+const HOUR_MS = 3_600_000;
+export const HR_MAX = 168;           // hours of probes kept per device: the 7 days the one-road card looks at
+const HR_COUNT_MAX = 1_000_000;      // probes counted in one hour, at most
+const UNCONFIRMED_MS = 6 * HOUR_MS;  // the anchor offered this long and not reached from outside: a card
+const RISK_HI = 0.2;                 // the one-road card warns when Y missed at least once and its interval's upper end is this or more
 
 /** What each kind is expected to be like: the assumptions table above. 'other' has none. */
 export const ASSUMED: { kind: string; ms: number; drops: string }[] = [
@@ -276,7 +305,11 @@ export interface DevNotes {
   sw: SwitchRec[];
   thru: string | null;   // the last anchor id it was routed through; null: none (or a file from before this field)
   nb: BlockRec[];        // public address blocks it answered from, as hashes; [] in a file from before this field
+  hr: HourRec[];         // its probes by the hour, oldest first; [] in a file from before this field
 }
+/** One hour's probes of a device: h the whole hours since 1970 (UTC) of the looks, n readings taken
+ *  in, m of them missed. Counts only. */
+export type HourRec = [h: number, n: number, m: number];
 /** One address block a device answered from: 12 hex of sha256(id|block), the first and last look
  *  time it answered from there, how many answers. Never the address or the block itself. */
 export type BlockRec = [h: string, first: number, last: number, n: number];
@@ -289,6 +322,11 @@ const cut = (s: string): string => s.slice(0, STR_MAX);
 /** A probe ring as the notes hold it: '1' answered, '0' missed, oldest first. */
 const packRing = (ring: boolean[]): string => ring.map((ok) => (ok ? '1' : '0')).join('');
 const isTime = (x: unknown): x is number => typeof x === 'number' && Number.isFinite(x) && x >= 0 && x <= MAX_TIME;
+/** whole hours since 1970 that a Date can hold */
+const isHourNo = (x: unknown): x is number => typeof x === 'number' && Number.isSafeInteger(x) && x >= 0 && x <= Math.floor(MAX_TIME / HOUR_MS);
+const isCount = (x: unknown): x is number => typeof x === 'number' && Number.isSafeInteger(x) && x >= 0 && x <= HR_COUNT_MAX;
+/** a count from a snapshot's roads: a finite number >= 0, floored; anything else is 0 */
+const roadCount = (x: unknown): number => (typeof x === 'number' && Number.isFinite(x) && x > 0 ? Math.floor(x) : 0);
 /** A probe answer time: a finite ms in a plausible range (up to an hour), rounded to a whole ms
  *  so a decayed value never shows a tail in a line. */
 const usableMs = (x: unknown): number | null =>
@@ -326,6 +364,64 @@ function wilson80(k: number, n: number): [number, number] | null {
   const half = (z * Math.sqrt(p * (1 - p) / n + z2 / (4 * n * n))) / den;
   return [Math.max(0, mid - half), Math.min(1, mid + half)];
 }
+/** A device's missed share over some hours, with its 80% interval: a of n probes missed (both
+ *  counts as they were), lo and hi the interval's ends as shares 0..1, hours how many hours had a
+ *  probe. Null without a probe. */
+export interface MissShare { a: number; n: number; hours: number; lo: number; hi: number }
+/** One hour's probes as the notes keep them: h the whole hours since 1970 (UTC), probes n, of them
+ *  missed m. */
+export interface HourProbes { h: number; n: number; m: number }
+const sumOf = (hs: HourProbes[]) => {
+  let a = 0, n = 0, hours = 0;
+  for (const h of hs) if (h.n > 0) { a += h.m; n += h.n; hours++; }
+  return { a, n, hours };
+};
+/** Wilson over probes: every probe one independent trial (today's `loss` way). Probes come in
+ *  bursts (a 15 s round while the brain is open) and outages last minutes to hours, so the trials
+ *  are not independent: bench8 measures how often this holds the truth. */
+export function missByProbe(hs: HourProbes[]): MissShare | null {
+  const s = sumOf(hs);
+  const w = wilson80(s.a, s.n);
+  return w ? { ...s, lo: w[0], hi: w[1] } : null;
+}
+/** Wilson over hours: each hour with a probe is one block, its missed share the hour's; the share
+ *  is the mean over those hours and the evidence is the number of hours, not of probes. */
+export function missByHour(hs: HourProbes[]): MissShare | null {
+  const s = sumOf(hs);
+  if (s.hours === 0) return null;
+  let sum = 0;
+  for (const h of hs) if (h.n > 0) sum += h.m / h.n;
+  const w = wilson80(sum, s.hours);
+  return w ? { ...s, lo: w[0], hi: w[1] } : null;
+}
+/** Wilson over blocks of `size` hours: an hour's block is floor(h / size) on its UTC hour number; a
+ *  block's missed share is its summed misses over its summed probes; the share is the mean over the
+ *  blocks that had a probe and the evidence is the number of those blocks. */
+export function missByBlock(hs: HourProbes[], size: number): MissShare | null {
+  const s = sumOf(hs);
+  const blocks = new Map<number, { n: number; m: number }>();
+  for (const h of hs) {
+    if (!(h.n > 0)) continue;
+    const k = Math.floor(h.h / size);
+    const b = blocks.get(k) ?? { n: 0, m: 0 };
+    b.n += h.n; b.m += h.m;
+    blocks.set(k, b);
+  }
+  if (blocks.size === 0) return null;
+  let sum = 0;
+  for (const b of blocks.values()) sum += b.m / b.n;
+  const w = wilson80(sum, blocks.size);
+  return w ? { ...s, lo: w[0], hi: w[1] } : null;
+}
+/** The way the one-road card states its interval (bench8, 17.11.2026): 4-hour blocks, the way the
+ *  rule picks (4 of 5 seeds covering at every level; test/brain-bench/bench8.ts). Over blocks the
+ *  interval held the truth in 94.5% of the 7-day windows at each of A 0.99, 0.9 and 0.7 (5 of 5
+ *  seeds each), at a mean width of 5–18%; over hours in 73–86% (4, 3 and 2 of 5 seeds), over probes
+ *  in 2–9% (0 of 5). The outage shape is invented: with outages of 240 minutes on average at A 0.9
+ *  the blocks hold it in 70% (3 of 5 seeds), so the card still says "seen from this computer only". */
+export const ONE_ROAD_WAY: 'probe' | 'hour' | 'block4' = 'block4';
+export const missOneRoad = (hs: HourProbes[]): MissShare | null =>
+  ONE_ROAD_WAY === 'block4' ? missByBlock(hs, 4) : ONE_ROAD_WAY === 'hour' ? missByHour(hs) : missByProbe(hs);
 /** Where 8 in 10 of the ms values fall: the 10th and 90th percentile of the sorted values (a =
  *  sorted[floor(0.1(m-1))], b = sorted[ceil(0.9(m-1))]). Needs at least 10, else null. */
 function spreadOf(ms: number[]): [number, number] | null {
@@ -418,7 +514,18 @@ function saneDev(x: unknown): [string, DevNotes] | null {
       nb.push([h, first, last, n]);
     }
   }
-  return [id, { name: cut(e.name), seen: e.seen, kind: e.kind, at: e.at, k, sw, thru, nb }];
+  const hr: HourRec[] = [];                        // missing in a file from before this field
+  if (e.hr !== undefined) {
+    if (!Array.isArray(e.hr)) return null;
+    for (const r of e.hr.slice(-HR_MAX)) {
+      if (!Array.isArray(r) || r.length !== 3) return null;
+      const [h, n, m] = r;
+      if (!isHourNo(h) || !isCount(n) || n < 1 || !isCount(m) || m > n) return null;
+      if (hr.length && h <= hr[hr.length - 1][0]) return null;   // this file writes them in order, one per hour
+      hr.push([h, n, m]);
+    }
+  }
+  return [id, { name: cut(e.name), seen: e.seen, kind: e.kind, at: e.at, k, sw, thru, nb, hr }];
 }
 
 /** A notes file from disk, kept only if it has exactly the shape this file writes. A bad shape
@@ -559,8 +666,9 @@ export function create(ctx: BranchCtx): Branch {
     return out;
   }
 
-  /** The one-anchor card's reason this look: exactly one anchor known and a far device. */
-  function oneAnchor(now: Snapshot): Suggestion[] {
+  /** The anchors this look knows: rows offering the role, by id (how a title names each), and this
+   *  computer once when its own counters say so or a row is reached through it; far: a far row. */
+  function anchorsKnown(now: Snapshot): { anchors: Map<string, string>; hostOn: boolean; far: boolean; n: number } {
     const anchors = new Map<string, string>();   // id -> how a title names it
     let far = false;
     let viaSelf = false;                         // a row reached through this computer: it is an anchor
@@ -574,13 +682,103 @@ export function create(ctx: BranchCtx): Branch {
     }
     // this computer offers the role: its own counters say so, or a row is reached through it (once)
     const hostOn = objOf(objOf(now.host)?.anchor)?.on === true || viaSelf;
-    if (anchors.size + (hostOn ? 1 : 0) !== 1 || !far) return [];
+    return { anchors, hostOn, far, n: anchors.size + (hostOn ? 1 : 0) };
+  }
+
+  /** a row whose probes are kept by the hour: it offers the anchor role, or it is far and says its roads */
+  const keepsHours = (d: Record<string, unknown>) => d.anchor === true || (isFar(d) && objOf(d.roads) !== null);
+  /** one reading in the hour of the look at: counted, and the hours outside the 7 days before it dropped */
+  function noteHour(e: DevNotes, at: number, reach: boolean) {
+    const h = Math.floor(at / HOUR_MS);
+    e.hr = e.hr.filter((r) => r[0] > h - HR_MAX && r[0] <= h);   // older than 7 days, or after this look (a bad clock)
+    const last = e.hr[e.hr.length - 1];
+    if (last && last[0] === h) {
+      if (last[1] < HR_COUNT_MAX) { last[1]++; if (!reach) last[2]++; }
+    } else {
+      e.hr.push([h, 1, reach ? 0 : 1]);
+    }
+  }
+  /** a device's probes by the hour over the 7 days up to the look at */
+  function hoursOf(id: string, at: number): HourProbes[] {
+    const h = Math.floor(at / HOUR_MS);
+    return (devs.get(id)?.hr ?? []).filter((r) => r[0] > h - HR_MAX && r[0] <= h).map((r) => ({ h: r[0], n: r[1], m: r[2] }));
+  }
+
+  /** The one-road cards of a look: a far device, reachable, with one road (direct + anchors = 1),
+   *  while two or more anchors are known; Y, its one road, says how often it missed in 7 days. */
+  function oneRoad(now: Snapshot): Suggestion[] {
+    if (!isTime(now.at) || anchorsKnown(now).n < 2) return [];
+    const out: Suggestion[] = [];
+    const taken = new Set<string>();
+    for (const raw of listOf(now.devices).slice(0, MAX_DEVICES)) {
+      const o = objOf(raw);
+      const id = o ? idOf(o.id) : null;
+      if (!o || id === null || taken.has(id)) continue;
+      taken.add(id);
+      const roads = objOf(o.roads);
+      if (!roads || o.reachable !== true || !isFar(o)) continue;
+      const direct = roadCount(roads.direct), anchors = roadCount(roads.anchors);
+      if (direct + anchors !== 1) continue;
+      const x = rowName(o, id);
+      let y: string, road: string, yN: string;
+      if (anchors === 1) {
+        const t = kindOf(o.via) === 'anchor' ? idOf(o.through) : null;
+        if (t === null || t === SELF || t === id) continue;   // nothing of it to count from here
+        y = t;
+        road = anchorWords(t, throughNameOf(o));
+        yN = anchorName(t) ?? throughNameOf(o) ?? 'the anchor';
+      } else {
+        if (!overInternet(o)) continue;
+        y = id;
+        road = 'its one internet address';
+        yN = 'that address';
+      }
+      const s = missOneRoad(hoursOf(y, now.at));
+      // a warn needs a miss: zero misses over fewer than 7 blocks already gives an upper end of 19-62%
+      const warn = s !== null && s.a >= 1 && s.hi >= RISK_HI;
+      const seen = s === null
+        ? `${yN} was not probed from this computer in 7 days, so how often it is away is not known.`
+        : `${yN} missed ${s.a} of ${s.n} probes in 7 days, 80% interval ${rangeWords(Math.round(s.lo * 100), Math.round(s.hi * 100))}%, seen from this computer only.`;
+      out.push({
+        id: cardId('connections', 'one-road', id), kind: warn ? 'warn' : 'suggest', weight: warn ? 2 : 1,
+        title: `${x} has one road from here: ${road}`,
+        why: `if ${yN} goes, ${x} cannot be reached from this computer. ${seen} another anchor it is paired with gives it a second road.`,
+        action: { do: 'open', panel: 'devices' },
+      });
+    }
+    return out;
+  }
+
+  /** The anchor-unconfirmed card: this computer offers the role, nothing confirmed it from outside,
+   *  and it has done so for 6 hours or more. */
+  function unconfirmed(now: Snapshot): Suggestion[] {
+    const a = objOf(objOf(now.host)?.anchor);
+    if (!a || a.on !== true || a.reachable === true || !isTime(a.since) || !isTime(now.at)) return [];
+    const ms = now.at - a.since;
+    if (ms < UNCONFIRMED_MS) return [];
+    return [{
+      id: cardId('connections', 'anchor-unconfirmed'), kind: 'suggest', weight: 1,
+      title: 'this computer\'s anchor is not confirmed from outside',
+      why: `it has offered the anchor role for ${Math.floor(ms / HOUR_MS)} hours. nothing reached it from another network yet; not confirmed is not closed. a device in another home that joins through it confirms it.`,
+      action: { do: 'open', panel: 'devices' },
+    }];
+  }
+
+  /** The one-anchor card's reason this look: exactly one anchor known and a far device. */
+  function oneAnchor(now: Snapshot): Suggestion[] {
+    const { anchors, hostOn, far, n } = anchorsKnown(now);
+    if (n !== 1 || !far) return [];
     const only = hostOn ? 'this computer' : [...anchors.values()][0];
+    // this computer's role is off and the one anchor is a far row: the change is to turn it on, behind
+    // a "really?" (DECISIONS 5, E2; the person said yes, 17.11.2026)
+    const oneId = hostOn ? null : [...anchors.keys()][0];
+    const oneRow = oneId == null ? null : listOf(now.devices).slice(0, MAX_DEVICES).map(objOf).find((o) => o !== null && idOf(o.id) === oneId) ?? null;
+    const turnOn = objOf(objOf(now.host)?.anchor)?.on === false && oneRow !== null && isFar(oneRow);
     return [{
       id: cardId('connections', 'one-anchor'), kind: 'suggest', weight: 1,
       title: `only one anchor (${only}): if it goes, far devices lose each other`,
       why: 'a second always-on computer in another home, made an anchor, keeps the circle up. this computer knows only the anchors it is paired with.',
-      action: { do: 'open', panel: 'devices' },
+      ...(turnOn ? { action: { do: 'anchor', on: true }, label: 'make this an anchor' } : { action: { do: 'open', panel: 'devices' } }),
     }];
   }
 
@@ -591,6 +789,7 @@ export function create(ctx: BranchCtx): Branch {
       sw: e.sw.map((s) => ({ ...s })),
       ...(e.thru !== null ? { thru: e.thru } : {}),   // only when there is one: today's shape otherwise
       ...(e.nb.length ? { nb: e.nb.map((r) => [...r]) } : {}),   // hashes and times only
+      ...(e.hr.length ? { hr: e.hr.map((r) => [...r]) } : {}),   // counts by the hour only
     }]);
     ctx.save({ v: 1, dev });
     dirty = false;
@@ -723,9 +922,13 @@ export function create(ctx: BranchCtx): Branch {
       let changed = false;
       const here = new Set<string>();
       const lookIds = new Set<string>();     // every row id of this look, before the rows are taken in
+      const thruIds = new Set<string>();     // the anchors a row of this look goes through: their probes are kept by the hour
       for (const raw of listOf(now.devices).slice(0, MAX_DEVICES)) {
-        const id = idOf(objOf(raw)?.id);
+        const o = objOf(raw);
+        const id = idOf(o?.id);
         if (id) lookIds.add(id);
+        const t = o && kindOf(o.via) === 'anchor' ? idOf(o.through) : null;
+        if (t !== null) thruIds.add(t);
       }
       for (const raw of listOf(now.devices).slice(0, MAX_DEVICES)) {
         const d = objOf(raw);
@@ -736,7 +939,7 @@ export function create(ctx: BranchCtx): Branch {
         const name = cut(textOf(d.name) ?? '');
         let e = devs.get(id);
         if (!e) {
-          e = { name, seen: at, kind: null, at: null, k: new Map(), sw: [], thru: null, nb: [] };
+          e = { name, seen: at, kind: null, at: null, k: new Map(), sw: [], thru: null, nb: [], hr: [] };
           devs.set(id, e);
           miss.set(id, 0);
           changed = true;
@@ -805,6 +1008,7 @@ export function create(ctx: BranchCtx): Branch {
         }
         k.last = at;
         if (reach) noteBlock(id, e, d, at);
+        if (e.hr.length || keepsHours(d) || thruIds.has(id)) noteHour(e, at, reach);
         changed = true;
       }
       // an anchor absent from this look: no device keeps it as the anchor it went through (also
@@ -920,6 +1124,7 @@ export function create(ctx: BranchCtx): Branch {
           action: { do: 'open', panel: 'branch', branch: 'trust' }, label: 'trust',
         });
       }
+      if (snap !== null) suggestions.push(...oneRoad(snap), ...unconfirmed(snap));
       suggestions.push(...downCards, ...steadyCards);
       // the loss hint for the deciding branches: remote devices whose kind has 10 probes
       const hints: DeviceHint[] = [];

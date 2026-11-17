@@ -6,7 +6,7 @@ import StaffPage from '@/components/StaffPage';
 import Trust from '@/components/brain/Trust';
 import { EyeCards } from '@/components/brain/Eye';
 import { lastPassport } from '@/data/passport';
-import { actOf, applyCard, branchOf, dismissCard, holdEye, useEyeView } from '@/eye/run';
+import { actOf, applyCard, branchOf, dismissCard, holdEye, rejectCard, useEyeView } from '@/eye/run';
 import { useLang } from '@/i18n';
 import { verifyChain } from '@/llm/audit';
 import { hasNative, llama } from '@/llm/native';
@@ -52,7 +52,7 @@ export default function BranchScreen() {
             ) : null}
           </View>
 
-          {cards.length ? <EyeCards cards={cards} actOf={(c) => actOf(c)} apply={applyCard} dismiss={dismissCard} /> : null}
+          {cards.length ? <EyeCards cards={cards} actOf={(c) => actOf(c)} apply={applyCard} reject={rejectCard} dismiss={dismissCard} /> : null}
 
           {branch === 'trust' ? <TrustPart /> : null}
 

@@ -293,8 +293,27 @@ test('executor: a device that keeps dropping out gets a look-again card; one fai
   const c = v.suggestions.find((x: any) => x.id === 'executor:failing:p1');
   assert.equal(c.title, 'pixel keeps dropping out');
   assert.match(c.why, /^\d of its last \d+ checks found it unreachable \(last: timed out\)/);
-  assert.deepEqual(c.action, { do: 'probe', devices: ['p1'] });
+  // apart with 2+ devices: the change is the load without it (DECISIONS 5, E2); this computer sat out and stays out
+  assert.deepEqual(c.action, { do: 'load', model: 'gemma3-4b', mode: 'apart', devices: ['p2'], here: false });
+  assert.equal(c.label, 'leave it out');
   assert.ok(v.lines.some((l: string) => /^pixel · .* checks failed$/.test(l)));
+  accepted(v, 'executor');
+});
+
+test('executor:failing (E2): apart with 2+ devices loads without it; a phone load of one device only looks again', () => {
+  const fails = (loadedNow: any) => (i: number) => snap({
+    devices: [dev({ checkedAt: AT - 60_000 + i * 5000, reachable: false, reason: 'timed out' }), dev({ id: 'p2', name: 'galaxy', checkedAt: AT - 60_000 + i * 5000 })],
+    work: { loaded: loadedNow },
+  });
+  let v = branch(executor.create).look(fails(loaded(GEMMA, 'apart', [here(20, 5), on('p1', 'pixel', 9), on('p2', 'galaxy', 9)])), 6);
+  let c = v.suggestions.find((x: any) => x.id === 'executor:failing:p1');
+  assert.deepEqual(c.action, { do: 'load', model: 'gemma3-4b', mode: 'apart', devices: ['p2'] }, 'this computer stays in: no here key');
+  assert.equal(c.label, 'leave it out');
+  accepted(v, 'executor');
+  v = branch(executor.create).look(fails(loaded(GEMMA, 'phone', [on('p1', 'pixel', 9)])), 6);
+  c = v.suggestions.find((x: any) => x.id === 'executor:failing:p1');
+  assert.deepEqual(c.action, { do: 'probe', devices: ['p1'] });
+  assert.equal(c.label, 'look again');
   accepted(v, 'executor');
 });
 
@@ -319,7 +338,9 @@ test('executor: limits says a device should rest: leave it out in apart, the lim
   assert.deepEqual(c.action, { do: 'load', model: 'gemma3-4b', mode: 'apart', devices: ['p1'], here: false });
   v = branch(executor.create, peeks).look(snap({ work: { loaded: loaded(GEMMA, 'phone', [on('p2', 'galaxy', 9)]) } }));
   c = v.suggestions.find((x: any) => x.id === 'executor:rest:p2');
-  assert.deepEqual(c.action, { do: 'open', panel: 'branch', branch: 'limits' });
+  // the only one answering (DECISIONS 5, E2): the change is to unload
+  assert.deepEqual(c.action, { do: 'unload' });
+  assert.equal(c.label, 'unload');
   accepted(v, 'executor');
 });
 

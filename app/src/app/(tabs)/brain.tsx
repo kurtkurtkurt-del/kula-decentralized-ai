@@ -21,7 +21,7 @@ import { group } from '@/components/brain/grouping';
 import { networkEstimate, type NetworkEstimate } from '@/data/network';
 import { lastPassport } from '@/data/passport';
 import { useRefreshOnFocus } from '@/hooks/useRefresh';
-import { actOf, applyCard, dismissCard, holdEye, useEyeView } from '@/eye/run';
+import { actOf, applyCard, dismissCard, holdEye, rejectCard, useEyeView } from '@/eye/run';
 import { useLang } from '@/i18n';
 import { parseLedger, peerBadge, summarize, verdictOf, verifyChain, type AuditEntry } from '@/llm/audit';
 import { clearBrainLog, latest, useBrainLog } from '@/llm/brainlog';
@@ -226,7 +226,7 @@ export default function BrainScreen() {
         {eye?.cards.length ? (
           <>
             <Head text={up(t('eye.cards'))} />
-            <EyeCards cards={eye.cards} actOf={(c) => actOf(c)} apply={applyCard} dismiss={dismissCard} />
+            <EyeCards cards={eye.cards} actOf={(c) => actOf(c)} apply={applyCard} reject={rejectCard} dismiss={dismissCard} />
           </>
         ) : null}
         <Head text={up(t('eye.title'))} hint={t('eye.lede')} />

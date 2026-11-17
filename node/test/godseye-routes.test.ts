@@ -8,7 +8,8 @@
 // counts once for one-anchor; a throughName names an anchor that is not a row of the look, or one
 // with a null id (its card keyed by the name, no anchor-down); the notes keep ids only. VERDICT 1
 // DO 4: an anchor absent from the look gives no anchor-down card and is forgotten as a device's
-// last anchor; a reachable row via anchor through a null id clears the old one.
+// last anchor; a reachable row via anchor through a null id clears the old one. P1 (17.11.2026): an
+// anchor's probes are kept by the hour, counts only (godseye-roads-risk.test.ts has the rest).
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
@@ -244,6 +245,25 @@ test('one-anchor: one anchor and a far device show after 3 looks and go 4 looks 
   for (let i = 1; i <= 5; i++) assert.equal(card(near.step(snap([den({ via: 'wifi', checkedAt: i })], at(10 * i))), 'connections:one-anchor'), undefined);
 });
 
+test('E2: one-anchor proposes turning this computer\'s anchor on only when its role is off and the one anchor is far', () => {
+  const HOST_OFF = { anchor: { on: false, reachable: null, links: 0, bytesDay: 0, capDay: null } };
+  const run = (devices: (i: number) => any[], host: Record<string, unknown>) => {
+    const b = branch();
+    let v: any;
+    for (let i = 1; i <= 3; i++) v = b.step(snap(devices(i), at(10 * i), host));
+    return card(v, 'connections:one-anchor');
+  };
+  const o = run((i) => [den({ checkedAt: i }), far({ checkedAt: i })], HOST_OFF);
+  assert.deepEqual(o.action, { do: 'anchor', on: true });
+  assert.equal(o.label, 'make this an anchor');
+  assert.ok(cleanCard(o));
+  // the one anchor on the wi-fi (a near row), a far device elsewhere: only the devices panel
+  const nearAnchor = run((i) => [den({ via: 'wifi', where: '192.168.1.40:50551', checkedAt: i }), dev({ id: 'p2', via: 'internet', where: '203.0.113.9:50551', checkedAt: i })], HOST_OFF);
+  assert.deepEqual(nearAnchor.action, { do: 'open', panel: 'devices' });
+  // no host.anchor in the look (an older engine): as before
+  assert.deepEqual(run((i) => [den({ checkedAt: i }), far({ checkedAt: i })], {}).action, { do: 'open', panel: 'devices' });
+});
+
 test('the loss hint: a remote device with 10 probes, never a lan one or one with fewer', () => {
   const { step } = branch();
   let v: any;
@@ -269,6 +289,8 @@ test('the notes: thru is an id only, survives a restart, and an old notes file (
   assert.equal(p1.thru, 'a1');
   assert.deepEqual(Object.keys(p1), ['name', 'seen', 'kind', 'at', 'k', 'sw', 'thru']);
   assert.ok(!('thru' in file.dev.find((x: any) => x[0] === 'a1')[1]), 'no thru: today\'s shape');
+  // P1 (17.11.2026): the anchor's probes by the hour, counts only; p1 says no roads, so none of its own
+  assert.deepEqual(file.dev.find((x: any) => x[0] === 'a1')[1].hr, [[Math.floor(at(0) / 3_600_000), 1, 0]]);
   assert.doesNotMatch(JSON.stringify(file), /\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}|through den/, 'no address in the notes');
   // a restart: the anchor misses three readings, the device is cut off: the remembered thru names the anchor
   const two = branch(file);

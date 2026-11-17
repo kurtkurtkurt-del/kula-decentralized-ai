@@ -12,7 +12,8 @@
 //   - sanity: a start already past while it still waits, an end before the start, an empty or very
 //     short request, a model this computer does not know, a model too big for the chosen devices.
 // It never blocks, edits or delays a job; it only says, and its cards only open its page or offer
-// to load the same model on home devices. It never keeps or emits the request text: its verdicts
+// to load the same model on home devices, to unload it when there is no home way, or to cancel a
+// waiting night project (17.11.2026: the person accepts or rejects). It never keeps or emits the request text: its verdicts
 // are reason kinds and counts, held in memory only (nothing goes into its notes file), and a title
 // is shown with anything a sensitivity rule finds masked out.
 import type { Branch, BranchCtx, EyeDevice, EyeProject, Ring, Snapshot, Suggestion, SuggestAction } from '../types.js';
@@ -166,13 +167,15 @@ function projectCard(p: EyeProject, v: Verdict, s: Snapshot): Suggestion | null 
   if (!ring) return null;
   const names = projectDevices(p, s).filter((d): d is EyeDevice => !!d && ringOf(d) === ring).map((d) => d.name);
   const kind = v.level === 'private' ? 'send-private' : 'send-circle';
+  // while it waits, the change is to cancel it (DECISIONS 5, E2); once it runs, only a look
+  const cancel = p.state === 'waiting' && typeof p.id === 'string' && p.id.length >= 1 && p.id.length <= 200;
   return {
     id: `review:${kind}:${cardKey(p.id)}`,
     kind: 'warn',
     title: `${v.level === 'private' ? 'private material' : 'material not for strangers'} would go to ${RING_WORDS[ring]}`,
     why: `the night project ${titleOf(p)} (${hhmm(p.start)}) carries ${kindsSaid(v.kinds)} and is set to run on ${names.join(', ') || 'a device'}. ${splitSaid(v, ring)}`,
-    action: { do: 'open', panel: 'branch', branch: 'review' },
-    label: 'look',
+    action: cancel ? { do: 'cancel', project: p.id } : { do: 'open', panel: 'branch', branch: 'review' },
+    label: cancel ? 'cancel it' : 'look',
     weight: ring === 'world' ? 3 : 2,
   };
 }
@@ -201,7 +204,8 @@ function loadedCards(s: Snapshot): Suggestion[] {
   const names = devs.filter((d) => ringOf(d) !== 'home').map((d) => `${d.name} (${ringOf(d)})`).join(', ');
   const keep = homeOnly(s);
   const ctx = (n: number) => (n >= 512 && n <= 262144 ? n : undefined);
-  const action: SuggestAction = keep ? (keep.do === 'load' ? { ...keep, ctx: ctx(keep.ctx ?? 0) } : keep) : { do: 'open', panel: 'branch', branch: 'review' };
+  // no home way: the change is to unload (DECISIONS 5, E2)
+  const action: SuggestAction = keep ? (keep.do === 'load' ? { ...keep, ctx: ctx(keep.ctx ?? 0) } : keep) : { do: 'unload' };
   if (action.do === 'load' && action.ctx === undefined) delete action.ctx;
   if (chatRuns(s)) {
     return [{
@@ -209,7 +213,7 @@ function loadedCards(s: Snapshot): Suggestion[] {
       kind: 'warn',
       title: `a private chat runs while ${RING_WORDS[far]} is in the loaded work`,
       why: `a chat is yours: it belongs at home. ${names} ${devs.filter((d) => ringOf(d) !== 'home').length === 1 ? 'is' : 'are'} in ${l.model.name} (${l.mode}) and ${far === 'world' ? 'a stranger’s phone sees the prompt in plain text while it answers' : 'a friend’s device sees what it answers'}. ${keep ? 'load it again on your own devices only.' : 'unload it, or chat on your own devices only.'}`,
-      action, ...(keep ? { label: 'keep it home' } : { label: 'look' }),
+      action, ...(keep ? { label: 'keep it home' } : { label: 'unload' }),
       weight: far === 'world' ? 3 : 2,
     }];
   }
@@ -219,7 +223,7 @@ function loadedCards(s: Snapshot): Suggestion[] {
     kind: 'warn',
     title: 'a stranger’s device is in the loaded work',
     why: `${names} ${devs.filter((d) => ringOf(d) === 'world').length === 1 ? 'is' : 'are'} in ${l.model.name} (${l.mode}): a chat now would reach a stranger’s phone in plain text. fine for world-ok work; ${keep ? 'load it again on your own devices before you chat.' : 'unload it before you chat.'}`,
-    action, ...(keep ? { label: 'keep it home' } : { label: 'look' }),
+    action, ...(keep ? { label: 'keep it home' } : { label: 'unload' }),
     weight: 1,
   }];
 }

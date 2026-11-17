@@ -115,7 +115,7 @@ export function inviteView(inv: Invite): InviteView {
   const until = new Date(inv.exp).toTimeString().slice(0, 5);
   return {
     whose: inv.whose, code: inv.code, exp: inv.exp, lanOnly: inv.lanOnly, typed: inv.typed,
-    words: `for ${inv.whose === 'mine' ? 'a computer of yours (no daily limit)' : 'a friend\'s computer (what it passes through here is limited each day)'}. it works once, until ${until}. on the other computer: devices → add a device → paste a code, and paste it there. or type it: devices → add a device → type it, with address ${inv.typed.address}, code ${inv.typed.code}, certificate ${inv.typed.certificate}, and turn on "an invite from an anchor".`
+    words: `for ${inv.whose === 'mine' ? 'a computer of yours: after it joins, press \'yes, it is mine\' on its row in devices here; until then it is limited like a friend\'s' :'a friend\'s computer (what it passes through here is limited each day)'}. it works once, until ${until}. on the other computer: devices → add a device → paste a code, and paste it there. or type it: devices → add a device → type it, with address ${inv.typed.address}, code ${inv.typed.code}, certificate ${inv.typed.certificate}, and turn on "an invite from an anchor".`
       + (inv.lanOnly ? ' it works only on this network for now: no door from the internet yet.' : ''),
   };
 }

@@ -1,6 +1,7 @@
 import type { EyeDevice, EyeModel, EyeProject, EyeWork, Snapshot } from '@godseye/core';
 import type { CatalogModel } from '@/llm/catalog';
 import type { EngineState } from '@/llm/engine';
+import { isAnchorRoad, reachedBy, roadOf } from '@/llm/roads';
 import type { LocalModel, Peer } from '@/llm/store';
 import { OLD_WORKER, type TrustNote } from '@/llm/trust';
 import type { Task } from '@/tasks/types';
@@ -70,13 +71,27 @@ function holdsOf(p: Peer, i: PhoneInput): string | null {
   return null;
 }
 
+/** The anchor a device is reached through now (roads.ts): `through` the id of the paired device
+ *  whose certificate is the road's anchor (null: not paired here), `throughName` that device's
+ *  name, else the name the road carries (null: none said). Both null off an anchor road. No
+ *  address and no fingerprint leave here. */
+function throughOf(p: Peer, i: PhoneInput): { through: string | null; throughName: string | null } {
+  const r = p.relay ? null : roadOf(p);
+  if (!isAnchorRoad(r)) return { through: null, throughName: null };
+  const fp = r.anchor.toLowerCase();
+  const a = i.peers.find((x) => x.id !== p.id && x.fp?.toLowerCase() === fp);
+  return { through: a?.id ?? null, throughName: a?.name ?? r.name ?? null };
+}
+
 export function deviceOf(p: Peer, i: PhoneInput): EyeDevice {
   const r = reachOf(p, i);
-  const relay = !!p.relay;
+  const via = reachedBy(p);
+  const { through, throughName } = throughOf(p, i);
   const gpu = typeof p.passport?.gpu === 'string' ? p.passport.gpu : null;
   return {
-    id: p.id, name: p.name, kind: p.kind, via: relay ? 'relay' : 'wifi',
-    where: relay ? 'a relay' : `${p.host}:${p.port}`,
+    id: p.id, name: p.name, kind: p.kind, via, through, throughName,
+    // through an anchor the device's own address is not the way: the anchor's name is
+    where: via === 'relay' ? 'a relay' : via === 'anchor' ? `through ${throughName ?? 'an anchor'}` : `${p.host}:${p.port}`,
     reachable: r ? r.ok : null, reachMs: r?.ms ?? null, reason: r && !r.ok ? r.why : null, checkedAt: r?.at ?? null,
     lastOk: p.last_ok ?? null, ramMb: p.ram, bwGBs: p.bw, gpu,
     tls: !!p.fp, waitingPair: !!p.pin, plugged: null, holds: holdsOf(p, i),

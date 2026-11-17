@@ -135,10 +135,19 @@
 //     a by value, far            0 .. 1 000 000 000      the by entry is dropped; far 0
 //     nets                       0 .. 1 000 000          0
 //   guard keeps the last 5 entries whose t is a usable time, why cut to 200 ('' when not a string).
+//   P0 (17.11.2026), each absent staying absent. A device's roads: one that is not an object is
+//   null; lan, direct and anchors are counts clamped into 0 .. 1000 (ROADS_MAX), 0 when not a
+//   number. A device's linkRttMs is a measurement, 0 .. 600 000 ms, else null; its linkAt a time,
+//   else null. The host anchor's since is a time, else null; its refused one that is not an object
+//   is null, else its first 40 keys are looked at: a word of ANCHOR_REFUSALS keeps its count, any
+//   other key (a shape key aside) is added to 'other', so free text never passes and no count is
+//   lost; a value that is not a finite number drops its entry, a count is clamped 0 .. 1e9. Its
+//   removed is a count clamped 0 .. 1e9, null when not a number; its memberMaxName a name cleaned
+//   like throughName and cut to 80, an empty one or anything else null.
 //   the engine's loaded.sees and a trust's upTo are not in the Snapshot type and no branch reads
 //   them: they are dropped.
 import { sha256Hex } from '../hash.js';
-import type { EyeDevice, EyeGate, EyeHealth, EyeModel, EyeProject, EyeTrust, EyeWork, EyeWorker, Snapshot } from '../types.js';
+import { ANCHOR_REFUSALS, type AnchorRefusal, type EyeDevice, type EyeGate, type EyeHealth, type EyeModel, type EyeProject, type EyeTrust, type EyeWork, type EyeWorker, type Snapshot } from '../types.js';
 
 export const TIME_MAX = 8.64e15;     // the largest ms a Date can hold (ECMAScript)
 export const ID_MAX = 200;           // an id longer than this is not one of ours
@@ -187,6 +196,8 @@ const GATE_HOURS = 26;               // the host gate's hours kept, the newest
 const GATE_BY_MAX = 40;              // reasons looked at in one hour's by
 const NETS_MAX = 1e6;                // the host gate's distinct networks
 const GATE_GUARD = 5;                // the host gate's rpc guard refusals kept, the newest
+const ROADS_MAX = 1000;              // a device's roads of one kind
+const REFUSED_KEYS = 40;             // keys looked at in the host anchor's refused
 
 /** an object (an array too: typeof; the callers check further) */
 export const isObj = (x: unknown): x is Record<string, unknown> => !!x && typeof x === 'object';
@@ -378,7 +389,36 @@ function devOf(raw: Record<string, unknown>, id: string): EyeDevice {
     ...('through' in raw ? { through: peerId(raw.through) } : {}),
     ...('throughName' in raw ? { throughName: (typeof raw.throughName === 'string' ? cleanName(raw.throughName).slice(0, NAME_MAX) : '') || null } : {}),
     ...('anchor' in raw ? { anchor: bool2(raw.anchor) } : {}),
+    // P0 (17.11.2026): only when the snapshot has them
+    ...('roads' in raw ? { roads: roadsOf(raw.roads) } : {}),
+    ...('linkRttMs' in raw ? { linkRttMs: num(raw.linkRttMs, 0, MS_MAX) } : {}),
+    ...('linkAt' in raw ? { linkAt: timeOr(raw.linkAt, null) } : {}),
   };
+}
+
+/** a device's roads: an object, else null; each kind a count clamped into 0 .. ROADS_MAX */
+function roadsOf(raw: unknown): NonNullable<EyeDevice['roads']> | null {
+  if (!isObj(raw) || Array.isArray(raw)) return null;
+  return {
+    lan: capped(raw.lan, 0, ROADS_MAX) ?? 0,
+    direct: capped(raw.direct, 0, ROADS_MAX) ?? 0,
+    anchors: capped(raw.anchors, 0, ROADS_MAX) ?? 0,
+  };
+}
+
+/** the anchor's refusals by word: an object, else null; a word of ANCHOR_REFUSALS keeps its count,
+ *  any other key goes to 'other' (no free text passes, no count is lost) */
+function refusedOf(raw: unknown): Partial<Record<AnchorRefusal, number>> | null {
+  if (!isObj(raw) || Array.isArray(raw)) return null;
+  const out: Partial<Record<AnchorRefusal, number>> = {};
+  for (const [k, n] of Object.entries(raw).slice(0, REFUSED_KEYS)) {
+    if (shapeKey(k)) continue;
+    const c = capped(n, 0, COUNT_MAX);
+    if (c === null) continue;
+    const w: AnchorRefusal = (ANCHOR_REFUSALS as readonly string[]).includes(k) ? k as AnchorRefusal : 'other';
+    out[w] = Math.min(COUNT_MAX, (out[w] ?? 0) + c);
+  }
+  return out;
 }
 
 /** the host's anchor counters: an object, else null; counts clamped, capDay null when not a number */
@@ -391,6 +431,10 @@ function hostAnchorOf(raw: unknown): NonNullable<Snapshot['host']['anchor']> | n
     bytesDay: capped(raw.bytesDay, 0, BYTES_MAX) ?? 0,
     capDay: capped(raw.capDay, 0, BYTES_MAX),
     ...('memberMaxDay' in raw ? { memberMaxDay: capped(raw.memberMaxDay, 0, BYTES_MAX) } : {}),
+    ...('since' in raw ? { since: timeOr(raw.since, null) } : {}),
+    ...('refused' in raw ? { refused: refusedOf(raw.refused) } : {}),
+    ...('removed' in raw ? { removed: capped(raw.removed, 0, COUNT_MAX) } : {}),
+    ...('memberMaxName' in raw ? { memberMaxName: (typeof raw.memberMaxName === 'string' ? cleanName(raw.memberMaxName).slice(0, NAME_MAX) : '') || null } : {}),
   };
 }
 

@@ -38,7 +38,8 @@ async function postJson(p, body) {
   const r = await fetch(apiUrl(p), { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body ?? {}) });
   gone(r);
   const o = await r.json().catch(() => ({ error: `http ${r.status}` }));
-  if (!r.ok) throw new Error(o.error || `http ${r.status}`);
+  // the code and the body go along, for a caller that answers a 409 with its fresh view (the brain's cards)
+  if (!r.ok) throw Object.assign(new Error(o.error || `http ${r.status}`), { status: r.status, body: o });
   return o;
 }
 // POST, then read the server-sent events; every `data:` object goes to onEvent
@@ -80,13 +81,18 @@ async function copyText(text) {
   toast('copied');
 }
 let toastTimer = null;
-function toast(text) {
+function toast(text, ms = 1600) {
   document.querySelector('.toast')?.remove();
   const t = el('div', 'toast', text);
   document.body.appendChild(t);
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => t.remove(), 1600);
+  toastTimer = setTimeout(() => t.remove(), ms);
 }
+// an address on this network (private, link-local, loopback): where a device joined from, in words
+const localAddr = (a) => {
+  const h = String(a || '').toLowerCase().replace(/^\[|\]$/g, '').replace(/^::ffff:/, '');
+  return /^(10\.|127\.|192\.168\.|169\.254\.|172\.(1[6-9]|2\d|3[01])\.)/.test(h) || h === '::1' || /^f[cd][0-9a-f]{0,2}:/.test(h) || /^fe[89ab][0-9a-f]?:/.test(h);
+};
 
 // ---------- settings (this browser only)
 
@@ -1070,36 +1076,104 @@ function drawMap(box) {
 const CARD_VERB = { load: 'load', unload: 'unload', fetch: 'fetch', probe: 'look again', open: 'open' };
 let cardsOpen = false;   // more than three cards: the rest behind "show all"
 const cardBusy = new Set();
+// (17.11.2026, DECISIONS 5) a card that changes something (c.change) gets accept and reject; nothing
+// changes without a tap. anchor and cancel (c.confirm) ask "really?" before the accept goes. A card
+// that only looks keeps its one button. × is the quiet hide on every card. cardAsk: the cards whose
+// footer asks "really?"; cardErr: what the server said no with, per card, in plain words.
+const cardAsk = new Set();
+const cardErr = new Map();
+let undoBusy = false;
+let undoErr = '';
+let undoTimer = null;
 function brainCards() {
-  const cards = isGuest() ? [] : (S.brain?.cards ?? []);
-  if (!cards.length) return '';
+  if (isGuest()) return '';
+  const cards = S.brain?.cards ?? [];
+  for (const id of [...cardAsk, ...cardErr.keys()]) if (!cards.some((c) => c.id === id)) { cardAsk.delete(id); cardErr.delete(id); }
+  const bar = undoBar();
+  if (!cards.length) return bar;
   const shown = cardsOpen ? cards : cards.slice(0, 3);
   const one = (c) => {
     const b = BRANCHES.find((x) => x.id === c.branch);
     const tone = c.kind === 'warn' ? 'look' : 'know';
-    const verb = c.action ? esc(c.label || CARD_VERB[c.action.do] || 'apply') : '';
-    return `<div class="bm-sel bc is-${tone}" data-card="${esc(c.id)}"><div class="h"><span class="n">${b ? b.n : ''}</span><b>${esc(b ? (SHORT_MAP[b.id] ?? b.name) : c.branch)}</b>`
+    return `<div class="bm-sel bc is-${tone}${c.change ? ' bc-change' : ''}" data-card="${esc(c.id)}"><div class="h"><span class="n">${b ? b.n : ''}</span><b>${esc(b ? (SHORT_MAP[b.id] ?? b.name) : c.branch)}</b>`
       + `<span class="tag is-${tone}">${c.kind === 'warn' ? 'warning' : 'suggestion'}</span><button type="button" class="bc-x" data-dismiss="${esc(c.id)}" aria-label="hide this card" title="hide until it changes">×</button></div>`
       + `<p class="bc-t">${esc(c.title)}</p><p class="bc-w">${esc(c.why)}</p>`
-      + (c.action ? `<div class="f"><span>${cardBusy.has(c.id) ? 'working…' : c.action.do === 'open' ? '' : 'nothing happens until you press'}</span><button type="button" class="pill bc-go" data-apply="${esc(c.id)}"${cardBusy.has(c.id) ? ' disabled' : ''}>${verb}</button></div>` : '')
+      + (c.change && c.action ? changeFoot(c) : c.action ? lookFoot(c) : '')
       + `</div>`;
   };
   const more = cards.length > 3 ? `<button type="button" class="link bc-more" data-more>${cardsOpen ? 'show fewer' : `show all ${cards.length}`}</button>` : '';
-  return `<section class="bcards" aria-label="the brain's suggestions"><h3 class="bfeed-h">suggestions <span class="bc-n">${cards.length}</span></h3>${shown.map(one).join('')}${more}</section>`;
+  return `${bar}<section class="bcards" aria-label="the brain's suggestions"><h3 class="bfeed-h">suggestions <span class="bc-n">${cards.length}</span></h3>${shown.map(one).join('')}${more}</section>`;
+}
+// a card that only looks (probe, open): its one neutral button, as before
+function lookFoot(c) {
+  const busy = cardBusy.has(c.id);
+  const err = cardErr.get(c.id);
+  const verb = esc(c.label || CARD_VERB[c.action.do] || 'apply');
+  const say = busy ? 'working…' : err ? `<span class="bc-err">${esc(err)}</span>` : c.action.do === 'open' ? '' : 'nothing happens until you press';
+  return `<div class="f"><span>${say}</span><button type="button" class="pill bc-go" data-apply="${esc(c.id)}"${busy ? ' disabled' : ''}>${verb}</button></div>`;
+}
+// a change card: what accept changes, the branch's record, then [accept] [reject], or "really?"
+function changeFoot(c) {
+  const id = esc(c.id);
+  const busy = cardBusy.has(c.id);
+  const err = cardErr.get(c.id);
+  const r = c.record;
+  const n = r ? (r.accepted | 0) + (r.rejected | 0) : 0;
+  const head = (c.does ? `<p class="bc-does">${esc(c.does)}</p>` : '')
+    + (n > 0 ? `<p class="bc-rec">you accepted ${r.accepted | 0} of its last ${n}</p>` : '');
+  const dis = busy ? ' disabled' : '';
+  if (cardAsk.has(c.id) && !busy) {
+    return `${head}<div class="f bc-really"><span>really?</span><span class="bc-btns"><button type="button" class="pill bc-go bc-yes" data-yes="${id}">yes, do it</button><button type="button" class="pill bc-no" data-no="${id}">no</button></span></div>`;
+  }
+  const say = busy ? 'working…' : err ? `<span class="bc-err">${esc(err)}</span>` : 'nothing changes until you press';
+  return `${head}<div class="f"><span>${say}</span><span class="bc-btns"><button type="button" class="pill bc-go bc-accept" data-accept="${id}"${dis}>accept</button><button type="button" class="pill bc-no bc-reject" data-reject="${id}"${dis}>reject</button></span></div>`;
+}
+// after an accept that can be undone: "you accepted: <title> · <word> [undo]", until its ten minutes end
+function undoBar() {
+  const u = S.brain?.undo;
+  clearTimeout(undoTimer); undoTimer = null;
+  if (!u || !(Date.now() < u.until)) { undoErr = ''; return ''; }
+  undoTimer = setTimeout(() => { if ($('app').classList.contains('brain-open')) renderBrain(); }, Math.min(u.until - Date.now() + 50, 600000));
+  return `<div class="bc-undo" id="bc-undo" role="status"><span class="bc-undo-t">you accepted: ${esc(u.title)} · ${esc(u.word)}</span>`
+    + (undoErr ? `<span class="bc-err">${esc(undoErr)}</span>` : '')
+    + `<button type="button" class="pill bc-undo-go" data-undo="${esc(u.id)}"${undoBusy ? ' disabled' : ''}>${undoBusy ? 'undoing…' : 'undo'}</button></div>`;
+}
+// the server's no, in plain words: 409 and 404 already are; 400 asks for the second yes; 500 did not start
+function cardSays(e) {
+  const m = String(e?.message || 'it did not work');
+  if (e?.status === 400 && /^confirm first/.test(m)) return 'this one asks for a second yes: press accept again';
+  if (e?.status >= 500) return `it did not work: ${m}`;
+  return m;
+}
+// a view from the server: draw it, and say in the feed what the brain said since (accepted, rejected, undid)
+function takeView(v) {
+  if (!v || typeof v !== 'object') return;
+  S.brain = v;
+  const fresh = (v.events ?? []).filter((e) => e.at > seenBrainAt).reverse();
+  for (const e of fresh) feed(e.branch, e.text, { at: e.at });
+  if (fresh.length) seenBrainAt = fresh[fresh.length - 1].at;
 }
 function wireCards(box) {
   for (const x of box.querySelectorAll('[data-dismiss]')) x.addEventListener('click', async (e) => {
     e.stopPropagation();
+    cardAsk.delete(x.dataset.dismiss); cardErr.delete(x.dataset.dismiss);
     try { const r = await postJson('brain/dismiss', { id: x.dataset.dismiss }); if (r?.view) S.brain = r.view; } catch {}
     renderBrain();
   });
   for (const x of box.querySelectorAll('[data-apply]')) x.addEventListener('click', () => applyCard(x.dataset.apply));
+  for (const x of box.querySelectorAll('[data-accept]')) x.addEventListener('click', () => acceptCard(x.dataset.accept, false));
+  for (const x of box.querySelectorAll('[data-yes]')) x.addEventListener('click', () => acceptCard(x.dataset.yes, true));
+  for (const x of box.querySelectorAll('[data-no]')) x.addEventListener('click', () => { cardAsk.delete(x.dataset.no); renderBrain(); });
+  for (const x of box.querySelectorAll('[data-reject]')) x.addEventListener('click', () => rejectCard(x.dataset.reject));
+  box.querySelector('[data-undo]')?.addEventListener('click', (e) => undoCard(e.currentTarget.dataset.undo));
   box.querySelector('[data-more]')?.addEventListener('click', () => { cardsOpen = !cardsOpen; renderBrain(); });
 }
 async function applyCard(id) {
   const c = (S.brain?.cards ?? []).find((x) => x.id === id);
   if (!c?.action || cardBusy.has(id)) return;
+  if (c.change) return acceptCard(id, false);
   const a = c.action;
+  cardErr.delete(id);
   if (a.do === 'open') {   // the page moves; the server only notes the card as used
     postJson('brain/apply', { id, action: a }).then((r) => { if (r?.view) S.brain = r.view; renderBrain(); }).catch(() => {});
     if (a.panel === 'branch' && a.branch) openBranch(a.branch);
@@ -1116,9 +1190,59 @@ async function applyCard(id) {
     feed(c.branch, `you applied: ${c.title} (${r?.word ?? 'done'})`);
   } catch (e) {
     feed(c.branch, `could not apply "${c.title}": ${e.message}`);
-    try { S.brain = await getJson('brain'); } catch {}   // a changed card (409): draw what it says now
+    if (e?.body?.view) S.brain = e.body.view;
+    else { try { S.brain = await getJson('brain'); } catch {} }   // a changed card (409): draw what it says now
+    cardErr.set(id, cardSays(e));
   }
   cardBusy.delete(id);
+  renderBrain(); refreshStatus?.();
+}
+// accept: a confirm kind asks "really?" first; "yes, do it" sends its kind back as confirm
+async function acceptCard(id, sure) {
+  const c = (S.brain?.cards ?? []).find((x) => x.id === id);
+  if (!c?.action || cardBusy.has(id)) return;
+  cardErr.delete(id);
+  if (c.confirm && !sure) { cardAsk.add(id); renderBrain(); return; }
+  cardAsk.delete(id);
+  await cardPost(c, 'brain/apply', { id, action: c.action, ...(c.confirm ? { confirm: c.action.do } : {}) }, 'accept');
+}
+async function rejectCard(id) {
+  const c = (S.brain?.cards ?? []).find((x) => x.id === id);
+  if (!c?.action || cardBusy.has(id)) return;
+  cardErr.delete(id); cardAsk.delete(id);
+  await cardPost(c, 'brain/reject', { id, action: c.action }, 'reject');
+}
+// one accept or reject: the brain's own feed line comes with the view; a no stays in the card's footer
+async function cardPost(c, route, body, verb) {
+  const id = c.id;
+  cardBusy.add(id); renderBrain();
+  try {
+    const r = await postJson(route, body);
+    takeView(r?.view);
+    if (verb === 'accept') undoErr = '';
+  } catch (e) {
+    if (e?.body?.view) takeView(e.body.view);   // 409: the card as it is now
+    else if (e?.status === 404) { try { takeView(await getJson('brain')); } catch {} }
+    cardErr.set(id, cardSays(e));
+    if (!(S.brain?.cards ?? []).some((x) => x.id === id)) feed(c.branch, `could not ${verb} "${c.title}": ${cardSays(e)}`);
+  }
+  cardBusy.delete(id);
+  renderBrain(); refreshStatus?.();
+}
+async function undoCard(id) {
+  if (undoBusy || !id) return;
+  const branch = S.brain?.undo?.branch || 'memory';
+  undoBusy = true; undoErr = ''; renderBrain();
+  try {
+    const r = await postJson('brain/undo', { id });
+    takeView(r?.view);
+  } catch (e) {
+    if (e?.body?.view) takeView(e.body.view);
+    else if (e?.status === 404) { try { takeView(await getJson('brain')); } catch {} }
+    undoErr = cardSays(e);
+    if (!S.brain?.undo) feed(branch, `could not undo: ${undoErr}`);
+  }
+  undoBusy = false;
   renderBrain(); refreshStatus?.();
 }
 $('bback').addEventListener('click', () => { brainOpen = null; renderBrain(); });
@@ -1353,6 +1477,16 @@ function renderDevices() {
     if (extra.length) lines.push(extra.join(' · '));
     const lk = g.peers.find((p) => p.link)?.link;
     if (lk) lines.push(lk.error ? `network: not measured (${lk.error})` : `network: ${lk.mbps} MB/s, ${lk.rttMs} ms delay`);
+    // its anchor's invite said "mine" (17.11.2026): limited like a friend's until the person says
+    // here that it is theirs; the time, the address and the certificate are what the joiner cannot pick
+    const claimed = g.peers.find((p) => p.claim);
+    if (claimed) {
+      const c = claimed.claim;
+      const at = new Date(c.at);
+      const hhmm = Number.isNaN(at.getTime()) ? 'an unknown time' : at.toTimeString().slice(0, 5);
+      const from = c.from ? `${c.from} (${localAddr(c.from) ? 'this network' : 'the internet'})` : 'an address not known';
+      lines.push(`its invite said it is yours. it joined at ${hhmm} from ${from}, certificate ${c.fp}. is it yours? until you say yes it is limited like a friend's device.`);
+    }
     for (const t of lines) who.appendChild(el('span', '', t));
     const tools = el('div', 'dev-tools');
     let cr = null;
@@ -1400,6 +1534,25 @@ function renderDevices() {
         refreshPeers(false);
       });
       tools.appendChild(cut);
+    }
+    if (claimed) {
+      const answer = async (yes) => {
+        try {
+          await postJson('peers/mine', { id: claimed.id, yes });
+          if (yes) toast(`${g.name} is yours: no daily limit`);
+          else toast('it stays a friend\'s device. if you do not know it, press remove its access, then forget it.', 8000);
+        } catch (err) { toast(err.message); }
+        refreshPeers(false);
+      };
+      const yes = el('button', 'pill', 'yes, it is mine');
+      yes.type = 'button';
+      yes.setAttribute('aria-label', `yes, ${g.name} is mine`);
+      yes.addEventListener('click', () => answer(true));
+      const no = el('button', 'pill', 'no');
+      no.type = 'button';
+      no.setAttribute('aria-label', `no, ${g.name} is not mine`);
+      no.addEventListener('click', () => answer(false));
+      tools.append(yes, no);
     }
     if (g.peers.length) {
       const x = el('button', 'icon x');
@@ -1791,7 +1944,7 @@ $('anchor-invite-new').addEventListener('click', async () => {
   try {
     const whose = $('anchor-whose').value === 'mine' ? 'mine' : 'friend';
     await postJson('share/invite', { whose });
-    feed('connections', `made an anchor invite for ${whose === 'mine' ? 'a computer of yours' : 'a friend\'s computer'} (once, 10 minutes)`);
+    feed('connections', `made an anchor invite for ${whose === 'mine' ? 'a computer of yours: after it joins, press \'yes, it is mine\' on its row in devices here; until then it is limited like a friend\'s' : 'a friend\'s computer'} (once, 10 minutes)`);
     await refreshShare();
   } catch (e) { $('anchor-invite-line').textContent = e.message; }
 });
@@ -1884,13 +2037,15 @@ showTab('host');
 
 function addMsg(text, kind = '') { const m = $('add-msg'); m.textContent = text; m.className = `msg ${kind}`; }
 
-async function added(row) {
+async function added(row, whose = null) {
   $('add').open = false;
   if (row.anchor) {
     // an anchor's invite: this computer joined it; its share registers there and the anchor pairs back
     if (row.joinedBefore) addMsg(`already joined: this computer joined ${row.name} before and stays linked to it. an invite works once, so this one is not needed here.`, 'ok');
     else {
-      addMsg(`joined the anchor ${row.name}. this computer shares itself now and links to it; the anchor connects back within a few seconds. away from home, your devices reach each other through it.`, 'ok');
+      // "my computer": the anchor still limits this computer like a friend's until its owner says
+      // yes on this computer's row there (Package A's claim), as the phone says after its answer
+      addMsg(`joined the anchor ${row.name}. this computer shares itself now and links to it; the anchor connects back within a few seconds. away from home, your devices reach each other through it.${whose === 'mine' ? ' if the anchor is your own, press \'yes, it is mine\' on this computer\'s row in its devices; until then it limits this computer like a friend\'s.' : ''}`, 'ok');
       feed('connections', `joined the anchor ${row.name}`);
     }
     await refreshPeers(false);
@@ -1920,42 +2075,54 @@ function isAnchorInvite(text) {
     return !!o && o.k === 'kula-peer' && o.anchor === true;
   } catch { return false; }
 }
-const JOIN_ASK = 'join this anchor?\n\nthis computer then starts sharing itself and stays linked to the anchor. the anchor\'s computer may then use this computer: run model layers on it and ask it for answers.\n\nto stop that later, forget the anchor in your devices.';
+const JOIN_ASK = 'join this anchor? this computer then starts sharing itself and stays linked to the anchor. the anchor\'s computer may then use this computer: run model layers on it and ask it for answers. to stop that later, forget the anchor in your devices. only join an anchor whose owner you trust. whose computer is it?';
+// Asked before joining, as the phone asks (17.11.2026): whose computer the anchor is. "my computer"
+// keeps it as your own here (home), "a friend's computer" as a friend's (circle); cancel: not joined.
+// Resolves 'mine', 'friend' or null. The buttons sit under the add box, in its message line.
 function askJoin() {
-  if (confirm(JOIN_ASK)) return true;
-  addMsg('not joined.');
-  return false;
+  return new Promise((resolve) => {
+    const m = $('add-msg');
+    m.className = 'msg';
+    const pick = (whose) => { m.replaceChildren(); if (!whose) addMsg('not joined.'); resolve(whose); };
+    const btn = (label, whose, cls) => { const b = el('button', cls, label); b.type = 'button'; b.addEventListener('click', () => pick(whose)); return b; };
+    const row = el('span', 'join-whose');
+    row.append(btn('my computer', 'mine', 'pill'), document.createTextNode(' '), btn('a friend\'s computer', 'friend', 'pill'), document.createTextNode(' '), btn('cancel', null, 'pill'));
+    m.replaceChildren(el('span', '', JOIN_ASK), el('br'), row);
+  });
 }
 
 $('add-type').addEventListener('click', async () => {
   const anchor = $('add-anchor').checked;
-  if (anchor && !askJoin()) return;
+  const whose = anchor ? await askJoin() : null;
+  if (anchor && !whose) return;
   addMsg('pairing…');
   try {
     if (anchor) addMsg('joining the anchor…');
-    const row = await postJson('peers/add', { address: $('add-address').value.trim(), pin: $('add-pin').value.trim(), fp: $('add-fp').value.trim(), name: $('add-name').value.trim(), anchor });
+    const row = await postJson('peers/add', { address: $('add-address').value.trim(), pin: $('add-pin').value.trim(), fp: $('add-fp').value.trim(), name: $('add-name').value.trim(), anchor, ...(whose ? { whose } : {}) });
     $('add-pin').value = '';
     $('add-anchor').checked = false;
-    await added(row);
+    await added(row, whose);
   } catch (e) { addMsg(e.message, 'bad'); }
 });
 $('add-paste').addEventListener('click', async () => {
   const text = $('add-text').value.trim();
   if (!text) return addMsg('paste what the phone shows first', 'bad');
-  if (isAnchorInvite(text) && !askJoin()) return;
+  const whose = isAnchorInvite(text) ? await askJoin() : null;
+  if (isAnchorInvite(text) && !whose) return;
   addMsg('adding…');
   try {
     // a hosted relay's six digit code is for the terminal (kula-node peers add --relay): the anchor replaced it here
-    const row = await postJson('peers/add', { text });
+    const row = await postJson('peers/add', { text, ...(whose ? { whose } : {}) });
     $('add-text').value = '';
-    await added(row);
+    await added(row, whose);
   } catch (e) { addMsg(e.message, 'bad'); }
 });
 
 async function addScanned(text) {
-  if (isAnchorInvite(text) && !askJoin()) return;
+  const whose = isAnchorInvite(text) ? await askJoin() : null;
+  if (isAnchorInvite(text) && !whose) return;
   addMsg('found the code, pairing…');
-  try { await added(await postJson('peers/add', { text })); } catch (e) { addMsg(e.message, 'bad'); }
+  try { await added(await postJson('peers/add', { text, ...(whose ? { whose } : {}) }), whose); } catch (e) { addMsg(e.message, 'bad'); }
 }
 async function startScan() {
   stopScan();

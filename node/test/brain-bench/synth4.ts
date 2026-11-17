@@ -48,6 +48,42 @@ export function attackOf(name: Scenario4): { from: number; to: number } | null {
   }
 }
 
+// a device's own gate opened to the internet (17.11.2026, P3): its own scenarios, apart from
+// SCENARIOS4 so the 336-hour ones and their numbers stay as they are. Invented rates, not measured on
+// a router (DECISIONS P3, PARK: scanner thresholds need a real router):
+//  - opened: 0.2 an hour, all of them strangers; from hour OPEN_AT (day 7, 00:00) scanners find the
+//    port: 3 an hour plus a sweep in a quarter of the hours that adds 12 on average (6 an hour in all,
+//    half of them in sweeps). Every refusal is a stranger's (no hello, tls, not paired).
+//  - opened+guess: the same counts (the same stream) plus GUESSES_IN wrong codes in hour GUESS_AT.
+// HOURS_OPEN covers a week before, the 72 hours the brain is given to learn the new level, and a
+// whole device-week after them.
+export const OPEN_AT = 168;
+export const LEARN_HOURS = 72;
+export const HOURS_OPEN = OPEN_AT + LEARN_HOURS + 168;   // 408
+export const GUESS_AT = 274;                             // day 11, 10:00: inside the scored week
+export const GUESSES_IN = 10;
+export const OPENED4 = ['opened', 'opened+guess'] as const;
+export type Opened4 = (typeof OPENED4)[number];
+
+/** an opened scenario: each hour's refusals in all (k, the wrong codes included) and its wrong codes */
+export function openedTrace(name: Opened4, seed: number): { k: number[]; guess: number[] } {
+  const rng = rngFor('opened', seed);       // both scenarios draw the same strangers
+  const k: number[] = [];
+  const guess: number[] = [];
+  for (let i = 0; i < HOURS_OPEN; i++) {
+    let n: number;
+    if (i < OPEN_AT) n = poisson(rng, 0.2);
+    else {
+      const sweep = rng() < 0.25;
+      n = poisson(rng, 3) + (sweep ? poisson(rng, 12) : 0);
+    }
+    const g = name === 'opened+guess' && i === GUESS_AT ? GUESSES_IN : 0;
+    k.push(n + g);
+    guess.push(g);
+  }
+  return { k, guess };
+}
+
 /** 336 hourly refusal counts of scenario `name` on `seed` */
 export function trace(name: Scenario4, seed: number): number[] {
   const rng = rngFor(name, seed);

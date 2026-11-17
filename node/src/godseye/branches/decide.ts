@@ -28,6 +28,15 @@
 // split" never fires on an assumption) and `far` = { lo, hi, assumed }, hi at FAR_HI_K until kFar is
 // learned (then lo = hi, at kFar). A seat may carry connections' `loss` hint (the upper end of its
 // missed probe share), which the planner names when a far link drops probes.
+// The measured link (17 Nov, P2): kula's engine times one request and its answer on an open
+// connection to each device (link.ts, both legs together through an anchor), and the look carries
+// it as `linkRttMs` with its time `linkAt`. A far seat whose reading is at most RTT_FRESH_MS old
+// carries it as `rtt` and is priced from it, not from the probe: RTT_TRIPS (1.1) round trips per
+// token while assumed, with the range RTT_TRIPS_HI (1.16, the slow end) to RTT_TRIPS_LO (0.95), the
+// fit of the 16 Nov points (D1), widened by RTT_NOISE (6%) each way for an answer's own scatter (the
+// fit's ends hold only its spread); once the planner learned its own fit of such links (hopRtt, 3
+// answers), kRtt. `far.link` says every far worker is priced so. A far seat without a fresh reading
+// is priced from the probe exactly as before; the units never mix in one fit (planner.ts).
 //
 // A device's free memory is its worker's live reading (GET /status, `worker.ramFreeMb`) when that
 // is fresh (WORKER_FRESH_MS) and it holds none of our model; when it holds our model, a reading
@@ -49,6 +58,11 @@ export const WORKER_FRESH_MS = 120_000;   // a free device's worker reading is u
 export const SLACK = 1.05;         // a card that shows stays while its reason holds within this much
 export const FAR_HOP_MS = { internet: 150, anchor: 300 } as const;   // a far worker's round trip when senses has no link (assumed)
 export const FAR_HI_K = 0.25;      // the optimistic far k: the probe's ms is about 4 round trips (DECISIONS P3)
+export const RTT_TRIPS = 1.1;      // round trips per token over a measured link (D1: the 16 Nov points fit 0.95–1.16)
+export const RTT_TRIPS_LO = 0.95;  // the fast end of that fit
+export const RTT_TRIPS_HI = 1.16;  // the slow end of that fit
+export const RTT_NOISE = 0.06; // an answer's own scatter around the measured-link estimate: widens the assumed range each way (DECISIONS 2 b; bench9: 0.08 held 94% of first answers, over the 0.92 cap; 0.06 holds 88%, 87/94/83% one/two/anchor)
+export const RTT_FRESH_MS = 7 * 24 * 3600_000;   // a measured link older than this is not used
 export const SHOW = 3;             // looks a reason must hold before its card shows
 export const HIDE = 4;             // looks a reason must be gone before its card goes
 const MB = 1024 * 1024;
@@ -66,6 +80,7 @@ export interface Seat {
   files?: { file: string; tps: number }[];   // tok/s it answered with on these files, each weighing 1 or more
   link?: Link;                      // senses: its link's usual round trip (ms); never on this computer's seat
   loss?: number;                    // connections: the upper end of its missed probe share, 0..1; only with that hint
+  rtt?: number;                     // a far seat's measured round trip (linkRttMs, at most RTT_FRESH_MS old), ms; only then
 }
 /** a seat reached straight over the internet or through an anchor (a relay is never split over) */
 export const isFar = (x: { via: string }): boolean => x.via === 'internet' || x.via === 'anchor';
@@ -187,6 +202,16 @@ export function lossOf(ctx: Pick<BranchCtx, 'peek'>): Map<string, number> {
   return out;
 }
 
+/** a device's measured round trip when it is usable: finite in (0, 600000] ms, measured at most
+ *  RTT_FRESH_MS before the look (a minute after it is taken as clock skew); else null */
+export function rttOf(s: Pick<Snapshot, 'at'>, d: Pick<EyeDevice, 'linkRttMs' | 'linkAt'>): number | null {
+  const r = d.linkRttMs, at = d.linkAt;
+  if (typeof r !== 'number' || !Number.isFinite(r) || !(r > 0) || r > 600_000) return null;
+  if (typeof at !== 'number' || !Number.isFinite(at)) return null;
+  const age = s.at - at;
+  return age >= -60_000 && age <= RTT_FRESH_MS ? r : null;
+}
+
 /** the devices trust says no to: a bad verdict, with its first failed check */
 export function untrusted(ctx: Pick<BranchCtx, 'peek'>): Map<string, string> {
   const out = new Map<string, string>();
@@ -247,7 +272,8 @@ export function field(s: Snapshot, ctx: Pick<BranchCtx, 'peek'>, measured?: Map<
     if (busy) { barred.push({ id: d.id, name: d.name, why: 'answering someone else' }); continue; }
     const link = links.get(d.id);
     const loss = losses.get(d.id);
-    seats.push({ id: d.id, name: d.name, local: false, kind: d.kind, via: d.via, ramMb: ram, capMb: Math.floor(ram * WORKER_SHARE), speed: speedOf(s, d.id, d.kind, d.bwGBs, speeds.get(d.id)), tonight: tonightOf(d.id), files: filesOf(s, speeds.get(d.id)), ...(link ? { link } : {}), ...(loss !== undefined ? { loss } : {}) });
+    const rtt = isFar(d) ? rttOf(s, d) : null;
+    seats.push({ id: d.id, name: d.name, local: false, kind: d.kind, via: d.via, ramMb: ram, capMb: Math.floor(ram * WORKER_SHARE), speed: speedOf(s, d.id, d.kind, d.bwGBs, speeds.get(d.id)), tonight: tonightOf(d.id), files: filesOf(s, speeds.get(d.id)), ...(link ? { link } : {}), ...(loss !== undefined ? { loss } : {}), ...(rtt != null ? { rtt } : {}) });
   }
   if (s.work.llama && s.host.freeMb != null && s.host.freeMb > 0) {
     const no = hints.get('local')?.find((h) => h.no)?.no ?? null;
@@ -282,7 +308,12 @@ export interface Place {
   shares?: { seat: Seat; mb: number }[];
   action: SuggestAction;
   chain?: { computeMs: number; links: Link[] };   // split with a k and every worker's link: its compute time per token and the links, in order
-  far?: { lo: number; hi: number; assumed: boolean };   // a split with a far worker, speeds known: its tok/s at kFar or 1 (lo) and at FAR_HI_K while assumed (hi), unrounded
+  // a split with a far worker, speeds known: its tok/s at the slow end (lo: kFar or 1 from the probe,
+  // kRtt or RTT_TRIPS_HI from a measured link) and the fast end (hi: FAR_HI_K or RTT_TRIPS_LO while
+  // assumed), unrounded; assumed while a far worker's fit is not learned; link: every far worker is
+  // priced from its measured link (only then; while assumed lo and hi are then widened by RTT_NOISE,
+  // and tps is the point at RTT_TRIPS, so the planner's faster-split card checks lo itself)
+  far?: { lo: number; hi: number; assumed: boolean; link?: true };
 }
 
 /** apart without this computer's seat says here:false: kula's engine runs this computer in apart
@@ -319,18 +350,25 @@ export function gbsFor(x: Seat, m: EyeModel, gb: number | null): number | null {
  *  With a usable k (finite, > 0) a worker with a link costs k times its srtt per token instead of HOP_MS,
  *  and a place whose every worker has a link says its chain; without one it is as before L9.
  *  A far worker (isFar) costs kFar (usable: finite, > 0; else 1, HOP_PRIOR) times its srtt, or
- *  FAR_HOP_MS for its route without a link, whatever k is; a place using one says `far` */
-export function split(f: Field, m: EyeModel, slack = 1, k?: number, kFar?: number): Place | null {
+ *  FAR_HOP_MS for its route without a link, whatever k is; one with a measured link (`rtt`) costs
+ *  kRtt (usable; else RTT_TRIPS) times that instead. A place using a far worker says `far` */
+export function split(f: Field, m: EyeModel, slack = 1, k?: number, kFar?: number, kRtt?: number): Place | null {
   const host = f.seats.find((x) => x.local);
   if (!host || !(m.catalog || m.here) || !(m.needMb > 0)) return null;
   const gb = readGb(m);
   const usable = typeof k === 'number' && Number.isFinite(k) && k > 0;
   const learned = typeof kFar === 'number' && Number.isFinite(kFar) && kFar > 0;
+  const rttLearned = typeof kRtt === 'number' && Number.isFinite(kRtt) && kRtt > 0;
   const gbsOf = (x: Seat): number | null => gbsFor(x, m, gb);
   const speed = (x: Seat) => gbsOf(x) ?? -1;
   const bySpeed = f.seats.filter((x) => !x.local && x.via !== 'relay').sort((a, b) => speed(b) - speed(a) || b.capMb - a.capMb);
   const farMs = (x: Seat): number => (x.link ? x.link.srtt : FAR_HOP_MS[x.via as keyof typeof FAR_HOP_MS]);
-  const hopOf = (x: Seat) => (isFar(x) ? (learned ? kFar! : 1) * farMs(x) : usable && x.link ? k! * x.link.srtt : HOP_MS);
+  // a far worker's ms and its k three ways: the point it is priced at, the slow end and the fast end
+  const farK = (x: Seat): { ms: number; k: number; slow: number; fast: number; learned: boolean } => {
+    if (x.rtt != null) return rttLearned ? { ms: x.rtt, k: kRtt!, slow: kRtt!, fast: kRtt!, learned: true } : { ms: x.rtt, k: RTT_TRIPS, slow: RTT_TRIPS_HI, fast: RTT_TRIPS_LO, learned: false };
+    return learned ? { ms: farMs(x), k: kFar!, slow: kFar!, fast: kFar!, learned: true } : { ms: farMs(x), k: 1, slow: 1, fast: FAR_HI_K, learned: false };
+  };
+  const hopOf = (x: Seat) => { if (isFar(x)) { const c = farK(x); return c.k * c.ms; } return usable && x.link ? k! * x.link.srtt : HOP_MS; };
   // a worker's cost per MB of the model it takes: its compute plus its link spread over its room (L10 P56)
   const perMb = (x: Seat): number => {
     const g = gbsOf(x);
@@ -362,9 +400,13 @@ export function split(f: Field, m: EyeModel, slack = 1, k?: number, kFar?: numbe
     const place: Place = { mode: 'split', seats: [host, ...used.map((x) => x.seat)], tps: ms ? Math.round((1000 / ms) * 10) / 10 : null, shares, action: loadAction(m, 'split', used.map((x) => x.seat)) };
     if (known && usable && used.every((x) => x.seat.link)) place.chain = { computeMs, links: used.map((x) => x.seat.link!) };
     if (ms != null && used.some((x) => isFar(x.seat))) {
-      // hi: the far links at FAR_HI_K while kFar is not learned; the near ones as priced
-      const hiMs = learned ? ms : computeMs + used.reduce((t, x) => t + (isFar(x.seat) ? FAR_HI_K * farMs(x.seat) : hopOf(x.seat)), 0);
-      place.far = { lo: 1000 / ms, hi: 1000 / hiMs, assumed: !learned };
+      // lo: the far links at their slow end, hi: at their fast end; the near ones as priced
+      const end = (pick: 'slow' | 'fast') => computeMs + used.reduce((t, x) => { if (!isFar(x.seat)) return t + hopOf(x.seat); const c = farK(x.seat); return t + c[pick] * c.ms; }, 0);
+      const fars = used.filter((x) => isFar(x.seat));
+      place.far = { lo: 1000 / end('slow'), hi: 1000 / end('fast'), assumed: fars.some((x) => !farK(x.seat).learned), ...(fars.every((x) => x.seat.rtt != null) ? { link: true as const } : {}) };
+      // every far link measured, fit not learned: the fit's ends hold K's spread only, so widen them by
+      // an answer's own scatter (RTT_NOISE); learned and probe-priced chains stay as they are
+      if (place.far.link && place.far.assumed) { place.far.lo *= 1 - RTT_NOISE; place.far.hi *= 1 + RTT_NOISE; }
     }
     // speeds unknown: the fewest that fit (the speed order); in the nearest-cost order it ends that order
     if (ms == null) { if (o === 0 && !best) best = place; break; }
@@ -375,8 +417,11 @@ export function split(f: Field, m: EyeModel, slack = 1, k?: number, kFar?: numbe
 
 /** the loaded split's chain of model m, as split() would say it: each part's compute time from its
  *  seat's speed on m and the workers' links; null when any of it is missing. With a far worker
- *  (isFar) it also says which link is far, one flag per link: the planner learns kFar from it */
-export function loadedChain(s: Snapshot, f: Field, m: EyeModel): { computeMs: number; links: Link[]; far?: boolean[] } | null {
+ *  (isFar) it also says which link is far, one flag per link: the planner learns kFar from it; and
+ *  when a far worker has a measured link (`rtt`), each link's measured round trip (null for the
+ *  others): the planner learns kRtt from it. A far worker with a measured link needs no srtt (its
+ *  link then stands in as { srtt: rtt, rttvar: 0 }) */
+export function loadedChain(s: Snapshot, f: Field, m: EyeModel): { computeMs: number; links: Link[]; far?: boolean[]; rtt?: (number | null)[] } | null {
   const L = s.work.loaded;
   if (!L || L.mode !== 'split' || !(L.model.id === m.id || L.model.file === m.file)) return null;
   const parts = (L.parts ?? []).filter((p) => p.mb > 0);
@@ -386,6 +431,7 @@ export function loadedChain(s: Snapshot, f: Field, m: EyeModel): { computeMs: nu
   let computeMs = 0;
   const links: Link[] = [];
   const far: boolean[] = [];
+  const rtt: (number | null)[] = [];
   for (const p of parts) {
     const seat = p.local ? f.seats.find((x) => x.local) : f.seats.find((x) => !x.local && x.id === p.id);
     if (!seat) return null;
@@ -393,13 +439,16 @@ export function loadedChain(s: Snapshot, f: Field, m: EyeModel): { computeMs: nu
     if (gbs == null || !(gbs > 0)) return null;
     computeMs += ((p.mb / total) * gb * 1000) / gbs;
     if (!seat.local) {
-      if (!seat.link) return null;
-      links.push(seat.link);
+      const measured = isFar(seat) && seat.rtt != null ? seat.rtt : null;
+      if (!seat.link && measured == null) return null;
+      links.push(seat.link ?? { srtt: measured!, rttvar: 0 });
       far.push(isFar(seat));
+      rtt.push(measured);
     }
   }
   if (!links.length) return null;
-  return far.some((x) => x) ? { computeMs, links, far } : { computeMs, links };
+  if (!far.some((x) => x)) return { computeMs, links };
+  return rtt.some((x) => x != null) ? { computeMs, links, far, rtt } : { computeMs, links, far };
 }
 
 // ---- words

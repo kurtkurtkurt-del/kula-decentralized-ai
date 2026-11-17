@@ -257,14 +257,21 @@ test("a friend's device past the anchor's daily cap (memberMaxDay): on at 1.01, 
   assert.ok(c);
   assert.equal(c.weight, 2);
   assert.equal(c.title, "a friend's device passed its daily limit through this anchor");
-  assert.equal(c.why, "a friend's device passed 2.02 of its 2.00 GB daily limit through this anchor in the last day, ciphertext only; your own devices have no limit. nothing was switched off.");
+  assert.equal(c.why, "a friend's device passed 2.02 of its 2.00 GB daily limit through this anchor today (UTC), ciphertext only; your own devices have no limit. the anchor refuses its new streams and cut its running ones until 00:00 UTC; the brain switched nothing.");
+  assert.doesNotMatch(c.why, /nothing was switched off/, 'the anchor does refuse and cut (anchor.ts run)');
   b.observe(snap([plainDev()], anchor(0.96)) as any, null);
   c = card(b.view(), 'trust:anchor-cap');
   assert.ok(c, 'held above 0.95');
-  assert.match(c.why, /^a friend's device passed 1\.92 of its 2\.00 GB daily limit/);
+  assert.equal(c.title, "a friend's device passed its daily limit through this anchor");
+  assert.equal(c.why, "the most one friend's device has passed through this anchor today is now 1.92 of its 2.00 GB daily limit (ciphertext only): under the limit, so the anchor takes its new streams again; the brain switched nothing.");
   b.observe(snap([plainDev()], anchor(0.9)) as any, null);
   assert.equal(card(b.view(), 'trust:anchor-cap'), undefined, 'gone under 0.95');
-  assert.deepEqual(events, ["a friend's device passed 2.02 of its 2.00 GB daily limit through this anchor", "every friend's device is back under its daily limit through this anchor"]);
+  assert.ok(card(b.view(), 'trust:anchor-near-cap'), 'near the cap again');
+  assert.deepEqual(events, [
+    "a friend's device passed 2.02 of its 2.00 GB daily limit through this anchor",
+    "a friend's device is near its daily limit through this anchor: 0.20 GB left",
+    "every friend's device is back under its daily limit through this anchor",
+  ]);
   const other = branch();
   other.b.observe(snap([plainDev()], anchor(0.96)) as any, null);
   assert.equal(card(other.b.view(), 'trust:anchor-cap'), undefined, '0.96 from below: no card');
@@ -272,6 +279,32 @@ test("a friend's device past the anchor's daily cap (memberMaxDay): on at 1.01, 
   assert.equal(card(other.b.view(), 'trust:anchor-cap'), undefined, 'no cap: no card');
   // the report is not touched by the anchor
   assert.equal(gateCheckOf(other.b.view()), undefined);
+});
+
+test('E2: anchor-cap and anchor-near-cap carry the cap to 2x in whole GB, from the cap the card saw', () => {
+  const at = (cap: number, x: number) => ({ anchor: { on: true, reachable: true, links: 1, bytesDay: x * cap, capDay: cap, memberMaxDay: x * cap } });
+  const over = branch();
+  over.b.observe(snap([plainDev()], at(2e9, 1.01)) as any, null);
+  let c = card(over.b.view(), 'trust:anchor-cap');
+  assert.deepEqual(c.action, { do: 'cap', gb: 4, from: 2 });
+  assert.equal(c.label, 'raise the limit');
+  const near = branch();
+  near.b.observe(snap([plainDev()], at(5e9, 0.85)) as any, null);
+  c = card(near.b.view(), 'trust:anchor-near-cap');
+  assert.deepEqual(c.action, { do: 'cap', gb: 10, from: 5 });
+  assert.equal(c.label, 'raise the limit');
+  // a cap that is not whole GB: 2x rounded up to a whole GB, from exactly the cap seen
+  const odd = branch();
+  odd.b.observe(snap([plainDev()], at(1.3e9, 1.2)) as any, null);
+  c = card(odd.b.view(), 'trust:anchor-cap');
+  assert.deepEqual(c.action, { do: 'cap', gb: 3, from: 1.3 });
+  assert.equal(Math.round(c.action.from * 1e9), 1.3e9, 'the server checks the cap seen against the engine in bytes');
+  // a cap whose double is past what the engine takes (100000 GB): only a look
+  const huge = branch();
+  huge.b.observe(snap([plainDev()], at(1e14, 1.01)) as any, null);
+  c = card(huge.b.view(), 'trust:anchor-cap');
+  assert.deepEqual(c.action, { do: 'open', panel: 'branch', branch: 'trust' });
+  assert.equal(c.label, 'look');
 });
 
 test('the cap is per friend device: memberMaxDay over and under, and without it no card', () => {
@@ -285,7 +318,7 @@ test('the cap is per friend device: memberMaxDay over and under, and without it 
   assert.ok(card(b.view(), 'trust:anchor-cap'), 'held above 0.95');
   b.observe(snap([plainDev()], anchor({ memberMaxDay: 0.9 * cap })) as any, null);
   assert.equal(card(b.view(), 'trust:anchor-cap'), undefined, 'gone under 0.95');
-  assert.equal(events.length, 2);
+  assert.equal(events.length, 3, 'the cap card came and went; the near-cap card came at 0.9');
   // every friend's device under its limit while all together (the owner's own too) are far over it: no card
   const under = branch();
   under.b.observe(snap([plainDev()], anchor({ memberMaxDay: 0.5 * cap })) as any, null);
@@ -303,6 +336,111 @@ test('the cap is per friend device: memberMaxDay over and under, and without it 
     one.b.observe(snap([plainDev()], { anchor: { on: true, reachable: true, links, bytesDay: 6e9, capDay: 5e9 } }) as any, null);
     assert.equal(card(one.b.view(), 'trust:anchor-cap'), undefined, `links ${links}, bytesDay 6e9 over capDay 5e9, no memberMaxDay: no card`);
     assert.deepEqual(one.events, []);
+  }
+});
+
+test('a gap in the hours (no ledger line seen): the last 24 hours are chosen by start time, not by count', () => {
+  // 24 entries over 26 hours: T0-5h and T0-6h were not seen; the two oldest hold 5 wrong codes
+  const full = gateAt(T0, () => 1, { by: (s) => (s === T0 - 25 * H ? { 'wrong pin': 3 } : s === T0 - 24 * H ? { 'wrong pin': 2 } : { 'no hello': 1 }) });
+  const gap = { ...full, hours: full.hours.filter((h) => h.start !== T0 - 5 * H && h.start !== T0 - 6 * H) };
+  assert.equal(gap.hours.length, 24);
+  const { b } = branch();
+  b.observe(snap([plainDev()], { gate: gap }) as any, null);
+  const v = b.view() as any;
+  assert.equal(gateCheckOf(v).ok, true, 'the wrong codes are older than 24 hours');
+  assert.equal(card(v, 'trust:gate-guess'), undefined, 'no guess card from hours older than 24');
+  assert.match(gateCheckOf(v).text, /^its gate refused 22 strangers today \(no hello ×22\) from about 3 networks/);
+});
+
+test('near the anchor cap: a suggest from 0.8, the GB left, the name in the card only; past the cap the cap card names it', () => {
+  const cap = 5e9;
+  const anchor = (x: number, o: Record<string, unknown> = {}) => ({ anchor: { on: true, reachable: true, links: 2, bytesDay: x * cap, capDay: cap, memberMaxDay: x * cap, since: 1, ...o } });
+  const name = 'ayse pixel';
+  const under = branch();
+  under.b.observe(snap([plainDev()], anchor(0.79, { memberMaxName: name })) as any, null);
+  assert.equal(card(under.b.view(), 'trust:anchor-near-cap'), undefined, '0.79: nothing');
+  assert.deepEqual(under.events, []);
+
+  const { b, events, notes } = branch();
+  b.observe(snap([plainDev()], anchor(0.8, { memberMaxName: name })) as any, null);
+  let c = card(b.view(), 'trust:anchor-near-cap');
+  assert.ok(c, '0.8: the card');
+  assert.equal(c.kind, 'suggest');
+  assert.equal(c.weight, 1);
+  assert.equal(c.title, 'ayse pixel is near its daily limit through this anchor');
+  assert.equal(c.why, "ayse pixel passed 4.00 of its 5.00 GB daily limit through this anchor today (UTC), counted since sharing last started: 1.00 GB left. a split load passes about the model's size through the anchor. at the limit the anchor refuses its new streams, past it it cuts the running ones too, until 00:00 UTC; the brain switched nothing.");
+  assert.equal(card(b.view(), 'trust:anchor-cap'), undefined);
+  assert.deepEqual(events, ["a friend's device is near its daily limit through this anchor: 1.00 GB left"]);
+
+  b.observe(snap([plainDev()], anchor(1.02, { memberMaxName: name })) as any, null);
+  assert.equal(card(b.view(), 'trust:anchor-near-cap'), undefined, 'past the cap: the cap card instead');
+  c = card(b.view(), 'trust:anchor-cap');
+  assert.equal(c.title, 'ayse pixel passed its daily limit through this anchor');
+  assert.equal(c.why, 'ayse pixel passed 5.10 of its 5.00 GB daily limit through this anchor today (UTC), ciphertext only; your own devices have no limit. the anchor refuses its new streams and cut its running ones until 00:00 UTC; the brain switched nothing.');
+  assert.deepEqual(events.slice(1), [
+    "a friend's device passed 5.10 of its 5.00 GB daily limit through this anchor",
+    "no friend's device is near its daily limit through this anchor any more (under 80% of it, or past it)",
+  ]);
+  assert.ok(!events.some((e) => e.includes('ayse')), 'memberMaxName never reaches a feed line');
+  assert.ok(!(JSON.stringify(notes() ?? null) ?? '').includes('ayse'), 'nor the notes');
+
+  // no name: a friend's device; no memberMaxDay: nothing
+  const anon = branch();
+  anon.b.observe(snap([plainDev()], anchor(0.9)) as any, null);
+  assert.equal(card(anon.b.view(), 'trust:anchor-near-cap')?.title, "a friend's device is near its daily limit through this anchor");
+  const bare = branch();
+  bare.b.observe(snap([plainDev()], { anchor: { on: true, reachable: true, links: 2, bytesDay: 0.9 * cap, capDay: cap, memberMaxName: name } }) as any, null);
+  assert.deepEqual((bare.b.view() as any).suggestions ?? [], [], 'no memberMaxDay: no card');
+  assert.deepEqual(bare.events, []);
+});
+
+test('anchor refusals: full, too many streams and too many dials a warn card with their meaning; not here and removed one calm line a day; the rest none', () => {
+  const a = (refused: unknown, o: Record<string, unknown> = {}) => ({ anchor: { on: true, reachable: true, links: 2, bytesDay: 0, capDay: 5e9, memberMaxDay: 0, since: 1, refused, removed: 0, ...o } });
+  const ids = (v: any) => (v.suggestions ?? []).map((s: any) => s.id);
+  const { b, events } = branch();
+  b.observe(snap([plainDev()], a({ 'byte limit': 3, other: 2, 'did not accept': 1, 'dialer gone': 1, 'target gone': 1 })) as any, null);
+  assert.deepEqual(ids(b.view()), [], 'byte limit (the cap card says it) and the rest: no card');
+  assert.deepEqual(events, []);
+
+  b.observe(snap([plainDev()], a({ full: 2, 'too many streams': 1, 'byte limit': 3 })) as any, null);
+  let c = card(b.view(), 'trust:anchor-refusing');
+  assert.ok(c);
+  assert.equal(c.kind, 'warn');
+  assert.equal(c.weight, 2);
+  assert.equal(c.title, 'this anchor refused streams today');
+  assert.equal(c.why, "today (UTC), counted since sharing last started: full ×2: every stream through this anchor was taken, or friends' devices together held all of theirs (a share stays free for your own devices); too many streams ×1: one device already had its most streams open at once. a refused stream fails the connection that asked for it; the brain switched nothing.");
+  assert.deepEqual(events, ['this anchor refused streams today: full ×2, too many streams ×1']);
+
+  b.observe(snap([plainDev()], a({ full: 4, 'too many streams': 1, 'too many dials': 7 })) as any, null);
+  c = card(b.view(), 'trust:anchor-refusing');
+  assert.match(c.why, /; too many dials ×7: a friend's device opened connections faster than its limit; one refused connection stops a split load\./);
+  assert.equal(events.length, 1, 'the counts grow: no new line');
+
+  // not here and removed members: one calm line, no card
+  b.observe(snap([plainDev()], a({ 'not here': 2 }, { removed: 1 })) as any, null);
+  assert.deepEqual(ids(b.view()), [], 'no card for not here or removed');
+  assert.deepEqual(events.slice(1), [
+    "this computer's anchor today: 2 connections asked for a device that was not connected to it right then (not here); 1 member whose access was removed, cut at once. nothing to do",
+    "this anchor: no stream refused as full, too many streams or too many dials in today's count",
+  ]);
+  b.observe(snap([plainDev()], a({ 'not here': 5 }, { removed: 2 })) as any, null);
+  assert.equal(events.length, 3, 'the same day: no second calm line');
+  b.observe(snap([plainDev()], a({}, { removed: 0 })) as any, null);
+  assert.equal(events.length, 3, 'the day turns (counts at 0): nothing said');
+  b.observe(snap([plainDev()], a({ 'not here': 1 })) as any, null);
+  assert.deepEqual(events.slice(3), ["this computer's anchor today: 1 connection asked for a device that was not connected to it right then (not here). nothing to do"]);
+
+  // absent or broken fields: nothing
+  for (const anchor of [
+    { on: true, reachable: true, links: 1, bytesDay: 0, capDay: 5e9 },
+    { on: true, reachable: true, links: 1, bytesDay: 0, capDay: 5e9, refused: null, removed: null },
+    { on: true, reachable: true, links: 1, bytesDay: 0, capDay: 5e9, refused: ['full'], removed: 'x' },
+    { on: true, reachable: true, links: 1, bytesDay: 0, capDay: 5e9, refused: { full: 'x', 'too many dials': -3, 'not here': NaN } },
+  ]) {
+    const o = branch();
+    o.b.observe(snap([plainDev()], { anchor }) as any, null);
+    assert.deepEqual(ids(o.b.view()), [], JSON.stringify(anchor));
+    assert.deepEqual(o.events, [], JSON.stringify(anchor));
   }
 });
 

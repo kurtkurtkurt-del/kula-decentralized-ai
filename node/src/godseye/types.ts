@@ -46,7 +46,18 @@ export interface EyeDevice {
   through?: string | null;         // via 'anchor': the anchor's device id, 'self' when this computer is the anchor; null: not in the peer book; absent: an older look
   throughName?: string | null;     // via 'anchor': the anchor's name ('this computer' for 'self'); null: not said; absent: an older look
   anchor?: boolean;               // this device offers the anchor role; absent: an older look
-  where: string;                   // how it is reached, in words (an address, "usb cable", …)
+  // the roads this computer has to it (17.11.2026, road.ts roads() over its records, cable and relay
+  // records left out), counted: distinct lan addresses, distinct addresses outside the lan (a
+  // global ipv6 address, a router's mapped port) and distinct anchors ('self' included). Counts
+  // only, never an address. null: could not say; absent: an older look
+  roads?: { lan: number; direct: number; anchors: number } | null;
+  // the network to it as measured from this computer (link.ts: one request and its answer on an
+  // open connection, the median, both legs together through an anchor), ms, and when (ms). Only
+  // when the device was measured; null: the measure gave no round trip (it failed, or an anchor
+  // held it back). Absent: never measured, or an older look
+  linkRttMs?: number | null;
+  linkAt?: number | null;
+  where: string;                  // how it is reached, in words (an address, "usb cable", …)
   // which kind of address its pinned certificate answered at (docs/INTERNET.md): its lan
   // address, a global ipv6 address, or a port its router mapped; null on a cable or a relay.
   // Left out of a snapshot from before 11.11.2026.
@@ -172,8 +183,18 @@ export interface Snapshot {
      *  world, in bytes, set by the anchor's owner; the owner's own devices have none; null: none),
      *  memberMaxDay (the most bytes any single friend's device passed today; null: not said; absent: an
      *  engine that does not count it; without it the brain makes no cap card).
-     *  null: could not say; absent: an engine without anchors */
-    anchor?: { on: boolean; reachable: boolean | null; links: number; bytesDay: number; capDay: number | null; memberMaxDay?: number | null } | null;
+     *  null: could not say; absent: an engine without anchors.
+     *  17.11.2026 (absent: an engine that does not say it): since (ms, when the anchor last started:
+     *  every count here is since then and at most today, UTC), refused (today's refusals to members
+     *  and to this computer's own dials, by a word of ANCHOR_REFUSALS; null: not said), removed
+     *  (members whose access was removed today), memberMaxName (the name of the friend's device
+     *  behind memberMaxDay, cut to 80; in the cap cards' title and why, so in the accept, reject and
+     *  undo feed lines that quote the title, scrubbed from the box (secretScan); never a note;
+     *  null: none or not known) */
+    anchor?: {
+      on: boolean; reachable: boolean | null; links: number; bytesDay: number; capDay: number | null; memberMaxDay?: number | null;
+      since?: number | null; refused?: Partial<Record<AnchorRefusal, number>> | null; removed?: number | null; memberMaxName?: string | null;
+    } | null;
     /** this computer's own gate refusals, from the reject lines of its own signed ledger
      *  (ui/godseye-feed.ts hostGate); null: no ledger read yet; absent: an older look */
     gate?: EyeGate | null;
@@ -183,6 +204,11 @@ export interface Snapshot {
   models: EyeModel[];
   projects: EyeProject[];
 }
+
+/** The words an anchor's refusals are counted under (17.11.2026; node/src/anchor.ts
+ *  ANCHOR_REASON_WORDS is the same list): any other reason is 'other', so no free text reaches a card. */
+export const ANCHOR_REFUSALS = ['too many dials', 'byte limit', 'too many streams', 'full', 'not here', 'did not accept', 'dialer gone', 'target gone', 'other'] as const;
+export type AnchorRefusal = typeof ANCHOR_REFUSALS[number];
 
 /** This computer's gate as its own ledger saw it (16.11.2026). Counts only: no address of anyone
  *  who knocked ever reaches the eye. */
@@ -230,13 +256,25 @@ export interface BranchEvent { at: number; text: string }
 /** One branch: told about every look (now and the one before), asked for its view. Both quick;
  *  a branch that throws is stopped and shown as broken, the others carry on. */
 /** What the person may do about a card (11.11.2026). The eye never does it: a tap on the card asks
- *  kula's engine to, the same way the person's own buttons do. `devices` are device ids from the snapshot. */
+ *  kula's engine to, the same way the person's own buttons do. `devices` are device ids from the snapshot.
+ *  load, unload, fetch, cap, anchor and cancel are changes (accept / reject, change.ts); probe and
+ *  open only look. */
 export type SuggestAction =
   | { do: 'load'; model: string; mode: 'phone' | 'apart' | 'split' | 'here'; devices: string[]; ctx?: number; here?: false }  // here:false only with apart: this computer stays out
   | { do: 'unload' }
   | { do: 'fetch'; model: string }                  // a catalog model onto this computer
   | { do: 'probe'; devices: string[] }               // look at these devices again
-  | { do: 'open'; panel: 'devices' | 'models' | 'settings' | 'branch'; branch?: BranchId };  // only moves the page
+  | { do: 'open'; panel: 'devices' | 'models' | 'settings' | 'branch'; branch?: BranchId }  // only moves the page
+  // 17.11.2026 (DECISIONS 5): the brain's change cards, carried out only on the person's accept
+  | { do: 'cap'; gb: number; from: number }          // a friend's daily GB through this anchor; from: the cap the card saw, in GB
+  | { do: 'anchor'; on: true }                       // make this computer an anchor (it faces the internet): confirm first
+  | { do: 'cancel'; project: string };               // a waiting night project, by id: confirm first
+
+/** What an accepted card's undo carries out (17.11.2026): the change back, captured by kula's engine
+ *  before the change. fetch and cancel have none. */
+export type UndoAction =
+  | Extract<SuggestAction, { do: 'load' | 'unload' | 'cap' }>
+  | { do: 'anchor'; on: false };
 
 /** A branch's suggestion or warning, drawn as a card on the brain panel. */
 export interface Suggestion {

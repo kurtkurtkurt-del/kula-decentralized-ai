@@ -19,7 +19,7 @@ import { AppState } from 'react-native';
 import { BRANCH_IDS, GodsEye, dark, type BranchMaker, type SuggestAction } from '@godseye/core';
 import { route, type PhoneEnv } from '@/eye/apply';
 import { kvNotes, NOTES_PREFIX } from '@/eye/notes';
-import { actOf, applyCard, dismissCard, eyeRunning, holdEye, look, resetEye } from '@/eye/run';
+import { actOf, applyCard, dismissCard, eyeRunning, holdEye, look, rejectCard, resetEye } from '@/eye/run';
 import { phoneSnapshot, type PhoneInput } from '@/eye/snapshot';
 import { phoneTrust } from '@/eye/trustBranch';
 import { setCurrentLang, translator } from '@/i18n/core';
@@ -322,5 +322,59 @@ describe('a card\'s tap on the phone', () => {
     calls.length = 0;
     await applyCard('advisor:see', null, env());
     expect(calls).toEqual(['branch limits']);
+  });
+
+  // accept / reject (17.11.2026, DECISIONS 5): the phone carries out load, unload and fetch; cap,
+  // anchor and cancel are the computer's (route has no way for them), and a reject goes to the eye
+  const changes: BranchMaker = () => ({
+    id: 'advisor', observe() {},
+    view: () => ({ ...dark(), built: true, stat: 'ideas', suggestions: [
+      { id: 'advisor:load', kind: 'suggest', title: 'try qwen here', why: 'it fits', action: { do: 'load', model: 'qwen', mode: 'here', devices: [] } },
+      { id: 'advisor:look', kind: 'suggest', title: 'look at pixel', why: 'quiet', action: { do: 'probe', devices: ['p1'] } },
+    ] }),
+  });
+
+  it('route: cap, anchor and cancel have no way on the phone (the computer does them)', () => {
+    const e = env();
+    expect(route({ do: 'cap', gb: 4, from: 2 }, e)).toBeNull();
+    expect(route({ do: 'anchor', on: true }, e)).toBeNull();
+    expect(route({ do: 'cancel', project: 'n1' }, e)).toBeNull();
+  });
+
+  it('route: what accept does, in words for the phone\'s own sentence (this phone, the devices by name)', () => {
+    const e = env();
+    expect(route({ do: 'load', model: 'qwen', mode: 'here', devices: [] }, e)?.does).toEqual({ key: 'alone', vars: { model: 'Qwen' } });
+    expect(route({ do: 'load', model: 'qwen', mode: 'apart', devices: ['me', 'p1', 'p2'] }, e)?.does).toEqual({ key: 'apart', vars: { model: 'Qwen', list: 'Pixel, Tab' } });
+    expect(route({ do: 'load', model: 'qwen', mode: 'split', devices: ['p2'] }, e)?.does).toEqual({ key: 'split', vars: { model: 'Qwen', list: 'Tab' } });
+    expect(route({ do: 'unload' }, e)?.does).toEqual({ key: 'unload' });
+    expect(route({ do: 'fetch', model: CATALOG[0].id }, e)?.does).toEqual({ key: 'fetch', vars: { model: CATALOG[0].name } });
+    expect(route({ do: 'probe', devices: ['p1'] }, e)?.does).toBeUndefined();
+  });
+
+  it('rejectCard: a change card goes to eye.reject and stays away, through a new eye on the same notes; a look card is not rejected; a changed or gone card says false', () => {
+    resetEye({ advisor: changes });
+    const v = look();
+    expect(v.cards.map((c) => [c.id, c.change])).toEqual([['advisor:load', true], ['advisor:look', false]]);
+    const spy = jest.spyOn(GodsEye.prototype, 'reject');
+    // shown another action than the card says now: nothing is rejected
+    expect(rejectCard('advisor:load', { do: 'load', model: 'qwen', mode: 'split', devices: ['p1'] })).toBe(false);
+    expect(spy).not.toHaveBeenCalled();
+    expect(rejectCard('advisor:look', v.cards[1].action)).toBe(false);   // only × closes a look card
+    expect(rejectCard('advisor:load', v.cards[0].action)).toBe(true);
+    expect(spy).toHaveBeenCalledWith('advisor:load');
+    spy.mockRestore();
+    expect(look().cards.map((c) => c.id)).toEqual(['advisor:look']);
+    resetEye({ advisor: changes });   // the app starts again: the rejection is in the kv-store
+    expect(look().cards.map((c) => c.id)).toEqual(['advisor:look']);
+    expect(rejectCard('advisor:load', v.cards[0].action)).toBe(false);   // gone
+    expect(dismissCard('advisor:look')).toBe(true);                      // × stays the quiet hide
+    expect(look().cards).toEqual([]);
+  });
+
+  it('a change card applied on the phone leaves no undo (the phone has none)', async () => {
+    resetEye({ advisor: changes });
+    const v = look();
+    await expect(applyCard('advisor:load', v.cards[0].action, env())).resolves.toBe('loaded Qwen (alone)');
+    expect(look().undo).toBeNull();
   });
 });

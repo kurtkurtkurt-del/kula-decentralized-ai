@@ -7,7 +7,7 @@ import { colors, fonts, radius } from '@/theme/tokens';
 // god's eye on the brain tab (11.11.2026, src/eye/): the twelve as a small map, three across,
 // each tile its number, its name, the branch's own few words and its gauge; a tap opens its page.
 // Under it the cards the branches say, most important first, each with the phone's way to carry
-// it out (or none) and a dismiss. The drawing is quiet: dark when a branch is not built, the
+// it out (or none) and a dismiss; a card that changes something says what and asks accept or reject. The drawing is quiet: dark when a branch is not built, the
 // terracotta when it stopped or warns, the accent when it has something to suggest.
 
 export type TileTone = 'dark' | 'ok' | 'warn' | 'broken';
@@ -63,17 +63,34 @@ export function sayWord(w: unknown, done: string): string {
   return s && s !== 'opened' ? s : done;
 }
 
-/** One card: what the branch says, and what the phone can do about it. */
-export function EyeCardView({ card, act, state, onApply, onDismiss }: {
+/** What a tap would do on the phone, as EyeCards needs it (apply.ts PhoneAct without the work). */
+export type CardAct = { kind: string; does?: { key: string; vars?: Record<string, string> } };
+
+/** One card: what the branch says, and what the phone can do about it. A change card (load, unload,
+ *  fetch, cap, anchor, cancel: 17.11.2026, DECISIONS 5) says what accept changes and draws accept and
+ *  reject; the phone accepts only what it carries out itself (load, unload, fetch), the rest says
+ *  "only the computer" and keeps reject. A card that asks for a second tap is always the computer's.
+ *  A look card (probe, open) keeps its one button. × is the quiet hide on every card; no undo here. */
+export function EyeCardView({ card, act: carried, state, onApply, onReject, onDismiss }: {
   card: EyeCard;
-  act: { kind: string } | null;
+  act: CardAct | null;
   state?: CardState;
   onApply: () => void;
+  onReject: () => void;
   onDismiss: () => void;
 }) {
   const { t, tx } = useLang();
   const warn = card.kind === 'warn';
   const branch = tx(`eye.branch.${card.branch}`, card.branch);
+  const change = card.change && card.action !== null;
+  const act = change && card.confirm ? null : carried;
+  // the phone's own sentence when it carries the change out; else the shared eye's, which is the computer's
+  const does = !change ? null : act?.does ? tx(`eye.does.${act.does.key}`, card.does ?? '', act.does.vars) : card.does ?? null;
+  const button = (label: string, onPress: () => void, primary: boolean) => (
+    <Pressable onPress={onPress} disabled={!!state?.busy} accessibilityRole="button" hitSlop={6} style={({ pressed }) => [primary ? styles.apply : styles.reject, (pressed || state?.busy) && styles.pressed]}>
+      <Text style={primary ? styles.applyText : styles.rejectText}>{label}</Text>
+    </Pressable>
+  );
   return (
     <View style={[styles.card, warn && styles.cardWarn]} accessible={false}>
       <Text style={[styles.kind, { color: warn ? colors.violet : colors.spotText }]}>
@@ -81,12 +98,18 @@ export function EyeCardView({ card, act, state, onApply, onDismiss }: {
       </Text>
       <Text style={styles.title}>{card.title}</Text>
       <Text style={styles.why}>{card.why}</Text>
+      {does ? <Text style={styles.does}>{does}</Text> : null}
       {state?.said ? <Text style={[styles.said, state.failed && { color: colors.violet }]} accessibilityLiveRegion="polite">{state.said}</Text> : null}
+      {change && !act ? <Text style={styles.notHereLine}>{t('eye.card.notHere')}</Text> : null}
       <View style={styles.buttons}>
-        {act ? (
-          <Pressable onPress={onApply} disabled={!!state?.busy} accessibilityRole="button" hitSlop={6} style={({ pressed }) => [styles.apply, (pressed || state?.busy) && styles.pressed]}>
-            <Text style={styles.applyText}>{tx(`eye.apply.${act.kind}`, act.kind)}</Text>
-          </Pressable>
+        {change ? (
+          <>
+            {act ? button(t('eye.card.accept'), onApply, true) : null}
+            {button(t('eye.card.reject'), onReject, false)}
+            <View style={styles.spacer} />
+          </>
+        ) : act ? (
+          button(tx(`eye.apply.${act.kind}`, act.kind), onApply, true)
         ) : card.action ? (
           <Text style={styles.notHere}>{t('eye.card.notHere')}</Text>
         ) : null}
@@ -99,10 +122,12 @@ export function EyeCardView({ card, act, state, onApply, onDismiss }: {
 }
 
 /** The cards with their state while a tap is carried out. */
-export function EyeCards({ cards, actOf, apply, dismiss }: {
+export function EyeCards({ cards, actOf, apply, reject, dismiss }: {
   cards: EyeCard[];
-  actOf: (c: EyeCard) => { kind: string } | null;
+  actOf: (c: EyeCard) => CardAct | null;
   apply: (id: string, shown: EyeCard['action']) => Promise<string>;
+  /** false: the eye did not take it (the card changed or went) */
+  reject: (id: string, shown: EyeCard['action']) => boolean;
   dismiss: (id: string) => void;
 }) {
   const { t, tx } = useLang();
@@ -125,6 +150,10 @@ export function EyeCards({ cards, actOf, apply, dismiss }: {
                 ? { said: tx('eye.card.changed', 'the card changed, look again'), failed: true }
                 : { said: t('eye.card.failed', { why: e?.message || '?' }), failed: true }),
             );
+          }}
+          onReject={() => {
+            // the action this card showed, like apply; the card goes with the next view
+            if (!reject(c.id, c.action)) set(c.id, { said: tx('eye.card.changed', 'the card changed, look again'), failed: true });
           }}
           onDismiss={() => dismiss(c.id)}
         />
@@ -159,6 +188,11 @@ const styles = StyleSheet.create({
   apply: { paddingHorizontal: 14, height: 32, borderRadius: radius.pill, backgroundColor: colors.spot, justifyContent: 'center' },
   applyText: { fontFamily: fonts.semibold, fontSize: 13, color: colors.ink },
   notHere: { flex: 1, fontFamily: fonts.regular, fontSize: 12, color: colors.mute },
+  notHereLine: { fontFamily: fonts.regular, fontSize: 12, color: colors.mute, marginTop: 2 },
+  does: { fontFamily: fonts.regular, fontSize: 12.5, lineHeight: 17, color: colors.mute, marginTop: 2 },
+  reject: { paddingHorizontal: 14, height: 32, borderRadius: radius.pill, borderWidth: 1, borderColor: colors.ink3, justifyContent: 'center' },
+  rejectText: { fontFamily: fonts.semibold, fontSize: 13, color: colors.paper2 },
+  spacer: { flex: 1 },
   dismiss: { paddingVertical: 6 },
   dismissText: { fontFamily: fonts.medium, fontSize: 12.5, color: colors.mute },
 });

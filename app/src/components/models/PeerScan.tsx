@@ -62,7 +62,13 @@ export function usePeerAdd(onAdded?: (p: Peer | null) => void) {
           joinInvite(text, whose).then((r) => {
             tapDone();
             const name = r.name.toLowerCase();
-            setNote([t(r.again ? 'peers.joinedAgain' : 'peers.joined', { name }), !r.sharing && !r.again ? t('peers.joinShare', { name }) : ''].filter(Boolean).join('. '));
+            // "my computer": the anchor's computer still limits a new member like a friend's until
+            // its owner says yes on the member's row there (an existing record keeps its ring)
+            setNote([
+              t(r.again ? 'peers.joinedAgain' : 'peers.joined', { name }),
+              !r.sharing && !r.again ? t('peers.joinShare', { name }) : '',
+              whose === 'mine' && !r.again ? t('peers.joined.mine') : '',
+            ].filter(Boolean).join('. '));
             onAdded?.(r.peer);
           }, (e: Error) => {
             setNote(null);

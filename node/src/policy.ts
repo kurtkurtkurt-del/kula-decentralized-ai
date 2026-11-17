@@ -46,6 +46,45 @@ export function isLoopback(ip: string): boolean {
   return p === '::1' || (net.isIPv4(p) && p.startsWith('127.'));
 }
 
+// An address this computer must never dial for someone else's say-so (a signed address record,
+// addressbook.ts): loopback, 0.0.0.0/8, ::, link-local (169.254/16, fe80::/10) and multicast
+// and above (224.0.0.0 up, ff00::/8), in plain and ipv4-mapped forms. A lan address is not one.
+export function undialable(ip: string): boolean {
+  const p = plainIp(ip);
+  const v = net.isIP(p);
+  if (v === 4) {
+    const [a, b] = p.split('.').map(Number);
+    return a === 0 || a === 127 || (a === 169 && b === 254) || a >= 224;
+  }
+  if (v !== 6) return true;
+  const g = ipv6Groups(p);
+  if (!g) return true;
+  // ipv4-mapped in any spelling ("::ffff:7f00:1")
+  if (g.slice(0, 5).every((x) => x === 0) && g[5] === 0xffff) return undialable(`${g[6] >> 8}.${g[6] & 255}.${g[7] >> 8}.${g[7] & 255}`);
+  // :: and ::1
+  if (g.slice(0, 7).every((x) => x === 0) && g[7] <= 1) return true;
+  return (g[0] & 0xffc0) === 0xfe80 || (g[0] & 0xff00) === 0xff00;
+}
+
+// an ipv6 literal as its eight 16-bit groups (an embedded ipv4 tail as two); null when it is not one
+function ipv6Groups(ip: string): number[] | null {
+  let s = ip.split('%')[0];
+  const tail = /(\d+)\.(\d+)\.(\d+)\.(\d+)$/.exec(s);
+  if (tail) {
+    const [a, b, c, d] = tail.slice(1).map(Number);
+    s = `${s.slice(0, tail.index)}${((a << 8) | b).toString(16)}:${((c << 8) | d).toString(16)}`;
+  }
+  const halves = s.split('::');
+  if (halves.length > 2) return null;
+  const part = (h: string) => (h ? h.split(':').map((x) => parseInt(x, 16)) : []);
+  const head = part(halves[0]);
+  const rest = halves.length === 2 ? part(halves[1]) : [];
+  const fill = 8 - head.length - rest.length;
+  if (fill < 0 || (halves.length === 1 && fill !== 0)) return null;
+  const g = [...head, ...new Array(halves.length === 2 ? fill : 0).fill(0), ...rest];
+  return g.length === 8 && g.every((x) => Number.isInteger(x) && x >= 0 && x <= 0xffff) ? g : null;
+}
+
 // The host of a url as an ip literal, or null when it is a name (or no url).
 export function urlIp(url: string): string | null {
   try {

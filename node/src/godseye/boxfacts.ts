@@ -394,7 +394,8 @@ export interface SecretScan {
 }
 
 /** the strings of one look that a branch can quote, and so may reach a feed line, a stat or a
- *  why: a device's name, where it sits and why it failed; a project's title, request, line and
+ *  why: a device's name, where it sits, why it failed and the name of the anchor it goes through;
+ *  the anchor's busiest friend device (host.anchor.memberMaxName); a project's title, request, line and
  *  error; the plan, the decisions and the loading line. ledger lines, certificates, public keys
  *  and refused peers are never quoted by a branch (they stay out of the box facts as well), so
  *  they need no scrubbing and are not collected here. a string under four chars is too common to
@@ -413,7 +414,11 @@ export function secretScan(now: Snapshot): SecretScan {
     add(raw.name);
     add(raw.where);
     add(raw.reason);
+    add(raw.throughName);   // F5: an anchor known by name only; connections' route-switch line quotes it
   }
+  // F5: the name of the friend's device behind the anchor's busiest day (cards only today; scrubbed
+  // all the same, should a stat or a feed line ever quote it)
+  if (isObj(s.host) && isObj(s.host.anchor)) add(s.host.anchor.memberMaxName);
   if (isObj(s.work)) {
     if (isObj(s.work.loading)) add(s.work.loading.line);
     for (const p of arr(s.work.plan)) add(p);

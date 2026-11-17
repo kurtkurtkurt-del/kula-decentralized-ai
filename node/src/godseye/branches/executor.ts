@@ -5,9 +5,11 @@
 // new checkedAt). Cards:
 //   slow     apart: a device answering at under a third of the fastest one's tok/s (both measured,
 //            both with 2 answers or more): leave it out
-//   rest     a device limits says should rest: leave it out (apart), or look at limits
+//   rest     a device limits says should rest: leave it out (apart), unload when it is the only one
+//            answering, else look at limits
 //   failing  a device of the loaded model found unreachable in 3 or more of its last checks, counting
-//            only checks of the last ten minutes, and none from before it answered again: look again.
+//            only checks of the last ten minutes, and none from before it answered again: leave it
+//            out (apart with 2+ devices), else look again.
 //            In a split this also covers the parts on other devices (partsOf): kula's engine opens a
 //            split with no peers (ui/engine.ts), so its workers are only in loaded.parts. Every token
 //            crosses a part, so the host's answer count growing is the part answering again: its
@@ -116,9 +118,11 @@ export function create(ctx: BranchCtx): Branch {
     for (const d of devs) {
       const no = hints.get(d.key)?.find((h) => h.no)?.no;
       if (!no) continue;
-      const act: SuggestAction | null = several ? without(s, new Set([d.key])) : { do: 'open', panel: 'branch', branch: 'limits' };
+      // the only one answering: the change is to unload (DECISIONS 5, E2)
+      const act: SuggestAction | null = several ? without(s, new Set([d.key])) : devs.length === 1 ? { do: 'unload' } : { do: 'open', panel: 'branch', branch: 'limits' };
       out.push({
-        id: cardId('executor', 'rest', d.key), kind: 'warn', weight: 3, action: act, ...(act?.do === 'load' ? { label: 'leave it out' } : {}),
+        id: cardId('executor', 'rest', d.key), kind: 'warn', weight: 3, action: act,
+        ...(act?.do === 'load' ? { label: 'leave it out' } : act?.do === 'unload' ? { label: 'unload' } : {}),
         title: `${d.name} ${no}`,
         why: several ? `it answers ${L.model.name} with the others; they can carry on without it while it rests.` : `it is the one answering ${L.model.name}; nothing is stopped by the brain.`,
       });
@@ -134,8 +138,10 @@ export function create(ctx: BranchCtx): Branch {
       const r = recent(c, s.at);
       const fails = r.filter((x) => !x.ok).length;
       if (!c || fails < (strict ? FAILS : FAILS_STAY)) continue;
+      // apart with 2+ devices: load without it (DECISIONS 5, E2); a split part or a lone device: look again
+      const leave = several && !d.part ? without(s, new Set([d.id])) : null;
       out.push({
-        id: cardId('executor', 'failing', d.id), kind: 'warn', weight: 2, action: { do: 'probe', devices: [d.id] }, label: 'look again',
+        id: cardId('executor', 'failing', d.id), kind: 'warn', weight: 2, action: leave ?? { do: 'probe', devices: [d.id] }, label: leave ? 'leave it out' : 'look again',
         title: `${d.name} keeps dropping out`,
         why: `${fails} of its last ${r.length} checks found it unreachable${c.reason ? ` (last: ${c.reason})` : ''}; `
           + (d.part ? `it holds part of ${L.model.name} and every token crosses it: an answer may stall or fail.` : 'a prompt sent to it may wait or fail.'),

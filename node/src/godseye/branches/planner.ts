@@ -8,7 +8,8 @@
 //           when the range's low end reaches the place alone and the guess is above it, else GAIN faster
 //   apart   two or more places hold a copy and it is not loaded apart on all of them: n answers at once
 //   alone   it is split, and one place alone is GAIN faster (a warning, with the load that fixes it)
-//   barred  a device holding part of a split should rest or is not trusted: split without it
+//   barred  a device holding part of a split should rest or is not trusted: split without it, or
+//           unload when the others cannot hold it
 // A device that limits or trust says no to is never suggested. Speeds come from the tok/s each device
 // really answered with (kept here, from every look with a model loaded, never from a split, where
 // the tok/s is the whole chain's), else its measured bandwidth; this computer has none until a model
@@ -29,17 +30,27 @@
 // facts (VERDICT 1, DO 2): no faster-split card while the far fit is assumed and a far worker has no
 // link (farGuessed: its 150/300 ms is a constant, not a pessimistic end); and a loaded far split with no
 // live tok/s warns "alone is faster" only when alone reaches the range's high end (k 0.25) × GAIN, not
-// its k = 1 end (with a live tok/s, as before). One more card:
+// its k = 1 end (with a live tok/s, as before).
+// The measured link (17 Nov, P2; decide.ts `rtt`): a far worker whose engine-measured round trip is at
+// most 7 days old is priced from it, 1.1 round trips per token in the range 0.95–1.16 while assumed
+// (widened by RTT_NOISE, 6% each way, for an answer's own scatter). Its point is the best estimate,
+// not a pessimistic end, so such a split's faster-split card needs farRange's lo (× slack) at alone's
+// tok/s as well as the point GAIN faster (DECISIONS 2 d); probe-priced and mixed chains as before.
+// Its own fit, hopRtt, keeps the units apart: a split answer whose far links all have a measured round
+// trip teaches only hopRtt (near links folded into the compute time at the near k); any other far
+// chain teaches hopFar as before (a far link with a measured round trip folded in at hopRtt's k, or
+// 1.1). A split whose far workers are all priced so says "from the measured link", else "assumed from
+// probes"; once learned, its range comes from the fit that its chain teaches. One more card:
 //   far     a split would use a far worker and alone or apart exists: the far split's likely range
 //           beside apart (or alone), with a far link's missed probes when they reach 20%; action null,
 //           the person chooses (weight 1)
 // Notes: the last model, the speeds (at most 40 devices × 8 files, each with `at`, when it was last
-// folded), the hop fit and the far hop fit `hopFar` (hop.ts; a file without it loads with a fresh
-// one), saved at most once a minute. A 9th file pushes out the device's file with the oldest `at`, a
+// folded), the hop fit, the far hop fit `hopFar` and the measured-link fit `hopRtt` (hop.ts; a file
+// without one loads with a fresh one), saved at most once a minute. A 9th file pushes out the device's file with the oldest `at`, a
 // 41st device the device whose newest `at` is oldest (never this computer, never the one just written).
 import type { Branch, BranchCtx, BranchView, EyeModel, Snapshot, Suggestion } from '../types.js';
 import { hhmm } from './util.js';
-import { GAIN, SLACK, Steady, alone, apart, cardId, field, gb1, isFar, loadedChain, modelOf, names, seatName, split, tpsOn, tpsWord, type Field, type Measured, type Place, type Seat } from './decide.js';
+import { GAIN, RTT_TRIPS, SLACK, Steady, alone, apart, cardId, field, gb1, isFar, loadedChain, modelOf, names, seatName, split, tpsOn, tpsWord, type Field, type Measured, type Place, type Seat } from './decide.js';
 import { chainTps, freshHop, hopInterval, hopK, hopStep, saneHop, type HopFit } from './hop.js';
 
 const MODE_WORD: Record<string, string> = { phone: 'on the phone', apart: 'apart', split: 'split', here: 'here' };
@@ -51,7 +62,7 @@ const EWMA = 0.3;                  // a new answer's weight in a device's averag
 const SAVE_EVERY_MS = 60_000;
 
 const LOSS_SAID = 0.2;             // a far link's missed probe share (upper end) the far card names
-interface Notes { v: 1; last: string | null; speeds: Record<string, Record<string, { tps: number; n: number; at: number }>>; hop?: HopFit; hopFar?: HopFit }
+interface Notes { v: 1; last: string | null; speeds: Record<string, Record<string, { tps: number; n: number; at: number }>>; hop?: HopFit; hopFar?: HopFit; hopRtt?: HopFit }
 
 const okAt = (t: unknown): t is number => typeof t === 'number' && Number.isFinite(t) && t >= 0 && t <= AT_MAX;
 
@@ -72,6 +83,8 @@ function sane(x: unknown, now: number): Notes {
   if (hop) out.hop = hop;
   const hopFar = saneHop(n.hopFar);
   if (hopFar) out.hopFar = hopFar;
+  const hopRtt = saneHop(n.hopRtt);
+  if (hopRtt) out.hopRtt = hopRtt;
   return out;
 }
 
@@ -119,41 +132,51 @@ export function lowEnd(S: Place, A: Place, hop: HopFit | undefined): number | nu
   return iv ? iv.lo : null;
 }
 
-/** the far split's likely tok/s: while assumed, split()'s lo (k 1) to hi (k 0.25); once hopFar is
- *  learned, the 80% range around the estimate at its k (lo = hi when there is no range yet); null
- *  without a far worker */
-export function farRange(S: Place, hopFar: HopFit | undefined): { lo: number; hi: number } | null {
+/** the far split's likely tok/s: while assumed, split()'s lo (the slow end: k 1 from the probe, 1.16
+ *  from a measured link, then × (1 − RTT_NOISE)) to hi (k 0.25, or 0.95 × (1 + RTT_NOISE)); once learned, the 80% range around the estimate at
+ *  the learned k, from the fit its chain teaches (hopRtt when every far worker has a measured link,
+ *  else hopFar; lo = hi when there is no range yet); null without a far worker */
+export function farRange(S: Place, hopFar: HopFit | undefined, hopRtt?: HopFit): { lo: number; hi: number } | null {
   if (!S.far) return null;
-  if (S.far.assumed || !hopFar) return { lo: S.far.lo, hi: S.far.hi };
-  return hopInterval(S.far.lo, hopFar.errs) ?? { lo: S.far.lo, hi: S.far.lo };
+  const fit = S.far.link ? hopRtt : hopFar;
+  if (S.far.assumed || !fit) return { lo: S.far.lo, hi: S.far.hi };
+  return hopInterval(S.far.lo, fit.errs) ?? { lo: S.far.lo, hi: S.far.lo };
 }
 
-/** a split whose far cost is a guess, not an end: assumed (hopFar not learned) and a far worker
- *  without a link, priced at FAR_HOP_MS (a constant, not a pessimistic end); no faster-split card */
-export const farGuessed = (S: Place): boolean => !!S.far?.assumed && S.seats.some((x) => !x.local && isFar(x) && !x.link);
+/** a split whose far cost is a guess, not an end: assumed and a far worker with neither a probe link
+ *  nor a measured one, priced at FAR_HOP_MS (a constant, not a pessimistic end); no faster-split card */
+export const farGuessed = (S: Place): boolean => !!S.far?.assumed && S.seats.some((x) => !x.local && isFar(x) && !x.link && x.rtt == null);
 
 const rangeWord = (r: { lo: number; hi: number }) =>
   r1(r.lo) === r1(r.hi) ? `~${r1(r.lo)} tok/s` : Number.isFinite(r.hi) ? `${r1(r.lo)}\u{2013}${r1(r.hi)} tok/s` : `${r1(r.lo)} tok/s or more`;
-const farHow = (S: Place, hopFar: HopFit | undefined) =>
-  S.far!.assumed ? `assumed from probes, ${Math.min(3, hopFar?.ks.length ?? 0)} of 3 far split answers watched` : `learned from the last ${hopFar?.errs.length ?? 0} far split answers watched`;
+const farHow = (S: Place, hopFar: HopFit | undefined, hopRtt?: HopFit) => {
+  if (S.far!.link) {
+    return S.far!.assumed
+      ? `from the measured link (about ${RTT_TRIPS} round trips per token), ${Math.min(3, hopRtt?.ks.length ?? 0)} of 3 far split answers watched`
+      : `from the measured link, learned from the last ${hopRtt?.errs.length ?? 0} far split answers watched`;
+  }
+  return S.far!.assumed ? `assumed from probes, ${Math.min(3, hopFar?.ks.length ?? 0)} of 3 far split answers watched` : `learned from the last ${hopFar?.errs.length ?? 0} far split answers watched`;
+};
 
 /** the range sentence a split card with a far worker ends with; '' without one */
-export function farWords(s: Snapshot, S: Place, hopFar: HopFit | undefined): string {
-  const r = farRange(S, hopFar);
+export function farWords(s: Snapshot, S: Place, hopFar: HopFit | undefined, hopRtt?: HopFit): string {
+  const r = farRange(S, hopFar, hopRtt);
   if (!r) return '';
   const far = S.seats.filter((x) => !x.local && isFar(x));
-  return ` far devices: split likely ${rangeWord(r)}; each token waits about one round trip to each far worker (${names(far.map((x) => ({ name: seatName(s, x) })))}), ${farHow(S, hopFar)}.`;
+  return ` far devices: split likely ${rangeWord(r)}; each token waits about one round trip to each far worker (${names(far.map((x) => ({ name: seatName(s, x) })))}), ${farHow(S, hopFar, hopRtt)}.`;
 }
 
 /** the planner's cards for one model in one look; strict to show, loose (SLACK) to stay; with a hop
  *  fit the split prices its near links with the fit's k, with a far fit of 3 answers or more its far
- *  links with that fit's k (else 1) */
-export function plan(s: Snapshot, f: Field, m: EyeModel, strict: boolean, hop?: HopFit, hopFar?: HopFit): { cards: Suggestion[]; alone: Place | null; apart: Place | null; split: Place | null } {
+ *  links with that fit's k (else 1), with a measured-link fit of 3 answers or more its far links that
+ *  have a measured round trip with that fit's k (else RTT_TRIPS) */
+export function plan(s: Snapshot, f: Field, m: EyeModel, strict: boolean, hop?: HopFit, hopFar?: HopFit, hopRtt?: HopFit): { cards: Suggestion[]; alone: Place | null; apart: Place | null; split: Place | null } {
   const slack = strict ? 1 : SLACK;
   const gain = strict ? GAIN : 1 + (GAIN - 1) / 3;
   const L = s.work.loaded && (s.work.loaded.model.id === m.id || s.work.loaded.model.file === m.file) ? s.work.loaded : null;
   const kFar = hopFar && hopFar.ks.length >= 3 ? hopK(hopFar) : undefined;
-  const A = alone(f, m, slack), P = apart(f, m, slack), S = split(f, m, slack, hop ? hopK(hop) : undefined, kFar);
+  const kRtt = hopRtt && hopRtt.ks.length >= 3 ? hopK(hopRtt) : undefined;
+  const A = alone(f, m, slack), P = apart(f, m, slack), S = split(f, m, slack, hop ? hopK(hop) : undefined, kFar, kRtt);
   const cards: Suggestion[] = [];
   const seated = seatedIds(s);
   const tonight = (xs: Seat[]) => xs.filter((x) => x.tonight?.guess === 'unlikely').map((x) => ` ${x.name} is unlikely to be there tonight (forecast ${Math.round(x.tonight!.p * 100)}%).`).join('');
@@ -165,19 +188,19 @@ export function plan(s: Snapshot, f: Field, m: EyeModel, strict: boolean, hop?: 
       cards.push({
         id: cardId('planner', 'split', m.id), kind: 'suggest', weight: 2, action: S.action, label: 'load split',
         title: `${m.name} fits only split: ${names(S.seats.map((x) => ({ name: seatName(s, x) })))} together hold it`,
-        why: `it needs about ${gb1(m.needMb)}; the most one place offers is ${gb1(biggest)}. split, ${tpsWord(S.tps)}${S.tps ? ` (${from(S.seats)})` : ''}.${tonight(S.seats)}${hopWords(S, hop)}${farWords(s, S, hopFar)}`,
+        why: `it needs about ${gb1(m.needMb)}; the most one place offers is ${gb1(biggest)}. split, ${tpsWord(S.tps)}${S.tps ? ` (${from(S.seats)})` : ''}.${tonight(S.seats)}${hopWords(S, hop)}${farWords(s, S, hopFar, hopRtt)}`,
       });
-    } else if (S.tps != null && A.tps != null && !farGuessed(S) && splitFaster(S.tps, lowEnd(S, A, hop), A.tps, gain, slack)) {
+    } else if (S.tps != null && A.tps != null && !farGuessed(S) && splitFaster(S.tps, lowEnd(S, A, hop), A.tps, gain, slack) && (!S.far?.link || farRange(S, hopFar, hopRtt)!.lo * slack >= A.tps)) {
       cards.push({
         id: cardId('planner', 'split', m.id), kind: 'suggest', weight: 2, action: S.action, label: 'load split',
         title: `${m.name} would run faster split over ${names(S.seats.map((x) => ({ name: seatName(s, x) })))}: ~${S.tps} tok/s; alone ${where(s, A.seats[0])} ~${A.tps}`,
-        why: `the layers go to the fastest device first; each token crosses ${S.seats.length - 1} link${S.seats.length === 2 ? '' : 's'} (${from([...S.seats, ...A.seats])}).${tonight(S.seats)}${hopWords(S, hop)}${farWords(s, S, hopFar)}`,
+        why: `the layers go to the fastest device first; each token crosses ${S.seats.length - 1} link${S.seats.length === 2 ? '' : 's'} (${from([...S.seats, ...A.seats])}).${tonight(S.seats)}${hopWords(S, hop)}${farWords(s, S, hopFar, hopRtt)}`,
       });
     }
   }
 
   // far: a split would use a far worker and the model also runs alone or apart: the person chooses
-  const fr = S ? farRange(S, hopFar) : null;
+  const fr = S ? farRange(S, hopFar, hopRtt) : null;
   if (S && fr && (A || P)) {
     const far = S.seats.filter((x) => !x.local && isFar(x));
     const lossy = far.filter((x) => typeof x.loss === 'number' && x.loss >= LOSS_SAID)
@@ -185,7 +208,7 @@ export function plan(s: Snapshot, f: Field, m: EyeModel, strict: boolean, hop?: 
     cards.push({
       id: cardId('planner', 'far', m.id), kind: 'suggest', weight: 1, action: null,
       title: `far devices: split likely ${rangeWord(fr)}, ${P ? `apart ${tpsWord(P.tps)} each` : `alone ${tpsWord(A!.tps)} ${where(s, A!.seats[0])}`}`,
-      why: `each token waits about one round trip to each far worker (${names(far.map((x) => ({ name: seatName(s, x) })))}). ${farHow(S, hopFar)}. ${P ? `apart keeps each answer on one device, ${P.seats.length} at once.` : 'alone keeps each answer on one device.'}${lossy} you choose.`,
+      why: `each token waits about one round trip to each far worker (${names(far.map((x) => ({ name: seatName(s, x) })))}). ${farHow(S, hopFar, hopRtt)}. ${P ? `apart keeps each answer on one device, ${P.seats.length} at once.` : 'alone keeps each answer on one device.'}${lossy} you choose.`,
     });
   }
 
@@ -214,7 +237,7 @@ export function plan(s: Snapshot, f: Field, m: EyeModel, strict: boolean, hop?: 
       cards.push({
         id: cardId('planner', 'alone', m.id), kind: 'warn', weight: 2, action: A.action, label: 'load alone',
         title: `split is slower than ${seatName(s, A.seats[0])} alone for ${m.name}`,
-        why: `split answers ${assumed ? `at about ${rangeWord(assumed)} (its far links assumed from probes)` : `${measuredNow ? 'at' : 'at about'} ${Math.round(now * 10) / 10} tok/s${measuredNow ? ' (measured)' : ''}`}; ${where(s, A.seats[0])} alone it would at ~${A.tps} (${from(A.seats)}), with no link to cross.`,
+        why: `split answers ${assumed ? `at about ${rangeWord(assumed)} (its far links ${assumed.link ? 'from the measured link' : 'assumed from probes'})` : `${measuredNow ? 'at' : 'at about'} ${Math.round(now * 10) / 10} tok/s${measuredNow ? ' (measured)' : ''}`}; ${where(s, A.seats[0])} alone it would at ~${A.tps} (${from(A.seats)}), with no link to cross.`,
       });
     }
   }
@@ -225,7 +248,8 @@ export function plan(s: Snapshot, f: Field, m: EyeModel, strict: boolean, hop?: 
       if (!seated.has(b.id) || b.id === 'local') continue;
       const without = S && !S.seats.some((x) => x.id === b.id) ? S : null;
       cards.push({
-        id: cardId('planner', 'barred', b.id), kind: 'warn', weight: 3, action: without?.action ?? null, ...(without ? { label: 'split without it' } : {}),
+        // the others cannot hold it: the change is to unload (DECISIONS 5, E2)
+        id: cardId('planner', 'barred', b.id), kind: 'warn', weight: 3, action: without?.action ?? { do: 'unload' }, label: without ? 'split without it' : 'unload',
         title: `${b.name} holds part of ${m.name} but ${b.why}`,
         why: without ? `split again without it: ${names(without.seats.map((x) => ({ name: seatName(s, x) })))} hold it, ${tpsWord(without.tps)}.` : 'the others do not hold the model without it: stop it, or wait.',
       });
@@ -249,6 +273,7 @@ export function create(ctx: BranchCtx): Branch {
   let savedAt = Number.NEGATIVE_INFINITY;
   let fit: HopFit = notes.hop ?? freshHop();
   let fitFar: HopFit = notes.hopFar ?? freshHop();
+  let fitRtt: HopFit = notes.hopRtt ?? freshHop();
   let chainWas: ReturnType<typeof loadedChain> = null;   // the loaded split's chain in the look before
   let seen: { key: string; done: number } | null = null;   // the split's answers when last seen
 
@@ -298,8 +323,11 @@ export function create(ctx: BranchCtx): Branch {
   }
 
   /** a split's answer teaches the hop: when its answers grew since the look before, the chain of the
-   *  look before and the measured tok/s give one k (hop.ts). A chain with a far worker teaches only
-   *  hopFar, its near links counted into the compute time at the near k; a near chain only hop */
+   *  look before and the measured tok/s give one k (hop.ts). A chain whose far links all have a
+   *  measured round trip teaches only hopRtt (over those round trips); another chain with a far worker
+   *  only hopFar (over the probe's srtt), a far link with a measured round trip counted into the
+   *  compute time at hopRtt's k (or RTT_TRIPS); in both the near links are counted into the compute
+   *  time at the near k; a near chain teaches only hop */
   function watch(s: Snapshot, fl: Field) {
     const chainNow = subject ? loadedChain(s, fl, subject) : null;
     const L = s.work.loaded;
@@ -311,11 +339,25 @@ export function create(ctx: BranchCtx): Branch {
           const farOf = chainWas.far;
           if (farOf) {
             const kNear = hopK(fit);
+            const rtt = chainWas.rtt;
+            const allRtt = !!rtt && farOf.every((x, i) => !x || rtt[i] != null);
+            const kRtt = fitRtt.ks.length >= 3 ? hopK(fitRtt) : RTT_TRIPS;
             let computeMs = chainWas.computeMs;
             const links: typeof chainWas.links = [];
-            chainWas.links.forEach((l, i) => { if (farOf[i]) links.push(l); else computeMs += kNear * l.srtt; });
-            const next = hopStep(fitFar, computeMs, links, d.tps);
-            if (next !== fitFar) { fitFar = next; notes.hopFar = fitFar; dirty = true; }
+            chainWas.links.forEach((l, i) => {
+              const r = rtt?.[i] ?? null;
+              if (!farOf[i]) computeMs += kNear * l.srtt;
+              else if (r == null) links.push(l);
+              else if (allRtt) links.push({ srtt: r, rttvar: 0 });
+              else computeMs += kRtt * r;
+            });
+            if (allRtt) {
+              const next = hopStep(fitRtt, computeMs, links, d.tps);
+              if (next !== fitRtt) { fitRtt = next; notes.hopRtt = fitRtt; dirty = true; }
+            } else {
+              const next = hopStep(fitFar, computeMs, links, d.tps);
+              if (next !== fitFar) { fitFar = next; notes.hopFar = fitFar; dirty = true; }
+            }
           } else {
             const next = hopStep(fit, chainWas.computeMs, chainWas.links, d.tps);
             if (next !== fit) { fit = next; notes.hop = fit; dirty = true; }
@@ -338,8 +380,8 @@ export function create(ctx: BranchCtx): Branch {
       subject = L ? modelOf(now, L.model.id) ?? modelOf(now, L.model.file) : now.work.loading ? null : modelOf(now, notes.last);
       f = field(now, ctx, measured());
       watch(now, f);
-      look = subject ? plan(now, f, subject, true, fit, fitFar) : null;
-      const loose = subject ? plan(now, f, subject, false, fit, fitFar).cards : [];
+      look = subject ? plan(now, f, subject, true, fit, fitFar, fitRtt) : null;
+      const loose = subject ? plan(now, f, subject, false, fit, fitFar, fitRtt).cards : [];
       shown = steady.step(look?.cards ?? [], loose);
       const t = ctx.now();
       if (dirty && t - savedAt >= SAVE_EVERY_MS) { ctx.save(notes); savedAt = t; dirty = false; }

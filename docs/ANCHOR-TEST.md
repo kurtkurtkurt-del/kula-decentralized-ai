@@ -34,8 +34,12 @@ Bu adımlar Türkçe aşağıda da var.
 3. On the phone: scan the invite's QR (or paste its text). Answer the question with "my computer".
 4. Write down: did it join? Within how many seconds? What does the phone's device list say for
    the home computer (it should say "over the internet" or "through anchor …")?
-5. On the home computer: does the page now say the anchor is reached from outside?
-6. On the phone: share this phone (so the home computer can use it), wait one minute, then on the
+5. On the home computer: devices → the phone's row. It should say "its invite said it is yours",
+   with the time, an address (the phone on mobile data should read "the internet") and the start of
+   a certificate. Write down that line, then press **yes, it is mine**. Until you do, the anchor
+   limits the phone like a friend's device. Does the row still ask after the press?
+6. On the home computer: does the page now say the anchor is reached from outside?
+7. On the phone: share this phone (so the home computer can use it), wait one minute, then on the
    home computer pick a small model (Qwen3 0.6B) and "apart" with the phone. Ask one question.
    Write down the speed it shows.
 
@@ -59,8 +63,12 @@ Bu adımlar Türkçe aşağıda da var.
 
 1. On the friend's computer: kula 0.6.0, then turn on "make this computer an anchor" (step 1 there).
 2. Each of you invites the other's computer once ("a friend's computer"): the two anchors must
-   join each other so addresses travel between them.
-3. Join your phone to the friend's anchor too.
+   join each other so addresses travel between them. When a computer joins, it asks whose the
+   anchor is: answer **a friend's computer** on each side. Write down the question's words.
+3. Join your phone to the friend's anchor too (answer "a friend's computer" there as well).
+   On your home computer, the friend's computer's row should say "through anchor …" or "over the
+   internet": a computer no longer keeps the lan addresses a friend's device names in its address
+   record, so it is never dialed at one of those.
 4. Turn your home computer off. Does the phone still reach the friend's computer? Turn it back on:
    does everything find it again without a new invite?
 5. Write down what each device list says at each step.
@@ -84,8 +92,10 @@ not al, garip bir şey görürsen ekran görüntüsü al. Başarısız bir adım
    gerçek adres vermiyor" diyorsa bu ev çapa olamaz, burada dur ve bana söyle.
 2. **Telefonu dışarıdan kat.** Telefonda wi-fi kapalı, mobil veri açık. Bilgisayarda "bir
    bilgisayarım için" davet oluştur, telefonla tara, "benim bilgisayarım" de. Katıldı mı, kaç
-   saniyede, cihaz listesinde ne yazıyor? Telefonu paylaşıma aç, bilgisayardan küçük modelle
-   (Qwen3 0.6B) "apart" seç, bir soru sor, hızı yaz.
+   saniyede, cihaz listesinde ne yazıyor? Sonra ev bilgisayarında cihazlar → telefonun satırı:
+   "its invite said it is yours" satırını (saat, adres, sertifika başı) not al ve **yes, it is
+   mine** düğmesine bas. Basana kadar çapa telefonu bir arkadaş cihazı gibi sınırlar. Telefonu
+   paylaşıma aç, bilgisayardan küçük modelle (Qwen3 0.6B) "apart" seç, bir soru sor, hızı yaz.
 3. **Ağ değişimi.** Telefonda wi-fi'ı aç, 30 saniye bekle, kapat. Satır "internet üzerinden" ile
    "bu wi-fi'da" arasında gidip geldi mi, ne kadar sürdü, hemen sorulan soru cevap aldı mı?
    Ekranı 10 dakika kilitle, sonra bilgisayardan soru sor: telefon cevap verdi mi? Vermediyse
@@ -94,8 +104,11 @@ not al, garip bir şey görürsen ekran görüntüsü al. Başarısız bir adım
    yükleme süresini ve bir cevabın hızını yaz. İkinci soruda tahmin "bu split'ten öğrenilen"
    demeli; iki hızı da yaz. Telefonun ne kadar mobil veri harcadığını not al.
 5. **İkinci ev (bir arkadaşla).** Arkadaşının bilgisayarını da çapa yap. İkiniz birbirinizin
-   bilgisayarını birer kez davet edin ("bir arkadaşımın bilgisayarı"). Telefonunu onun çapasına
-   da kat. Kendi bilgisayarını kapat: telefon arkadaşının bilgisayarına hâlâ ulaşıyor mu? Geri aç:
+   bilgisayarını birer kez davet edin ("bir arkadaşımın bilgisayarı"). Bir bilgisayar katılırken
+   çapanın kimin olduğunu sorar: iki tarafta da "a friend's computer" de ve sorunun sözlerini not al.
+   Telefonunu onun çapasına da kat ("bir arkadaşımın bilgisayarı"). Ev bilgisayarında arkadaşının
+   bilgisayarının satırı "through anchor …" ya da "over the internet" demeli: arkadaş cihazlarına
+   artık kayıtlarındaki yerel ağ (lan) adresinden ulaşılmıyor. Kendi bilgisayarını kapat: telefon arkadaşının bilgisayarına hâlâ ulaşıyor mu? Geri aç:
    yeni davet gerekmeden her şey onu yeniden buluyor mu?
 
 Notları, ekran görüntülerini ve her cihazda görünen kula sürümünü bu projede bana yapıştır.

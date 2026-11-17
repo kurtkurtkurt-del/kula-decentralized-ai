@@ -39,13 +39,26 @@
 // guard, a device's own rpc guard (its verdict does not change: it defended itself, and untrusted()
 // never sees it), guessing, and the anchor past its daily cap. One feed line when a card comes and
 // one when it goes. A look without host.gate makes the same report as before.
+//
+// A device's own gate on the internet (17.11.2026, P3). (a) Each device keeps its last 24 finished
+// hours (level.ts); when they hold a new level by gatewatch.ts's rule (the whole day and each 6-hour
+// quarter above 3 × the usual), its fit starts again on them, with one feed line, so a gate that
+// starts facing the internet is learned in about three days instead of weeks. (b) Measured on
+// test/brain-bench/bench4.ts's opened scenarios, (a) alone left about 32 false red hours a
+// device-week, so: for a device whose gate faces the internet (it offers the anchor role, it is
+// reached straight over the internet (not merely through an anchor: F2), or this computer knows an address of it outside
+// the lan), a burst whose day holds only strangers' reasons (gatewatch.ts classOf 'stranger': no
+// hello, tls, not paired, …) keeps the refused check ok and says card trust:device-burst:<id> (warn,
+// weight 2), one feed line when it comes and one when it goes. Five or more wrong codes, a replay,
+// an rpc guard refusal or any other reason in the day keep the burst red, as before.
 import type { Branch, BranchCtx, EyeDevice, EyeTrust, Snapshot, Suggestion, TrustCheck, TrustReport, Verdict } from '../types.js';
 import type { EyeKey, EyeKeys } from '../platform.js';
 import { fromBase64, sha256Hex } from '../hash.js';
 import { hhmm, pct } from './util.js';
 import { cardId } from './decide.js';
-import { burstStep, freshBurst, saneBurst, nbTail, NEED, STRATUM_NEED, B0, MIN_K, TAIL_P, type BurstFit } from './burst.js';
-import { GUESSES, GUESS_LIMIT, GATE_KEY, capOn, gateCards, gateCheck, gateLines, gateStep, hoursOf, type GateState } from './gatewatch.js';
+import { freshBurst, saneBurst, nbTail, NEED, STRATUM_NEED, B0, MIN_K, TAIL_P, type BurstFit } from './burst.js';
+import { GUESSES, GUESS_LIMIT, GATE_KEY, capOn, classOf, gateCards, gateCheck, gateLines, gateStep, hoursOf, type GateCard, type GateState } from './gatewatch.js';
+import { levelStep, saneLevel, type LevelHour } from './level.js';
 export { GUESS_LIMIT };
 
 // the signatures and the certificate's subject come from the platform (ctx.keys: node:crypto on a
@@ -146,12 +159,13 @@ interface Seen {
   lastBurst: number;            // the last finished hour's refusals when it was a burst; 0: it was not
   lastUsual: number;            // that hour of day's usual rate when the last finished hour was a burst
   rising: boolean;              // the CUSUM said the rate went up over the last finished hours
-  shorterRestart: boolean;      // the shorter fault was raised while a restart was still unconsumed
+  level: LevelHour[];           // the last 24 finished hours, consecutive (level.ts): a new level refits
+  shorterRestart: boolean;     // the shorter fault was raised while a restart was still unconsumed
   proved: number;               // the `at` of the newest owner-blind proof that held; 0: none
   provedDown: boolean;          // it proved before and its check fails now (said once)
 }
 type Notes = Record<string, Seen>;
-const fresh = (): Seen => ({ head: null, verified: 0, since: 0, at: 0, restartSeen: null, fault: null, faultAt: null, faultLine: null, gap: false, held: null, seen: 0, count: 0, shrunkTo: null, rejAt: -1, rejTotal: 0, win: { start: 0, k: 0 }, burst: freshBurst(), lastBurst: 0, lastUsual: 0, rising: false, shorterRestart: false, proved: 0, provedDown: false });
+const fresh = (): Seen => ({ head: null, verified: 0, since: 0, at: 0, restartSeen: null, fault: null, faultAt: null, faultLine: null, gap: false, held: null, seen: 0, count: 0, shrunkTo: null, rejAt: -1, rejTotal: 0, win: { start: 0, k: 0 }, burst: freshBurst(), lastBurst: 0, lastUsual: 0, rising: false, level: [], shorterRestart: false, proved: 0, provedDown: false });
 /** the gate watch's fit as its `~gate` Seen keeps it: burst the fit, at the newest finished hour
  *  taken in, lastBurst / lastUsual / rising what that hour said; a fresh one when there is none */
 const gateOf = (s: Seen | undefined): GateState => (s
@@ -196,6 +210,7 @@ function sane(x: unknown): Notes {
     v.lastBurst = Math.floor(Math.min(Math.max(0, nnum(v.lastBurst, 0)), COUNT_MAX));
     v.lastUsual = Number.isFinite(v.lastUsual) ? Math.min(Math.max(0, v.lastUsual), LAMBDA_MAX) : 0;
     v.rising = v.rising === true;
+    v.level = saneLevel(v.level);
     v.shorterRestart = v.shorterRestart === true;
     v.proved = Math.min(Math.max(0, nnum(v.proved, 0)), ABSURD);
     v.provedDown = v.provedDown === true;
@@ -260,6 +275,15 @@ const plural = (n: number, w: string) => `${n} ${w}${n === 1 ? '' : 's'}`;
 const day = (ms: number) => new Date(ms).toISOString().slice(0, 10);
 /** a whole number a line shows: floored, so 40.7 lines is 40, never a fraction */
 const fmt = (n: number) => String(Math.floor(n));
+/** the device's gate faces the internet (P3 b): it offers the anchor role, it is reached over the
+ *  internet, or this computer knows an address of it outside the lan. Reached through an anchor
+ *  is not enough (F2): a device behind its home's router is not open to scanners, so refusals at
+ *  its gate come from its lan or from a member of the same anchor, and those stay red */
+const facesInternet = (d: EyeDevice): boolean => {
+  const roads = d.roads && typeof d.roads === 'object' ? d.roads : null;
+  return d.anchor === true || d.via === 'internet'
+    || (!!roads && typeof roads.direct === 'number' && Number.isFinite(roads.direct) && roads.direct > 0);
+};
 const STARTOVER = 'its ledger started over';   // the started-over fault's prefix, for keeping it
 
 export function create(ctx: BranchCtx): Branch {
@@ -273,6 +297,10 @@ export function create(ctx: BranchCtx): Branch {
   let gateNow: Suggestion[] = [];
   let gateOn = new Map<string, string>();
   let capWas = false;
+  // the devices' own gates knocked on by strangers only (P3 b): this look's cards (build fills them)
+  // and the ones on, id → the line for when it goes. Memory only, as the gate's
+  let softNow: GateCard[] = [];
+  let softOn = new Map<string, string>();
   // each device's last window, line -> its sha256 (A8): only lines not in the last answer are
   // hashed again. Keyed by the whole line, so a line changed by one byte is a new line and hashed;
   // rebuilt from this answer's lines every time, so it never holds more than one window per device.
@@ -402,6 +430,7 @@ export function create(ctx: BranchCtx): Branch {
       s.rejAt = newest >= 0 ? newest : 0;
       s.rejTotal = total;
       s.win = { start: t.at, k: 0 };
+      s.level = [];
     } else if (t.at - prevAt > HOUR || prevAt - t.at > HOUR) {
       // a gap in the looks (the computer was away, the phone asleep, or the clock jumped either
       // way): the refusals in between cannot be placed into any hour; re-anchor only and count
@@ -415,6 +444,7 @@ export function create(ctx: BranchCtx): Branch {
       s.lastUsual = 0;
       s.rising = false;
       s.burst = { ...s.burst, s: 0 };
+      s.level = [];               // the hours kept for a new level must follow each other
     } else {
       const rolledBack = newest >= 0 && s.rejAt - newest > HOUR;   // the device's clock went back: re-anchor
       // count only entries proven to lie in the running hour: newer than the watermark and not older
@@ -429,13 +459,17 @@ export function create(ctx: BranchCtx): Branch {
         // the hour closed, or the answer's clock went back past its start: the finished hour is
         // held against its own hour of day and learned (burst.ts; a flagged hour teaches little).
         // a burst is remembered with that hour's usual, so the check stays red until a finished
-        // hour is quiet. then the window re-anchors
-        const r = burstStep(s.burst, hourOf(s.win.start), Math.min(s.win.k, PER_ANSWER));
+        // hour is quiet. then the window re-anchors. the hour is kept for level.ts (a clock that
+        // went back starts the kept hours again), and a new level refits the fit on the last 24
+        // hours: what the last hour said ends there, as at this computer's gate
+        const r = levelStep(s.burst, s.win.start - t.at > HOUR ? [] : s.level, hourOf(s.win.start), Math.min(s.win.k, PER_ANSWER));
         s.burst = r.fit;
-        s.lastBurst = r.tail ? s.win.k : 0;
-        s.lastUsual = r.tail ? Math.min(r.usual, LAMBDA_MAX) : 0;
-        s.rising = r.rise;
+        s.level = r.kept;
+        s.lastBurst = r.tail && !r.level ? s.win.k : 0;
+        s.lastUsual = r.tail && !r.level ? Math.min(r.usual, LAMBDA_MAX) : 0;
+        s.rising = r.rise && !r.level;
         s.win = { start: t.at, k: 0 };
+        if (r.level) ctx.emit(`${name}'s gate: a new level of refusals: learning what is usual again`);
       }
       s.win.k += nfresh;
     }
@@ -499,10 +533,35 @@ export function create(ctx: BranchCtx): Branch {
       const learning = f.n < NEED
         ? ` (still learning what is usual: ${fmt(f.n)} of ${NEED} hours)`
         : known ? '' : ' (still learning what is usual at this hour of day)';
+      // (b) a gate that faces the internet, knocked on by strangers only: a card, not a red check.
+      // only strangers' reasons in the day and in the last few listed; anything else keeps it red
+      const last = Array.isArray(t!.rejectsLast) ? t!.rejectsLast : [];
+      const strangersOnly = refused.length > 0 && refused.every(([w]) => classOf(w) === 'stranger')
+        && last.every((r) => !r || typeof r !== 'object' || (typeof r.why === 'string' && classOf(r.why) === 'stranger'));
+      const soft = (burst || stillBurst || rising) && strangersOnly && replays === 0 && guesses < GUESS_LIMIT && facesInternet(d);
+      if (soft && okId(d.id)) {
+        const what = burst
+          ? `${fmt(Math.min(s.win.k, K_MAX))} refusals in the last hour, at this hour of day usually about ${usual.toFixed(1)}`
+          : stillBurst
+            ? `${fmt(Math.min(s.lastBurst, K_MAX))} refusals in the last finished hour, at that hour of day usually about ${s.lastUsual.toFixed(1)}`
+            : 'refusals running above its usual for the last hours';
+        const title = `more knocking on ${name}'s gate than usual`;
+        softNow.push({
+          card: {
+            id: cardId('trust', 'device-burst', d.id), kind: 'warn', weight: 2, title,
+            why: `${what}, all from strangers (${refused.slice(0, 4).map(([w, n]) => `${w} ×${n}`).join(', ')}). its gate faces the internet, where scanners knock on every open port; none got in. a wrong code, a replay or the rpc guard would still turn it red.`,
+            action: { do: 'open', panel: 'branch', branch: 'trust' }, label: 'look',
+          },
+          said: `${title}: ${what}, all from strangers`,
+          gone: `${name}: the knocking on its gate is back to its usual`,
+        });
+      }
       checks.push(replays > 0
         ? { k: 'refused', ok: false, text: `someone replayed a recorded handshake (${plural(replays, 'time')} today); it was refused` }
         : guesses >= GUESS_LIMIT
           ? { k: 'refused', ok: false, text: `${guesses} wrong codes today: someone may be guessing. all were refused` }
+          : soft
+            ? { k: 'refused', ok: true, text: `refused today: ${words}: more than usual, all from strangers. its gate faces the internet, where scanners knock on every open port; none got in` }
           : burst
             ? { k: 'refused', ok: false, text: `${fmt(Math.min(s.win.k, K_MAX))} refusals in the last hour, at this hour of day it usually sees about ${usual.toFixed(1)}: unusual. all were refused` }
             : stillBurst
@@ -557,7 +616,8 @@ export function create(ctx: BranchCtx): Branch {
     // its own gate (gatewatch.ts): only when the look has one, so an older look's report is the same
     const gc = gateCheck(gateOf(notes[GATE_KEY]), now.host && typeof now.host === 'object' ? now.host.gate : undefined);
     if (gc) host.push(gc);
-    const devices = (Array.isArray(now.devices) ? now.devices.filter((d): d is EyeDevice => !!d && typeof d === 'object') : []).map(deviceReport);
+    softNow = [];
+    const devices =(Array.isArray(now.devices) ? now.devices.filter((d): d is EyeDevice => !!d && typeof d === 'object') : []).map(deviceReport);
     const bad = devices.filter((d) => d.verdict === 'bad');
     const hostBad = host.some((c) => c.ok === false);
     const waiting = devices.filter((d) => d.verdict === 'unknown');
@@ -665,6 +725,9 @@ export function create(ctx: BranchCtx): Branch {
       gateOn = gl.on;
       for (const line of gl.lines) ctx.emit(line);
       gateNow = cards.map((c) => c.card);
+      const sl = gateLines(softOn, softNow);
+      softOn = sl.on;
+      for (const line of sl.lines) ctx.emit(line);
       // the gate's fit is never trimmed: it is no device
       trim(new Set([...devs.map((d) => d.id), GATE_KEY]));
       trimHashes();
@@ -711,8 +774,8 @@ export function create(ctx: BranchCtx): Branch {
         lines: report.devices.map((d) => `${d.name} · ${d.verdict === 'ok' ? 'all clear' : d.verdict === 'bad' ? firstBad(d.checks).text : 'not checked yet'}`),
         note: 'nothing private goes into these checks: no prompts, no answers, only who connected and whether it was let in.',
         report,
-        // the gate's cards (weight 3 and 2) before owner-blind's (weight 1)
-        suggestions: [...gateNow, ...ownerBlindCards()],
+        // the gate's cards (weight 3 and 2), the devices' own gates (2), then owner-blind's (weight 1)
+        suggestions: [...gateNow, ...softNow.map((c) => c.card), ...ownerBlindCards()],
       };
     },
   };

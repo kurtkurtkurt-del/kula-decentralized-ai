@@ -14,9 +14,9 @@ import path from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { openApart, openPeerDevice, startLlamaServer, type Cluster, type Message, type ModelRef, type Reply, type StartBackend, type WireMessage } from '../apart.js';
 import { measureLink, heldBack, type Link } from '../link.js';
-import { isAnchorRoad, roadDialer, type PeerAnchor, type RoadContext } from '../road.js';
+import { isAnchorRoad, roadDialer, roads, type PeerAnchor, type RoadContext } from '../road.js';
 import type { AnchorHub } from '../anchor.js';
-import { joinWithInvite, readJoined, joinedRoads, removeJoined, reachableFromOutside, type JoinedAnchor } from '../join.js';
+import { joinWithInvite, readJoined, joinedRoads, removeJoined, reachableFromOutside, isWhose, WHOSE_ASK_WORDS, type JoinedAnchor } from '../join.js';
 import { readMoves, type Move } from '../addressbook.js';
 import { peerTls, readPeers, writePeers, parsePeerText, upsertPeer, findPeer, probePeers, peersFile, whereIs, discover, reachedBy, isRing, ringOf, widestRing, WORLD_CLOSED, type AddrVia, type Peer, type PeerProbe, type Found, type PeerKind, type Ring } from '../peers.js';
 import { connectRemote, handshake, peekGate, GateRefused, type GatePeek, FP_MISMATCH, FP_PREFIX_MIN } from '../gate.js';
@@ -174,6 +174,10 @@ export interface PeerRow {
   // how far the person trusts it (11.11.2026): home (their own), circle (a friend's), world (a
   // stranger's); the widest over its records. God's eye's request review reads it.
   ring: Ring;
+  // its anchor's invite said "mine" and the person has not answered yet (17.11.2026): when it
+  // paired back, the address it registered from and the start of its certificate (what the joiner
+  // cannot choose, beside the name it can). For the page only: never in the brain's devices.
+  claim?: { at: string; from: string; fp: string };
   // its worker's own GET /status at the last probe that got one (13.11.2026, scan D M2 M1):
   // numbers and flags only, never prompt text; at is when it came. Absent until a /status answered.
   worker?: WorkerLook;
@@ -330,7 +334,14 @@ export interface EngineOptions {
 // link to it now), bytesDay (what it passed on today, ciphertext, every member together) and
 // capDay (a friend's device's daily limit in bytes; the person's own devices have none),
 // memberMaxDay (the most one capped member passed today, to hold against capDay).
-export interface AnchorView { on: boolean; reachable: boolean | null; links: number; bytesDay: number; capDay: number | null; memberMaxDay: number }
+// While on (17.11.2026): since (when the anchor last started; the counts are since then, at most
+// today), refused (today's refusals to members and to this computer's own dials, by anchor.ts's
+// reason words), removed (members removed today), memberMaxName (whose bytes memberMaxDay is; null:
+// none or not known).
+export interface AnchorView {
+  on: boolean; reachable: boolean | null; links: number; bytesDay: number; capDay: number | null; memberMaxDay: number;
+  since?: number; refused?: Record<string, number>; removed?: number; memberMaxName?: string | null;
+}
 
 // What a model takes in memory, run whole: the file, the kv cache for ctx, some slack.
 export function needMb(size: number, kvMbPer1k: number, ctx: number): number {
@@ -489,7 +500,17 @@ export class Engine {
   peers(): PeerRow[] {
     const all = readPeers(this.file());
     const groups = groupPeers(all);
-    return groups.map((g) => this.deviceRow(g, groups));
+    // the roads and the anchors' fingerprints once per call, not once per row (anchors.json is read once)
+    const pre = this.rowContext(groups);
+    return groups.map((g) => this.deviceRow(g, groups, pre));
+  }
+
+  // what every row of one peers() call shares: the road context, and the fingerprints of every
+  // anchor a record names or this computer is registered with
+  private rowContext(groups: Peer[][]): { ctx: RoadContext; anchorFps: Set<string> } {
+    const ctx = this.roads();
+    const anchorFps = new Set<string>([...groups.flat().flatMap((p) => (p.anchors ?? []).map((a) => a.fp.toLowerCase())), ...(ctx.anchors ?? []).map((a) => a.fp.toLowerCase())]);
+    return { ctx, anchorFps };
   }
 
   // The roads this computer has besides addresses: its own anchor (share with the anchor on) and
@@ -511,8 +532,9 @@ export class Engine {
   attachJoin(f: (a: JoinedAnchor) => void): void { this.onJoin = f; }
   private onJoin: ((a: JoinedAnchor) => void) | null = null;
 
-  /** This computer as an anchor of the circle: its live counters (AnchorView). */
-  anchor(): AnchorView {
+  /** This computer as an anchor of the circle: its live counters (AnchorView). `detail` (the
+   *  brain's feed asks for it) adds since, refused, removed and memberMaxName while on. */
+  anchor(opts: { detail?: boolean } = {}): AnchorView {
     const hub = this.roads().hub as AnchorHub | null;
     if (!hub || typeof hub.stats !== 'function') return { on: false, reachable: null, links: 0, bytesDay: 0, capDay: null, memberMaxDay: 0 };
     const members = hub.members();
@@ -522,9 +544,19 @@ export class Engine {
     // today; the person's own devices (ring home) and this computer's own dials are never capped
     const own = this.identity().fp;
     const capped = (fp: string) => fp !== own && (typeof hub.capped === 'function' ? hub.capped(fp) : true);
-    const perMember = Object.entries(st.bytesToday).filter(([fp]) => capped(fp)).map(([, b]) => b);
+    const perMember = Object.entries(st.bytesToday).filter(([fp]) => capped(fp));
+    const top = perMember.reduce<[string, number] | null>((a, x) => (!a || x[1] > a[1] ? x : a), null);
+    // whose bytes those are: its name in the peer book, else the name it registered with here
+    let memberMaxName: string | null = null;
+    if (opts.detail && top && top[1] > 0) {
+      try { memberMaxName = this.deviceByFp(groupPeers(readPeers(this.file())), top[0])?.name ?? null; } catch {}
+      memberMaxName ??= members.find((m) => m.fp === top[0])?.name || null;
+    }
     // reached from outside is said only when a member came in from an address that is not private
-    return { on: true, reachable: reachableFromOutside(members) ? true : null, links: members.length, bytesDay: day.reduce((a, b) => a + b, 0), capDay: hub.caps.bytesPerDay ?? null, memberMaxDay: perMember.length ? Math.max(...perMember) : 0 };
+    return {
+      on: true, reachable: reachableFromOutside(members) ? true : null, links: members.length, bytesDay: day.reduce((a, b) => a + b, 0), capDay: hub.caps.bytesPerDay ?? null, memberMaxDay: top ? top[1] : 0,
+      ...(opts.detail && typeof st.since === 'number' ? { since: st.since, refused: { ...(st.refusedToday ?? {}) }, removed: st.removedToday ?? 0, memberMaxName } : {}),
+    };
   }
 
   // the device a certificate belongs to in the peer book: its row id and name
@@ -546,18 +578,28 @@ export class Engine {
     return g ? g[0].id : id;
   }
 
-  private deviceRow(g: Peer[], groups: Peer[][] = [g]): PeerRow {
+  private deviceRow(g: Peer[], groups: Peer[][] = [g], pre: { ctx: RoadContext; anchorFps: Set<string> } = this.rowContext(groups)): PeerRow {
     const best = bestRoute(g, this.routeState);
     // the anchor network: through which anchor its road goes, and whether it offers the role itself
-    const anchorFps = new Set<string>([...groups.flat().flatMap((p) => (p.anchors ?? []).map((a) => a.fp.toLowerCase())), ...(this.roads().anchors ?? []).map((a) => a.fp.toLowerCase())]);
+    const { ctx, anchorFps } = pre;
     const offers = g.some((p) => p.anchor === true || (!!p.fp && anchorFps.has(p.fp.toLowerCase())));
+    // its roads (road.ts roads()) over its records, counted: distinct lan addresses, distinct
+    // addresses outside the lan, distinct anchors; a cable or a relay record is no road here
+    const lan = new Set<string>(), direct = new Set<string>(), anchorRoads = new Set<string>();
+    for (const p of g) {
+      if (p.cable || p.relay) continue;
+      for (const r of roads(p, ctx)) {
+        if (isAnchorRoad(r)) anchorRoads.add(r.anchor);
+        else (r.via === 'lan' ? lan : direct).add(`${r.host}|${r.port}`);
+      }
+    }
     let through: Pick<PeerRow, 'through' | 'throughName'> = {};
     if (isAnchorRoad(best.route)) {
       const fp = best.route.anchor;
       if (fp === 'self') through = { through: 'self', throughName: 'this computer' };
       else {
         const d = this.deviceByFp(groups, fp);
-        const named = [...(best.anchors ?? []), ...(this.roads().anchors ?? [])].find((a) => a.fp === fp)?.name ?? null;
+        const named = [...(best.anchors ?? []), ...(ctx.anchors ?? [])].find((a) => a.fp === fp)?.name ?? null;
         through = { through: d?.id ?? null, throughName: d?.name ?? named ?? `${fp.slice(0, 8)}…` };
       }
     }
@@ -580,6 +622,7 @@ export class Engine {
     const heardAt = Math.max(0, ...g.map((p) => this.heardAt.get(p.id) ?? 0)) || null;
     // the newest worker /status over its records
     const worker = g.map((p) => this.workers.get(p.id)).reduce<WorkerLook | undefined>((a, w) => (w && (!a || w.at > a.at) ? w : a), undefined);
+    const claimed = g.find((p) => p.claim && typeof p.claim.at === 'string' && typeof p.claim.from === 'string');
     return {
       ...row,
       ...(where ? { where } : {}),
@@ -602,8 +645,11 @@ export class Engine {
       heardAt,
       ...through,
       ...(offers ? { anchor: true } : {}),
+      // counts only, never an address (the brain reads them: godseye devices[].roads)
+      ...{ roads: { lan: lan.size, direct: direct.size, anchors: anchorRoads.size } },
       usesThisComputer: g.some((p) => !!p.fp && this.paired().has(p.fp)),
       ring: widestRing(g),
+      ...(claimed ? { claim: { at: claimed.claim!.at, from: claimed.claim!.from, fp: (claimed.fp ?? '').toLowerCase().slice(0, 16) } } : {}),
       ...(worker ? { worker: { ...worker } } : {}),
     };
   }
@@ -825,11 +871,11 @@ export class Engine {
 
   // The qr json, its base64url code, host:port:secret, or a relay code (+ pin): parsed by the
   // same code as `kula-node peers add`, then probed once so a v3 peer pairs right away.
-  async addPeer(text: string, opts: { name?: string; relay?: string } = {}): Promise<PeerRow> {
+  async addPeer(text: string, opts: { name?: string; relay?: string; whose?: string } = {}): Promise<PeerRow> {
     const peer = parsePeerText(text, opts.relay || process.env.KULA_RELAY || undefined);
     if (opts.name?.trim()) peer.name = opts.name.trim().slice(0, 60);
     // an anchor's invite (docs/ANCHOR.md "join"): pair with it and join, never kept as a plain peer
-    if (peer.anchor && peer.hpin && peer.pin) return this.joinAnchor(peer);
+    if (peer.anchor && peer.hpin && peer.pin) return this.joinAnchor(peer, null, opts.whose);
     const file = this.file();
     const { list, added } = upsertPeer(readPeers(file), peer);
     writePeers(list, file);
@@ -842,7 +888,7 @@ export class Engine {
   // one-time code; optionally the start of the certificate. One tls handshake with the code
   // learns the certificate (the code's proof covers both certificates, so a device in the
   // middle fails it), the start shown on the phone must match, and the peer is kept paired.
-  async pairByHand(input: { address: string; pin: string; fp?: string; name?: string; anchor?: boolean }): Promise<PeerRow> {
+  async pairByHand(input: { address: string; pin: string; fp?: string; name?: string; anchor?: boolean; whose?: string }): Promise<PeerRow> {
     const m = HOST_PORT.exec(String(input.address ?? '').trim());
     if (!m) throw new Error('address must look like 192.168.1.20:50551');
     const host = m[1].replace(/^\[|\]$/g, '');
@@ -857,7 +903,7 @@ export class Engine {
       if (fpStart.length < FP_PREFIX_MIN) throw new Error(`an anchor's invite needs the start of its certificate: ${FP_PREFIX_MIN} letters and digits or more`);
       const now = new Date().toISOString();
       const peer: Peer = { id: `${host}:${port}`, name: input.name?.trim().slice(0, 60) || '', host, port, secret: '', fp: null, pin, paired_at: null, relay: null, anchor: true, kind: 'pc', ram: null, bw: null, added_at: now, last_ok: null };
-      return this.joinAnchor(peer, fpStart);
+      return this.joinAnchor(peer, fpStart, input.whose);
     }
     const fp = await this.pinPair(host, port, pin, fpStart || null);
     if (fpStart && !fp.startsWith(fpStart)) throw new Error('the certificate does not match what the phone shows: not pairing');
@@ -884,8 +930,11 @@ export class Engine {
   // Joins an anchor with its invite (join.ts): pairs with its gate with the invite's code, keeps it
   // in the peer book and among the joined anchors; the page's share then registers there and the
   // anchor pairs back. Its roads are this computer's from now on (roads(): the joined anchors).
-  private async joinAnchor(peer: Peer, fpPrefix: string | null = null): Promise<PeerRow> {
-    const j = await joinWithInvite({ peer, fpPrefix, identity: this.identity(), peersFile: this.file(), joinedFile: this.joinedFile() });
+  // `whose`: the person's answer (17.11.2026, as the phone asks), my computer (ring home here) or a
+  // friend's (circle); no answer, no join: refused before anything is dialed or the code is spent.
+  private async joinAnchor(peer: Peer, fpPrefix: string | null = null, whose?: string): Promise<PeerRow> {
+    if (!isWhose(whose)) throw new Error(WHOSE_ASK_WORDS);
+    const j = await joinWithInvite({ peer, fpPrefix, identity: this.identity(), peersFile: this.file(), joinedFile: this.joinedFile(), whose });
     this.reach.set(j.peer.id, { r: { ok: true }, at: Date.now() });
     const at = `${j.at.host.includes(':') ? `[${j.at.host}]` : j.at.host}:${j.at.port}`;
     this.note(j.again ? `the invite of ${j.peer.name} was pasted again: this computer had joined it already` : `joined the anchor ${j.peer.name} at ${at}: this computer registers there while it shares, and the anchor pairs back`);
@@ -966,9 +1015,28 @@ export class Engine {
     const g = hit ? groupOf(groupPeers(list), hit.id) : null;
     if (!g) return false;
     const was = widestRing(g);
-    for (const x of g) x.ring = ring;
+    // a ring the person set answers a "mine" claim too
+    for (const x of g) { x.ring = ring; delete x.claim; }
     writePeers(list, file);
     if (was !== ring) this.note(`${this.deviceRow(g).name} is now ${ring} (was ${was})`);
+    return true;
+  }
+
+  // The person's answer to a "mine" invite (17.11.2026): yes, this device is mine (every record of
+  // it goes home, no daily limit); no (it stays circle, a friend's). Only a device with a claim can
+  // be answered, so this never lifts a friend's device. null: no such device; false: nothing to answer.
+  confirmMine(id: string, yes: boolean): boolean | null {
+    const file = this.file();
+    const list = readPeers(file);
+    const hit = findPeer(list, id);
+    const g = hit ? groupOf(groupPeers(list), hit.id) : null;
+    if (!g) return null;
+    if (!g.some((p) => p.claim)) return false;
+    const was = widestRing(g);
+    for (const x of g) { if (yes) x.ring = 'home'; delete x.claim; }
+    writePeers(list, file);
+    const name = this.deviceRow(g).name;
+    this.note(yes ? `${name} is yours: now home (was ${was}), no daily limit` : `${name} stays a friend's device (${was}), limited each day`);
     return true;
   }
 
@@ -1817,7 +1885,10 @@ export class Engine {
           if (mmproj) plan.push(`it sees photos: its image encoder (${path.basename(mmproj)}) is loaded next to it, so a photo goes straight to it.`);
           cluster = await openApart({ ...common, model: ref, peers: [], localModelFile: file, localMmproj: mmproj, llama, startBackend: this.opts.startBackend });
         } else {
-          const bw = await (this.opts.bandwidth ?? (() => measureBandwidth().catch(() => 4)))();
+          let bwMeasured = true;
+          const bw = await (this.opts.bandwidth ?? (() => measureBandwidth().catch(() => { bwMeasured = false; return 4; })))();
+          // this computer's memory speed at this load, in the plan lines (the 19/9 outlier: is it the reading?)
+          plan.push(bwMeasured ? `this computer's memory speed: ${Math.round(bw * 10) / 10} GB/s, measured at this load.` : `this computer's memory speed could not be measured at this load: ${bw} GB/s assumed.`);
           // only the hosted relay is left out (it carries the api channel only); a device over the
           // internet or through an anchor is measured along its road and planned like any other,
           // and the plan says how each is reached and what its link costs (far split, 16.11.2026)

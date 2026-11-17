@@ -73,6 +73,8 @@ describe('joining an anchor with its invite', () => {
     await press(s.buttons[1]);
     expect(mockJoins).toEqual([expect.objectContaining({ fpPrefix: '00112233445566778899', pin: '0123456789abcdef', whose: 'mine' })]);
     expect(s.hook().note).toContain('joined berlin');
+    // the anchor's computer keeps a new member as a friend's until its owner says yes on its row
+    expect(s.hook().note).toContain('on that computer, in devices, press “yes, it is mine” on this phone’s row; until then it limits this phone like a friend’s');
     await s.done();
   });
 
@@ -80,6 +82,8 @@ describe('joining an anchor with its invite', () => {
     const s = await scan();
     await press(s.buttons[2]);
     expect(mockJoins).toEqual([expect.objectContaining({ fpPrefix: '00112233445566778899', whose: 'friend' })]);
+    expect(s.hook().note).toContain('joined berlin');
+    expect(s.hook().note).not.toContain('yes, it is mine');
     await s.done();
   });
 });

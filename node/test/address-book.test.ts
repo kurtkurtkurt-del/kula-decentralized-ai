@@ -30,7 +30,7 @@ type GateIdentity = import('../src/tls.ts').GateIdentity;
 const { AnchorHub, circleMembers } = await import('../src/anchor.ts');
 const { OneTimeCodes, AnchorLinks, readJoined, writeJoined, joinedRoads } = await import('../src/join.ts');
 type JoinedAnchor = import('../src/join.ts').JoinedAnchor;
-const { readPeers, writePeers } = await import('../src/peers.ts');
+const { readPeers, writePeers, probePeers } = await import('../src/peers.ts');
 type Peer = import('../src/peers.ts').Peer;
 type PeerAddr = import('../src/peers.ts').PeerAddr;
 const { pickRoute, openRoad, roadDialer } = await import('../src/road.ts');
@@ -97,6 +97,7 @@ async function home(name: string, echoPort: number, o: { anchor?: boolean; addrs
     identity, peersFile, joinedFile, file: path.join(dir, 'addrbook.json'),
     addrs: () => o.addrs ?? [{ host: '127.0.0.1', port: h.gate.port, via: 'mapped' }],
     log: (s) => h.logs.push(s),
+    allowLoopback: true,   // every home here answers on 127.0.0.1
   });
   h.hub = o.anchor ? new AnchorHub({ self: identity.fp, isMember: circleMembers(paired, peersFile), record: () => h.book.own(), whoRate: FAST, handOut: o.handOut }) : null;
   h.gate = await startGateServer({ port: 0, host: '127.0.0.1', secret: null, targets: () => echoPort, tls, anchor: h.hub ?? undefined });
@@ -258,6 +259,221 @@ test('address book: a forged record (another key, a fingerprint not pinned) and 
   const shuffled = JSON.parse(JSON.stringify({ sig: newer.sig, extra: 1, ...newer }));
   assert.equal(checkRecord(shuffled).ok, true);
   assert.ok(!('extra' in (checkRecord(shuffled) as { rec: object }).rec));
+});
+
+test('address book: a forgotten device leaves it; its addresses are gone from addrbook.json at the next ask and at start', () => {
+  const dir = fs.mkdtempSync(path.join(HOME, 'forget-'));
+  const me = createIdentity('me');
+  const P = createIdentity('kept');
+  const Q = createIdentity('forgotten');
+  const R = createIdentity('forgotten-anchor');
+  const peersFile = path.join(dir, 'peers.json');
+  const joinedFile = path.join(dir, 'anchors.json');
+  const file = path.join(dir, 'addrbook.json');
+  const peer = (id: string, fp: string, host: string): Peer => ({ id, name: id, host, port: 50551, secret: '', fp, kind: 'pc', ram: null, bw: null, added_at: 't' });
+  writePeers([peer('kept', P.fp, '192.168.1.9'), peer('forgotten', Q.fp, '192.168.1.10')], peersFile);
+  writeJoined([{ fp: R.fp, name: 'forgotten-anchor', host: '192.168.1.11', port: 50551, joined_at: 't' }], joinedFile);
+  const book = new AddressBook({ identity: me, peersFile, joinedFile, file, addrs: () => [] });
+  const at = (host: string, port: number, seq: number) => ({ addrs: [{ host: '10.0.0.5', port, via: 'lan' as const }, { host, port, via: 'mapped' as const }], anchors: [], seq, at: seq });
+  assert.equal(book.accept(signRecord(P, at('198.51.100.7', 40000, 10)), null).ok, true);
+  assert.equal(book.accept(signRecord(Q, at('198.51.100.8', 40001, 10)), null).ok, true);
+  assert.equal(book.accept(signRecord(R, at('198.51.100.9', 40002, 10)), null).ok, true);
+  assert.ok(fs.readFileSync(file, 'utf8').includes('198.51.100.8'));
+
+  // Q is forgotten (its peer row goes): the next ask drops its record and its move line, on disk too
+  writePeers(readPeers(peersFile).filter((p) => p.fp !== Q.fp), peersFile);
+  assert.deepEqual(book.wants().map((w) => w.fp).sort(), [P.fp, R.fp].sort());
+  assert.equal(book.held(Q.fp), null);
+  const disk = fs.readFileSync(file, 'utf8');
+  assert.ok(!disk.includes('198.51.100.8') && !disk.includes(Q.fp), 'Q\'s addresses are gone from addrbook.json');
+  assert.ok(disk.includes('198.51.100.7') && disk.includes('198.51.100.9'), 'the others stay');
+  assert.ok(readMoves(file).every((m) => m.fp !== Q.fp));
+  assert.equal((fs.statSync(file).mode & 0o777).toString(8), '600');
+
+  // the anchor R is left while kula-node is not running: the book drops it when it starts again
+  writeJoined([], joinedFile);
+  new AddressBook({ identity: me, peersFile, joinedFile, file, addrs: () => [] });
+  const later = fs.readFileSync(file, 'utf8');
+  assert.ok(!later.includes('198.51.100.9') && !later.includes(R.fp), 'R\'s addresses are gone at start');
+  assert.equal(book.held(P.fp)!.seq, 10, 'what is still pinned stays');
+  // a forgotten device's record handed over again is not taken back
+  assert.deepEqual(book.accept(signRecord(Q, at('198.51.100.8', 40001, 11)), null), { ok: false, why: 'not pinned here' });
+});
+
+// Security read F1: a pinned device (or a copied key) signs a record naming this computer's own
+// loopback; taken, every probe round would dial it there, a slow port scan from outside.
+test('address book: a record naming loopback, an unspecified, link-local or multicast address is refused whole and nothing is dialed there; a lan address is still taken', async (t) => {
+  const dir = fs.mkdtempSync(path.join(HOME, 'undialable-'));
+  let hits = 0;
+  const srv = net.createServer((s) => { hits++; s.destroy(); });
+  await new Promise<void>((r) => srv.listen(0, '127.0.0.1', () => r()));
+  const L = (srv.address() as net.AddressInfo).port;
+  const me = createIdentity('me');
+  const B = createIdentity('b');
+  const peersFile = path.join(dir, 'peers.json');
+  const joinedFile = path.join(dir, 'anchors.json');
+  writePeers([{ id: 'b', name: 'b', host: '127.0.0.1', port: await deadPort(), secret: '', fp: B.fp, kind: 'pc', ram: null, bw: null, added_at: 't' }], peersFile);
+  const book = new AddressBook({ identity: me, peersFile, joinedFile, file: path.join(dir, 'addrbook.json'), addrs: () => [] });
+  const refused = { ok: false, why: 'an address this computer must not dial' };
+  let seq = Date.now();
+  try {
+    const r = book.accept(signRecord(B, { addrs: [{ host: '127.0.0.1', port: L, via: 'mapped' }], anchors: [{ fp: 'ab'.repeat(32), host: '127.0.0.1', port: L }], seq, at: seq }), null);
+    await probePeers(readPeers(peersFile), 1000, ['api'], undefined, me);
+    t.diagnostic(`probe: ok=${r.ok} hits=${hits}`);
+    assert.deepEqual(r, refused);
+    assert.equal(book.held(B.fp), null);
+    const b = readPeers(peersFile)[0];
+    assert.equal(b.addrs, undefined, 'the peer book gains no addrs');
+    assert.equal(b.anchors, undefined, 'nor anchors');
+    assert.equal(hits, 0, 'nothing dialed the listener');
+
+    // every other form, as an address and as an anchor
+    for (const host of ['::1', '0.0.0.0', '169.254.1.1', '224.0.0.1', '::ffff:127.0.0.1', '::ffff:7f00:1', '::', 'fe80::1', 'ff02::1']) {
+      seq++;
+      assert.deepEqual(book.accept(signRecord(B, { addrs: [{ host, port: 40000, via: 'mapped' }], anchors: [], seq, at: seq }), null), refused, host);
+      assert.deepEqual(book.accept(signRecord(B, { addrs: [{ host: '198.51.100.7', port: 40000, via: 'mapped' }], anchors: [{ fp: 'ab'.repeat(32), host, port: 40000 }], seq, at: seq }), null), refused, `${host} as an anchor`);
+    }
+    assert.equal(book.held(B.fp), null);
+
+    // a lan address is still taken
+    seq++;
+    assert.equal(book.accept(signRecord(B, { addrs: [{ host: '192.168.1.7', port: 40000, via: 'lan' }], anchors: [], seq, at: seq }), null).ok, true);
+    assert.deepEqual(readPeers(peersFile)[0].addrs, [{ host: '192.168.1.7', port: 40000, via: 'lan' }]);
+  } finally { srv.close(); }
+});
+
+// Security read F4: a peer book (or joined store) that cannot be read is not an empty one; read
+// as empty, the prune would wipe every record and its seq floor, and an anchor could hand an old
+// record back.
+test('address book: a peer book that cannot be read leaves the book as it is; nothing is asked or taken until it can', () => {
+  const dir = fs.mkdtempSync(path.join(HOME, 'unreadable-'));
+  const me = createIdentity('me');
+  const B = createIdentity('b');
+  const peersFile = path.join(dir, 'peers.json');
+  const joinedFile = path.join(dir, 'anchors.json');
+  const file = path.join(dir, 'addrbook.json');
+  writePeers([{ id: 'b', name: 'b', host: '192.168.1.9', port: 50551, secret: '', fp: B.fp, kind: 'pc', ram: null, bw: null, added_at: 't' }], peersFile);
+  const logs: string[] = [];
+  const book = new AddressBook({ identity: me, peersFile, joinedFile, file, addrs: () => [], log: (s) => logs.push(s) });
+  const body = (seq: number) => ({ addrs: [{ host: '198.51.100.7', port: 40000 + seq, via: 'mapped' as const }], anchors: [], seq, at: seq });
+  assert.equal(book.accept(signRecord(B, body(10)), null).ok, true);
+  const saved = fs.readFileSync(peersFile, 'utf8');
+  const broken = { ok: false, why: 'the peer book could not be read' };
+
+  for (const [f, bad] of [[peersFile, '{'], [peersFile, '{}'], [joinedFile, '[1,']] as const) {
+    fs.writeFileSync(f, bad);
+    try {
+      assert.deepEqual(book.wants(), [], `${path.basename(f)} = ${bad}: nothing asked`);
+      assert.equal(book.held(B.fp)?.seq, 10, 'the record stays');
+      assert.equal(book.prune(), 0);
+      new AddressBook({ identity: me, peersFile, joinedFile, file, addrs: () => [] });
+      assert.equal(book.held(B.fp)?.seq, 10, 'and stays at start');
+      assert.deepEqual(book.accept(signRecord(B, body(11)), null), broken);
+      assert.equal(book.held(B.fp)?.seq, 10);
+    } finally {
+      if (f === peersFile) fs.writeFileSync(peersFile, saved); else fs.rmSync(joinedFile);
+    }
+    assert.deepEqual(book.wants(), [{ fp: B.fp, seq: 10 }], 'readable again: asked with the kept seq');
+  }
+  assert.equal(logs.filter((l) => /could not be read/.test(l)).length, 3, `once each time it broke: ${logs.join(' | ')}`);
+  // readable again (and the joined store absent, which is empty): the floor holds, a newer one is taken
+  assert.equal(book.held(B.fp)?.seq, 10);
+  assert.deepEqual(book.wants(), [{ fp: B.fp, seq: 10 }]);
+  assert.deepEqual(book.accept(signRecord(B, body(9)), null), { ok: false, why: 'not newer' });
+  assert.equal(book.accept(signRecord(B, body(12)), null).ok, true);
+});
+
+// The person's decision (17 Nov): a friend's (circle) device's private addresses are not kept
+// here; the person's own (home) devices keep them. By address class, not only by the record's own
+// `via` label, which the friend chooses. Loopback is F1's rule and is left alone.
+const friendBody = (seq: number) => ({
+  addrs: [
+    { host: '192.168.1.9', port: 50551, via: 'lan' as const },
+    { host: '203.0.113.5', port: 40000, via: 'mapped' as const },
+    { host: '10.0.0.3', port: 40001, via: 'mapped' as const },
+    { host: 'fd00::1', port: 40002, via: 'ipv6' as const },
+  ],
+  anchors: [{ fp: 'ab'.repeat(32), host: '192.168.1.20', port: 50551 }],
+  seq, at: seq,
+});
+const friendFiles = (tag: string, ring: 'home' | 'circle') => {
+  const dir = fs.mkdtempSync(path.join(HOME, `${tag}-`));
+  const me = createIdentity('me');
+  const B = createIdentity('b');
+  const peersFile = path.join(dir, 'peers.json');
+  const joinedFile = path.join(dir, 'anchors.json');
+  const file = path.join(dir, 'addrbook.json');
+  writePeers([{ id: 'b', name: 'b', host: '192.168.1.9', port: 50551, secret: '', fp: B.fp, kind: 'pc', ram: null, bw: null, added_at: 't', ring }], peersFile);
+  return { me, B, peersFile, joinedFile, file };
+};
+const setRingOf = (peersFile: string, fp: string, ring: 'home' | 'circle') => writePeers(readPeers(peersFile).map((p) => (p.fp === fp ? { ...p, ring } : p)), peersFile);
+
+test('address book: a friend\'s (circle) device keeps no private address from its record, whatever the record calls it; its anchors at private addresses go too', () => {
+  const { me, B, peersFile, joinedFile, file } = friendFiles('friend-lan', 'circle');
+  const book = new AddressBook({ identity: me, peersFile, joinedFile, file, addrs: () => [] });
+  assert.equal(book.accept(signRecord(B, friendBody(10)), null).ok, true);
+  const b = readPeers(peersFile)[0];
+  assert.deepEqual(b.addrs, [{ host: '203.0.113.5', port: 40000, via: 'mapped' }], 'the outside address only');
+  assert.deepEqual(b.anchors, [], 'an anchor at a private address is not taken');
+  assert.equal(b.host, '192.168.1.9', 'where it was paired stays');
+  assert.equal(b.port, 50551);
+  assert.equal(book.held(B.fp)!.addrs.length, 4, 'the held record stays whole (the seq floor and the signature)');
+});
+
+test('address book: the same record for the person\'s own (home) device keeps every address and anchor', () => {
+  const { me, B, peersFile, joinedFile, file } = friendFiles('home-lan', 'home');
+  const book = new AddressBook({ identity: me, peersFile, joinedFile, file, addrs: () => [] });
+  assert.equal(book.accept(signRecord(B, friendBody(10)), null).ok, true);
+  const b = readPeers(peersFile)[0];
+  assert.deepEqual(b.addrs, friendBody(10).addrs);
+  assert.deepEqual(b.anchors, friendBody(10).anchors);
+});
+
+test('address book: a device that became a friend\'s is cleaned at start; turned home its lan address comes back from the held record, and goes again as a friend\'s', () => {
+  const { me, B, peersFile, joinedFile, file } = friendFiles('ring-turns', 'home');
+  const first = new AddressBook({ identity: me, peersFile, joinedFile, file, addrs: () => [] });
+  assert.equal(first.accept(signRecord(B, friendBody(10)), null).ok, true);
+  assert.equal(readPeers(peersFile)[0].addrs!.length, 4);
+  // turned circle while kula-node was not running: the stored lan addresses go at start
+  setRingOf(peersFile, B.fp, 'circle');
+  const book = new AddressBook({ identity: me, peersFile, joinedFile, file, addrs: () => [] });
+  assert.deepEqual(readPeers(peersFile)[0].addrs, [{ host: '203.0.113.5', port: 40000, via: 'mapped' }], 'cleaned at start');
+  assert.deepEqual(readPeers(peersFile)[0].anchors, []);
+  // confirmed as the person's own: its record is applied again at the next ask (its seq has not risen)
+  setRingOf(peersFile, B.fp, 'home');
+  assert.deepEqual(book.wants(), [{ fp: B.fp, seq: 10 }]);
+  assert.deepEqual(readPeers(peersFile)[0].addrs, friendBody(10).addrs, 'the lan address is back');
+  assert.deepEqual(readPeers(peersFile)[0].anchors, friendBody(10).anchors);
+  // and a friend's again: gone at the next ask
+  setRingOf(peersFile, B.fp, 'circle');
+  book.wants();
+  assert.deepEqual(readPeers(peersFile)[0].addrs, [{ host: '203.0.113.5', port: 40000, via: 'mapped' }], 'gone again');
+  assert.equal(book.held(B.fp)!.seq, 10);
+});
+
+test('address book: a friend\'s anchor joined at a lan address is still dialled there; it learns only the outside address from its record', () => {
+  const dir = fs.mkdtempSync(path.join(HOME, 'friend-anchor-'));
+  const me = createIdentity('me');
+  const X = createIdentity('x');
+  const peersFile = path.join(dir, 'peers.json');
+  const joinedFile = path.join(dir, 'anchors.json');
+  const file = path.join(dir, 'addrbook.json');
+  writePeers([{ id: 'x', name: 'x', host: '192.168.1.20', port: 50551, secret: '', fp: X.fp, kind: 'pc', ram: null, bw: null, added_at: 't', ring: 'circle', anchor: true }], peersFile);
+  writeJoined([{ fp: X.fp, name: 'x', host: '192.168.1.20', port: 50551, joined_at: 't' }], joinedFile);
+  const book = new AddressBook({ identity: me, peersFile, joinedFile, file, addrs: () => [] });
+  const mapped = { host: '203.0.113.9', port: 40000, via: 'mapped' as const };
+  assert.equal(book.accept(signRecord(X, { addrs: [{ host: '192.168.1.20', port: 50551, via: 'lan' }, mapped], anchors: [], seq: 10, at: 10 }), null).ok, true);
+  let j = readJoined(joinedFile)[0];
+  assert.deepEqual([j.host, j.port], ['192.168.1.20', 50551], 'the joined host stays');
+  assert.deepEqual(j.addrs, [mapped]);
+  assert.deepEqual(readPeers(peersFile)[0].addrs, [mapped]);
+  // its record names another lan address now: the host this computer dials is not moved to it
+  // (nor to the outside one, as a home anchor's would be: the lan is how this computer joined)
+  assert.equal(book.accept(signRecord(X, { addrs: [{ host: '192.168.1.21', port: 50551, via: 'lan' }, mapped], anchors: [], seq: 11, at: 11 }), null).ok, true);
+  j = readJoined(joinedFile)[0];
+  assert.deepEqual([j.host, j.port], ['192.168.1.20', 50551]);
+  assert.deepEqual(j.addrs, [mapped]);
+  assert.ok(!fs.readFileSync(joinedFile, 'utf8').includes('192.168.1.21') && !fs.readFileSync(peersFile, 'utf8').includes('192.168.1.21'));
 });
 
 test('address book on the wire: an anchor that changes what it hands out is not believed; it carries only records it may, newest first', async () => {

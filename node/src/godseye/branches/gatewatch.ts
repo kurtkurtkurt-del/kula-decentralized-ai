@@ -42,7 +42,8 @@
 // A red host check turns the cluster's verdict red (trust.ts build), never a device's: untrusted()
 // (decide.ts) reads the devices only.
 //
-// The cards (warn; the action only opens the trust branch), weight 3 first:
+// The cards (warn; the action only opens the trust branch, but the two cap cards carry the friend's
+// daily limit to 2x in whole GB, from the cap they saw, for the person to accept: capAction), weight 3 first:
 //   trust:gate-guard        3  at once, while the 26 hours hold a guard refusal
 //   trust:rpc-guard:<id>    3  a device's rejectsDay holds a reason starting 'rpc guard' (it answered,
 //                              no error); its verdict does not change: it defended itself
@@ -56,8 +57,19 @@
 //                              friend's device (circle or world; the owner's own devices have none),
 //                              memberMaxDay the most one of them passed today, above capDay. No
 //                              memberMaxDay, no card (bytesDay is every member together, the owner's
-//                              own devices too). It stays while above CAP_STAY (0.95) × capDay
-// One feed line when a card comes and one when it goes (gateLines), never one per look.
+//                              own devices too). It stays while above CAP_STAY (0.95) × capDay. Its
+//                              words follow anchor.ts run(): at the limit a new stream of that device
+//                              is refused ('byte limit'), past it its running ones are cut, until the
+//                              UTC day turns (or sharing restarts: the counts are memory only)
+//   trust:anchor-refusing   2  (17.11.2026, P4) host.anchor.refused holds full, too many streams or
+//                              too many dials today: the counts by reason and what each means
+//   trust:anchor-near-cap   1  (a suggest) memberMaxDay at NEAR_CAP (0.8) × capDay or above while the
+//                              cap card is off: the GB left; a split load passes about the model's
+//                              size through the anchor
+// memberMaxName (the device behind memberMaxDay) names it in the card's title and why, never in this
+// branch's own feed lines (the eye's accept/reject/undo lines quote the title, scrubbed from the box). One feed line when a card comes and one when it goes (gateLines), never one per look.
+// Besides the cards, one calm feed line (no card) while today's 'not here' refusals or removed
+// members are above 0 (gateCards' `quiet`): the counts start again at 00:00 UTC, so about one a day.
 //
 // The uncertainty: none of these thresholds (MIN_K, TAIL_P, the 1000 backstop, 5 guesses) was
 // measured against a real router's scanner rate; the burst says only that the far count is unlikely
@@ -79,6 +91,15 @@ export const GUESS_LIMIT = 5;          // guesses in a day that turn a check red
 export const GUARD = 'rpc guard';      // every reason starting with it is the guard's
 export const BACKSTOP = 1000;          // far refusals in the running hour: a card even while learning
 export const CAP_STAY = 0.95;          // the anchor-cap card stays while the bytes held (capBytes) are above this × capDay
+export const NEAR_CAP = 0.8;           // the anchor-near-cap card from this × capDay (while the cap card is off)
+/** the anchor refusals the refusing card is about (types.ts ANCHOR_REFUSALS), with what each means */
+export const ANCHOR_LOUD: ReadonlyArray<[string, string]> = [
+  ['full', 'every stream through this anchor was taken, or friends\' devices together held all of theirs (a share stays free for your own devices)'],
+  ['too many streams', 'one device already had its most streams open at once'],
+  ['too many dials', 'a friend\'s device opened connections faster than its limit; one refused connection stops a split load'],
+];
+/** the anchor refusals and removals said in one calm feed line, no card */
+export const ANCHOR_QUIET_KEY = '~anchor-quiet';
 export const GATE_KEY = '~gate';       // the reserved key of the fit in trust's notes
 export const GATE_HOURS = 26;          // the hours the gate holds at most
 
@@ -191,11 +212,16 @@ export function gateStep(st: GateState, hours: GateHour[]): { st: GateState; cha
   return { st: s, changed };
 }
 
-/** the last n hours' counts by reason and by class */
+/** the last n hours' counts by reason and by class: the hours that started within n hours of the
+ *  running hour (the last one), chosen by their start and not by their count, since an hour in
+ *  which the ledger saw no line is left out (godseye-feed.ts hostGate) and n entries can then
+ *  reach further back than n hours */
 function sums(hours: GateHour[], n: number) {
   const by = new Map<string, number>();
   const cls: Record<GateClass, number> = { stranger: 0, guess: 0, guard: 0, other: 0 };
-  for (const h of hours.slice(-n)) {
+  const from = hours.length ? hours[hours.length - 1].start - n * HOUR : Infinity;
+  for (const h of hours) {
+    if (h.start <= from) continue;
     for (const [w, c] of h.by) {
       const key = w.startsWith(GUARD) ? GUARD : w;
       by.set(key, Math.min((by.get(key) ?? 0) + c, COUNT_MAX));
@@ -211,7 +237,8 @@ const wordsOf = (by: Map<string, number>, keep: (w: string) => boolean) =>
  *  whichever is more) and the newest why */
 function guardOf(gate: unknown, hours: GateHour[]): { n: number; why: string | null } {
   const counted = sums(hours, GATE_HOURS).cls.guard;
-  const from = hours.length ? hours[0].start : Infinity;
+  // the same 26 hours by time as the counts: the oldest hour shown, at most 25 before the running one
+  const from = hours.length ? Math.max(hours[0].start, hours[hours.length - 1].start - (GATE_HOURS - 1) * HOUR) : Infinity;
   const listed = (isObj(gate) && Array.isArray(gate.guard) ? gate.guard : [])
     .filter((g): g is { t: number; why: unknown } => isObj(g) && isTime(g.t) && g.t >= from)
     .sort((a, b) => a.t - b.t);
@@ -268,6 +295,16 @@ const warn = (id: string, weight: 1 | 2 | 3, title: string, why: string): Sugges
   ({ id, kind: 'warn', weight, title, why, action: { ...OPEN }, label: 'look' });
 const gb = (bytes: number) => { const x = bytes / 1e9; return x < 10 ? x.toFixed(2) : x.toFixed(1); };
 
+const CAP_GB_MAX = 100_000;   // the most GB a day the engine takes (sharehere.ts setFriendCap)
+/** the cap cards' change (DECISIONS 5, E2): a friend's daily limit to 2x, in whole GB, from the cap
+ *  the card saw (in GB, so the server can hold it against the engine's capDay); a look when 2x is
+ *  past what the engine takes */
+function capAction(capBytes: number): Pick<Suggestion, 'action' | 'label'> {
+  const from = capBytes / 1e9;
+  const to = Math.min(CAP_GB_MAX, Math.ceil(2 * from));
+  return from <= CAP_GB_MAX && to > from ? { action: { do: 'cap', gb: to, from }, label: 'raise the limit' } : { action: { ...OPEN }, label: 'look' };
+}
+
 const bytesOk = (x: unknown): x is number => typeof x === 'number' && Number.isFinite(x) && x >= 0;
 
 /** the bytes the anchor's daily limit is held against: capDay is the limit of one friend's device
@@ -289,7 +326,7 @@ export function capOn(anchor: unknown, was: boolean): boolean {
 }
 
 /** every gate card this look says, weight 3 first. `cap`: the anchor-cap card is on (capOn) */
-export function gateCards(st: GateState, gate: unknown, devices: readonly EyeDevice[], anchor: unknown, cap: boolean): GateCard[] {
+export function gateCards(st: GateState, gate: unknown, devices: readonly EyeDevice[], anchor: unknown, cap: boolean): GateCards {
   const out: GateCard[] = [];
   const hours = isObj(gate) ? hoursOf(gate) : [];
   if (hours.length) {
@@ -351,21 +388,84 @@ export function gateCards(st: GateState, gate: unknown, devices: readonly EyeDev
       });
     }
   }
-  const c = cap ? capBytes(anchor) : null;
-  if (c) {
-    const x = `a friend's device passed ${gb(c.bytes)} of its ${gb(c.cap)} GB daily limit through this anchor`;
+  // the anchor (17.11.2026, P4). The words follow anchor.ts run(): a friend's device at its daily
+  // bytes has its new streams refused ('byte limit'), past them its running ones are cut, until the
+  // UTC day turns; the counts live in memory, so they start again when sharing restarts
+  const c = capBytes(anchor);
+  const named = memberName(anchor);
+  const who = named ?? "a friend's device";
+  const FRIEND = "a friend's device";
+  if (c && cap) {
+    const passed = `passed ${gb(c.bytes)} of its ${gb(c.cap)} GB daily limit through this anchor`;
+    const at = c.bytes >= c.cap;
+    const what = c.bytes > c.cap ? 'the anchor refuses its new streams and cut its running ones until 00:00 UTC'
+      : 'the anchor refuses its new streams until 00:00 UTC';
     out.push({
-      card: warn('trust:anchor-cap', 2, "a friend's device passed its daily limit through this anchor", `${x} in the last day, ciphertext only; your own devices have no limit. nothing was switched off.`),
-      said: x,
+      card: { ...warn('trust:anchor-cap', 2, `${at ? who : FRIEND} passed its daily limit through this anchor`, at
+        ? `${who} ${passed} today (UTC), ciphertext only; your own devices have no limit. ${what}; the brain switched nothing.`
+        : `the most one friend's device has passed through this anchor today is now ${gb(c.bytes)} of its ${gb(c.cap)} GB daily limit (ciphertext only): under the limit, so the anchor takes its new streams again; the brain switched nothing.`), ...capAction(c.cap) },
+      said: `${FRIEND} ${passed}`,
       gone: "every friend's device is back under its daily limit through this anchor",
     });
+  } else if (c && c.bytes >= NEAR_CAP * c.cap) {
+    const left = `${gb(Math.max(0, c.cap - c.bytes))} GB left`;
+    out.push({
+      card: {
+        id: 'trust:anchor-near-cap', kind: 'suggest', weight: 1, title: `${who} is near its daily limit through this anchor`,
+        why: `${who} passed ${gb(c.bytes)} of its ${gb(c.cap)} GB daily limit through this anchor today (UTC), counted since sharing last started: ${left}. a split load passes about the model's size through the anchor. at the limit the anchor refuses its new streams, past it it cuts the running ones too, until 00:00 UTC; the brain switched nothing.`,
+        ...capAction(c.cap),
+      },
+      said: `${FRIEND} is near its daily limit through this anchor: ${left}`,
+      gone: "no friend's device is near its daily limit through this anchor any more (under 80% of it, or past it)",
+    });
   }
-  return out.sort((a, b) => (b.card.weight ?? 2) - (a.card.weight ?? 2));
+  const loud = refusedOf(anchor, ANCHOR_LOUD.map(([w]) => w));
+  if (loud.length) {
+    const means = new Map(ANCHOR_LOUD);
+    out.push({
+      card: warn('trust:anchor-refusing', 2, 'this anchor refused streams today', `today (UTC), counted since sharing last started: ${loud.map(([w, n]) => `${w} ×${n}: ${means.get(w)}`).join('; ')}. a refused stream fails the connection that asked for it; the brain switched nothing.`),
+      said: `this anchor refused streams today: ${loud.map(([w, n]) => `${w} ×${n}`).join(', ')}`,
+      gone: "this anchor: no stream refused as full, too many streams or too many dials in today's count",
+    });
+  }
+  const sorted: GateCards = out.sort((a, b) => (b.card.weight ?? 2) - (a.card.weight ?? 2));
+  // 'not here' and removed members: one calm feed line, no card
+  const notHere = refusedOf(anchor, ['not here']).at(0)?.[1] ?? 0;
+  const removed = isObj(anchor) ? whole(anchor.removed) : 0;
+  if (notHere + removed > 0) {
+    const parts: string[] = [];
+    if (notHere > 0) parts.push(`${plural(notHere, 'connection')} asked for a device that was not connected to it right then (not here)`);
+    if (removed > 0) parts.push(`${plural(removed, 'member')} whose access was removed, cut at once`);
+    sorted.quiet = new Map([[ANCHOR_QUIET_KEY, `this computer's anchor today: ${parts.join('; ')}. nothing to do`]]);
+  }
+  return sorted;
 }
 
-/** the feed lines of this look: one when a card comes, one when it goes. `was`: the cards on before,
- *  id → its gone line; returns the lines and the map for the next look */
-export function gateLines(was: ReadonlyMap<string, string>, cards: GateCard[]): { lines: string[]; on: Map<string, string> } {
+const NAME_MAX = 80;
+/** the friend's device behind memberMaxDay (guard.ts cleans it and cuts it to 80): for a card's
+ *  title and why, never this branch's feed lines or a note (the eye's accept lines quote the title,
+ *  scrubbed from the box). null: not said */
+function memberName(anchor: unknown): string | null {
+  if (!isObj(anchor)) return null;
+  const n = anchor.memberMaxName;
+  return typeof n === 'string' && n.length > 0 && n.length <= NAME_MAX ? n : null;
+}
+
+/** today's anchor refusals under the given words (types.ts ANCHOR_REFUSALS), each above 0, in the
+ *  order given; refused absent, null or not an object: none */
+function refusedOf(anchor: unknown, words: readonly string[]): [string, number][] {
+  if (!isObj(anchor) || !isObj(anchor.refused)) return [];
+  const r = anchor.refused;
+  return words.map((w): [string, number] => [w, Object.hasOwn(r, w) ? whole(r[w]) : 0]).filter(([, n]) => n > 0);
+}
+
+/** the cards of a look, and its feed lines without a card (key → line; said once while the key stays) */
+export type GateCards = GateCard[] & { quiet?: Map<string, string> };
+
+/** the feed lines of this look: one when a card comes, one when it goes, and a quiet line once while
+ *  its key stays. `was`: the cards and quiet keys on before, id → its gone line ('' for a quiet key,
+ *  which says nothing when it goes); returns the lines and the map for the next look */
+export function gateLines(was: ReadonlyMap<string, string>, cards: GateCards): { lines: string[]; on: Map<string, string> } {
   const on = new Map<string, string>();
   const lines: string[] = [];
   for (const c of cards) {
@@ -373,6 +473,11 @@ export function gateLines(was: ReadonlyMap<string, string>, cards: GateCard[]): 
     on.set(c.card.id, c.gone);
     if (!was.has(c.card.id)) lines.push(c.said);
   }
-  for (const [id, gone] of was) if (!on.has(id)) lines.push(gone);
+  for (const [key, line] of cards.quiet ?? []) {
+    if (on.has(key)) continue;
+    on.set(key, '');
+    if (!was.has(key)) lines.push(line);
+  }
+  for (const [id, gone] of was) if (!on.has(id) && gone) lines.push(gone);
   return { lines, on };
 }

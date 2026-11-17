@@ -25,7 +25,7 @@ type TlsServer = import('../src/gate.ts').TlsServer;
 const { createIdentity, newPin, Paired } = await import('../src/tls.ts');
 type GateIdentity = import('../src/tls.ts').GateIdentity;
 const { AnchorHub, circleMembers } = await import('../src/anchor.ts');
-const { OneTimeCodes, AnchorHost, AnchorLinks, joinWithInvite, joinedAgainWords, inviteWords, readJoined, joinedRoads, pairBackCode, reachableFromOutside, ringCapped } = await import('../src/join.ts');
+const { OneTimeCodes, AnchorHost, AnchorLinks, joinWithInvite, joinedAgainWords, inviteWords, readJoined, joinedRoads, pairBackCode, reachableFromOutside, ringCapped, recordPairedBack } = await import('../src/join.ts');
 const { parsePeerText, readPeers, writePeers, probePeers, setRing } = await import('../src/peers.ts');
 const { joinAnchor, dialAnchor } = await import('../src/anchor.ts');
 type Peer = import('../src/peers.ts').Peer;
@@ -154,7 +154,25 @@ test('the invite round trip across three homes: B and C join A, A pairs back wit
     const recB = readPeers(A.peersFile).find((p) => p.fp === B.identity.fp)!;
     assert.deepEqual(recB.route, { via: 'anchor', anchor: 'self' });
     assert.equal(recB.name, 'mac-home');
-    assert.equal(recB.ring, 'home', 'the invite said: mine');
+    // the invite said "mine" (17.11.2026, the person's decision): a friend's seat (circle, capped)
+    // with a claim, until the person says on this computer's page that it is theirs
+    assert.equal(recB.ring, 'circle', 'a "mine" invite gives circle until the person confirms');
+    assert.equal(recB.claim?.from, '127.0.0.1', 'where it joined from');
+    assert.ok(Number.isFinite(Date.parse(recB.claim!.at)), 'when it joined');
+    assert.deepEqual(Object.keys(recB.claim!).sort(), ['at', 'from']);
+    assert.equal(A.hub!.capped(B.identity.fp), true, 'limited like a friend\'s until confirmed');
+    const eM = new Engine({ peersFile: A.peersFile, pairedFile: path.join(A.dir, 'paired'), identity: A.identity, llama: null });
+    try {
+      const rowB = eM.peers().find((r) => r.id === recB.id)!;
+      assert.deepEqual(rowB.claim, { at: recB.claim!.at, from: '127.0.0.1', fp: B.identity.fp.slice(0, 16) }, 'the row shows what the joiner cannot choose');
+      assert.equal(eM.confirmMine(recB.id, true), true);
+      const confirmed = readPeers(A.peersFile).find((p) => p.fp === B.identity.fp)!;
+      assert.equal(confirmed.ring, 'home', 'the person said: it is mine');
+      assert.ok(!('claim' in confirmed), 'the claim is answered');
+      assert.equal(A.hub!.capped(B.identity.fp), false, 'no daily limit once confirmed');
+      assert.equal(eM.peers().find((r) => r.id === recB.id)!.claim, undefined);
+      assert.equal(eM.confirmMine(recB.id, true), false, 'nothing left to confirm');
+    } finally { await eM.close(); }
     assert.ok(recB.paired_at);
     await until(() => readJoined(B.joinedFile)[0].hpin === null, 3000, 'B to note the pair-back');
     await until(() => lB.view()[0]?.state === 'registered', 3000, 'B registered');
@@ -401,6 +419,31 @@ test('the words for an invite used already name the owner\'s remedy', () => {
   assert.match(w, /if it was not you who used it, tell the anchor's owner to remove the device that used it/);
 });
 
+// F3 (17 Nov): a "mine" invite used by a device already paired keeps the ring the person gave it;
+// a friend's device (circle, capped) is never raised to home by an invite, and gets no claim. A new
+// device is circle always; a "mine" invite only adds the claim the person answers on the page.
+test('a pair-back keeps the ring of a device already in the book; a new one is circle, with a claim when the invite said mine', () => {
+  const file = path.join(HOME, 'pairback-ring', 'peers.json');
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const fpOld = 'ab'.repeat(32), fpNew = 'cd'.repeat(32), fpFriend = 'ef'.repeat(32);
+  const claim = { at: new Date().toISOString(), from: '127.0.0.1' };
+  const old: Peer = { id: 'friend', name: 'friend', host: '', port: 0, secret: '', fp: fpOld, pin: null, paired_at: 't', ring: 'circle', kind: 'pc', ram: null, bw: null, added_at: 't' };
+  writePeers([old], file);
+  const p = recordPairedBack(file, fpOld, 'friend', 'pc', claim);
+  assert.equal(p.ring, 'circle', 'the returned record keeps circle');
+  assert.ok(!p.claim, 'an existing record gets no claim');
+  const kept = readPeers(file).find((x) => x.fp === fpOld)!;
+  assert.equal(kept.ring, 'circle', 'the book keeps circle');
+  assert.ok(!kept.claim, 'the book has no claim for it');
+  const n = recordPairedBack(file, fpNew, 'mine', 'pc', claim);
+  assert.equal(n.ring, 'circle', 'a new device is circle until the person confirms');
+  assert.deepEqual(n.claim, claim);
+  assert.deepEqual(readPeers(file).find((x) => x.fp === fpNew)!.claim, claim);
+  const f = recordPairedBack(file, fpFriend, 'pal', 'pc');
+  assert.equal(f.ring, 'circle');
+  assert.ok(!f.claim, 'a friend\'s invite makes no claim');
+});
+
 test('a typed invite: address, code and the certificate start (16 or more) join; a short or wrong start is refused before the code is spent', async () => {
   const echo = await echoServer();
   const A = await home('anchor', echo.port, { anchor: true });
@@ -413,11 +456,19 @@ test('a typed invite: address, code and the certificate start (16 or more) join;
     const typed = { address: inv.typed.address, pin: inv.typed.code, anchor: true };
     await assert.rejects(engine.pairByHand({ ...typed, fp: inv.typed.certificate.slice(0, 12) }), /16 letters and digits or more/);
     const wrong = [...inv.typed.certificate].map((c) => (c === 'f' ? '0' : 'f')).join('');
-    await assert.rejects(engine.pairByHand({ ...typed, fp: wrong }), /certificate does not match/);
+    await assert.rejects(engine.pairByHand({ ...typed, fp: wrong, whose: 'friend' }), /certificate does not match/);
     assert.ok(A.host!.current(), 'the code is not spent by a wrong certificate');
-    const row = await engine.pairByHand({ ...typed, fp: inv.typed.certificate, name: 'berlin' });
+    // whose computer the anchor is (17.11.2026, as the phone asks): no answer, no join, typed or pasted
+    await assert.rejects(engine.pairByHand({ ...typed, fp: inv.typed.certificate }), /whose computer the anchor is: my computer or a friend's computer/);
+    await assert.rejects(engine.pairByHand({ ...typed, fp: inv.typed.certificate, whose: 'stranger' }), /whose computer the anchor is/);
+    await assert.rejects(engine.addPeer(inv.code), /whose computer the anchor is/);
+    assert.ok(A.host!.current(), 'the code is not spent without an answer');
+    assert.ok(!A.paired.has(E.fp), 'nothing was dialed');
+    const row = await engine.pairByHand({ ...typed, fp: inv.typed.certificate, name: 'berlin', whose: 'mine' });
     assert.equal(row.anchor, true);
     assert.equal(row.name, 'berlin');
+    assert.equal(row.ring, 'home', '"my computer": this computer treats the anchor as its own');
+    assert.equal(readPeers(peersFile)[0].ring, 'home');
     assert.ok(A.paired.has(E.fp));
     const store = readJoined(path.join(dir, 'anchors.json'));
     assert.equal(store.length, 1);
@@ -623,7 +674,7 @@ test('the page: the anchor switch, an invite (text and qr), a typed invite joins
     assert.equal((await post(api('share/invite'), ui.port, { whose: 'stranger' })).status, 400);
     const mine = await (await post(api('share/invite'), ui.port, { whose: 'mine' })).json();
     assert.equal(mine.whose, 'mine');
-    assert.match(mine.words, /a computer of yours \(no daily limit\)/);
+    assert.match(mine.words, /^for a computer of yours: after it joins, press 'yes, it is mine' on its row in devices here; until then it is limited like a friend's\. it works once/);
     const inv = await (await post(api('share/invite'), ui.port, {})).json();
     assert.equal(inv.whose, 'friend', 'a friend\'s by default');
     const p = parsePeerText(inv.code);
@@ -644,8 +695,20 @@ test('the page: the anchor switch, an invite (text and qr), a typed invite joins
     // this computer joins A by a typed invite through the page; sharing starts so it can register
     const ai = A.host!.invite(mapped(A));
     const before = seen.length;
-    const row = await (await post(api('peers/add'), ui.port, { address: ai.typed.address, pin: ai.typed.code, fp: ai.typed.certificate, anchor: true })).json();
+    const typedAi = { address: ai.typed.address, pin: ai.typed.code, fp: ai.typed.certificate, anchor: true };
+    // the page asks whose computer the anchor is: without an answer it is refused, the code unspent
+    const unasked = await post(api('peers/add'), ui.port, typedAi);
+    assert.equal(unasked.status, 400);
+    assert.match((await unasked.json()).error, /whose computer the anchor is/);
+    const pasted = await post(api('peers/add'), ui.port, { text: ai.code });
+    assert.equal(pasted.status, 400);
+    assert.match((await pasted.json()).error, /whose computer the anchor is/);
+    assert.equal((await post(api('peers/add'), ui.port, { ...typedAi, whose: 'stranger' })).status, 400);
+    assert.ok(A.host!.current(), 'the code is not spent without an answer');
+    const row = await (await post(api('peers/add'), ui.port, { ...typedAi, whose: 'friend' })).json();
     assert.equal(row.anchor, true, JSON.stringify(row));
+    assert.equal(row.ring, 'circle', '"a friend\'s computer": the anchor is circle here');
+    assert.equal(readPeers(path.join(dir, 'peers.json')).find((p) => p.fp === A.identity.fp)!.ring, 'circle');
     assert.ok(A.paired.has(me.fp), 'A paired this computer');
     await until(() => seen.length === before + 1, 3000, 'sharing to start after the join');
     assert.equal(seen.at(-1)!.anchor, undefined, 'joining does not make this computer an anchor');

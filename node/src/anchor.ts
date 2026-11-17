@@ -104,6 +104,14 @@ export interface AnchorOptions {
   now?: () => number;
 }
 
+// The words a refusal to a member (or to this computer's own dial) is counted under in stats():
+// a fixed list, so no free text (a thrown value's message, `run`'s String(why)) ever reaches the
+// page or the brain. Any other reason is 'other'. godseye/types.ts ANCHOR_REFUSALS is the same list.
+export const ANCHOR_REASON_WORDS = ['too many dials', 'byte limit', 'too many streams', 'full', 'not here', 'did not accept', 'dialer gone', 'target gone', 'other'] as const;
+export type AnchorReasonWord = typeof ANCHOR_REASON_WORDS[number];
+export const anchorReasonWord = (reason: unknown): AnchorReasonWord =>
+  (ANCHOR_REASON_WORDS as readonly string[]).includes(reason as string) && reason !== 'other' ? reason as AnchorReasonWord : 'other';
+
 // the most address records one anchor carries
 export const ANCHOR_MAX_RECORDS = 512;
 // fingerprints in one `who` line
@@ -198,6 +206,11 @@ export class AnchorHub {
   private readonly recs = new DialBucket();
   private readonly records = new Map<string, AddrRecord>();
   private readonly days = new Map<string, { day: number; bytes: number }>();
+  // today's refusals to members and to this computer's own dials, by reason word, and the members
+  // removed today (UTC day; memory only, counts only, never a fingerprint)
+  private refusedDay: { day: number; by: Map<AnchorReasonWord, number> } = { day: -1, by: new Map() };
+  private removedDay = { day: -1, n: 0 };
+  private readonly since: number;
   private readonly now: () => number;
   private readonly checker: NodeJS.Timeout;
   private closed = false;
@@ -206,6 +219,7 @@ export class AnchorHub {
     this.caps = { ...ANCHOR_CAPS };
     this.setCaps(opts.caps ?? {});
     this.now = opts.now ?? Date.now;
+    this.since = this.now();
     this.checker = setInterval(() => this.check(), ANCHOR_CHECK_MS);
     this.checker.unref();
   }
@@ -238,7 +252,26 @@ export class AnchorHub {
 
   on(f: (e: AnchorEvent) => void): () => void { this.listeners.add(f); return () => { this.listeners.delete(f); }; }
 
-  private emit(e: AnchorEvent) { for (const f of this.listeners) { try { f(e); } catch {} } }
+  private emit(e: AnchorEvent) {
+    this.count(e);
+    for (const f of this.listeners) { try { f(e); } catch {} }
+  }
+
+  // the counters stats() reads: a refusal to a member or to this computer's own dial (a stranger's,
+  // refused at the gate, is not counted here), and a member removed
+  private count(e: AnchorEvent): void {
+    try {
+      const day = Math.floor(e.at / DAY_MS);
+      if (e.type === 'refuse' && e.fp !== null && (e.fp === this.opts.self || this.opts.isMember(e.fp))) {
+        if (this.refusedDay.day !== day) this.refusedDay = { day, by: new Map() };
+        const w = anchorReasonWord(e.reason);
+        this.refusedDay.by.set(w, (this.refusedDay.by.get(w) ?? 0) + 1);
+      } else if (e.type === 'leave' && e.why === 'removed') {
+        if (this.removedDay.day !== day) this.removedDay = { day, n: 0 };
+        this.removedDay.n++;
+      }
+    } catch {}
+  }
 
   // the gate's refusal before the JSON line (a stranger), for the same event stream
   refused(peer: string, fp: string | null, reason: string): void { this.emit({ type: 'refuse', fp, peer, at: this.now(), reason }); }
@@ -247,11 +280,17 @@ export class AnchorHub {
     return [...this.registry.values()].map((m) => ({ fp: m.fp, name: m.name, kind: m.kind, peer: m.peer, since: m.since }));
   }
 
-  stats(): { members: number; streams: number; bytesToday: Record<string, number> } {
+  // since: when this anchor started (the counts are since then, at most today); refusedToday: the
+  // refusals to members and to this computer's own dials today, by reason word
+  // (ANCHOR_REASON_WORDS); removedToday: members whose access was removed today
+  stats(): { members: number; streams: number; bytesToday: Record<string, number>; refusedToday: Partial<Record<AnchorReasonWord, number>>; removedToday: number; since: number } {
     const day = Math.floor(this.now() / DAY_MS);
     const bytesToday: Record<string, number> = {};
     for (const [fp, d] of this.days) if (d.day === day) bytesToday[fp] = d.bytes;
-    return { members: this.registry.size, streams: this.streams.size, bytesToday };
+    const refusedToday: Partial<Record<AnchorReasonWord, number>> = {};
+    if (this.refusedDay.day === day) for (const [w, n] of this.refusedDay.by) refusedToday[w] = n;
+    const removedToday = this.removedDay.day === day ? this.removedDay.n : 0;
+    return { members: this.registry.size, streams: this.streams.size, bytesToday, refusedToday, removedToday, since: this.since };
   }
 
   // A member's access was removed: unless it is still a member another way, its control

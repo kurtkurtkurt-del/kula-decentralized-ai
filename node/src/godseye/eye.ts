@@ -2,7 +2,8 @@
 // Platform-neutral (11.11.2026): no node: module here. The notes go through EyeNotes, the trust
 // branch's signatures through EyeKeys, the black box is handed in opened (platform.ts); a
 // computer's eye is node.ts, a phone's is app/src/eye/.
-import { BRANCHES, BRANCH_IDS, dark, type Branch, type BranchCtx, type BranchEvent, type BranchId, type BranchMaker, type BranchView, type Snapshot, type SuggestAction, type Suggestion } from './types.js';
+import { BRANCHES, BRANCH_IDS, dark, type Branch, type BranchCtx, type BranchEvent, type BranchId, type BranchMaker, type BranchView, type Snapshot, type SuggestAction, type Suggestion, type UndoAction } from './types.js';
+import { canUndo, changeWords, isChange, needsConfirm } from './change.js';
 import { MAKERS } from './branches/index.js';
 import { clean, dropped, type Dropped } from './branches/guard.js';
 import type { Box, BoxStatus, EyeKeys, EyeNotes } from './platform.js';
@@ -44,6 +45,21 @@ const CARDS_MAX = 24;
 const CARD_ID = /^[a-z]+:[\w.:@/-]{1,100}$/;
 const MODES = ['phone', 'apart', 'split', 'here'];
 const PANELS = ['devices', 'models', 'settings', 'branch'];
+// accept / reject (17.11.2026, DECISIONS 5): a rejection hides a change card for REJECT_MS, from the
+// second one on for REJECT_AGAIN_MS, a warning always for REJECT_WARN_MS; it is remembered (for that
+// count and the weight) REMEMBER_MS after the last reject. A branch's record looks back RECORD_MS.
+// Both live in the notes under CARDS_NOTES; the undo lives in memory only, UNDO_MS.
+const HOUR_MS = 3_600_000;
+const DAY_MS = 24 * HOUR_MS;
+const REJECT_MS = 7 * DAY_MS;
+const REJECT_AGAIN_MS = 30 * DAY_MS;
+const REJECT_WARN_MS = DAY_MS;
+const REMEMBER_MS = 90 * DAY_MS;
+const RECORD_MS = 30 * DAY_MS;
+const UNDO_MS = 10 * 60_000;
+const REJECTS_MAX = 256;
+const RECORD_MAX = 512;
+const CARDS_NOTES = 'cards';
 const str = (v: unknown, max: number): string | null => (typeof v === 'string' && v.trim() ? v.slice(0, max) : null);
 const ids = (v: unknown): string[] | null => (Array.isArray(v) && v.length <= 64 && v.every((x) => typeof x === 'string' && x.length <= 200) ? [...v] : null);
 
@@ -69,8 +85,23 @@ export function cleanAction(a: unknown): SuggestAction | null {
       if (x.panel === 'branch' && !branch) return null;
       return { do: 'open', panel: x.panel as 'devices', ...(branch ? { branch } : {}) };
     }
+    case 'cap': return gbOk(x.gb) && gbOk(x.from) ? { do: 'cap', gb: x.gb as number, from: x.from as number } : null;
+    case 'anchor': return x.on === true ? { do: 'anchor', on: true } : null;
+    case 'cancel': return typeof x.project === 'string' && x.project.length >= 1 && x.project.length <= 200 ? { do: 'cancel', project: x.project } : null;
     default: return null;
   }
+}
+
+/** a cap's GB: finite, above 0, at most 100 000 */
+const gbOk = (v: unknown): boolean => typeof v === 'number' && Number.isFinite(v) && v > 0 && v <= 100000;
+
+/** an undo exactly as types.ts spells it, or null: load, unload, cap (cleanAction's rules), anchor off */
+export function cleanUndo(u: unknown): UndoAction | null {
+  const x = u as Record<string, unknown> | null;
+  if (!x || typeof x !== 'object') return null;
+  if (x.do === 'anchor') return x.on === false ? { do: 'anchor', on: false } : null;
+  const a = cleanAction(x);
+  return a && (a.do === 'load' || a.do === 'unload' || a.do === 'cap') ? a : null;
 }
 
 /** the action the person saw is the action the card says now: deep equality of plain data, key order
@@ -128,14 +159,61 @@ export interface EyeOptions {
 }
 
 export type EyeBranchView = BranchView & { n: number; id: BranchId; name: string; what: string; error?: string };
-/** a branch's suggestion as the panel draws it: whose it is and since when it has been there */
-export type EyeCard = Suggestion & { branch: BranchId; since: number };
+/** a branch's suggestion as the panel draws it: whose it is and since when it has been there.
+ *  change: accept and reject belong on it (change.ts isChange); confirm: accept takes a second tap;
+ *  does: what accept changes, one sentence (change cards only); record: the person's accepts and
+ *  rejects of its branch's change cards in the last 30 days (change cards only, absent when none) */
+export type EyeCard = Suggestion & {
+  branch: BranchId; since: number;
+  change: boolean; confirm: boolean; does?: string; record?: { accepted: number; rejected: number };
+};
+/** the last accept that can be undone, as the panel shows it: until when */
+export interface EyeUndoView { id: string; branch: BranchId; title: string; word: string; at: number; until: number }
+/** and with what undoes it, for kula's engine (pendingUndo) */
+export type EyeUndo = EyeUndoView & { action: UndoAction };
 export interface EyeView {
   at: number;                                         // when the last look was taken
   branches: EyeBranchView[];                          // the twelve, in the map's order
   cards: EyeCard[];                                   // suggestions and warnings, most important first
   events: (BranchEvent & { branch: BranchId })[];     // newest first
   box: { count: number; from: number; head: string | null; bytes: number; ok: boolean; problem: string | null } | null;
+  undo: EyeUndoView | null;                           // the last accept, while it can be undone (10 minutes)
+}
+
+/** a rejection: the card id and the kind of action the person turned down (sameDismissal's do, model,
+ *  mode), how often, when last, and until when it hides */
+interface Rejection { id: string; a: { do: string; model?: string; mode?: string }; count: number; at: number; until: number }
+/** one accept or reject of a change card, for its branch's record */
+interface Decision { at: number; branch: BranchId; id: string; a: 'accept' | 'reject' }
+
+const kindOf = (a: SuggestAction): Rejection['a'] => {
+  const x = a as { do: string; model?: unknown; mode?: unknown };
+  return { do: x.do, ...(typeof x.model === 'string' ? { model: x.model } : {}), ...(typeof x.mode === 'string' ? { mode: x.mode } : {}) };
+};
+const num = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);
+
+/** the cards notes as written, each entry checked; anything else is left out */
+function readCardsNotes(v: unknown): { rejected: Rejection[]; record: Decision[] } {
+  const x = (v && typeof v === 'object' ? v : {}) as { rejected?: unknown; record?: unknown };
+  const rejected: Rejection[] = [];
+  for (const r of Array.isArray(x.rejected) ? x.rejected.slice(-REJECTS_MAX) : []) {
+    const e = r as Record<string, unknown> | null;
+    const a = e?.a as Record<string, unknown> | null | undefined;
+    if (!e || typeof e.id !== 'string' || !CARD_ID.test(e.id) || !a || typeof a.do !== 'string' || a.do.length > 20) continue;
+    if (!num(e.count) || e.count < 1 || !num(e.at) || !num(e.until)) continue;
+    rejected.push({
+      id: e.id, count: Math.min(Math.floor(e.count), 1000), at: e.at, until: e.until,
+      a: { do: a.do, ...(typeof a.model === 'string' ? { model: a.model.slice(0, 200) } : {}), ...(typeof a.mode === 'string' ? { mode: a.mode.slice(0, 20) } : {}) },
+    });
+  }
+  const record: Decision[] = [];
+  for (const r of Array.isArray(x.record) ? x.record.slice(-RECORD_MAX) : []) {
+    const e = r as Record<string, unknown> | null;
+    if (!e || !num(e.at) || !BRANCH_IDS.includes(e.branch as BranchId) || typeof e.id !== 'string' || !CARD_ID.test(e.id)) continue;
+    if (e.a !== 'accept' && e.a !== 'reject') continue;
+    record.push({ at: e.at, branch: e.branch as BranchId, id: e.id, a: e.a });
+  }
+  return { rejected, record };
 }
 
 export class GodsEye {
@@ -169,6 +247,38 @@ export class GodsEye {
     this.now = opts.now ?? Date.now;
     this.box = opts.box && typeof opts.box.append === 'function' ? opts.box : null;
     this.make();
+    this.loadCards();
+  }
+
+  /** the rejections and the record, from the notes; torn notes are kept aside as cards.bad, like a branch's */
+  private loadCards(): void {
+    let text: string | null = null;
+    try { text = this.opts.notes.read(CARDS_NOTES); } catch { return; }
+    if (text === null) return;
+    try {
+      const v = readCardsNotes(JSON.parse(text));
+      this.rejected = v.rejected;
+      this.decisions = v.record;
+    } catch {
+      this.log(`god's eye cards: the notes could not be read (${text.length} chars); starting fresh, the old text is kept as ${CARDS_NOTES}.bad`);
+      try { this.opts.notes.write(`${CARDS_NOTES}.bad`, text); } catch {}
+    }
+  }
+
+  private saveCards(): void {
+    try { this.opts.notes.write(CARDS_NOTES, JSON.stringify({ v: 1, rejected: this.rejected, record: this.decisions })); }
+    catch (e) { this.log(`god's eye cards: could not save: ${why(e)}`); }
+  }
+
+  /** a line in the live feed under a branch (and, with a box, written at the next flush) */
+  private say(branch: BranchId, text: string): void {
+    const ev = { at: this.now(), text: String(text).slice(0, 300), branch };
+    this.events.unshift(ev);
+    this.events.length = Math.min(this.events.length, EVENTS_MAX);
+    if (this.box !== null) {
+      this.pending.push(ev);
+      if (this.pending.length > PENDING_MAX) this.pending.splice(0, this.pending.length - PENDING_MAX);
+    }
   }
 
   /** the eye's one log: a log that throws must not stop it */
@@ -195,6 +305,12 @@ export class GodsEye {
       try { n += this.opts.notes.remove(id); } catch {}
       try { n += this.opts.notes.remove(`${id}.bad`); } catch {}
     }
+    // the cards' notes too: every rejection and the record go, and the undo with them
+    try { n += this.opts.notes.remove(CARDS_NOTES); } catch {}
+    try { n += this.opts.notes.remove(`${CARDS_NOTES}.bad`); } catch {}
+    this.rejected = [];
+    this.decisions = [];
+    this.undo = null;
     this.branches.clear();
     this.broken.clear();
     this.views.clear();
@@ -240,21 +356,13 @@ export class GodsEye {
         catch (e) { this.log(`god's eye ${id}: could not save: ${why(e)}`); }
       },
       keys: this.opts.keys ?? null,
-      emit: (text: string) => {
-        const ev = { at: this.now(), text: String(text).slice(0, 300), branch: id };
-        this.events.unshift(ev);
-        this.events.length = Math.min(this.events.length, EVENTS_MAX);
-        if (this.box !== null) {
-          this.pending.push(ev);
-          if (this.pending.length > PENDING_MAX) this.pending.splice(0, this.pending.length - PENDING_MAX);
-        }
-      },
+      emit: (text: string) => this.say(id, text),
       // a broken branch's last view is not quoted for ever: peek sees nothing of it
       peek: (other: BranchId) => {
         const v = this.broken.has(other) ? null : this.views.get(other) ?? null;
         // finding D3: the advisor ranks only the cards the panel shows; a card the person dismissed
         // or applied is never its "first:" or "then:"
-        if (id !== 'advisor' || v === null || this.hidden.size === 0 || !Array.isArray(v.suggestions)) return v;
+        if (id !== 'advisor' || v === null || (this.hidden.size === 0 && this.rejected.length === 0) || !Array.isArray(v.suggestions)) return v;
         return { ...v, suggestions: v.suggestions.filter((s) => !this.hidesRaw(s)) };
       },
     };
@@ -324,6 +432,41 @@ export class GodsEye {
   /** dismissed or applied, with the action the person saw: hidden while the branch says that id with
    *  that action (finding D2: the same id with another action is another card to the person) */
   private hidden = new Map<string, { action: SuggestAction | null; applied: boolean }>();
+  /** rejected change cards (kept in the notes): unlike a dismissal, a rejection outlives its card */
+  private rejected: Rejection[] = [];
+  /** accepts and rejects of change cards, for each branch's record (kept in the notes) */
+  private decisions: Decision[] = [];
+  /** the last accept that can be undone, in memory only */
+  private undo: (EyeUndo & { kind: Suggestion['kind']; shown: SuggestAction }) | null = null;
+
+  /** the rejection of a card with this id and this kind of action, hiding or not */
+  private rejectionOf(id: string, action: SuggestAction | null): Rejection | null {
+    if (action === null) return null;
+    return this.rejected.find((r) => r.id === id && sameDismissal(r.a, kindOf(action))) ?? null;
+  }
+
+  /** a card with this id and action is rejected now */
+  private isRejected(id: string, action: SuggestAction | null): boolean {
+    const r = this.rejectionOf(id, action);
+    return r !== null && this.now() < r.until;
+  }
+
+  /** writes a rejection: 7 days, 30 from the second, a warning 24 hours; returns how long it hides */
+  private addRejection(id: string, kind: Suggestion['kind'], action: SuggestAction): number {
+    const now = this.now();
+    const old = this.rejectionOf(id, action);
+    const count = (old?.count ?? 0) + 1;
+    const ms = kind === 'warn' ? REJECT_WARN_MS : count >= 2 ? REJECT_AGAIN_MS : REJECT_MS;
+    this.rejected = this.rejected.filter((r) => r !== old);
+    this.rejected.push({ id, a: kindOf(action), count, at: now, until: now + ms });
+    if (this.rejected.length > REJECTS_MAX) this.rejected.splice(0, this.rejected.length - REJECTS_MAX);
+    return ms;
+  }
+
+  private addDecision(branch: BranchId, id: string, a: Decision['a']): void {
+    this.decisions.push({ at: this.now(), branch, id, a });
+    if (this.decisions.length > RECORD_MAX) this.decisions.splice(0, this.decisions.length - RECORD_MAX);
+  }
 
   /** a card with this id and this action is one the person dismissed or applied; no action on both
    *  sides is the same (a warning with nothing to apply). An applied card needs the very action; a
@@ -338,8 +481,10 @@ export class GodsEye {
   /** a raw suggestion (as a branch's view holds it) the panel hides now */
   private hidesRaw(s: unknown): boolean {
     const x = s as { id?: unknown; action?: unknown } | null;
-    if (!x || typeof x !== 'object' || typeof x.id !== 'string' || !this.hidden.has(x.id)) return false;
-    return this.isHidden(x.id, x.action == null ? null : cleanAction(x.action));
+    if (!x || typeof x !== 'object' || typeof x.id !== 'string') return false;
+    const action = x.action == null ? null : cleanAction(x.action);
+    if (this.isRejected(x.id, action)) return true;
+    return this.hidden.has(x.id) && this.isHidden(x.id, action);
   }
 
   /** every card the branches say now, checked, before anything is hidden; in the map's order */
@@ -373,18 +518,47 @@ export class GodsEye {
     }
     for (const id of [...this.cardSince.keys()]) if (!live.has(id)) this.cardSince.delete(id);
     for (const id of [...this.hidden.keys()]) if (!live.has(id) || !this.isHidden(id, live.get(id) ?? null)) this.hidden.delete(id);
+    // a rejection is kept when its card goes, until it expires and is no longer remembered; an
+    // undo ends after its ten minutes
+    const now = this.now();
+    const rejected = this.rejected.filter((r) => now < r.until || now - r.at < REMEMBER_MS);
+    const decisions = this.decisions.filter((d) => now - d.at < RECORD_MS);
+    if (rejected.length !== this.rejected.length || decisions.length !== this.decisions.length) {
+      this.rejected = rejected;
+      this.decisions = decisions;
+      this.saveCards();
+    }
+    if (this.undo !== null && now >= this.undo.until) this.undo = null;
   }
 
   /** every card the branches say now, checked, the hidden ones left out, most important first. Only reads. */
   cards(): EyeCard[] {
     const all = this.liveCards();
-    const hiddenNow = new Set(all.filter((c) => this.isHidden(c.id, c.action)).map((c) => c.id));
+    const hiddenNow = new Set(all.filter((c) => this.isHidden(c.id, c.action) || this.isRejected(c.id, c.action)).map((c) => c.id));
+    // each branch's record: the person's accepts and rejects of its change cards, the last 30 days
+    const now = this.now();
+    const tally = new Map<BranchId, { accepted: number; rejected: number }>();
+    for (const d of this.decisions) {
+      if (now - d.at >= RECORD_MS) continue;
+      const t = tally.get(d.branch) ?? { accepted: 0, rejected: 0 };
+      if (d.a === 'accept') t.accepted++; else t.rejected++;
+      tally.set(d.branch, t);
+    }
     const out: EyeCard[] = [];
     for (const c of all) {
       if (hiddenNow.has(c.id)) continue;
       // the advisor's "first: <card>" leans on another branch's card: hidden with it
       if (c.id.startsWith('advisor:first:') && hiddenNow.has(c.id.slice('advisor:first:'.length))) continue;
-      out.push({ ...c, since: this.cardSince.get(c.id) ?? (this.lastAt || this.now()) });
+      const change = isChange(c.action);
+      // teaching, v1: a suggestion the person rejected twice comes back at weight 1; a warning keeps its weight
+      const weight = c.kind === 'suggest' && (this.rejectionOf(c.id, c.action)?.count ?? 0) >= 2 ? 1 : c.weight;
+      const does = change ? changeWords(c.action, this.before) : null;
+      const record = change ? tally.get(c.branch) : undefined;
+      out.push({
+        ...c, weight, since: this.cardSince.get(c.id) ?? (this.lastAt || now),
+        change, confirm: change && needsConfirm(c.action),
+        ...(does ? { does } : {}), ...(record ? { record: { ...record } } : {}),
+      });
     }
     return out.sort((a, b) => cardRank(b) - cardRank(a) || a.since - b.since).slice(0, CARDS_MAX);
   }
@@ -403,12 +577,70 @@ export class GodsEye {
     return true;
   }
 
-  /** kula's engine carried a card out on the person's tap (or tried): hidden, and written in the box */
-  applied(id: string, word: string): void {
-    const c = this.cards().find((x) => x.id === id);
+  /** kula's engine carried a card out on the person's tap (or tried): hidden, and written in the box.
+   *  A change card's accept also goes in its branch's record and the feed ("you accepted: …"), and
+   *  [undo], what kula's engine captured before the change, is kept ten minutes (load, unload, cap
+   *  and anchor only; fetch and cancel have none). Every accept of a change card ends the undo before.
+   *  [seen]: the card the caller held when the person tapped. A look during the change may already
+   *  have forgotten it (an unload takes its reason away, verdict B2): the change ran all the same, so
+   *  it is recorded from that card. Only a card still shown is hidden. */
+  applied(id: string, word: string, undo?: UndoAction | null, seen?: EyeCard | null): void {
+    const live = this.cards().find((x) => x.id === id) ?? null;
+    const c = live ?? (seen && seen.id === id ? seen : null);
     if (!c) return;
-    this.hidden.set(c.id, { action: c.action, applied: true });
-    this.recordAct(c.branch, 'apply', c.id, String(word).slice(0, WORD_MAX));
+    const w = String(word).slice(0, WORD_MAX);
+    if (live) this.hidden.set(c.id, { action: c.action, applied: true });
+    if (c.change && c.action !== null) {
+      const now = this.now();
+      const u = undo == null || !canUndo(c.action) ? null : cleanUndo(undo);
+      this.undo = u === null ? null : { id: c.id, branch: c.branch, title: c.title, word: w, at: now, until: now + UNDO_MS, action: u, kind: c.kind, shown: c.action };
+      this.addDecision(c.branch, c.id, 'accept');
+      this.saveCards();
+      this.say(c.branch, `you accepted: ${c.title}: ${w}`);
+    }
+    this.recordAct(c.branch, 'apply', c.id, w);
+  }
+
+  /** the person turned a change card down: hidden 7 days (30 from the second time; a warning 24
+   *  hours) while its branch says that kind of action, even when it goes and comes back, and kept
+   *  through a restart. Written in the record, the feed and the box. false: no such card shown, or
+   *  a card that changes nothing (probe, open, none), which only × closes. */
+  reject(id: string): boolean {
+    const c = this.card(id);
+    if (!c || !c.change || c.action === null) return false;
+    const ms = this.addRejection(c.id, c.kind, c.action);
+    this.addDecision(c.branch, c.id, 'reject');
+    this.saveCards();
+    this.say(c.branch, `you rejected: ${c.title}`);
+    this.recordAct(c.branch, 'reject', c.id, ms >= DAY_MS * 2 ? `hidden ${Math.round(ms / DAY_MS)} days` : `hidden ${Math.round(ms / HOUR_MS)} hours`);
+    return true;
+  }
+
+  /** the last accept while it can be undone, with what undoes it (for kula's engine), or null */
+  pendingUndo(): EyeUndo | null {
+    const u = this.undo;
+    if (u === null || this.now() >= u.until) return null;
+    return { id: u.id, branch: u.branch, title: u.title, word: u.word, at: u.at, until: u.until, action: u.action };
+  }
+
+  /** kula's engine undid the last accept: the undo ends, and it counts as a reject, so the card does
+   *  not come straight back (its accept in the record turns into a reject). false: nothing to undo. */
+  undone(word = 'undone'): boolean {
+    const u = this.undo;
+    if (u === null || this.now() >= u.until) { this.undo = null; return false; }
+    this.undo = null;
+    const w = String(word).slice(0, WORD_MAX);
+    this.addRejection(u.id, u.kind, u.shown);
+    let turned = false;
+    for (let i = this.decisions.length - 1; i >= 0; i--) {
+      const d = this.decisions[i];
+      if (d.id === u.id && d.a === 'accept') { this.decisions[i] = { ...d, a: 'reject' }; turned = true; break; }
+    }
+    if (!turned) this.addDecision(u.branch, u.id, 'reject');
+    this.saveCards();
+    this.say(u.branch, `you undid: ${u.title}: ${w}`);
+    this.recordAct(u.branch, 'undo', u.id, w);
+    return true;
   }
 
   /** kula's engine could not carry out an applied card (a load that failed in the background): the box
@@ -470,7 +702,9 @@ export class GodsEye {
       const v = err ? { ...dark('broken'), error: err } : this.plainView(m.id);
       return { ...v, n: m.n, id: m.id, name: m.name, what: v.what || m.what };
     });
-    return { at: this.lastAt, branches, cards: this.cards(), events: [...this.events], box: this.boxView() };
+    const u = this.pendingUndo();
+    const undo = u === null ? null : { id: u.id, branch: u.branch, title: u.title, word: u.word, at: u.at, until: u.until };
+    return { at: this.lastAt, branches, cards: this.cards(), events: [...this.events], box: this.boxView(), undo };
   }
 
   // ---- the black box: what the eye writes, and what it says about the chain

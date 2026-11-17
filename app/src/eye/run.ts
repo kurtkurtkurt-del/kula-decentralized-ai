@@ -27,7 +27,8 @@ import { phoneTrust } from './trustBranch';
 // brain tab on screen, or a cluster this phone runs (a model apart or split, or a load under way);
 // in the background it pauses and nothing is read. The notes live in the kv-store (notes.ts); the
 // black box stays on the computer. The eye only watches: a card is carried out by the person's
-// tap (applyCard), through the phone's engine (apply.ts).
+// tap (applyCard), through the phone's engine (apply.ts); a change card can also be rejected
+// (rejectCard). The phone keeps no undo: it passes none to eye.applied.
 
 export const EYE_EVERY_MS = 5000;
 const SIDE_EVERY_MS = 30_000;   // battery, heat and this phone's ledger: slower than a look
@@ -245,7 +246,7 @@ export async function applyCard(id: string, shown: unknown, env: PhoneEnv = phon
   const fresh = () => { view = e.view(); notify(); };
   const loading = c.action?.do === 'load' ? c.action : null;
   if (loading) {
-    e.applied(c.id, `loading ${loading.model} (${loading.mode})`);
+    e.applied(c.id, `loading ${loading.model} (${loading.mode})`, null, c);
     fresh();
   }
   let word: string;
@@ -258,9 +259,23 @@ export async function applyCard(id: string, shown: unknown, env: PhoneEnv = phon
     fresh();
     throw left ? new Error(t('eye.card.leftOut', { list: left.leftOut.join(', '), model: left.model })) : err;
   }
-  if (!loading) e.applied(c.id, word);
+  if (!loading) e.applied(c.id, word, null, c);
   fresh();
   return word;
+}
+
+/** The person turned a change card down (17.11.2026, DECISIONS 5): the eye keeps the rejection in
+ *  the notes, so the card stays away when it goes and comes back, and through a restart. [shown] is
+ *  the action the person saw: when the card says another by now, nothing is rejected. false: no such
+ *  card, a changed one, or one that changes nothing (only × closes those). */
+export function rejectCard(id: string, shown: unknown): boolean {
+  const e = theEye();
+  const c = e.card(id);
+  if (!c || !sameAction(shown, c.action)) return false;
+  const ok = e.reject(id);
+  view = e.view();
+  notify();
+  return ok;
 }
 
 export function dismissCard(id: string): boolean {

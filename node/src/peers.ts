@@ -78,6 +78,10 @@ export interface Peer {
   added_at: string;
   last_ok?: string | null;
   ring?: Ring;           // absent: home
+  // its anchor's invite said "mine" (17.11.2026, the person's decision): it is circle (capped) until
+  // the person answers on this computer's page (engine.confirmMine). When it paired back and the
+  // address it registered from. Written only by the pair-back; any ring change answers it.
+  claim?: { at: string; from: string } | null;
 }
 
 export function peersFile(): string {
@@ -303,7 +307,8 @@ export function setRing(list: Peer[], ref: string, ring: Ring): { list: Peer[]; 
   const hit = findPeer(list, ref);
   if (!hit) return null;
   const group = new Set(groupOf(groupPeers(list), hit.id) ?? [hit]);
-  const next = list.map((p) => (group.has(p) ? { ...p, ring } : p));
+  // a ring the person set answers a "mine" claim too
+  const next = list.map((p) => { if (!group.has(p)) return p; const { claim: _, ...rest } = p; return { ...rest, ring }; });
   return { list: next, peers: next.filter((_, i) => group.has(list[i])) };
 }
 

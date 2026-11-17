@@ -6,7 +6,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { clean } from '../src/godseye/branches/guard.ts';
-import { BRANCHES } from '../src/godseye/types.ts';
+import { ANCHOR_REFUSALS, BRANCHES } from '../src/godseye/types.ts';
+import { ANCHOR_REASON_WORDS, anchorReasonWord } from '../src/anchor.ts';
 
 const hash = (id: string) => createHash('sha256').update(id).digest('hex').slice(0, 16);
 const stand = (id: string) => `~${hash(id)}~${id.slice(0, 40).replace(/[^A-Za-z0-9._:-]/g, '_')}`;
@@ -30,11 +31,14 @@ const healthy = (): Record<string, unknown> => ({
   at: T0 + 25 * H + 10,
   host: {
     name: 'mac', freeMb: 4000, ledger: { ok: true, count: 12, problem: null },
-    anchor: { on: true, reachable: null, links: 3, bytesDay: 5e9, capDay: 2e10, memberMaxDay: 3e9 },
+    anchor: {
+      on: true, reachable: null, links: 3, bytesDay: 5e9, capDay: 2e10, memberMaxDay: 3e9,
+      since: T0 + 2 * H, refused: { 'byte limit': 2, 'not here': 1, other: 4 }, removed: 1, memberMaxName: 'ayşe’s phone',
+    },
     gate: gate(),
   },
   devices: [
-    dev({ id: 'far1', via: 'anchor', through: 'anc1', throughName: 'home mac', where: 'through anchor home mac' }),
+    dev({ id: 'far1', via: 'anchor', through: 'anc1', throughName: 'home mac', where: 'through anchor home mac', roads: { lan: 1, direct: 0, anchors: 1 }, linkRttMs: 37, linkAt: T0 + 3 * H }),
     dev({ id: 'anc1', via: 'internet', reachedBy: 'mapped', anchor: true, through: null }),
     dev({ id: 'p2', anchor: false }),
     dev({ id: 'far2', via: 'anchor', through: 'self', throughName: 'this computer', where: 'through this computer (its anchor)' }),
@@ -62,6 +66,60 @@ test('a look without any of the new fields stays without them', () => {
   // a host anchor from an engine that does not count members leaves memberMaxDay out
   const h = clean({ at: 1, host: { name: 'mac', freeMb: 1, anchor: { on: true, reachable: null, links: 1, bytesDay: 2, capDay: 3 } } })!;
   assert.equal('memberMaxDay' in h.host.anchor!, false);
+  // P0 (17.11.2026): an older look has none of them
+  for (const k of ['since', 'refused', 'removed', 'memberMaxName']) assert.equal(k in h.host.anchor!, false, k);
+  for (const k of ['roads', 'linkRttMs', 'linkAt']) assert.equal(k in s.devices[0], false, k);
+});
+
+test('the anchor\'s reason words: one list on both sides, the same as anchor.ts maps to', () => {
+  assert.deepEqual([...ANCHOR_REFUSALS], [...ANCHOR_REASON_WORDS]);
+  for (const w of ANCHOR_REASON_WORDS) assert.equal(anchorReasonWord(w), w);
+  // free text, a thrown value's message, a stranger's word: other
+  for (const x of ['anchor closing', 'target replaced', 'bad dial', 'not paired', 'Error: boom at 10.0.0.1', '', null, 42, undefined]) assert.equal(anchorReasonWord(x), 'other');
+});
+
+test('devices[].roads: counts clamped 0..1000, not a number 0, not an object null', () => {
+  const r = (x: unknown) => clean({ at: 1, devices: [dev({ roads: x })] })!.devices[0].roads;
+  assert.deepEqual(r({ lan: 2, direct: 1, anchors: 3 }), { lan: 2, direct: 1, anchors: 3 });
+  assert.deepEqual(r({ lan: -1, direct: 1e9, anchors: 'x' }), { lan: 0, direct: 1000, anchors: 0 });
+  assert.deepEqual(r({}), { lan: 0, direct: 0, anchors: 0 });
+  assert.deepEqual(r({ lan: 1, direct: 0, anchors: 0, host: '192.168.1.4' }), { lan: 1, direct: 0, anchors: 0 }, 'nothing else passes');
+  assert.equal(r(null), null);
+  assert.equal(r('2 roads'), null);
+  assert.equal(r([1, 2, 3]), null);
+});
+
+test('devices[].linkRttMs and linkAt: a round trip 0..600 000 ms and a time, else null', () => {
+  const d = (x: Record<string, unknown>) => clean({ at: 1, devices: [dev(x)] })!.devices[0];
+  assert.equal(d({ linkRttMs: 13.3 }).linkRttMs, 13.3);
+  assert.equal(d({ linkRttMs: 0 }).linkRttMs, 0);
+  for (const x of [-1, 600_001, NaN, Infinity, '13 ms', null]) assert.equal(d({ linkRttMs: x }).linkRttMs, null, String(x));
+  assert.equal(d({ linkAt: T0 }).linkAt, T0);
+  for (const x of [-1, 9e15, '2026-11-17T09:00:00Z', null]) assert.equal(d({ linkAt: x }).linkAt, null, String(x));
+});
+
+test('host.anchor.since, refused, removed, memberMaxName: cleaned, no free text in refused', () => {
+  const a = (x: Record<string, unknown>) => clean({ at: 1, host: { name: 'mac', freeMb: 1, anchor: { on: true, reachable: null, links: 1, bytesDay: 2, capDay: 3, ...x } } })!.host.anchor!;
+  assert.equal(a({ since: T0 }).since, T0);
+  for (const x of [-5, 'yesterday', null, 1e20]) assert.equal(a({ since: x }).since, null, String(x));
+  // a word of the list keeps its count; any other key is counted under other, never shown
+  const r = a({ refused: { 'byte limit': 3, 'Error: connect ECONNREFUSED 10.0.0.7:4000': 2, 'anchor closing': 1, other: 1, full: 'many', ['__proto__']: 9, constructor: 5, 'too many streams': 1e12 } }).refused!;
+  assert.deepEqual(r, { 'byte limit': 3, other: 4, 'too many streams': 1e9 });
+  assert.deepStrictEqual(Object.getPrototypeOf(r), Object.prototype);
+  assert.doesNotMatch(JSON.stringify(r), /ECONN|10\.0\.0\.7/);
+  assert.equal(a({ refused: null }).refused, null);
+  assert.equal(a({ refused: 'byte limit' }).refused, null);
+  assert.equal(a({ refused: [3] }).refused, null);
+  assert.deepEqual(a({ refused: {} }).refused, {});
+  assert.equal(a({ removed: 2 }).removed, 2);
+  assert.equal(a({ removed: -2 }).removed, 0);
+  assert.equal(a({ removed: 'two' }).removed, null);
+  assert.equal(a({ memberMaxName: 'ayşe’s phone' }).memberMaxName, 'ayşe’s phone');
+  assert.equal(a({ memberMaxName: 'z'.repeat(300) }).memberMaxName, 'z'.repeat(80));
+  assert.equal(a({ memberMaxName: 'evil‮\ncard' }).memberMaxName, 'evil card');
+  assert.equal(a({ memberMaxName: '' }).memberMaxName, null);
+  assert.equal(a({ memberMaxName: 7 }).memberMaxName, null);
+  assert.equal(a({ memberMaxName: null }).memberMaxName, null);
 });
 
 test('through: \'self\' (this computer is the anchor) passes as \'self\'', () => {

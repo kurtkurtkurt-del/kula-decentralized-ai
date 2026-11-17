@@ -21,7 +21,7 @@ const { clean } = await import('../src/godseye/branches/guard.ts');
 const { readPeers, writePeers, setRing, ringOf: peerRing, widestRing, upsertPeer, parsePeerText } = await import('../src/peers.ts');
 const { peersCommand } = await import('../src/mastercmd.ts');
 const { Engine } = await import('../src/ui/engine.ts');
-const { deviceOf } = await import('../src/ui/godseye-feed.ts');
+const { deviceOf, kulaSnapshot } = await import('../src/ui/godseye-feed.ts');
 const { startUi } = await import('../src/ui/server.ts');
 const { ChatStore } = await import('../src/ui/store.ts');
 const { createIdentity } = await import('../src/tls.ts');
@@ -218,6 +218,83 @@ test('the engine and POST peers/ring: the row carries the ring, the eye\'s devic
   await e.close();
 });
 
+// 17.11.2026 (the person's decision): a "mine" invite gives a friend's seat (circle, capped) and a
+// claim; the person answers it on the anchor computer's page (POST peers/mine). Only a device with
+// a claim can be lifted through it; the claim never reaches the brain.
+test('POST peers/mine: yes lifts a claimed device to home once; no claim, unknown, cross-origin or guest is refused; no and peers/ring clear the claim', async () => {
+  const dir = fs.mkdtempSync(path.join(HOME, 'm-'));
+  const peersFile = path.join(dir, 'peers.json');
+  const FROM = '198.51.100.23';
+  const claim = { at: '2026-11-17T09:41:00.000Z', from: FROM };
+  const anc = (id: string, fp: string, o: Partial<Peer> = {}): Peer => rec({ id, name: id, host: '', port: 0, fp, kind: 'pc', ring: 'circle', route: { via: 'anchor', anchor: 'self' }, ...o });
+  writePeers([
+    anc('mac-home', 'd4'.repeat(32), { claim }),
+    anc('pal', 'e5'.repeat(32)),
+    anc('tab', 'f6'.repeat(32), { claim }),
+    anc('laptop', '07'.repeat(32), { claim }),
+  ], peersFile);
+  const e = new Engine({ peersFile, identity: createIdentity('mac'), llama: null, probeMs: 1500, statusMs: 150, discoverMs: 60, peekMs: 1500, hostId: 'host-mine' });
+  const row = (id: string) => e.peers().find((r) => r.id === id)!;
+  assert.deepEqual(row('mac-home').claim, { ...claim, fp: 'd4'.repeat(8) });
+  assert.equal(row('pal').claim, undefined);
+  // the claim and its address stay on the page: the brain's devices never see them
+  const snapshot = JSON.stringify(kulaSnapshot(e, { list: () => [] } as any));
+  assert.ok(!snapshot.includes(FROM), 'no claim address in the eye snapshot');
+  assert.ok(!snapshot.includes('"claim"'), 'no claim in the eye snapshot');
+
+  const ui = await startUi({ port: 0, engine: e, store: new ChatStore(path.join(HOME, 'chats-mine')), token: 'kula-' + 'ce'.repeat(20), lanHost: '::1', eye: false });
+  const post = (p: string, body: unknown, origin = `http://127.0.0.1:${ui.port}`) => fetch(`${ui.url}api/${p}`, { method: 'POST', headers: { 'content-type': 'application/json', origin, 'sec-fetch-site': origin.endsWith(`:${ui.port}`) ? 'same-origin' : 'cross-site' }, body: JSON.stringify(body) });
+  try {
+    // refused before anything changes: another origin, a guest, an unknown device, a device without a claim
+    assert.equal((await post('peers/mine', { id: 'mac-home', yes: true }, 'http://evil.example')).status, 403);
+    const { url } = await ui.invite.set(true);
+    const j = await fetch(url!, { redirect: 'manual' });
+    await j.text();
+    const cookie = j.headers.get('set-cookie')!.split(';')[0];
+    const guest = await fetch(`http://[::1]:${ui.port}/${ui.prefix}/api/peers/mine`, { method: 'POST', headers: { cookie, 'content-type': 'application/json', origin: `http://[::1]:${ui.port}`, 'sec-fetch-site': 'same-origin' }, body: JSON.stringify({ id: 'mac-home', yes: true }) });
+    assert.equal(guest.status, 403);
+    assert.equal((await post('peers/mine', { id: 'nobody', yes: true })).status, 404);
+    assert.equal((await post('peers/mine', { id: 'pal', yes: true })).status, 409, 'a friend\'s device without a claim is never lifted');
+    assert.equal(readPeers(peersFile).find((p) => p.id === 'pal')!.ring, 'circle');
+    assert.equal(readPeers(peersFile).find((p) => p.id === 'mac-home')!.ring, 'circle', 'nothing changed yet');
+
+    // yes: home, the claim answered, a note said; a second yes has nothing to answer
+    const yes = await post('peers/mine', { id: 'mac-home', yes: true });
+    assert.equal(yes.status, 200);
+    assert.equal((await yes.json()).ring, 'home');
+    const mac = readPeers(peersFile).find((p) => p.id === 'mac-home')!;
+    assert.equal(mac.ring, 'home');
+    assert.ok(!('claim' in mac));
+    assert.equal(row('mac-home').claim, undefined);
+    assert.ok(e.status().decisions.some((d: { text: string }) => /mac-home is yours: now home/.test(d.text)));
+    assert.equal((await post('peers/mine', { id: 'mac-home', yes: true })).status, 409);
+
+    // no: the claim goes, the ring stays circle
+    const no = await post('peers/mine', { id: 'tab', yes: false });
+    assert.equal(no.status, 200);
+    assert.equal((await no.json()).ring, 'circle');
+    const tab = readPeers(peersFile).find((p) => p.id === 'tab')!;
+    assert.equal(tab.ring, 'circle');
+    assert.ok(!('claim' in tab));
+    assert.ok(e.status().decisions.some((d: { text: string }) => /tab stays a friend's device/.test(d.text)));
+    assert.equal((await post('peers/mine', { id: 'tab', yes: true })).status, 409, 'after no, yes cannot lift it');
+
+    // peers/ring answers the claim too
+    assert.equal((await post('peers/ring', { id: 'laptop', ring: 'circle' })).status, 200);
+    assert.ok(!('claim' in readPeers(peersFile).find((p) => p.id === 'laptop')!));
+    assert.equal((await post('peers/mine', { id: 'laptop', yes: true })).status, 409);
+  } finally {
+    await ui.close();
+    await e.close();
+  }
+});
+
+test('setRing in the peer book clears a claim on every record of the device', () => {
+  const claim = { at: 't', from: '127.0.0.1' };
+  const r = setRing([rec({ id: 'a', claim }), rec({ id: 'b', claim })], 'a', 'circle')!;
+  assert.ok(r.list.every((p) => !('claim' in p)));
+});
+
 // ---------- the review branch with rings
 
 const NOW = Date.UTC(2026, 10, 11, 20, 0);
@@ -310,6 +387,35 @@ test('a friend in the loaded work while you chat: no card (your decision, 11.11.
   // a split part on a stranger's device counts too
   const split = loadedOn([], { mode: 'split', parts: [{ id: 'p1', name: 'pixel', local: false, mb: 900, layers: 12 }] });
   assert.equal(cards(snap({ devices: [dev({ ring: 'world' })], projects: [], work: { ...idle, chatting: 1, loaded: split } }))[0].id, 'review:private-chat');
+});
+
+test('E2: with no home way (no home device, no llama here) the private-chat and world-in-cluster cards unload', () => {
+  const noLlama = { ...idle, llama: false };
+  const chat = cards(snap({ devices: [dev({ ring: 'world' })], projects: [], work: { ...noLlama, chatting: 1, loaded: loadedOn(['p1']) } }));
+  assert.equal(chat[0].id, 'review:private-chat');
+  assert.deepEqual(chat[0].action, { do: 'unload' });
+  assert.equal(chat[0].label, 'unload');
+  assert.ok(cleanCard(chat[0]));
+  const quiet = cards(snap({ devices: [dev({ ring: 'world' })], projects: [], work: { ...noLlama, loaded: loadedOn(['p1']) } }));
+  assert.equal(quiet[0].id, 'review:world-in-cluster');
+  assert.deepEqual(quiet[0].action, { do: 'unload' });
+  assert.equal(quiet[0].label, 'unload');
+});
+
+test('E2: send-private and send-circle cancel the night project while it waits; a running one only opens review', () => {
+  const priv = cards(snap({ devices: [dev({ ring: 'world' })], projects: [project({ request: PRIVATE })] }));
+  assert.equal(priv[0].id, 'review:send-private:a1');
+  assert.deepEqual(priv[0].action, { do: 'cancel', project: 'a1' });
+  assert.equal(priv[0].label, 'cancel it');
+  assert.ok(cleanCard(priv[0]));
+  const circ = cards(snap({ devices: [dev({ ring: 'world' })], projects: [project({ request: TOPIC })] }));
+  assert.equal(circ[0].id, 'review:send-circle:a1');
+  assert.deepEqual(circ[0].action, { do: 'cancel', project: 'a1' });
+  assert.equal(circ[0].label, 'cancel it');
+  const running = cards(snap({ devices: [dev({ ring: 'world' })], projects: [project({ request: PRIVATE, state: 'running' })] }));
+  assert.equal(running[0].id, 'review:send-private:a1');
+  assert.deepEqual(running[0].action, { do: 'open', panel: 'branch', branch: 'review' });
+  assert.equal(running[0].label, 'look');
 });
 
 test('the page: per ring, what may go now and what is held back, in counts', () => {
