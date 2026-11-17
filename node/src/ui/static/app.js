@@ -1362,6 +1362,8 @@ $('scrim').addEventListener('click', () => { setSide(false); setBrain(false); })
 $('new-chat').addEventListener('click', () => { newChat(); if (matchMedia('(max-width: 860px)').matches) setSide(false); });
 let searchTimer = null;
 $('search').addEventListener('input', () => { clearTimeout(searchTimer); searchTimer = setTimeout(loadChats, 200); });
+$('open-mine').addEventListener('click', () => openConnect(false, false, 'mine'));
+
 // start a chat (17.11.2026): a small menu under the button: a chat, a coding model, a model
 // that sees photos; each opens the same steps with its own list
 $('where').addEventListener('click', (e) => {
@@ -1371,7 +1373,7 @@ $('where').addEventListener('click', (e) => {
   const m = el('div', 'where-menu');
   m.id = 'where-menu';
   m.setAttribute('role', 'menu');
-  for (const [kind, word, sub] of [['mine', 'my models', 'the ones already downloaded: tap to open'], ['chat', 'start a chat', 'talk, write, think'], ['code', 'start a coding model', 'code, pages and interfaces'], ['vision', 'start an image recognition model', 'it reads the photos you add']]) {
+  for (const [kind, word, sub] of [['chat', 'start a chat', 'talk, write, think'], ['code', 'start a coding model', 'code, pages and interfaces'], ['vision', 'start an image recognition model', 'it reads the photos you add']]) {
     const b = el('button', 'where-item');
     b.type = 'button';
     b.setAttribute('role', 'menuitem');
