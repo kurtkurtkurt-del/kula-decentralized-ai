@@ -10,7 +10,7 @@
 <link rel="stylesheet" href="site.css">
 </head>
 <body>
-<!-- kula's download page (v0.6.0, 17.11.2026). Plain html + site.css, no build step, nothing
+<!-- kula's download page (v0.7.0, 17.11.2026). Plain html + site.css, no build step, nothing
      fetched from anywhere else.
 
      Downloads use the newest GitHub release by stable asset names, so the release must carry
@@ -38,7 +38,7 @@
 
 <main>
   <section class="hero wrap">
-    <p class="kicker"><span class="dot" aria-hidden="true"></span> open models · on your own devices · v0.6.0</p>
+    <p class="kicker"><span class="dot" aria-hidden="true"></span> open models · on your own devices · v0.7.0</p>
     <h1>Your devices,<br>one local AI.</h1>
     <p class="lede">kula joins your phones, tablets and computers into one AI cluster that runs open
       models. They talk to each other directly — nothing goes to a cloud.</p>
@@ -367,7 +367,22 @@
   </section>
 
   <section class="news wrap" aria-labelledby="news-h0">
-    <h2 id="news-h0">what's new in 0.6.0 <time class="news-date" datetime="2026-11-17">17 November 2026</time></h2>
+    <h2 id="news-h0">what's new in 0.7.0 <time class="news-date" datetime="2026-11-17">17 November 2026</time></h2>
+    <ul class="news-list">
+      <li><b>Accept or reject the brain's suggestions.</b> A card that can name a change carries it;
+        it says what accepting changes, and an undo is there for ten minutes. Nothing changes without your tap.</li>
+      <li><b>Your own devices, confirmed by you.</b> A device joining with a "my device" invite stays
+        limited like a friend's until you press "yes, it is mine". A computer joining asks whose the anchor is.</li>
+      <li><b>The brain watches the anchor network:</b> a far device with one way left, an anchor not
+        reached from outside yet, a friend near its daily limit. Its speed guess over the internet comes from the measured connection.</li>
+      <li><b>Fewer false alarms</b> on a computer that faces the internet.</li>
+      <li><b>A second security review.</b> Nothing serious found; five smaller things fixed.</li>
+      <li><b>New apps.</b> Android, Mac, Linux and Windows, all 0.7.0. Not yet tried with a real router or a phone on mobile data.</li>
+    </ul>
+  </section>
+
+  <details class="news news-old wrap">
+    <summary><h2 id="news-h060">what's new in 0.6.0 <time class="news-date" datetime="2026-11-17">17 November 2026</time></h2><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 10 5 5 5-5"/></svg></summary>
     <ul class="news-list">
       <li><b>Devices in different homes join over the internet.</b> A computer that stays on at home
         becomes an anchor; your phone on mobile data or a friend's computer reach each other through
@@ -380,7 +395,7 @@
       <li><b>Checked for the internet</b> before release. Not yet tried with a real router or a phone on mobile data.</li>
       <li><b>New apps.</b> Android, Mac, Linux and Windows, all 0.6.0.</li>
     </ul>
-  </section>
+  </details>
 
   <details class="news news-old wrap">
     <summary><h2 id="news-h051">what's new in 0.5.1 <time class="news-date" datetime="2026-11-16">16 November 2026</time></h2><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 10 5 5 5-5"/></svg></summary>
@@ -523,7 +538,7 @@
     <a href="https://huggingface.co/bartowski/mistralai_Mistral-Small-3.2-24B-Instruct-2506-GGUF">Mistral Small</a>
     <a href="https://huggingface.co/unsloth/GLM-4.7-Flash-GGUF">GLM 4.7</a>
   </nav>
-  <p class="small">kula v0.6.0 · runs on <a href="https://github.com/ggml-org/llama.cpp">llama.cpp</a> · type: Inter Tight (SIL OFL)</p>
+  <p class="small">kula v0.7.0 · runs on <a href="https://github.com/ggml-org/llama.cpp">llama.cpp</a> · type: Inter Tight (SIL OFL)</p>
 </footer>
 
 <script>

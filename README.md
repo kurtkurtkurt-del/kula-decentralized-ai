@@ -27,6 +27,35 @@ and says when a device alone would be faster. Rule of thumb: jobs are split, mod
 iOS is out of scope for now: the app opens on iOS but runs no models (a Swift module is written
 on a branch, never built).
 
+## what's new in 0.7.0 · 17 November 2026
+
+- **Accept or reject the brain's suggestions.** A brain card that can name a change now carries
+  it: load or unload a model, download one, raise a friend's daily limit, cancel a night task that
+  has not started, or make this computer an anchor (that one asks "really?" first). Each card says
+  in one sentence what accepting changes. Press **accept** and it happens; for ten minutes an
+  **undo** bar can put it back. Press **reject** and the card stays away for a week (a warning
+  for a day). Cards that only tell you something keep "look" and ×. Nothing changes without
+  your tap. The phone has accept and reject too.
+- **Your own devices, confirmed by you.** A device that joins your anchor with a "my device"
+  invite is limited like a friend's until you press **"yes, it is mine"** on its row in devices;
+  the row shows when and from where it joined. A computer joining an anchor now asks whether it
+  is **your computer or a friend's**, like the phone does.
+- **The brain watches the anchor network.** It says when a far device has only one way left to
+  reach it, when your anchor has not been reached from outside yet, when a friend's device nears
+  its daily limit, and when the anchor turned streams away and why. The speed it expects from a
+  split over the internet now comes from the measured connection: on our test points it was off
+  by 2–3%, where it used to be off by more than half.
+- **Fewer false alarms on an anchor.** A computer that faces the internet gets knocks from
+  strangers all day. The brain now learns that level and shows it as a card instead of marking
+  the computer red; wrong pairing codes and replays still mark it red at once.
+- **A second security review.** Nothing serious was found; five smaller things were fixed: a
+  friend's device can no longer point your computer at addresses inside your own computer or
+  network, friends' home-network addresses are not kept, an invite never lifts a device you
+  already know, and a few names stay out of the brain's records. Details in
+  [docs/SECURITY.md](docs/SECURITY.md).
+- **Not yet tried with a real router, a real phone on mobile data or a second home**, as for
+  0.6.0: the steps are in [docs/ANCHOR-TEST.md](docs/ANCHOR-TEST.md).
+
 ## what's new in 0.6.0 · 17 November 2026
 
 - **Devices in different homes join over the internet, with no server in between.** A computer
