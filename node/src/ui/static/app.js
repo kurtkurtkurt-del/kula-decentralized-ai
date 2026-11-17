@@ -523,10 +523,11 @@ function fillBot(wrap, m, i) {
   wrap.replaceChildren();
   if (think !== null && (think || thinking)) {
     const d = el('details', `think${live && thinking ? ' live' : ''}`);
-    d.open = userToggled ? wasOpen : live && thinking;
+    // the person's last choice (17.11.2026) holds for every answer after it; none yet: open while thinking
+    d.open = userToggled ? wasOpen : typeof settings.thinkOpen === 'boolean' ? settings.thinkOpen : live && thinking;
     if (userToggled) d.dataset.user = '1';
     const sum = el('summary', '', live && thinking ? 'thinking…' : 'thought it over');
-    sum.addEventListener('click', () => { d.dataset.user = '1'; });
+    sum.addEventListener('click', () => { d.dataset.user = '1'; settings.thinkOpen = !d.open; saveSettings(); });
     const body = el('div', `think-body${live && thinking ? '' : ' md'}`);
     // done: the thinking is shown formatted like the answer (renderMarkdown escapes model text)
     if (live && thinking) body.textContent = think; else body.innerHTML = thinkHtml(think);
