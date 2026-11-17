@@ -2485,16 +2485,17 @@ function renderPool() {
     return b;
   });
   box.replaceChildren(el('span', 'pool-lead', 'counted:'), el('span', 'pool-chip here on', 'this computer'), ...chips,
-    el('span', 'pool-sum', `together about ${(cap.max / 1024).toFixed(1)} GB for a model`));
+    el('span', 'pool-sum', `free now together about ${(cap.now / 1024).toFixed(1)} GB for a model${cap.max - cap.now > 512 ? ` (about ${(cap.max / 1024).toFixed(1)} GB with other programs on this computer closed)` : ''}`));
   // the best that fits them (17.11.2026): the highest score among chat models whose size fits
   if (!S.lineup && !poolAsked) { poolAsked = true; getJson('lineup').then((l) => { S.lineup = l; renderPool(); }).catch(() => {}); }
   if (!S.models.length && !poolAskedModels) { poolAskedModels = true; getJson('models').then((m) => { S.models = m; renderPool(); }).catch(() => {}); }
-  const best = bestFit(cap.max);
+  // what fits now: the devices step checks the same free memory before it loads
+  const best = bestFit(cap.now);
   if (best) {
     const go1 = el('button', 'pool-best', '');
     go1.type = 'button';
     go1.append('best that fits: ', el('b', '', best.name), ` · ${best.score}/100 · open`);
-    go1.title = `${best.name}: about ${(best.needMb / 1024).toFixed(1)} GB, the highest score that fits the counted devices`;
+    go1.title = `${best.name}: about ${(best.needMb / 1024).toFixed(1)} GB, the highest score that fits what the counted devices have free now`;
     go1.addEventListener('click', async () => {
       settings.model = best.id; saveSettings();
       await openConnect();
