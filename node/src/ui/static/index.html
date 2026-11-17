@@ -57,6 +57,7 @@
         </button>
       </div>
     </header>
+    <div class="pool owner-only" id="pool" hidden aria-label="which connected devices count for the models"></div>
 
     <section class="thread" id="thread" aria-live="polite">
       <div class="proj-banner" id="proj-banner" hidden></div>
@@ -142,7 +143,8 @@
         <ol class="wiz-dots" id="wiz-dots" aria-label="steps"></ol>
       </div>
       <div class="wiz-step" id="wiz-step" aria-live="polite"></div>
-      <div class="wiz-foot"><button type="button" class="link" id="wiz-advanced">advanced</button></div>
+      <!-- no "advanced" (17.11.2026): every choice is a step, from the start -->
+      <div class="wiz-foot" hidden><button type="button" class="link" id="wiz-advanced" hidden>advanced</button></div>
     </div>
 
     <div class="advanced" id="advanced" hidden>

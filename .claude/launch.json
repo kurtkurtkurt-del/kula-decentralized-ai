@@ -55,6 +55,15 @@
         "--no-open"
       ],
       "port": 50590
+    },
+    {
+      "name": "kula-ui-dev",
+      "runtimeExecutable": "bash",
+      "runtimeArgs": [
+        "-c",
+        "cd node && KULA_NODE_HOME=/private/tmp/claude-501/-Users-ahmetselcukkurt-Desktop-claudecode-kula-decentralized-ai/630115c5-2b05-48e1-af36-0ce62b045673/scratchpad/kh KULA_SHARE_PORT=50561 npx tsx src/bin/kula-node.ts ui --no-open --port 50597"
+      ],
+      "port": 50597
     }
   ]
 }

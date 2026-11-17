@@ -212,10 +212,29 @@ export const FULL_CATALOG: UiModel[] = [...UI_CATALOG, ...LINEUP_EXTRA.filter((m
 
 // What GET lineup answers: the tree, each model either the id of a row in GET models (it can
 // run) or a dimmed entry with its reason. Memory is the page's check: it knows the devices.
-export interface LineupModel { id: string; name: string; quant: string; size: number | null; params_b: number | null; active_b: number | null; blurb: string; why: string | null }
+export interface LineupModel { id: string; name: string; quant: string; size: number | null; params_b: number | null; active_b: number | null; blurb: string; why: string | null; score: number | null }
 export interface LineupSeries { id: string; name: string; blurb: string; models: LineupModel[] }
 export interface LineupMaker { id: string; name: string; by: string; blurb: string; series: LineupSeries[] }
 export interface LineupView { makers: LineupMaker[]; hereFreeMb: number; hereTotalMb: number; llama: string }
+
+
+// How capable each model is, out of 100 (17.11.2026): kula's own rough reading of public
+// benchmarks and use, for picking at a glance; the frontier models of today sit near 90, a tiny
+// phone model near 10. A guess with about ±5 of slack, not a measurement on these devices.
+export const SCORE: Record<string, number> = {
+  'kimi-k3': 92, 'deepseek-v4.1-flash': 91, 'glm-5.3': 90, 'deepseek-v4-flash': 88, 'qwen3.8-flash-next': 88,
+  'gpt-oss-120b': 80, 'qwen3-coder-next': 78, 'qwen3.8-27b': 78, 'glm-4.5-air': 76, 'qwen3.6-27b': 75,
+  'qwen3.6-35b-a3b': 72, 'gemma4-31b': 70, 'glm-4.7-flash': 69, 'qwen3.5-35b-a3b': 68, 'gemma4-26b-a4b': 67,
+  'qwen3-coder-30b-a3b': 66, 'gpt-oss-20b': 66, 'devstral-small-2': 64, 'qwen3-30b-a3b': 64, 'lfm2.5-24b-a2b': 58,
+  'mistral-small-3.2': 60, 'llama4-scout': 58, 'phi4-reasoning-plus': 60, 'llama3.3-70b': 58, 'gemma3-27b': 56,
+  'qwen3.5-9b': 58, 'gemma4-12b': 57, 'deepseek-r1-0528-qwen3-8b': 56, 'deepseek-r1-qwen-14b': 53, 'phi4-14b': 52,
+  'qwen3-8b': 50, 'gemma3-12b': 48, 'qwen3.5-4b': 47, 'gemma4-e4b': 45, 'nemotron-3.5-bolt-e4b': 43,
+  'qwen3-4b-q4': 42, 'qwen2.5-coder-7b': 40, 'deepseek-r1-qwen-7b': 40, 'qwen2.5-7b-q4': 38, 'llama3.1-8b': 36,
+  'ministral-8b': 36, 'phi4-mini-reasoning': 36, 'qwen3.5-2b': 34, 'gemma4-e2b': 33, 'gemma3-4b': 32,
+  'phi4-mini-q4': 31, 'smollm3-3b': 30, 'mistral-7b-v0.3': 26, 'llama3.2-3b-q4': 26, 'qwen3-1.7b-q8': 25,
+  'deepseek-r1-qwen-1.5b': 20, 'qwen2.5-coder-1.5b': 18, 'qwen2.5-1.5b-q4': 18, 'qwen3.5-0.8b': 16, 'smolvlm2-2.2b-q4': 15,
+  'llama3.2-1b-q4': 13, 'gemma3-1b-q4': 13, 'qwen3-0.6b-q8': 11, 'smolvlm-500m-q8': 6,
+};
 
 export function lineupView(hereFreeMb: number, hereTotalMb: number): LineupView {
   const makers = LINEUP.map((k) => ({
@@ -225,10 +244,10 @@ export function lineupView(hereFreeMb: number, hereTotalMb: number): LineupView 
       models: s.models.flatMap((m): LineupModel[] => {
         if (!isFile(m)) {
           const c = UI_CATALOG.find((x) => x.id === m.catalog);
-          return c ? [{ id: c.id, name: c.name, quant: c.quant, size: c.size, params_b: c.params_b, active_b: c.active_b ?? null, blurb: c.blurb, why: null }] : [];
+          return c ? [{ id: c.id, name: c.name, quant: c.quant, size: c.size, params_b: c.params_b, active_b: c.active_b ?? null, blurb: c.blurb, why: null, score: SCORE[c.id] ?? null }] : [];
         }
         const f = LINEUP_FILES[m.id];
-        return [{ id: m.id, name: m.name, quant: m.quant, size: f?.size ?? null, params_b: m.params_b || null, active_b: m.active_b ?? null, blurb: m.blurb, why: whyNot(m, f) }];
+        return [{ id: m.id, name: m.name, quant: m.quant, size: f?.size ?? null, params_b: m.params_b || null, active_b: m.active_b ?? null, blurb: m.blurb, why: whyNot(m, f), score: SCORE[m.id] ?? null }];
       }),
     })),
   }));

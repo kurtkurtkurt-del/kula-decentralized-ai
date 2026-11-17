@@ -182,7 +182,9 @@ svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width:
 .think > summary::before { content: ""; width: 6px; height: 6px; border-right: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor; transform: rotate(-45deg); transition: transform 0.15s; }
 .think[open] > summary::before { transform: rotate(45deg); }
 .think.live > summary { color: var(--gold); }
-.think-body { padding: 0 14px 12px; color: var(--mute); white-space: pre-wrap; font-size: 13.5px; line-height: 1.55; max-height: 320px; overflow-y: auto; }
+.think-body.md { white-space: normal; }
+.think-body.md > :first-child { margin-top: 0; }
+.think-body { overscroll-behavior: contain; padding: 0 14px 12px; color: var(--mute); white-space: pre-wrap; font-size: 13.5px; line-height: 1.55; max-height: 320px; overflow-y: auto; }
 .meta { font-size: 12px; color: var(--meta); display: flex; gap: 10px; flex-wrap: wrap; align-items: center; font-variant-numeric: tabular-nums; }
 .meta .sep { opacity: 0.5; }
 
@@ -542,6 +544,7 @@ ul.wiz-steps li::before { content: "› "; color: var(--meta); }
 /* active: the device is part of the loaded model right now (6.11.2026) */
 .active-tag { display: inline-flex; align-items: center; gap: 5px; margin-left: 8px; padding: 1px 8px 1px 7px; border-radius: 999px; font-size: 11px; font-weight: 600; vertical-align: 1px; color: #fff; background: var(--sage); }
 .active-tag::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: #fff; animation: pulse 1.4s ease-in-out infinite; }
+#dev-list .dev.dev .who span.also { color: var(--meta); opacity: 0.7; }
 #dev-list .dev .who span.role { color: var(--words); font-weight: 500; }
 /* the split pick step */
 .pick-list { display: grid; gap: 8px; margin: 6px 0 14px; }
@@ -1030,3 +1033,20 @@ ul.wiz-steps li::before { content: "› "; color: var(--meta); }
 #anchor-cap:focus, #anchor-whose:focus { border-color: var(--accent); outline: none; }
 #anchor-code { overflow-wrap: anywhere; }
 @media (max-width: 860px) { #anchor-cap, #anchor-whose { font-size: 16px; } }
+
+/* the pool strip under the top bar (17.11.2026): connected devices, ticked when they count */
+.pool { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 6px 16px; font-size: 12px; color: var(--meta); border-bottom: 1px solid var(--line2); }
+.pool[hidden] { display: none; }
+.pool .pool-lead { color: var(--mute); }
+.pool .pool-chip { font: inherit; font-size: 12px; padding: 2px 10px; border-radius: 999px; border: 1px solid var(--line2); background: transparent; color: var(--meta); cursor: pointer; }
+.pool .pool-chip.on { color: var(--words); background: var(--sunk); border-color: var(--line2); }
+.pool .pool-chip.here { cursor: default; }
+.pool .pool-sum { margin-left: auto; color: var(--mute); }
+.model .score { font-weight: 500; font-size: 11px; padding: 1px 7px; border-radius: 999px; background: var(--sunk); color: var(--words); margin-left: 4px; }
+/* start a chat has no "advanced" (17.11.2026): every choice is a step */
+.wiz-foot, #wiz-advanced { display: none !important; }
+.top { position: relative; }
+.where-menu { position: absolute; top: 100%; left: 56px; z-index: 30; margin-top: 4px; min-width: 260px; display: flex; flex-direction: column; padding: 6px; border: 1px solid var(--line2); border-radius: 12px; background: var(--ground); box-shadow: 0 8px 24px rgba(0,0,0,0.12); }
+.where-menu .where-item { font: inherit; text-align: left; padding: 8px 10px; border: 0; border-radius: 8px; background: transparent; color: var(--words); cursor: pointer; display: flex; flex-direction: column; }
+.where-menu .where-item:hover, .where-menu .where-item:focus-visible { background: var(--sunk); }
+.where-menu .where-item span { font-size: 12px; color: var(--mute); }

@@ -96,7 +96,7 @@ const localAddr = (a) => {
 
 // ---------- settings (this browser only)
 
-const DEFAULTS = { temperature: 0.7, maxTokens: 1024, ctx: 4096, system: '', theme: 'kula', mode: 'phone', model: null, peers: [], way: null, pick: {},
+const DEFAULTS = { temperature: 0.7, maxTokens: 3072, ctx: 4096, system: '', theme: 'kula', mode: 'phone', model: null, peers: [], way: null, pick: {},
   start: 'new', enter: 'enter', name: '', about: '', style: 'default' };
 function readSettings() {
   let s;
@@ -105,6 +105,8 @@ function readSettings() {
   if (!['new', 'last'].includes(s.start)) s.start = 'new';
   if (!['enter', 'mod'].includes(s.enter)) s.enter = 'enter';
   if (!['default', 'concise', 'detailed', 'friendly', 'formal'].includes(s.style)) s.style = 'default';
+  // 17.11.2026: 1024 cut thinking models' answers short; the old default moves up with it
+  if (s.maxTokens === 1024) s.maxTokens = 3072;
   if (!s.pick || typeof s.pick !== 'object' || Array.isArray(s.pick)) s.pick = {};
   return s;
 }
@@ -308,6 +310,33 @@ function setPjMode(m) {
   if (m === 'phone' && pjPicked.size > 1) { const first = [...pjPicked][0]; pjPicked.clear(); pjPicked.add(first); }
   renderPjDevices();
 }
+// plan a project's model list: the ones the counted devices hold together first, the rest
+// greyed with why (the pool strip under the top bar decides what counts)
+// a model's capability out of 100 (lineup.ts SCORE), null when kula has none for it
+function scoreOf(id) {
+  for (const k of S.lineup?.makers ?? []) for (const x of k.series) for (const m of x.models) if (m.id === id) return m.score ?? null;
+  return null;
+}
+
+function fillPjModels() {
+  const sel = $('pj-model');
+  if (!sel) return;
+  const keep = sel.value;
+  const cap = memoryTogether();
+  const need = new Map(wiz.modelRows(S.models).map((r) => [r.id, r.needMb]));
+  const fits = (m) => !need.get(m.id) || !cap.max || need.get(m.id) <= cap.max;
+  const opts = [...S.models].sort((a, b) => Number(fits(b)) - Number(fits(a)) || (scoreOf(b.id) ?? -1) - (scoreOf(a.id) ?? -1)).map((m) => {
+    const sc = scoreOf(m.id);
+    const o = el('option', '', `${sc != null ? `${sc}/100 · ` : ''}${m.name}${m.size ? ` · ${(m.size / 1e9).toFixed(2)} GB` : ''}${fits(m) ? '' : ' · too big for the counted devices'}`);
+    o.value = m.id;
+    o.disabled = !fits(m);
+    return o;
+  });
+  sel.replaceChildren(...opts);
+  if (keep && opts.some((o) => o.value === keep && !o.disabled)) sel.value = keep;
+  else sel.value = opts.find((o) => !o.disabled)?.value ?? '';
+}
+
 async function openProject() {
   if (isGuest()) return;
   const d = $('project');
@@ -318,11 +347,12 @@ async function openProject() {
   if (!$('pj-start').value) { $('pj-start').value = localInput(t.getTime()); $('pj-end').value = localInput(t.getTime() + 5 * 3600000); }
   pjHours();
   try { if (!S.models.length) S.models = await getJson('models'); } catch {}
+  try { if (!S.lineup) S.lineup = await getJson('lineup'); } catch {}
   const sel = $('pj-model');
-  sel.replaceChildren(...S.models.map((m) => { const o = el('option', '', `${m.name}${m.size ? ` · ${(m.size / 1e9).toFixed(2)} GB` : ''}`); o.value = m.id; return o; }));
+  fillPjModels();
   const loadedId = S.status?.loaded?.model?.id;
   sel.value = loadedId && S.models.some((m) => m.id === loadedId) ? loadedId : settings.model && S.models.some((m) => m.id === settings.model) ? settings.model : (S.models[0]?.id ?? '');
-  if (!pjPicked.size) for (const p of S.peers) if (p.reach?.ok && !p.far) pjPicked.add(p.id);
+  if (!pjPicked.size) for (const p of poolPeers()) if (!p.far) pjPicked.add(p.id);
   setPjMode(pjMode);
   d.showModal();
   refreshPeers(true).then(() => renderPjDevices());
@@ -470,6 +500,10 @@ function botEl(m, i) {
   return wrap;
 }
 
+// the finished thinking's html, kept: the answer streams under it and redraws every frame
+let thinkMemo = { src: null, html: '' };
+function thinkHtml(t) { if (thinkMemo.src !== t) thinkMemo = { src: t, html: renderMarkdown(t) }; return thinkMemo.html; }
+
 function fillBot(wrap, m, i) {
   const live = S.streaming?.index === i;
   const { think, answer, thinking } = splitThink(m.content);
@@ -477,6 +511,15 @@ function fillBot(wrap, m, i) {
   const oldThink = wrap.querySelector('details.think');
   const userToggled = oldThink?.dataset.user === '1';
   const wasOpen = oldThink?.open;
+  // still thinking (17.11.2026): only the text grows; rebuilding the box every frame made it
+  // stutter and jump. It follows the end only while the reader is at the end
+  if (live && thinking && oldThink && oldThink.classList.contains('live')) {
+    const body = oldThink.querySelector('.think-body');
+    const atEnd = body.scrollHeight - body.scrollTop - body.clientHeight < 40;
+    body.textContent = think;
+    if (atEnd) body.scrollTop = body.scrollHeight;
+    return;
+  }
   wrap.replaceChildren();
   if (think !== null && (think || thinking)) {
     const d = el('details', `think${live && thinking ? ' live' : ''}`);
@@ -484,10 +527,12 @@ function fillBot(wrap, m, i) {
     if (userToggled) d.dataset.user = '1';
     const sum = el('summary', '', live && thinking ? 'thinking…' : 'thought it over');
     sum.addEventListener('click', () => { d.dataset.user = '1'; });
-    const body = el('div', 'think-body', think);
+    const body = el('div', `think-body${live && thinking ? '' : ' md'}`);
+    // done: the thinking is shown formatted like the answer (renderMarkdown escapes model text)
+    if (live && thinking) body.textContent = think; else body.innerHTML = thinkHtml(think);
     d.append(sum, body);
     wrap.appendChild(d);
-    if (live && thinking) setTimeout(() => { body.scrollTop = body.scrollHeight; }, 0);
+    if (live && thinking) requestAnimationFrame(() => { body.scrollTop = body.scrollHeight; });
   }
   const ans = el('div', 'answer');
   if (answer) ans.innerHTML = renderMarkdown(answer); // renderMarkdown escapes every character of model text
@@ -528,10 +573,14 @@ function fillBot(wrap, m, i) {
     // photos (10.11.2026): seen by the model itself, or read by a vision model on this computer first
     if (x.photos) parts.push(`${x.photos.n === 1 ? 'photo' : `${x.photos.n} photos`} ${x.photos.how === 'direct' ? 'seen' : 'read'} by ${x.photos.by}${x.photos.tight ? ' (memory was tight)' : ''}`);
     if (x.stopped) parts.push('stopped');
+    if (x.cut) parts.push('cut at the length limit');
     parts.forEach((p, k) => { if (k) meta.appendChild(el('span', 'sep', '·')); meta.appendChild(el('span', '', p)); });
     const tools = el('div', 'tools');
     if (m.content) tools.appendChild(toolButton('copy', ICON.copy, () => copyText(stripThink(m.content))));
-    if (i === (S.chat?.messages.length ?? 0) - 1 && !S.streaming) tools.appendChild(toolButton('answer again', ICON.again, regenerate));
+    if (i === (S.chat?.messages.length ?? 0) - 1 && !S.streaming) {
+      if (x.cut) { const c = el('button', 'link', 'continue'); c.type = 'button'; c.title = 'the answer hit the length limit: go on from where it stopped'; c.addEventListener('click', () => answer(true)); tools.appendChild(c); }
+      tools.appendChild(toolButton('answer again', ICON.again, regenerate));
+    }
     meta.appendChild(tools);
     wrap.appendChild(meta);
   }
@@ -598,11 +647,14 @@ function regenerate() {
   answer();
 }
 
-async function answer() {
+// cont (17.11.2026): the last answer hit the length limit; the model gets it back and goes on, and
+// what comes is added to the same message
+async function answer(cont = false) {
   const msgs = S.chat.messages;
-  const history = historyFor(msgs.length);
-  const m = { role: 'assistant', content: '', meta: {} };
-  msgs.push(m);
+  if (cont && (S.streaming || msgs.at(-1)?.role !== 'assistant')) return;
+  const history = cont ? [...historyFor(msgs.length), { role: 'user', content: 'go on exactly where you stopped. do not repeat anything.' }] : historyFor(msgs.length);
+  const m = cont ? msgs.at(-1) : { role: 'assistant', content: '', meta: {} };
+  if (cont) { const a = stripThink(m.content); m.content = a; if (a && !/\s$/.test(a)) m.content += ' '; m.meta = {}; } else msgs.push(m);
   const index = msgs.length - 1;
   const ac = new AbortController();
   S.streaming = { ac, index };
@@ -619,7 +671,7 @@ async function answer() {
       if (typeof ev.t === 'string') { if (!first) first = performance.now() - t0; pieces++; m.content += ev.t; paintLive(); }
       if (ev.done) {
         const ph = ev.photos;
-        m.meta = { tokens: ev.tokens, tps: ev.tps, firstMs: ev.firstMs, ms: ev.ms, device: ev.device, ...(ev.stopped ? { stopped: true } : {}), ...(ph ? { photos: { how: ph.how, by: ph.by, n: ph.n, ...(ph.tight ? { tight: true } : {}) } } : {}) };
+        m.meta = { ...(ev.tokens >= settings.maxTokens && !ev.stopped ? { cut: true } : {}), tokens: ev.tokens, tps: ev.tps, firstMs: ev.firstMs, ms: ev.ms, device: ev.device, ...(ev.stopped ? { stopped: true } : {}), ...(ph ? { photos: { how: ph.how, by: ph.by, n: ph.n, ...(ph.tight ? { tight: true } : {}) } } : {}) };
         // a vision model's reading stays with the message: later turns get it instead of the photos
         if (ph?.how === 'describe' && typeof ph.text === 'string' && asker?.role === 'user') asker.seen = { text: ph.text, by: ph.by, n: ph.n };
       }
@@ -1310,7 +1362,27 @@ $('scrim').addEventListener('click', () => { setSide(false); setBrain(false); })
 $('new-chat').addEventListener('click', () => { newChat(); if (matchMedia('(max-width: 860px)').matches) setSide(false); });
 let searchTimer = null;
 $('search').addEventListener('input', () => { clearTimeout(searchTimer); searchTimer = setTimeout(loadChats, 200); });
-$('where').addEventListener('click', () => (isGuest() ? setBrain(!$('app').classList.contains('brain-open')) : openConnect()));
+// start a chat (17.11.2026): a small menu under the button: a chat, a coding model, a model
+// that sees photos; each opens the same steps with its own list
+$('where').addEventListener('click', (e) => {
+  if (isGuest()) return setBrain(!$('app').classList.contains('brain-open'));
+  const old = $('where-menu');
+  if (old) { old.remove(); return; }
+  const m = el('div', 'where-menu');
+  m.id = 'where-menu';
+  m.setAttribute('role', 'menu');
+  for (const [kind, word, sub] of [['chat', 'start a chat', 'talk, write, think'], ['code', 'start a coding model', 'code, pages and interfaces'], ['vision', 'start an image recognition model', 'it reads the photos you add']]) {
+    const b = el('button', 'where-item');
+    b.type = 'button';
+    b.setAttribute('role', 'menuitem');
+    b.append(el('b', '', word), el('span', '', sub));
+    b.addEventListener('click', () => { m.remove(); openConnect(false, kind === 'vision', kind); });
+    m.appendChild(b);
+  }
+  $('where').after(m);
+  e.stopPropagation();
+  setTimeout(() => document.addEventListener('click', function off(ev) { if (!m.contains(ev.target)) { m.remove(); document.removeEventListener('click', off); } }), 0);
+});
 
 // ---------- connect: devices
 
@@ -1341,7 +1413,7 @@ function selectedPeers() {
   return sel.length ? sel : ids;
 }
 
-function renderPeers() { renderDevices(); }
+function renderPeers() { renderDevices(); renderPool(); }
 
 // ---------- devices: one list (6.11.2026). Every device once, however it is reached: a phone
 // adb sees on a cable and the paired records of it (by cable, by wi-fi) are one row. Active
@@ -1421,6 +1493,9 @@ function startRename(g, who, nameEl) {
   f.addEventListener('blur', () => finish(true));
 }
 
+// a way that is not the one in use: shown dim, after "also:"
+const dimIf = (dim, t) => (dim ? { t } : t);
+
 function renderDevices() {
   const box = $('dev-list');
   if (!box) return;
@@ -1444,9 +1519,11 @@ function renderDevices() {
     const viaAnchor = p0?.via === 'anchor';
     const wayLabel = viaAnchor ? 'anchor' : p0?.reachedBy === 'ipv6' || p0?.reachedBy === 'mapped' ? 'internet' : 'wi-fi';
     const badges = el('i', 'ways');
-    if (g.cable || w.cable) badges.appendChild(el('i', `way cable${g.cableOn ? ' on' : ''}`, 'cable'));
-    if (w.wifi) badges.appendChild(el('i', `way wifi${g.wifiOn ? ' on' : ''}`, wayLabel));
-    if (w.relay) badges.appendChild(el('i', `way relay${g.relayOn ? ' on' : ''}`, 'relay'));
+    // one badge: the way it talks over now (17.11.2026: two badges side by side read as "both");
+    // the other ways stay below as dim lines, said as "also"
+    const useWay = g.cableOn ? 'cable' : g.wifiOn ? 'wifi' : g.relayOn ? 'relay' : null;
+    if (useWay) badges.appendChild(el('i', `way ${useWay} on`, `in use: ${useWay === 'cable' ? 'cable' : useWay === 'wifi' ? wayLabel : 'relay'}`));
+    else if (g.cable || w.cable || w.wifi || w.relay) badges.appendChild(el('i', 'way', 'not connected'));
     if (badges.childNodes.length) name.appendChild(badges);
     const lines = [];
     const fresh = p0?.heardAt && Date.now() - p0.heardAt < 60000;
@@ -1454,19 +1531,18 @@ function renderDevices() {
       const st = g.cable ? (STATE_WORDS[g.cable.state] || g.cable.state) : 'unplugged';
       const reach = w.cable?.ok ? ` · reachable${w.cable.ms ? ` (${w.cable.ms} ms)` : ''}` : '';
       const paired = w.cable ? '' : g.cable?.installed === false ? ' · kula is not installed' : ' · not paired yet';
-      lines.push(`cable · ${st}${reach}${paired}`);
+      lines.push(dimIf(useWay && useWay !== 'cable', `cable · ${st}${reach}${paired}`));
     }
     // how it is reached now, in plain words (on this wi-fi, over the internet, through an anchor),
     // said once: with its state when it has a network way, alone when it has none
     const rw = g.cable || w.cable ? null : reachWords(p0);
     if (w.wifi) {
       const state = w.wifi.ok ? `ready${w.wifi.ms ? ` (${w.wifi.ms} ms)` : ''}` : w.wifi.ok === false ? (fresh ? 'heard here, not answering' : 'not reachable') : fresh ? 'heard on this wi-fi' : 'not checked';
-      lines.push(viaAnchor ? `${rw ?? reachWords(p0)} · ${state}` : `${rw ?? wayLabel} · ${w.wifi.where} · ${state}`);
+      lines.push(dimIf(useWay && useWay !== 'wifi', viaAnchor ? `${rw ?? reachWords(p0)} · ${state}` : `${rw ?? wayLabel} · ${w.wifi.where} · ${state}`));
     } else if (rw) lines.push(rw);
     // this device is an anchor: this computer reaches the others through it when away from home
     if (p0?.anchor && !viaAnchor) lines.push('the anchor of this computer: away from home, your devices reach each other through it');
-    if (w.relay) lines.push(`relay · ${w.relay.where} · ${w.relay.ok ? 'reachable' : w.relay.ok === false ? 'not reachable' : 'not checked'}`);
-    if ([g.cableOn, g.wifiOn, g.relayOn].filter(Boolean).length > 1) lines.push(`talks over ${g.via === 'cable' ? 'the cable' : 'wi-fi'} now`);
+    if (w.relay) lines.push(dimIf(useWay && useWay !== 'relay', `relay · ${w.relay.where} · ${w.relay.ok ? 'reachable' : w.relay.ok === false ? 'not reachable' : 'not checked'}`));
     const extra = [];
     if (p0?.kind) extra.push(KIND_WORD[p0.kind] || p0.kind);
     if (p0?.ram) extra.push(`${(p0.ram / 1024).toFixed(1)} GB free`);
@@ -1487,7 +1563,7 @@ function renderDevices() {
       const from = c.from ? `${c.from} (${localAddr(c.from) ? 'this network' : 'the internet'})` : 'an address not known';
       lines.push(`its invite said it is yours. it joined at ${hhmm} from ${from}, certificate ${c.fp}. is it yours? until you say yes it is limited like a friend's device.`);
     }
-    for (const t of lines) who.appendChild(el('span', '', t));
+    for (const t of lines) who.appendChild(typeof t === 'string' ? el('span', '', t) : el('span', 'also', `also: ${t.t}`));
     const tools = el('div', 'dev-tools');
     let cr = null;
     if (g.peers.length) {
@@ -2352,13 +2428,51 @@ function enterStep() {
 let wizPick = null;            // the devices step's ticked rows (ids), null: not drawn yet
 let wizPickTouched = false;    // the user ticked or unticked something: a late probe keeps their ticks
 let wizPickChecking = false;   // the step's probe is out
-let pickAt = { maker: null, series: null };   // where the model step's picker is
+let pickAt = { maker: null, series: null };
+let pickKind = 'chat';         // what start a chat was opened for: chat, code, vision
+// the models made for code (17.11.2026): only under "a coding model", not in the chat list
+const CODE_MODELS = new Set(['qwen3-coder-next', 'qwen3-coder-30b-a3b', 'devstral-small-2', 'qwen2.5-coder-7b', 'qwen2.5-coder-1.5b']);
+  // where the model step's picker is
 
 // What the devices could hold together: this computer's memory × 0.7 and every paired device's
 // advertised free memory × 0.75 (the split planner's shares), MB. `max` counts this computer's
 // whole memory (what it could give with other programs closed), `now` what is free right now.
+// The pool (17.11.2026): the devices connected now, each counted unless the person unticked it in
+// the strip under the top bar; the model lists of "start a chat" and "plan a project" follow it.
+const poolOff = () => new Set(settings.poolOff ?? []);
+function poolPeers() {
+  const off = poolOff();
+  return S.peers.filter((p) => p.reach?.ok && !off.has(p.id));
+}
+function renderPool() {
+  const box = $('pool');
+  if (!box) return;
+  const now = S.peers.filter((p) => p.reach?.ok);
+  box.hidden = !now.length || isGuest();
+  if (box.hidden) return;
+  const off = poolOff();
+  const cap = memoryTogether();
+  const chips = now.map((p) => {
+    const b = el('button', `pool-chip${off.has(p.id) ? '' : ' on'}`, `${off.has(p.id) ? '' : '✓ '}${p.name}${p.ram ? ` · ${(p.ram / 1024).toFixed(1)} GB` : ''}`);
+    b.type = 'button';
+    b.setAttribute('aria-pressed', String(!off.has(p.id)));
+    b.title = off.has(p.id) ? 'not counted: tap to count it' : 'counted: tap to leave it out';
+    b.addEventListener('click', () => {
+      const o = poolOff();
+      if (o.has(p.id)) o.delete(p.id); else o.add(p.id);
+      settings.poolOff = [...o]; saveSettings();
+      renderPool();
+      if ($('connect')?.open) renderWiz(true);
+      if ($('project')?.open) fillPjModels();
+    });
+    return b;
+  });
+  box.replaceChildren(el('span', 'pool-lead', 'counted:'), el('span', 'pool-chip here on', 'this computer'), ...chips,
+    el('span', 'pool-sum', `together about ${(cap.max / 1024).toFixed(1)} GB for a model`));
+}
+
 function memoryTogether() {
-  const peers = S.peers.reduce((n, p) => n + (p.ram ?? 0) * 0.75, 0);
+  const peers = poolPeers().reduce((n, p) => n + (p.ram ?? 0) * 0.75, 0);
   return { max: Math.round((S.lineup?.hereTotalMb ?? 0) * 0.7 + peers), now: Math.round((S.lineup?.hereFreeMb ?? 0) * 0.7 + peers) };
 }
 
@@ -2386,7 +2500,10 @@ function modelButton(m, phone) {
   b.type = 'button';
   b.setAttribute('aria-pressed', String(settings.model === m.id));
   const size = m.size ? gb(m.size) : '';
-  b.append(el('b', '', `${m.name}${m.quant ? ` · ${m.quant}` : ''}`), el('span', 'size', size), el('span', 'blurb', m.catalog === false ? 'a file on this computer: only this computer can run it (here or split)' : m.blurb));
+  const sc = m.score ?? scoreOf(m.id);
+  const name = el('b', '', `${m.name}${m.quant ? ` · ${m.quant}` : ''}`);
+  if (sc != null) { const t = el('span', 'score', `${sc}/100`); t.title = 'how capable it is, out of 100: kula’s rough reading of public benchmarks, ±5'; name.append(' ', t); }
+  b.append(name, el('span', 'size', size), el('span', 'blurb', m.catalog === false ? 'a file on this computer: only this computer can run it (here or split)' : m.blurb));
   const fit = el('span', 'fit');
   // a mixture of experts (10.11.2026): all of it in memory, only the active part read per token
   if (m.active_b) fit.appendChild(el('span', 'info', `MoE · ${m.active_b}B active${m.params_b ? ` of ${m.params_b}B` : ''}`));
@@ -2627,7 +2744,9 @@ const VIEWS = {
     };
     if (!S.models.length || !S.lineup) { out.push(q('which model?'), waiting('getting the list…')); return out; }
     if (W.vision) return visionModelsView(phone, loadedNote);
-    const tree = pickTree(phone);
+    const tree = pickKind === 'code' ? pickTree(phone) : pickTree(phone)
+      .map((k) => ({ ...k, series: k.series.filter((x) => x.id !== 'vision' && x.id !== 'qwen-coder').map((x) => ({ ...x, models: x.models.filter((m) => !CODE_MODELS.has(m.id)) })).filter((x) => x.models.length) }))
+      .filter((k) => k.series.length);
     const goTo = (maker, series) => { pickAt = { maker, series }; renderWiz(true); $('wiz-q')?.focus(); };
     const maker = tree.find((k) => k.id === pickAt.maker) ?? null;
     const series = maker?.series.find((x) => x.id === pickAt.series) ?? null;
@@ -2639,6 +2758,15 @@ const VIEWS = {
       out.push(q('which model?'));
       const note = loadedNote();
       if (note) out.push(note);
+      // a coding model (17.11.2026): its own list, best first; the chat list leaves them out
+      if (pickKind === 'code') {
+        const list = tree.flatMap((k) => k.series.flatMap((x) => x.models)).filter((m) => CODE_MODELS.has(m.id))
+          .sort((a, b) => Number(!!a.off) - Number(!!b.off) || (b.score ?? 0) - (a.score ?? 0));
+        const box = el('div', 'model-list wiz-models');
+        for (const m of list) box.appendChild(modelButton(m, phone));
+        out.push(para('models made for writing and fixing code, and for pages and interfaces (html, css), the most capable that fits first.', 'hint'), box);
+        return out;
+      }
       const box = el('div', 'choices pick-list');
       const held = phone?.holds ? S.models.find((m) => m.file === phone.holds) : null;
       if (held) box.appendChild(card(held.name, `already on ${phone.name}: no download`, () => { settings.model = held.id; saveSettings(); go({ type: 'model', id: held.id }); }, 'on the phone'));
@@ -2952,10 +3080,11 @@ $('wiz-back').addEventListener('click', () => go({ type: 'back' }));
 
 // auto: the page opened it by itself (a model loaded: it stays shut)
 // vision: opened by the "+" for a photo, so only models that see photos are offered, run here
-async function openConnect(auto, vision) {
+async function openConnect(auto, vision, kind) {
   if (isGuest()) return;
   auto = auto === true;
-  vision = vision === true;
+  vision = vision === true || kind === 'vision';
+  pickKind = vision ? 'vision' : kind === 'code' ? 'code' : 'chat';
   const run = ++wizRun;
   W = wiz.initial(settings.way);
   wizStepShown = '';
@@ -2969,8 +3098,7 @@ async function openConnect(auto, vision) {
   // the model (or the load running); the cable and wi-fi steps are reached from "add a device"
   let start = S.status?.loading ? 'load' : 'model';
   W = { ...W, chat: true, vision };
-  $('connect-title').textContent = vision ? 'a model that sees photos' : 'start a chat';
-  $('wiz-advanced').parentElement.hidden = vision;
+  $('connect-title').textContent = vision ? 'a model that sees photos' : pickKind === 'code' ? 'a coding model' : 'start a chat';
   const d = $('connect');
   const show = (step) => {
     W = { ...W, step };
