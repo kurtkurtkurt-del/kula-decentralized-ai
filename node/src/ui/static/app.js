@@ -1371,7 +1371,7 @@ $('where').addEventListener('click', (e) => {
   const m = el('div', 'where-menu');
   m.id = 'where-menu';
   m.setAttribute('role', 'menu');
-  for (const [kind, word, sub] of [['chat', 'start a chat', 'talk, write, think'], ['code', 'start a coding model', 'code, pages and interfaces'], ['vision', 'start an image recognition model', 'it reads the photos you add']]) {
+  for (const [kind, word, sub] of [['mine', 'my models', 'the ones already downloaded: tap to open'], ['chat', 'start a chat', 'talk, write, think'], ['code', 'start a coding model', 'code, pages and interfaces'], ['vision', 'start an image recognition model', 'it reads the photos you add']]) {
     const b = el('button', 'where-item');
     b.type = 'button';
     b.setAttribute('role', 'menuitem');
@@ -2759,6 +2759,28 @@ const VIEWS = {
       const note = loadedNote();
       if (note) out.push(note);
       // a coding model (17.11.2026): its own list, best first; the chat list leaves them out
+      // my models (17.11.2026): the ones already on this computer or a phone; a tap loads it straight
+      // (here when this computer has it, else the way used last), no download
+      if (pickKind === 'mine') {
+        const holds = new Set(S.peers.map((p) => p.holds).filter(Boolean));
+        const list = S.models.filter((m) => m.here || holds.has(m.file)).map((m) => ({ ...m, score: scoreOf(m.id) }))
+          .sort((a, b) => (b.score ?? -1) - (a.score ?? -1));
+        if (!list.length) { out.push(para('no model is downloaded yet: pick one under start a chat, and it stays here for next time.', 'hint')); return out; }
+        const box = el('div', 'model-list wiz-models');
+        for (const m of list) {
+          const b = modelButton(m, phone);
+          const fresh = b.cloneNode(true); // without the usual click: this one goes straight on
+          fresh.addEventListener('click', () => {
+            const mode = m.here ? 'here' : (settings.mode && settings.mode !== 'here' ? settings.mode : 'phone');
+            settings.model = m.id; settings.mode = mode; saveSettings();
+            W = wiz.next(W, { type: 'model', id: m.id });
+            go({ type: 'mode', mode });
+          });
+          box.appendChild(fresh);
+        }
+        out.push(para('already downloaded: tap one to open it.', 'hint'), box);
+        return out;
+      }
       if (pickKind === 'code') {
         const list = tree.flatMap((k) => k.series.flatMap((x) => x.models)).filter((m) => CODE_MODELS.has(m.id))
           .sort((a, b) => Number(!!a.off) - Number(!!b.off) || (b.score ?? 0) - (a.score ?? 0));
@@ -3084,7 +3106,7 @@ async function openConnect(auto, vision, kind) {
   if (isGuest()) return;
   auto = auto === true;
   vision = vision === true || kind === 'vision';
-  pickKind = vision ? 'vision' : kind === 'code' ? 'code' : 'chat';
+  pickKind = vision ? 'vision' : kind === 'code' || kind === 'mine' ? kind : 'chat';
   const run = ++wizRun;
   W = wiz.initial(settings.way);
   wizStepShown = '';
@@ -3098,7 +3120,7 @@ async function openConnect(auto, vision, kind) {
   // the model (or the load running); the cable and wi-fi steps are reached from "add a device"
   let start = S.status?.loading ? 'load' : 'model';
   W = { ...W, chat: true, vision };
-  $('connect-title').textContent = vision ? 'a model that sees photos' : pickKind === 'code' ? 'a coding model' : 'start a chat';
+  $('connect-title').textContent = vision ? 'a model that sees photos' : pickKind === 'code' ? 'a coding model' : pickKind === 'mine' ? 'my models' : 'start a chat';
   const d = $('connect');
   const show = (step) => {
     W = { ...W, step };
