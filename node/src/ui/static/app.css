@@ -1051,3 +1051,5 @@ ul.wiz-steps li::before { content: "› "; color: var(--meta); }
 .where-menu .where-item:hover, .where-menu .where-item:focus-visible { background: var(--sunk); }
 .where-menu .where-item span { font-size: 12px; color: var(--mute); }
 #open-mine { white-space: nowrap; flex-shrink: 0; margin-left: 6px; }
+.pool .pool-best { font: inherit; font-size: 12px; padding: 2px 10px; border-radius: 999px; border: 1px solid var(--via-wifi, var(--line2)); background: transparent; color: var(--words); cursor: pointer; }
+.pool .pool-best:hover { background: var(--sunk); }

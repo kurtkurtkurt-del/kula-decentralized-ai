@@ -2447,6 +2447,20 @@ function poolPeers() {
   const off = poolOff();
   return S.peers.filter((p) => p.reach?.ok && !off.has(p.id));
 }
+let poolAsked = false, poolAskedModels = false;
+// the highest-scoring chat model (not a coder, not a vision one) whose size fits `capMb`
+function bestFit(capMb) {
+  if (!capMb || !S.models.length || !S.lineup) return null;
+  const vision = new Set((S.lineup.makers ?? []).flatMap((k) => k.series.filter((x) => x.id === 'vision').flatMap((x) => x.models.map((m) => m.id))));
+  let best = null;
+  for (const r of wiz.modelRows(S.models)) {
+    const sc = scoreOf(r.id);
+    if (sc == null || !r.needMb || r.needMb > capMb || CODE_MODELS.has(r.id) || vision.has(r.id)) continue;
+    if (!best || sc > best.score) best = { id: r.id, name: r.name, needMb: r.needMb, score: sc };
+  }
+  return best;
+}
+
 function renderPool() {
   const box = $('pool');
   if (!box) return;
@@ -2472,6 +2486,22 @@ function renderPool() {
   });
   box.replaceChildren(el('span', 'pool-lead', 'counted:'), el('span', 'pool-chip here on', 'this computer'), ...chips,
     el('span', 'pool-sum', `together about ${(cap.max / 1024).toFixed(1)} GB for a model`));
+  // the best that fits them (17.11.2026): the highest score among chat models whose size fits
+  if (!S.lineup && !poolAsked) { poolAsked = true; getJson('lineup').then((l) => { S.lineup = l; renderPool(); }).catch(() => {}); }
+  if (!S.models.length && !poolAskedModels) { poolAskedModels = true; getJson('models').then((m) => { S.models = m; renderPool(); }).catch(() => {}); }
+  const best = bestFit(cap.max);
+  if (best) {
+    const go1 = el('button', 'pool-best', '');
+    go1.type = 'button';
+    go1.append('best that fits: ', el('b', '', best.name), ` · ${best.score}/100 · open`);
+    go1.title = `${best.name}: about ${(best.needMb / 1024).toFixed(1)} GB, the highest score that fits the counted devices`;
+    go1.addEventListener('click', async () => {
+      settings.model = best.id; saveSettings();
+      await openConnect();
+      if (W.step === 'model') go({ type: 'model', id: best.id });
+    });
+    box.appendChild(go1);
+  }
 }
 
 function memoryTogether() {
