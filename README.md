@@ -27,6 +27,31 @@ and says when a device alone would be faster. Rule of thumb: jobs are split, mod
 iOS is out of scope for now: the app opens on iOS but runs no models (a Swift module is written
 on a branch, never built).
 
+## coming in the next version · 19 November 2026
+
+On kula-main, in the computer apps (the chat page); the phone app is unchanged.
+
+- **An old chat remembers its model.** Opening it shows a line above the message box: which
+  model it used and where, with one tap to load it again. It never loads by itself. When it
+  cannot work it says why in red (the file was deleted, a device is no longer paired or does not
+  answer, llama.cpp is missing) with the button that fixes it: connect, add a device, pick another
+  model or another way.
+- **Skills.** Type `/` in the message box for a list: explain simply, fix my writing, summarize,
+  translate tr ⇄ en, and four fun ones (pirate, grandma, a friendly roast, a movie trailer).
+  Picking one puts a note in the chat; the model gets its instructions from the next message on.
+  One at a time per chat, turned off from the note, the chip or the list. Settings › skills turns
+  each on or off and adds your own. Skills are kept in this browser.
+- **Picking a model.** "my models" beside start a chat opens one you already have with a tap. The
+  start menu has a coding model and an image recognition model of their own. Every model shows a
+  score out of 100 (kula's rough reading of public benchmarks). A strip under the top bar ticks
+  the connected devices that count and suggests the best model they can hold with the memory free
+  now. The old "advanced" part is gone: every choice is a step.
+- **Answers and thinking.** Answers go up to 3072 tokens instead of 1024, and one cut at the limit
+  gets a **continue** button. The thinking box no longer stutters, and stays open or closed the
+  way you left it.
+- **Devices.** A device card shows one badge for the way it talks over now; the others sit below,
+  dimmed.
+
 ## what's new in 0.7.0 · 17 November 2026
 
 - **Accept or reject the brain's suggestions.** A brain card that can name a change now carries
