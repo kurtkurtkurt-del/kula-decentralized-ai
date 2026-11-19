@@ -3,6 +3,8 @@
 // names that devices give themselves go through textContent too.
 import { renderMarkdown, splitThink, stripThink } from './markdown.js';
 import * as wiz from './wizard.js';
+import * as cm from './chatmodel.js';
+import * as sk from './skills.js';
 import { mountLearn } from './learn.js';
 import * as bmap from './brainmap.js';
 import { mountReplay } from './replay.js';
@@ -108,6 +110,8 @@ function readSettings() {
   // 17.11.2026: 1024 cut thinking models' answers short; the old default moves up with it
   if (s.maxTokens === 1024) s.maxTokens = 3072;
   if (!s.pick || typeof s.pick !== 'object' || Array.isArray(s.pick)) s.pick = {};
+  // skills (19.11.2026): skillsOff and skillsMine, capped and de-duplicated
+  sk.cleanStore(s);
   return s;
 }
 const settings = readSettings();
@@ -140,6 +144,13 @@ const S = {
   role: 'owner',       // 'guest' for a device that came in with an invite
 };
 const isGuest = () => S.role === 'guest';
+// S.models and S.peers start as these empty lists: until one is replaced by a fetch, the chat-model
+// line treats it as not known yet (an empty list from the server is a real answer)
+const MODELS0 = S.models;
+const PEERS0 = S.peers;
+// the line above the composer (chatmodel.js decides): "stay" per chat id until it is opened again;
+// the last failed load from the line; the load the line is running, with its progress text
+const CM = { dismissed: new Set(), loadError: null, run: null, sig: '' };
 const shots = [];                   // photos waiting in the composer: { file, url }
 let sending = false;                // shrinking them before a send
 
@@ -195,7 +206,7 @@ function renderChatList() {
     const pj = projectOf(c.id);
     if (pj) { open.classList.add('proj'); open.prepend(el('span', `moon ${pj.state}`)); }
     open.title = c.title;
-    open.addEventListener('click', () => openChat(c.id));
+    open.addEventListener('click', () => openChat(c.id, true));
     const more = el('button', 'more');
     more.type = 'button';
     more.setAttribute('aria-label', `more for ${c.title}`);
@@ -226,18 +237,22 @@ function renderChatList() {
 
 document.addEventListener('click', () => { if (S.menuFor) { S.menuFor = null; renderChatList(); } });
 
-async function openChat(id) {
+// byHand: a click in the chat list (only then are the chat's devices probed)
+async function openChat(id, byHand = false) {
   if (S.streaming) return toast('wait for the answer, or stop it');
   try {
     const c = await getJson(`chats/${id}`);
-    S.chat = { id: c.id, title: c.title, messages: c.messages || [] };
+    S.chat = { id: c.id, title: c.title, messages: c.messages || [], ran: c.ran ?? null, model: c.model ?? null };
     S.saved = true;
     S.editing = -1;
+    CM.dismissed.delete(c.id);
+    CM.loadError = null;
     history.replaceState(null, '', `#${c.id}`);
     renderThread(true);
     renderChatList();
     renderProjectBanner();
     if (matchMedia('(max-width: 860px)').matches) setSide(false);
+    chatModelLook(S.chat, byHand);
   } catch (e) { toast(e.message); }
 }
 
@@ -246,6 +261,7 @@ function newChat() {
   S.chat = { id: randomId(), title: 'new chat', messages: [] };
   S.saved = false;
   S.editing = -1;
+  CM.loadError = null;
   history.replaceState(null, '', location.pathname);
   renderThread(true);
   renderChatList();
@@ -257,11 +273,145 @@ async function saveChat() {
   const c = S.chat;
   if (!c || !c.messages.length) return;
   try {
-    const r = await postJson(`chats/${c.id}`, { messages: c.messages, model: S.status?.loaded?.model?.name ?? null });
+    const r = await postJson(`chats/${c.id}`, { messages: c.messages, model: c.ran?.name ?? c.model ?? S.status?.loaded?.model?.name ?? null, ...(c.ran ? { ran: c.ran } : {}) });
     c.title = r.title;
     if (!S.saved) { S.saved = true; history.replaceState(null, '', `#${c.id}`); }
     loadChats();
   } catch (e) { toast(`not saved: ${e.message}`); }
+}
+
+// ---------- the chat's model (19.11.2026): an old chat names the model it ran on, in a line above
+// the composer, with one tap to load it the same way. Nothing loads by itself; chatmodel.js
+// decides what the line says (DECISIONS A2-A6), this draws it and runs the buttons.
+
+const chatLocked = (chat) => { const p = chat ? projectOf(chat.id) : null; return !!p && (p.state === 'waiting' || p.state === 'running'); };
+
+function chatModelNow() {
+  const c = S.chat;
+  if (!c) return null;
+  if (CM.run && CM.run.id === c.id) return { kind: 'busy', red: false, text: CM.run.text, buttons: [{ act: 'stop', label: 'stop', primary: false, title: null }] };
+  return cm.chatModelState({
+    ran: cm.ranFromChat(c, S.models),
+    status: S.status,
+    models: S.models,
+    modelsKnown: S.models !== MODELS0,
+    peers: S.peers !== PEERS0 ? S.peers : null,
+    guest: isGuest(),
+    locked: chatLocked(c),
+    dismissed: CM.dismissed.has(c.id),
+    loadError: CM.loadError?.id === c.id ? CM.loadError.text : null,
+  });
+}
+
+// redrawn only when what it says changed (refreshStatus calls this every 2.5 s); focus stays
+// where it is, and a button that had it gets it back after a redraw
+function renderChatModel() {
+  const box = $('chat-model');
+  if (!box) return;
+  const st = chatModelNow();
+  const sig = JSON.stringify(st);
+  if (sig === CM.sig) return;
+  CM.sig = sig;
+  if (!st) { box.hidden = true; box.replaceChildren(); return; }
+  const had = box.contains(document.activeElement) ? document.activeElement.dataset.act : null;
+  box.className = `chat-model ${st.red ? 'red' : 'busy'}`;
+  const parts = [el('span', 'cm-text', st.text)];
+  if (st.buttons.length) {
+    const row = el('span', 'cm-btns');
+    for (const b of st.buttons) {
+      const x = el('button', b.primary ? 'primary' : 'pill', b.label);
+      x.type = 'button';
+      x.dataset.act = b.act;
+      if (b.title) x.title = b.title;
+      x.addEventListener('click', () => chatModelAct(b.act));
+      row.appendChild(x);
+    }
+    parts.push(row);
+  }
+  box.replaceChildren(...parts);
+  box.hidden = false;
+  if (had) box.querySelector(`button[data-act="${had}"]`)?.focus();
+}
+
+// the stored devices by today's ids (the entry that holds the id, else the one with the name),
+// and, when the chat's model is loaded, the devices it is loaded on
+function chatModelIds(ran) {
+  const entries = cm.entriesOf(S.peers);
+  const ids = new Set();
+  ran.peers.forEach((id, i) => {
+    const e = entries.find((x) => x.ids.includes(id)) ?? entries.find((x) => x.name === (ran.names[i] ?? id));
+    for (const x of e?.ids ?? [id]) ids.add(x);
+  });
+  const loaded = S.status?.loaded;
+  if (loaded?.model?.id === ran.model) for (const id of cm.ranOf(loaded)?.peers ?? []) ids.add(id);
+  return [...ids];
+}
+
+async function chatModelProbe(ran) {
+  const ids = chatModelIds(ran);
+  if (!ids.length) return renderChatModel();
+  try { S.peers = await postJson('peers/probe', { ids }); } catch (e) { toast(e.message); }
+  renderPeers();
+  renderChatModel();
+}
+
+// on opening a chat: the model list when it is not here yet, the peers when the chat used devices,
+// and, only for a click in the list, one probe of those devices when its model is not loaded
+async function chatModelLook(chat, byHand) {
+  if (isGuest() || chatLocked(chat)) return;
+  if (!S.models.length) { try { S.models = await getJson('models'); } catch {} }
+  if (S.chat !== chat) return;
+  renderChatModel();
+  const ran = cm.ranFromChat(chat, S.models);
+  if (!ran?.mode || ran.mode === 'here' || !ran.peers.length) return;
+  if (!S.peers.length) await refreshPeers(false);
+  if (!byHand || S.chat !== chat || S.status?.loaded?.model?.id === ran.model) return;
+  await chatModelProbe(ran);
+}
+
+async function chatModelLoad(chat, ran) {
+  if (loadRun || CM.run) return toast('a model is loading already');
+  const Y = S.status?.loaded?.model?.name;
+  if (Y && S.status?.chatting > 0 && !confirm(`${Y} is answering right now: stop it and load ${ran.name}?`)) return;
+  const body = cm.loadBody(ran, S.peers, settings.ctx);
+  CM.loadError = null;
+  CM.run = { id: chat.id, text: 'starting…', stopped: false };
+  renderChatModel();
+  let error = null;
+  const run = CM.run;
+  const show = {
+    progress: () => {},
+    msg: (text, kind = '') => { if (kind === 'bad') error = text; else if (!kind) { run.text = text; renderChatModel(); } },
+  };
+  const ok = await runLoad(body, show);
+  CM.run = null;
+  if (ok) {
+    settings.model = ran.model;
+    if (ran.mode) settings.mode = ran.mode;
+    if (ran.mode && ran.mode !== 'here' && body.peers?.length) settings.peers = body.peers;
+    saveSettings();
+    toast(`${ran.name} is ready`);
+    if (S.chat === chat) input.focus();
+  } else if (!run.stopped) CM.loadError = { id: chat.id, text: error || 'the load failed' };
+  renderChatModel();
+}
+
+async function chatModelAct(act) {
+  const c = S.chat;
+  const ran = c ? cm.ranFromChat(c, S.models) : null;
+  if (!ran) return;
+  if (act === 'load') return chatModelLoad(c, ran);
+  if (act === 'stay') { CM.dismissed.add(c.id); return renderChatModel(); }
+  if (act === 'pick-model') return openConnect(false, false, 'chat');
+  if (act === 'pick-mode') {
+    await openConnect(false, false, 'chat');
+    // the sheet starts at the model: this chat's, so it lands on "how it runs"
+    if (W.step === 'model' && S.models.some((m) => m.id === ran.model)) { settings.model = ran.model; saveSettings(); go({ type: 'model', id: ran.model }); }
+    return;
+  }
+  if (act === 'devices') return openDevices();
+  if (act === 'check') { CM.loadError = null; return chatModelProbe(ran); }
+  if (act === 'stop') { if (CM.run) CM.run.stopped = true; return postJson('stop').catch((e) => toast(e.message)); }
 }
 
 
@@ -391,6 +541,7 @@ function renderProjectBanner() {
   input.placeholder = locked ? (p.state === 'waiting' ? `this chat belongs to a night project: it opens after ${whenWords(p.end)}` : 'the night project is working: read along, the report comes here') : 'message kula';
   $('composer').classList.toggle('locked', locked);
   updateSend();
+  renderChatModel();
   if (!p) { b.hidden = true; return; }
   b.hidden = false;
   b.className = `proj-banner ${p.state}`;
@@ -435,10 +586,37 @@ function renderThread(toBottom = false) {
   box.replaceChildren();
   msgEls.length = 0;
   const msgs = S.chat?.messages ?? [];
-  msgs.forEach((m, i) => { const e = m.role === 'user' ? userEl(m, i) : botEl(m, i); msgEls[i] = e; box.appendChild(e); });
+  const active = sk.activeSkill(msgs);
+  msgs.forEach((m, i) => { const e = m.skill ? noteEl(m, m === active) : m.role === 'user' ? userEl(m, i) : botEl(m, i); msgEls[i] = e; box.appendChild(e); });
   $('empty').hidden = msgs.length > 0;
   updateEmpty();
+  renderSkillChip();
   if (toBottom) scrollDown(true);
+}
+
+// a skill note (19.11.2026): picked or turned off in this chat; words only (textContent), it never
+// goes to the model itself (historyFor). `active`: this is the skill on now, so it gets "turn off"
+function noteEl(m, active) {
+  const s = m.skill;
+  const wrap = el('div', `msg-note${s.off ? ' off' : ''}`);
+  if (s.off) {
+    wrap.append(el('p', 'note-head', `skill off: ${s.name}`), el('p', 'note-sub', 'the model answers as usual again.'));
+    return wrap;
+  }
+  wrap.appendChild(el('p', 'note-head', `skill on: ${s.name}`));
+  if (s.about) wrap.appendChild(el('p', 'note-about', s.about));
+  const sub = el('p', 'note-sub', 'the model gets this from your next message.');
+  if (active) {
+    const off = el('button', 'link', 'turn off');
+    off.type = 'button';
+    off.addEventListener('click', turnOffSkill);
+    sub.append(' ', off);
+  }
+  wrap.appendChild(sub);
+  const d = el('details', 'snippet');
+  d.append(el('summary', '', 'what the model is told'), el('pre', '', m.content));
+  wrap.appendChild(d);
+  return wrap;
 }
 
 function lastIndex(role) {
@@ -474,7 +652,8 @@ function userEl(m, i) {
       const text = ta.value.trim();
       if (!text && !m.photos?.length) return;
       S.editing = -1;
-      S.chat.messages = S.chat.messages.slice(0, i);
+      // a skill picked after this message stays: it applies to the message sent again
+      S.chat.messages = [...S.chat.messages.slice(0, i), ...S.chat.messages.slice(i + 1).filter((x) => x.skill)];
       ask(text, m.photos);
     });
     ta.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); send.click(); } if (e.key === 'Escape') cancel.click(); });
@@ -614,11 +793,15 @@ $('messages').addEventListener('click', (e) => {
 
 // ---------- asking
 
+// skills (19.11.2026): the active skill's text joins the one leading system message; the notes
+// themselves are skipped, so no system message reaches the model mid-chat (DECISIONS B3)
 function historyFor(upTo) {
   const msgs = [];
-  const sys = systemText();
+  const upToNow = S.chat.messages.slice(0, upTo);
+  const sys = sk.systemWith(systemText(), sk.activeSkill(upToNow));
   if (sys) msgs.push({ role: 'system', content: sys });
-  for (const m of S.chat.messages.slice(0, upTo)) {
+  for (const m of upToNow) {
+    if (m.skill) continue;
     if (m.role === 'assistant') {
       const a = stripThink(m.content);
       if (!a.trim()) continue; // a failed or empty answer is not history
@@ -651,8 +834,11 @@ function regenerate() {
 // cont (17.11.2026): the last answer hit the length limit; the model gets it back and goes on, and
 // what comes is added to the same message
 async function answer(cont = false) {
-  const msgs = S.chat.messages;
+  const chat = S.chat;
+  const msgs = chat.messages;
   if (cont && (S.streaming || msgs.at(-1)?.role !== 'assistant')) return;
+  // what answers this question: it becomes the chat's model when the answer comes (DECISIONS A1)
+  const loadedThen = S.status?.loaded ?? null;
   const history = cont ? [...historyFor(msgs.length), { role: 'user', content: 'go on exactly where you stopped. do not repeat anything.' }] : historyFor(msgs.length);
   const m = cont ? msgs.at(-1) : { role: 'assistant', content: '', meta: {} };
   if (cont) { const a = stripThink(m.content); m.content = a; if (a && !/\s$/.test(a)) m.content += ' '; m.meta = {}; } else msgs.push(m);
@@ -688,9 +874,11 @@ async function answer(cont = false) {
     if (m.meta.reading) delete m.meta.reading;
     feedDone(said, m.meta.error ? `the answer failed: ${m.meta.error}` : `${m.meta.stopped ? 'stopped' : 'answered'}${m.meta.device ? ` on ${m.meta.device}` : ''}${m.meta.tokens ? ` · ${m.meta.tokens} tokens` : ''}${m.meta.tps ? ` · ${m.meta.tps} tok/s` : ''}`);
     S.streaming = null;
+    if (!m.meta.error) { const ran = cm.ranOf(loadedThen); if (ran) chat.ran = ran; }
     setBusy(false);
     renderThread();
     scrollDown();
+    renderChatModel();
     saveChat();
   }
 }
@@ -706,14 +894,18 @@ function setBusy(on) {
 const input = $('input');
 function grow(t) { t.style.height = 'auto'; t.style.height = `${Math.min(t.scrollHeight, window.innerHeight * 0.4)}px`; }
 function updateSend() { $('send').disabled = (!input.value.trim() && !shots.length) || !!S.streaming || input.disabled; }
-input.addEventListener('input', () => { grow(input); updateSend(); });
+input.addEventListener('input', () => { grow(input); updateSend(); renderSkillPick(); });
+// the / list's keys come first: while it is open, enter and tab pick instead of sending
+input.addEventListener('keydown', skillPickKey);
+input.addEventListener('focus', () => renderSkillPick());
+input.addEventListener('blur', () => hideSkillPick());
 // settings → general → sending: enter sends (shift+enter a new line), or ctrl/⌘+enter sends
 input.addEventListener('keydown', (e) => {
   if (e.key !== 'Enter' || e.isComposing) return;
   const mod = e.ctrlKey || e.metaKey;
   if (settings.enter === 'mod' ? mod : !e.shiftKey && !mod) { e.preventDefault(); $('composer').requestSubmit(); }
 });
-function composerHint() { $('composer-hint').textContent = settings.enter === 'mod' ? 'ctrl/⌘+enter sends · enter new line' : 'enter sends · shift+enter new line'; }
+function composerHint() { $('composer-hint').textContent = `${settings.enter === 'mod' ? 'ctrl/⌘+enter sends · enter new line' : 'enter sends · shift+enter new line'} · / skills`; }
 composerHint();
 $('composer').addEventListener('submit', async (e) => {
   e.preventDefault();
@@ -736,6 +928,140 @@ $('composer').addEventListener('submit', async (e) => {
   updateSend();
   ask(text, photos);
 });
+
+// ---------- skills (19.11.2026): `/` in the message box lists them; a pick puts a note into the
+// chat (skills.js decides what a note is and which one is active, DECISIONS B2-B6)
+
+// open: the list shows; rows: what it shows; at: the highlighted row; shut: the text Escape closed it for
+const SP = { open: false, rows: [], at: 0, shut: null };
+
+function renderSkillChip() {
+  const chip = $('skill-chip');
+  const active = sk.activeSkill(S.chat?.messages);
+  chip.hidden = !active;
+  if (!active) { chip.replaceChildren(); return; }
+  const x = el('button', 'skill-x');
+  x.type = 'button';
+  x.title = 'turn this skill off';
+  x.setAttribute('aria-label', `turn off ${active.skill.name}`);
+  x.appendChild(svg(ICON.x));
+  x.addEventListener('click', () => { turnOffSkill(); input.focus(); });
+  chip.replaceChildren(el('span', '', 'skill: '), el('b', '', active.skill.name), x);
+}
+
+// the rows for what is typed, or null when the box holds an ordinary message
+function skillRows() {
+  const q = sk.queryOf(input.value);
+  if (q === null || input.disabled || SP.shut === input.value) return null;
+  const found = sk.matches(sk.enabled(settings), q);
+  if (!found.length) return null;
+  const active = sk.activeSkill(S.chat?.messages);
+  return [
+    ...(active ? [{ kind: 'off', active }] : []),
+    ...found.map((s) => ({ kind: 'skill', s })),
+    { kind: 'manage' },
+  ];
+}
+
+function hideSkillPick() {
+  SP.open = false;
+  SP.rows = [];
+  $('skill-pick').hidden = true;
+  $('skill-pick').replaceChildren();
+  input.removeAttribute('aria-activedescendant');
+}
+
+function renderSkillPick() {
+  if (SP.shut !== null && SP.shut !== input.value) SP.shut = null;
+  const rows = document.activeElement === input ? skillRows() : null;
+  if (!rows) return hideSkillPick();
+  const same = SP.open && SP.rows.length === rows.length && SP.rows.every((r, i) => r.kind === rows[i].kind && r.s?.id === rows[i].s?.id);
+  // a new list highlights the best match (not the off row, so enter never turns off by surprise)
+  if (!same) SP.at = Math.max(0, rows.findIndex((r) => r.kind === 'skill'));
+  SP.open = true;
+  SP.rows = rows;
+  const box = $('skill-pick');
+  box.replaceChildren();
+  rows.forEach((r, i) => {
+    const o = el('div', `sp-row ${r.kind}`);
+    o.id = `skill-opt-${i}`;
+    o.setAttribute('role', 'option');
+    o.setAttribute('aria-selected', String(i === SP.at));
+    if (r.kind === 'off') o.append(el('b', '', `off: stop ${r.active.skill.name}`));
+    else if (r.kind === 'manage') o.append(el('span', '', 'manage skills…'));
+    else o.append(el('b', '', r.s.name), el('code', '', `/${r.s.id}`), el('span', 'sp-about', r.s.about));
+    // the box keeps the focus; a click picks
+    o.addEventListener('mousedown', (e) => e.preventDefault());
+    o.addEventListener('click', () => chooseSkillRow(i));
+    box.appendChild(o);
+  });
+  box.hidden = false;
+  input.setAttribute('aria-activedescendant', `skill-opt-${SP.at}`);
+  $(`skill-opt-${SP.at}`)?.scrollIntoView?.({ block: 'nearest' });
+}
+
+function skillPickKey(e) {
+  if (e.isComposing || !SP.open) return;
+  const n = SP.rows.length;
+  if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+    e.preventDefault();
+    SP.at = (SP.at + (e.key === 'ArrowDown' ? 1 : n - 1)) % n;
+    renderSkillPick();
+  } else if ((e.key === 'Enter' || e.key === 'Tab') && !e.shiftKey) {
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    chooseSkillRow(SP.at);
+  } else if (e.key === 'Escape') {
+    e.preventDefault();
+    e.stopPropagation();
+    SP.shut = input.value;
+    hideSkillPick();
+  }
+}
+
+function clearBox() { input.value = ''; SP.shut = null; grow(input); updateSend(); }
+
+function chooseSkillRow(i) {
+  const r = SP.rows[i];
+  if (!r) return;
+  if (r.kind === 'manage') { clearBox(); hideSkillPick(); openSettings('skills'); return; }
+  if (r.kind === 'off') { clearBox(); turnOffSkill(); renderSkillPick(); return; }
+  pickSkill(r.s);
+}
+
+const skillBlocked = () => {
+  if (S.streaming) { toast('wait for the answer, or stop it'); return true; }
+  if (S.chat && chatLocked(S.chat)) { toast('this chat opens after the night project has run'); return true; }
+  return false;
+};
+
+// a pick: the note goes into the chat (no model turn); saved at once when the chat has a file,
+// else with the first answer
+function pickSkill(s) {
+  if (skillBlocked()) return;
+  clearBox();
+  hideSkillPick();
+  if (!S.chat) newChat();
+  const active = sk.activeSkill(S.chat.messages);
+  if (!(active && active.skill.id === s.id && active.content === s.text)) {
+    S.chat.messages.push(sk.noteFor(s));
+    afterSkillNote();
+  }
+  input.focus();
+}
+
+function turnOffSkill() {
+  const active = sk.activeSkill(S.chat?.messages);
+  if (!active || skillBlocked()) return;
+  S.chat.messages.push(sk.offNote(active));
+  afterSkillNote();
+}
+
+function afterSkillNote() {
+  S.stick = true;
+  renderThread(true);
+  if (S.saved) saveChat();
+}
 
 // ---------- photos (10.11.2026): up to three per message, shrunk here before they leave the
 // browser (768 px on the long side for one, 512 for two or three, as the phone does) and sent
@@ -1340,6 +1666,7 @@ async function refreshStatus() {
   if ($('app').classList.contains('brain-open') && !isGuest()) await refreshBrain();
   whereText();
   updateEmpty();
+  renderChatModel();
   if ($('app').classList.contains('brain-open')) renderBrain();
   if ($('connect').open) renderLoadState();
 }
@@ -1406,6 +1733,7 @@ async function refreshPeers(probe) {
   if (fresh.length && settings.peers.length && settings.mode !== 'phone') { settings.peers = [...new Set([...settings.peers, ...fresh])]; saveSettings(); }
   renderPeers();
   renderModels();
+  renderChatModel();
   if ($('app').classList.contains('brain-open')) renderBrain();
 }
 
@@ -3239,6 +3567,7 @@ function showSec(sec) {
   if (sec === 'about' || sec === 'developer' || sec === 'data') refreshInfo();
   if (sec === 'model') renderSetModel();
   if (sec === 'personal') $('set-preview').textContent = systemText() || '(nothing: the model gets only the chat)';
+  if (sec === 'skills') renderSetSkills();
 }
 for (const b of document.querySelectorAll('#set-nav button')) b.addEventListener('click', () => showSec(b.dataset.sec));
 $('set-nav').addEventListener('keydown', (e) => {
@@ -3307,6 +3636,74 @@ $('set-system').addEventListener('input', () => { settings.system = $('set-syste
 $('set-name').addEventListener('input', () => { settings.name = $('set-name').value; saveSettings(); preview(); });
 $('set-about').addEventListener('input', () => { settings.about = $('set-about').value; saveSettings(); preview(); });
 segOn('set-style', (v) => { settings.style = v; saveSettings(); preview(); });
+
+// ---- skills (19.11.2026): this browser's; a switch per skill, own ones added, edited, deleted here
+
+let skillEditing = null;   // the id of the own skill the form edits, or null: the form adds
+function skillMsg(text, bad) { const m = $('skill-msg'); m.textContent = text; m.className = `msg${text ? (bad ? ' bad' : ' ok') : ''}`; }
+function skillForm(s) {
+  skillEditing = s ? s.id : null;
+  $('skill-name').value = s?.name ?? '';
+  $('skill-about').value = s?.about ?? '';
+  $('skill-text').value = s?.text ?? '';
+  $('skill-add-h').textContent = s ? `edit ${s.name}` : 'add your own';
+  $('skill-save').textContent = s ? 'save skill' : 'add skill';
+  $('skill-cancel').hidden = !s;
+}
+function renderSetSkills() {
+  const list = $('set-skills');
+  list.replaceChildren();
+  for (const s of sk.allSkills(settings)) {
+    const li = el('li', `skill-row${s.on ? '' : ' off'}`);
+    const sw = el('label', 'switch');
+    const box = el('input');
+    box.type = 'checkbox';
+    box.setAttribute('role', 'switch');
+    box.checked = s.on;
+    box.setAttribute('aria-label', `${s.name}: in the / list`);
+    box.addEventListener('change', () => { sk.setOn(settings, s.id, box.checked); saveSettings(); renderSetSkills(); });
+    const words = el('span', 'skill-words');
+    words.append(el('b', '', s.name), el('code', '', `/${s.id}`), el('em', 'skill-tag', s.builtin ? 'built in' : 'yours'));
+    sw.append(box, words);
+    li.appendChild(sw);
+    if (s.about) li.appendChild(el('p', 'skill-about', s.about));
+    const d = el('details', 'snippet');
+    d.append(el('summary', '', 'what the model is told'), el('pre', '', s.text));
+    li.appendChild(d);
+    if (!s.builtin) {
+      const acts = el('div', 'skill-acts');
+      const ed = el('button', 'link', 'edit');
+      ed.type = 'button';
+      ed.addEventListener('click', () => { skillForm(s); skillMsg(''); $('skill-name').focus(); });
+      const del = el('button', 'link danger', 'delete');
+      del.type = 'button';
+      del.addEventListener('click', () => {
+        if (!confirm(`delete the skill "${s.name}"? a chat that already uses it keeps it.`)) return;
+        sk.removeMine(settings, s.id);
+        saveSettings();
+        if (skillEditing === s.id) skillForm(null);
+        skillMsg('');
+        renderSetSkills();
+      });
+      acts.append(ed, del);
+      li.appendChild(acts);
+    }
+    list.appendChild(li);
+  }
+}
+$('skill-add').addEventListener('submit', (e) => {
+  e.preventDefault();
+  const body = { name: $('skill-name').value, about: $('skill-about').value, text: $('skill-text').value };
+  const r = skillEditing ? sk.updateMine(settings, skillEditing, body) : sk.addMine(settings, body);
+  if (!r.ok) return skillMsg(r.error, true);
+  saveSettings();
+  const was = skillEditing;
+  skillForm(null);
+  skillMsg(was ? `saved: /${r.skill.id}` : `added: type /${r.skill.id} in the message box to use it`);
+  renderSetSkills();
+});
+$('skill-cancel').addEventListener('click', () => { skillForm(null); skillMsg(''); });
+$('skill-all-on').addEventListener('click', () => { sk.allBuiltinOn(settings); saveSettings(); renderSetSkills(); });
 
 // ---- general
 

@@ -3,6 +3,8 @@
 // whole conversation after every turn; the title is the first user message until renamed.
 // A user message may keep its photos (at most three, shrunk by the page, data: urls checked by
 // ui/vision.ts) and the vision model's reading of them; a chat holds 6 MB of photos at most.
+// A chat also keeps `ran` (which model answered last, and how, so the page can offer it again)
+// and system notes tagged with the skill the person picked.
 import fs from 'node:fs';
 import path from 'node:path';
 import { randomBytes } from 'node:crypto';
@@ -11,7 +13,12 @@ import { checkPhotos, cleanSeen, CHAT_PHOTOS_MAX_CHARS, type Seen } from './visi
 
 // photos: how the newest message's photos were answered (seen by the model, or read by a vision model first)
 export interface ChatMeta { tokens?: number; tps?: number; firstMs?: number; ms?: number; device?: string; stopped?: boolean; error?: string; photos?: { how: 'direct' | 'describe'; by: string; n: number; tight?: boolean } }
-export interface ChatMessage { role: 'system' | 'user' | 'assistant'; content: string; meta?: ChatMeta; photos?: string[]; seen?: Seen }
+// skill: a system note the person picked in the chat (a snapshot of the skill); `off` turns it off
+export interface ChatSkill { id: string; name: string; about?: string; off?: true }
+export interface ChatMessage { role: 'system' | 'user' | 'assistant'; content: string; meta?: ChatMeta; photos?: string[]; seen?: Seen; skill?: ChatSkill }
+// ran: how the chat's last good answer was made (model id and name, the way it ran, the devices)
+export type RanMode = 'phone' | 'apart' | 'split' | 'here';
+export interface ChatRan { model: string; name: string; mode: RanMode | null; peers: string[]; names: string[]; here: boolean; ctx: number | null; at: number }
 export interface Conversation {
   id: string;
   title: string;
@@ -19,6 +26,7 @@ export interface Conversation {
   created: number;
   updated: number;
   model?: string | null;
+  ran?: ChatRan | null;
   messages: ChatMessage[];
 }
 export interface ConversationRow { id: string; title: string; updated: number; count: number }
@@ -39,6 +47,39 @@ export function titleOf(messages: ChatMessage[]): string {
 }
 
 const num = (v: unknown): number | undefined => (typeof v === 'number' && Number.isFinite(v) ? v : undefined);
+
+const SKILL_ID_RE = /^[a-z0-9-]{1,40}$/;
+const RAN_MODES: readonly RanMode[] = ['phone', 'apart', 'split', 'here'];
+const strs = (v: unknown): string[] => (Array.isArray(v) ? v.filter((s): s is string => typeof s === 'string').slice(0, 16).map((s) => s.slice(0, 120)) : []);
+
+// a skill note's tag: a good id or nothing at all
+export function cleanSkill(v: unknown): ChatSkill | undefined {
+  if (!v || typeof v !== 'object') return undefined;
+  const x = v as Record<string, unknown>;
+  if (typeof x.id !== 'string' || !SKILL_ID_RE.test(x.id)) return undefined;
+  const out: ChatSkill = { id: x.id, name: typeof x.name === 'string' ? x.name.slice(0, 60) : x.id };
+  if (typeof x.about === 'string') out.about = x.about.slice(0, 200);
+  if (x.off === true) out.off = true;
+  return out;
+}
+
+// the chat's last run: known keys only, sizes capped; anything without a model name is not one
+export function cleanRan(v: unknown): ChatRan | undefined {
+  if (!v || typeof v !== 'object') return undefined;
+  const x = v as Record<string, unknown>;
+  if (typeof x.model !== 'string' || !x.model) return undefined;
+  const model = x.model.slice(0, 200);
+  return {
+    model,
+    name: typeof x.name === 'string' && x.name ? x.name.slice(0, 200) : model,
+    mode: RAN_MODES.includes(x.mode as RanMode) ? (x.mode as RanMode) : null,
+    peers: strs(x.peers),
+    names: strs(x.names),
+    here: x.here === true,
+    ctx: num(x.ctx) ?? null,
+    at: num(x.at) ?? Date.now(),
+  };
+}
 
 // What the page sent, made safe to keep: known fields only, sizes capped.
 export function clean(id: string, body: any, prev: Conversation | null): Conversation {
@@ -62,12 +103,18 @@ export function clean(id: string, body: any, prev: Conversation | null): Convers
       const seen = cleanSeen(m.seen);
       if (seen && photos.length) out.seen = seen;
     }
+    if (role === 'system') {
+      const skill = cleanSkill(m?.skill);
+      if (skill) out.skill = skill;
+    }
     return out;
   });
   const photoChars = messages.reduce((a, m) => a + (m.photos ?? []).reduce((b, u) => b + u.length, 0), 0);
   if (photoChars > CHAT_PHOTOS_MAX_CHARS) throw new Error(`this chat holds too many photos (${Math.round(photoChars / 1e6)} MB; at most ${CHAT_PHOTOS_MAX_CHARS / 1e6} MB): start a new chat for more photos`);
   const titleSet = prev?.titleSet ?? false;
   const now = Date.now();
+  // a save without a good `ran` keeps the one already kept: it is never erased
+  const ran = cleanRan(body?.ran) ?? prev?.ran ?? undefined;
   return {
     id,
     title: titleSet ? prev!.title : titleOf(messages),
@@ -75,6 +122,7 @@ export function clean(id: string, body: any, prev: Conversation | null): Convers
     created: prev?.created ?? now,
     updated: now,
     model: typeof body?.model === 'string' ? body.model.slice(0, 200) : prev?.model ?? null,
+    ...(ran ? { ran } : {}),
     messages,
   };
 }

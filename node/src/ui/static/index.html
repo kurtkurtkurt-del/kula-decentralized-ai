@@ -70,15 +70,18 @@
     </section>
 
     <footer class="composer-wrap">
+      <div class="chat-model" id="chat-model" hidden role="status"></div>
       <form class="composer" id="composer" autocomplete="off">
+        <div class="skill-pick" id="skill-pick" role="listbox" aria-label="skills" hidden></div>
         <div class="shots" id="shots" hidden aria-label="photos to send"></div>
-        <textarea id="input" rows="1" placeholder="message kula" aria-label="message"></textarea>
+        <div class="skill-chip" id="skill-chip" hidden></div>
+        <textarea id="input" rows="1" placeholder="message kula" aria-label="message" aria-controls="skill-pick" aria-autocomplete="list"></textarea>
         <div class="composer-row">
           <input type="file" id="photo-input" accept="image/*" multiple hidden>
           <button type="button" class="attach" id="attach" aria-label="add a photo" title="add a photo and pick a model that sees it (up to 3; paste or drop works too)">
             <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 4.5v11M4.5 10h11"/></svg>
           </button>
-          <span class="composer-hint" id="composer-hint">enter sends · shift+enter new line</span>
+          <span class="composer-hint" id="composer-hint">enter sends · shift+enter new line · / skills</span>
           <button type="button" class="stop" id="stop" hidden aria-label="stop">
             <svg viewBox="0 0 20 20" aria-hidden="true"><rect x="6" y="6" width="8" height="8" rx="1.5"/></svg>
           </button>
@@ -364,6 +367,7 @@
     <nav class="set-nav" id="set-nav" role="tablist" aria-label="settings sections">
       <button type="button" role="tab" data-sec="general">general</button>
       <button type="button" role="tab" data-sec="personal">personalisation</button>
+      <button type="button" role="tab" data-sec="skills">skills</button>
       <button type="button" role="tab" data-sec="model">model</button>
       <button type="button" role="tab" data-sec="usage" class="owner-only">usage</button>
       <button type="button" role="tab" data-sec="devices" class="owner-only">devices</button>
@@ -417,6 +421,24 @@
           <pre id="set-preview"></pre>
         </details>
         <p class="hint">sent with every question asked from this browser (the page's chats only, not /v1 or night projects). a small model may follow it loosely.</p>
+      </section>
+
+      <section class="set-pane" data-sec="skills" role="tabpanel" aria-label="skills" hidden>
+        <p class="hint">type / in the message box to use one. a skill is a short instruction the model gets with the chat; one at a time per chat.</p>
+        <ul class="skill-list" id="set-skills"></ul>
+        <form class="skill-add" id="skill-add" autocomplete="off" novalidate>
+          <h3 class="set-h" id="skill-add-h">add your own</h3>
+          <label class="field"><span>name <em>the / list finds it by this</em></span><input type="text" id="skill-name" maxlength="40" placeholder="haiku"></label>
+          <label class="field"><span>what it does <em>one line, shown in the / list</em></span><input type="text" id="skill-about" maxlength="120" placeholder="every answer as a short poem"></label>
+          <label class="field"><span>what the model is told</span><textarea id="skill-text" rows="5" maxlength="4000" placeholder="answer every message as a haiku: three lines, 5, 7 and 5 syllables."></textarea></label>
+          <div class="row">
+            <button type="submit" class="primary" id="skill-save">add skill</button>
+            <button type="button" class="ghost" id="skill-cancel" hidden>cancel</button>
+          </div>
+          <p class="msg" id="skill-msg" role="status"></p>
+        </form>
+        <button type="button" class="link skill-all" id="skill-all-on">all built-in skills on</button>
+        <p class="hint">skills live in this browser only. turning one off hides it from the / list; a chat that already uses it keeps it until you turn it off there.</p>
       </section>
 
       <section class="set-pane" data-sec="model" role="tabpanel" aria-label="model" hidden>
